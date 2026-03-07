@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Community Discussions
+    url: https://github.com/accept-io/community/discussions
+    about: Ask questions and share ideas
