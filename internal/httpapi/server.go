@@ -3,6 +3,9 @@ package httpapi
 import (
 	"encoding/json"
 	"net/http"
+
+	"github.com/accept-io/midas/internal/eval"
+	"github.com/accept-io/midas/internal/value"
 )
 
 type Server struct {
@@ -53,10 +56,19 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 }
 
 type evaluateRequest struct {
-	SurfaceID   string      `json:"surface_id"`
-	AgentID     string      `json:"agent_id"`
-	Confidence  float64     `json:"confidence"`
-	Consequence interface{} `json:"consequence,omitempty"`
+	SurfaceID   string               `json:"surface_id"`
+	AgentID     string               `json:"agent_id"`
+	Confidence  float64              `json:"confidence"`
+	Consequence *evaluateConsequence `json:"consequence,omitempty"`
+	Context     map[string]any       `json:"context,omitempty"`
+	RequestID   string               `json:"request_id,omitempty"`
+}
+
+type evaluateConsequence struct {
+	Type       value.ConsequenceType `json:"type"`
+	Amount     float64               `json:"amount,omitempty"`
+	Currency   string                `json:"currency,omitempty"`
+	RiskRating value.RiskRating      `json:"risk_rating,omitempty"`
 }
 
 type evaluateResponse struct {
@@ -86,13 +98,37 @@ func (s *Server) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	_ = toEvalRequest(req)
+
 	resp := evaluateResponse{
-		Outcome:    "RequestClarification",
-		Reason:     "evaluation pipeline not yet implemented",
-		EnvelopeID: "env_placeholder",
+		Outcome:    string(eval.OutcomeReject),
+		Reason:     string(eval.ReasonProfileNotFound),
+		EnvelopeID: "",
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// toEvalRequest maps the HTTP request payload into the runtime evaluation contract.
+func toEvalRequest(req evaluateRequest) eval.DecisionRequest {
+	var consequence *eval.Consequence
+	if req.Consequence != nil {
+		consequence = &eval.Consequence{
+			Type:       req.Consequence.Type,
+			Amount:     req.Consequence.Amount,
+			Currency:   req.Consequence.Currency,
+			RiskRating: req.Consequence.RiskRating,
+		}
+	}
+
+	return eval.DecisionRequest{
+		SurfaceID:   req.SurfaceID,
+		AgentID:     req.AgentID,
+		Confidence:  req.Confidence,
+		Consequence: consequence,
+		Context:     req.Context,
+		RequestID:   req.RequestID,
+	}
 }
 
 func methodNotAllowed(w http.ResponseWriter, allowed string) {
