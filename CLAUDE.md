@@ -21,22 +21,55 @@ The evaluation flow is a deterministic sequence:
 
 ## Domain model
 
-The authority chain flows in one direction:
+Authority flows in one direction:
 
-```
 DecisionSurface → AuthorityProfile → AuthorityGrant → Agent
-```
 
-- **DecisionSurface** — what is governed. ID, name, domain, business owner, technical owner, status, version, effective date. Does NOT carry thresholds.
-- **AuthorityProfile** — how much authority is granted. Confidence threshold, consequence threshold, consequence type, policy reference, escalation mode, fail mode, required context keys, version, effective date. Multiple profiles per surface.
-- **Agent** — who is acting. ID, name, type, owner, model version, endpoint, operational state.
-- **AuthorityGrant** — thin link between agent and profile. No governance semantics. Agent ID, profile ID, granted by, effective date, status.
-- **Envelope** — lifecycle object for every evaluation. Stores evidence as references (resolved versions), not duplicated payloads.
-- **Consequence** — typed value object (currency + amount, or risk rating).
+Evaluation lookup flows the opposite direction:
+
+Agent → AuthorityGrant → AuthorityProfile → DecisionSurface
+
+---
+
+### DecisionSurface (`internal/surface/`)
+What is governed. ID, name, domain, business owner, technical owner, status (active/inactive/draft), version, effective date. Does NOT carry thresholds.
+
+### AuthorityProfile (`internal/authority/`)
+How much authority is granted. Confidence threshold (`float64`), consequence threshold (`authority.Consequence`), consequence type, policy reference, escalation mode (auto/manual), fail mode (open/closed), required context keys (`[]string`), version, effective date. Multiple profiles per surface.
+
+### Agent (`internal/agent/`)
+Who is acting. ID, name, type (ai/service/operator), owner, model version, endpoint, operational state (active/suspended/revoked).
+
+### AuthorityGrant (`internal/authority/`)
+Thin link between agent and profile. Agent ID, profile ID, granted by, effective date, status (active/revoked/expired). No governance semantics.
+
+### Envelope (`internal/envelope/`)
+Lifecycle object for every evaluation. Stores evidence as version references (resolved surface version, profile version, agent ID), not duplicated payloads. References `eval.Outcome` and `eval.ReasonCode`.
+
+### Consequence types
+Two consequence types exist:
+- `authority.Consequence` — on the profile, defines the configured threshold
+- `eval.Consequence` — on the request, defines what the caller submitted
+
+Both use `value.ConsequenceType` (monetary/risk_rating) and `value.RiskRating` (low/medium/high/critical) from `internal/value/`. Comparison logic between the two types should live in the `decision` or `authority` package.
+
+## Shared types (`internal/eval/` and `internal/value/`)
+
+The `eval` package holds types shared across domain boundaries:
+- `eval.Outcome` — Execute, Escalate, Reject, RequestClarification
+- `eval.ReasonCode` — typed constants (WITHIN_AUTHORITY, CONFIDENCE_BELOW_THRESHOLD, etc.)
+- `eval.DecisionRequest` — surface ID, agent ID, confidence, consequence, context map, request ID
+- `eval.Consequence` — submitted consequence value
+
+The `value` package holds primitive value objects:
+- `value.ConsequenceType` — monetary, risk_rating
+- `value.RiskRating` — low, medium, high, critical
+
+These packages exist to avoid circular dependencies. `eval` imports `value`. Domain packages import `value` or `eval` as needed. Nothing imports domain packages from `eval` or `value`.
 
 ## Authority outcomes and reason codes
 
-Every evaluation returns exactly one outcome with a typed reason code (constants, not strings):
+Defined in `internal/eval/outcome.go` as typed constants:
 
 | Outcome | Reason codes |
 |---------|-------------|
@@ -45,82 +78,129 @@ Every evaluation returns exactly one outcome with a typed reason code (constants
 | Reject | AGENT_NOT_FOUND, SURFACE_NOT_FOUND, SURFACE_INACTIVE, NO_ACTIVE_GRANT, PROFILE_NOT_FOUND, GRANT_PROFILE_SURFACE_MISMATCH |
 | RequestClarification | INSUFFICIENT_CONTEXT |
 
-## Package structure
+## Repository interfaces
 
-```
-internal/
-  surface/       — DecisionSurface domain types and repository interface
-  authority/     — AuthorityProfile, AuthorityGrant domain types and repository interfaces
-  agent/         — Agent domain types and repository interface
-  envelope/      — Envelope lifecycle, state machine, repository interface
-  decision/      — Orchestrator (the evaluation flow above)
-  policy/        — PolicyEvaluator interface + EmbeddedOPAEvaluator (or NoOpPolicyEvaluator)
-  escalation/    — Escalation recording
-  review/        — Human override recording
-  audit/         — Audit records, DecisionExplanation
-  metrics/       — Outcome counters, latency tracking
-  events/        — EventPublisher interface + structured-log implementation
-  httpapi/       — HTTP handlers, middleware, routing
-  store/
-    postgres/    — All repository implementations (Postgres only)
-    migrations/  — Sequential SQL migrations
-```
+All interfaces are defined in their domain packages. Implementations live in `internal/store/postgres/`.
 
-## Key design rules
+**SurfaceRepository** (`internal/surface/`):
+- `FindByID(ctx, id) → (*DecisionSurface, error)`
+- `FindActiveAt(ctx, id, at time.Time) → (*DecisionSurface, error)` — resolves latest version where `effective_date <= at`
+- `Create(ctx, *DecisionSurface) → error`
+- `Update(ctx, *DecisionSurface) → error`
+- `List(ctx) → ([]*DecisionSurface, error)`
 
-- **Orchestrator depends only on repository interfaces**, never on Postgres directly. All repository interfaces are defined in their domain packages, implementations live in `store/postgres/`.
-- **OPA imports stay inside `internal/policy/` only.** No OPA or Rego references in the orchestrator, envelope, API contract, or audit record.
-- **Thresholds and policy live on the AuthorityProfile only.** Grants are semantically thin. Surfaces do not carry thresholds.
-- **Envelopes store evidence as references** (resolved surface version, profile version, agent ID), not copies of full configuration.
-- **Reason codes are typed constants** defined in the authority package. Never use raw strings for reason codes.
-- **Version resolution** always resolves the latest active version where `effective_date <= evaluation time`.
-- **Authority chain validation** (`grant.profile.surface_id == request.surface_id`) runs at evaluation time AND at grant creation time.
+**ProfileRepository** (`internal/authority/`):
+- `FindByID(ctx, id) → (*AuthorityProfile, error)`
+- `FindActiveAt(ctx, id, at time.Time) → (*AuthorityProfile, error)` — resolves latest version where `effective_date <= at`
+- `ListBySurface(ctx, surfaceID) → ([]*AuthorityProfile, error)`
+- `Create(ctx, *AuthorityProfile) → error`
+- `Update(ctx, *AuthorityProfile) → error`
 
-## Envelope states
+**GrantRepository** (`internal/authority/`):
+- `FindByID(ctx, id) → (*AuthorityGrant, error)`
+- `FindActiveByAgentAndProfile(ctx, agentID, profileID) → (*AuthorityGrant, error)`
+- `ListByAgent(ctx, agentID) → ([]*AuthorityGrant, error)`
+- `Create(ctx, *AuthorityGrant) → error`
+- `Revoke(ctx, id) → error`
+
+**AgentRepository** (`internal/agent/`):
+- `GetByID(ctx, id) → (*Agent, error)`
+- `Create(ctx, *Agent) → error`
+- `Update(ctx, *Agent) → error`
+- `List(ctx) → ([]*Agent, error)`
+
+**EnvelopeRepository** (`internal/envelope/`):
+- `GetByID(ctx, id) → (*Envelope, error)`
+- `Create(ctx, *Envelope) → error`
+- `Update(ctx, *Envelope) → error`
+
+Note: `EnvelopeRepository` needs a `FindByRequestID` method (planned, not yet added).
+
+## Policy layer (`internal/policy/`)
+
+**PolicyEvaluator** interface:
+- `Evaluate(ctx, PolicyInput) → (PolicyResult, error)`
+
+**PolicyInput**: SurfaceID, AgentID, Context map.
+**PolicyResult**: Allowed (bool), Reason (string).
+
+**NoOpPolicyEvaluator** (`noop.go`): always returns allowed. Default for development.
+
+OPA imports are not permitted outside `internal/policy/`.
+
+## Envelope state machine (`internal/envelope/`)
 
 ```
 RECEIVED → EVALUATING → OUTCOME_RECORDED → CLOSED
                       → ESCALATED → CLOSED
 ```
 
-Invalid transitions must be rejected.
+Transitions enforced by `Envelope.Transition(next)`. Returns `ErrInvalidTransition` for invalid edges. `ClosedAt` timestamp set automatically on transition to CLOSED.
 
-## API endpoints
+## HTTP layer (`internal/httpapi/`)
 
-Currently implemented:
-- `POST /v1/evaluate` — decision evaluation (stub, returns RequestClarification)
-- `GET /healthz` — health check
-- `GET /readyz` — readiness check
+Wire format types (`evaluateRequest`, `evaluateResponse`) are separate from domain types. The `toEvalRequest` function maps HTTP payload to `eval.DecisionRequest`.
 
-Planned (week 4):
-- `POST/GET/PUT /v1/surfaces` and `GET /v1/surfaces/{id}`
-- `POST/GET/PUT /v1/profiles` and `GET /v1/profiles/{id}` and `GET /v1/surfaces/{id}/profiles`
-- `POST/GET/PUT /v1/agents` and `GET /v1/agents/{id}`
-- `POST/GET/DELETE /v1/grants` and `GET /v1/grants?agent_id=...&profile_id=...`
-- `GET /v1/escalations` and `GET /v1/escalations/{id}`
-- `POST /v1/reviews`
-- `POST /v1/agents/{id}/revoke`
+The `Server` currently has a hardcoded response. Next step: inject `*decision.Orchestrator` into the server and call `Evaluate` from `handleEvaluate`.
 
-## DecisionExplanation
-
-Structured object embedded in audit records:
+## Package structure
 
 ```
-DecisionExplanation {
-    evaluation_path     []EvaluationStep
-    thresholds_applied  ThresholdsApplied
-    policy_result       PolicyResult (or null)
-    outcome             AuthorityOutcome
-}
+internal/
+  surface/         — DecisionSurface, SurfaceRepository interface
+  authority/       — AuthorityProfile, AuthorityGrant, ProfileRepository, GrantRepository interfaces
+  agent/           — Agent, AgentRepository interface
+  envelope/        — Envelope, state machine, EnvelopeRepository interface
+  decision/        — Orchestrator (evaluation flow)
+  eval/            — Outcome, ReasonCode, DecisionRequest, Consequence (shared types)
+  value/           — ConsequenceType, RiskRating (primitive value objects)
+  policy/          — PolicyEvaluator interface, NoOpPolicyEvaluator
+  escalation/      — (empty, week 4)
+  review/          — (empty, week 4)
+  audit/           — (empty, week 2)
+  metrics/         — (empty, week 5)
+  events/          — (empty, week 4)
+  httpapi/         — HTTP server, handlers, wire format mapping
+  store/
+    postgres/      — Repository implementations (surface_repo.go, authority_repo.go, agent_repo.go, envelope_repo.go)
+    migrations/    — Sequential SQL migrations
 ```
 
-Community edition: deterministic, mechanical data. No narrative prose.
+## Key design rules
 
-## External dependencies
+- **Orchestrator depends only on repository interfaces**, never on Postgres directly.
+- **OPA imports stay inside `internal/policy/` only.**
+- **Thresholds and policy live on the AuthorityProfile only.** Grants are semantically thin. Surfaces do not carry thresholds.
+- **Envelopes store evidence as references**, not copies of full configuration.
+- **Reason codes are typed constants** in `internal/eval/outcome.go`. Never use raw strings.
+- **Version resolution**: latest active version where `effective_date <= evaluation time`.
+- **Authority chain validation** runs at evaluation time AND at grant creation time.
+- **Wire format types** (`evaluateRequest`) stay in `httpapi`. Domain types (`eval.DecisionRequest`) stay in `eval`. Map between them with explicit conversion functions.
+- **Consequence comparison** between `eval.Consequence` (submitted) and `authority.Consequence` (configured threshold) needs an explicit comparison function — the types are intentionally different.
 
-- PostgreSQL 15+ (required)
-- OPA Go library — embedded, no sidecar (bundled)
-- Kafka — event publishing (optional)
+## Postgres repo files
+
+```
+internal/store/postgres/
+  surface_repo.go     — implements surface.SurfaceRepository
+  authority_repo.go   — implements authority.ProfileRepository and authority.GrantRepository
+  agent_repo.go       — implements agent.AgentRepository
+  envelope_repo.go    — implements envelope.EnvelopeRepository
+```
+
+## Migrations (planned)
+
+```
+internal/store/migrations/
+  001_decision_surfaces.sql
+  002_authority_profiles.sql
+  003_agents.sql
+  004_agent_authorizations.sql   (grants referencing profile ID)
+  005_operational_envelopes.sql
+  006_audit_records.sql          (week 2)
+  007_escalations.sql            (week 4)
+  008_human_reviews.sql          (week 4)
+```
 
 ## Build and run
 
@@ -138,8 +218,6 @@ make tidy         # Run go mod tidy
 
 This repo is the community edition (Apache 2.0). Enterprise features live in the separate `midas-enterprise` repo and must never leak into this codebase.
 
-Enterprise features include: time-bounded authority, threshold change audit, dual approval, escalation routing/SLA, reviewer authority boundaries, drift detection, RBAC, OpenTelemetry, batch evaluation, composite envelopes, policy version pinning, external policy engines.
-
 Safety features (like emergency authority revocation) are always community.
 
 ## Code style
@@ -148,3 +226,23 @@ Safety features (like emergency authority revocation) are always community.
 - `go vet` must be clean
 - Tests for all evaluation paths, reason codes, and envelope state transitions
 - Structured JSON logging with correlation IDs on every request
+- Unexported struct fields on types that are constructed via factory functions (e.g. orchestrator dependencies)
+
+# Key Design Rules
+
+1. Orchestrator depends only on repository interfaces
+2. OPA imports isolated to internal/policy
+3. Thresholds live only on AuthorityProfile
+4. Grants remain semantically thin
+5. Surfaces do not carry authority configuration
+6. Envelopes store references not copies
+7. Reason codes must be typed constants
+8. Version resolution uses effective date rules
+9. Authority chain validated at grant creation and evaluation
+10. All evaluations must be deterministic
+
+# Evaluation invariants
+Every evaluation must produce:
+- exactly one AuthorityOutcome
+- exactly one ReasonCode
+- exactly one Envelope

@@ -4,18 +4,25 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/google/uuid"
+
+	"github.com/accept-io/midas/internal/decision"
 	"github.com/accept-io/midas/internal/eval"
 	"github.com/accept-io/midas/internal/value"
 )
 
 type Server struct {
-	mux *http.ServeMux
+	mux          *http.ServeMux
+	orchestrator *decision.Orchestrator
 }
 
-func NewServer() *Server {
+func NewServer(orchestrator *decision.Orchestrator) *Server {
 	mux := http.NewServeMux()
 
-	s := &Server{mux: mux}
+	s := &Server{
+		mux:          mux,
+		orchestrator: orchestrator,
+	}
 	s.routes()
 
 	return s
@@ -98,12 +105,38 @@ func (s *Server) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = toEvalRequest(req)
+	if req.Confidence < 0 || req.Confidence > 1 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "confidence must be between 0 and 1",
+		})
+		return
+	}
+
+	if req.RequestID == "" {
+		req.RequestID = uuid.NewString()
+	}
+
+	if s.orchestrator == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "orchestrator not configured",
+		})
+		return
+	}
+
+	evalReq := toEvalRequest(req)
+
+	result, err := s.orchestrator.Evaluate(r.Context(), evalReq)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
 
 	resp := evaluateResponse{
-		Outcome:    string(eval.OutcomeReject),
-		Reason:     string(eval.ReasonProfileNotFound),
-		EnvelopeID: "",
+		Outcome:    string(result.Outcome),
+		Reason:     string(result.ReasonCode),
+		EnvelopeID: result.EnvelopeID,
 	}
 
 	writeJSON(w, http.StatusOK, resp)
