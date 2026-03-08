@@ -39,18 +39,40 @@ type Evidence struct {
 	ProfileVersion int
 	AgentID        string
 }
+type DecisionExplanation struct {
+	SurfaceID string `json:"surface_id"`
+	AgentID   string `json:"agent_id"`
+
+	ConfidenceProvided  float64 `json:"confidence_provided"`
+	ConfidenceThreshold float64 `json:"confidence_threshold"`
+
+	ConsequenceProvidedType       string  `json:"consequence_provided_type,omitempty"`
+	ConsequenceProvidedAmount     float64 `json:"consequence_provided_amount,omitempty"`
+	ConsequenceProvidedCurrency   string  `json:"consequence_provided_currency,omitempty"`
+	ConsequenceProvidedRiskRating string  `json:"consequence_provided_risk_rating,omitempty"`
+
+	ConsequenceThresholdType       string  `json:"consequence_threshold_type,omitempty"`
+	ConsequenceThresholdAmount     float64 `json:"consequence_threshold_amount,omitempty"`
+	ConsequenceThresholdCurrency   string  `json:"consequence_threshold_currency,omitempty"`
+	ConsequenceThresholdRiskRating string  `json:"consequence_threshold_risk_rating,omitempty"`
+
+	PolicyEvaluated bool   `json:"policy_evaluated"`
+	Result          string `json:"result"`
+	Reason          string `json:"reason"`
+}
 
 // Envelope is the lifecycle object for a single evaluation request.
 type Envelope struct {
-	ID         string
-	RequestID  string
-	State      EnvelopeState
-	Evidence   Evidence
-	Outcome    eval.Outcome
-	ReasonCode eval.ReasonCode
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
-	ClosedAt   *time.Time
+	ID          string
+	RequestID   string
+	State       EnvelopeState
+	Evidence    Evidence
+	Explanation *DecisionExplanation
+	Outcome     eval.Outcome
+	ReasonCode  eval.ReasonCode
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+	ClosedAt    *time.Time
 }
 
 // Transition advances the envelope to the next state.

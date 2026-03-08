@@ -131,6 +131,26 @@ func (o *Orchestrator) Evaluate(ctx context.Context, req eval.DecisionRequest) (
 		ProfileVersion: p.Version,
 		AgentID:        a.ID,
 	}
+
+	env.Explanation = &envelope.DecisionExplanation{
+		SurfaceID:                      s.ID,
+		AgentID:                        a.ID,
+		ConfidenceProvided:             req.Confidence,
+		ConfidenceThreshold:            p.ConfidenceThreshold,
+		PolicyEvaluated:                p.PolicyReference != "",
+		ConsequenceThresholdType:       string(p.ConsequenceThreshold.Type),
+		ConsequenceThresholdAmount:     p.ConsequenceThreshold.Amount,
+		ConsequenceThresholdCurrency:   p.ConsequenceThreshold.Currency,
+		ConsequenceThresholdRiskRating: string(p.ConsequenceThreshold.RiskRating),
+	}
+
+	if req.Consequence != nil {
+		env.Explanation.ConsequenceProvidedType = string(req.Consequence.Type)
+		env.Explanation.ConsequenceProvidedAmount = req.Consequence.Amount
+		env.Explanation.ConsequenceProvidedCurrency = req.Consequence.Currency
+		env.Explanation.ConsequenceProvidedRiskRating = string(req.Consequence.RiskRating)
+	}
+
 	if err := o.envelopes.Update(ctx, env); err != nil {
 		return EvaluationResult{}, err
 	}
@@ -266,6 +286,12 @@ func (o *Orchestrator) finish(
 ) (EvaluationResult, error) {
 	env.Outcome = outcome
 	env.ReasonCode = reason
+
+	if env.Explanation == nil {
+		env.Explanation = &envelope.DecisionExplanation{}
+	}
+	env.Explanation.Result = string(outcome)
+	env.Explanation.Reason = string(reason)
 
 	switch outcome {
 	case eval.OutcomeEscalate:

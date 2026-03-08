@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -36,6 +37,7 @@ func (r *EnvelopeRepo) GetByID(ctx context.Context, id string) (*envelope.Envelo
 			state,
 			outcome,
 			reason_code,
+			explanation_json,
 			created_at,
 			updated_at,
 			closed_at
@@ -67,6 +69,7 @@ func (r *EnvelopeRepo) GetByRequestID(ctx context.Context, requestID string) (*e
 			state,
 			outcome,
 			reason_code,
+			explanation_json,
 			created_at,
 			updated_at,
 			closed_at
@@ -100,6 +103,7 @@ func (r *EnvelopeRepo) List(ctx context.Context) ([]*envelope.Envelope, error) {
 			state,
 			outcome,
 			reason_code,
+			explanation_json,
 			created_at,
 			updated_at,
 			closed_at
@@ -143,15 +147,21 @@ func (r *EnvelopeRepo) Create(ctx context.Context, e *envelope.Envelope) error {
 			state,
 			outcome,
 			reason_code,
+			explanation_json,
 			created_at,
 			updated_at,
 			closed_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
 		)
 	`
 
-	_, err := r.db.ExecContext(
+	expl, err := marshalExplanation(e.Explanation)
+	if err != nil {
+		return err
+	}
+
+	_, err = r.db.ExecContext(
 		ctx,
 		q,
 		e.ID,
@@ -164,6 +174,7 @@ func (r *EnvelopeRepo) Create(ctx context.Context, e *envelope.Envelope) error {
 		e.State,
 		nullableOutcome(e.Outcome),
 		nullableReasonCode(e.ReasonCode),
+		expl,
 		e.CreatedAt,
 		e.UpdatedAt,
 		nullableTime(e.ClosedAt),
@@ -184,10 +195,16 @@ func (r *EnvelopeRepo) Update(ctx context.Context, e *envelope.Envelope) error {
 			state = $8,
 			outcome = $9,
 			reason_code = $10,
-			updated_at = $11,
-			closed_at = $12
+			explanation_json = $11,
+			updated_at = $12,
+			closed_at = $13
 		WHERE id = $1
 	`
+
+	expl, err := marshalExplanation(e.Explanation)
+	if err != nil {
+		return err
+	}
 
 	res, err := r.db.ExecContext(
 		ctx,
@@ -202,6 +219,7 @@ func (r *EnvelopeRepo) Update(ctx context.Context, e *envelope.Envelope) error {
 		e.State,
 		nullableOutcome(e.Outcome),
 		nullableReasonCode(e.ReasonCode),
+		expl,
 		e.UpdatedAt,
 		nullableTime(e.ClosedAt),
 	)
@@ -226,15 +244,16 @@ type envelopeScanner interface {
 
 func scanEnvelopeRow(row envelopeScanner) (*envelope.Envelope, error) {
 	var (
-		e              envelope.Envelope
-		surfaceID      sql.NullString
-		surfaceVersion sql.NullInt64
-		profileID      sql.NullString
-		profileVersion sql.NullInt64
-		agentID        sql.NullString
-		outcome        sql.NullString
-		reasonCode     sql.NullString
-		closedAt       sql.NullTime
+		e               envelope.Envelope
+		surfaceID       sql.NullString
+		surfaceVersion  sql.NullInt64
+		profileID       sql.NullString
+		profileVersion  sql.NullInt64
+		agentID         sql.NullString
+		outcome         sql.NullString
+		reasonCode      sql.NullString
+		explanationJSON []byte
+		closedAt        sql.NullTime
 	)
 
 	err := row.Scan(
@@ -248,6 +267,7 @@ func scanEnvelopeRow(row envelopeScanner) (*envelope.Envelope, error) {
 		&e.State,
 		&outcome,
 		&reasonCode,
+		&explanationJSON,
 		&e.CreatedAt,
 		&e.UpdatedAt,
 		&closedAt,
@@ -277,12 +297,43 @@ func scanEnvelopeRow(row envelopeScanner) (*envelope.Envelope, error) {
 	if reasonCode.Valid {
 		e.ReasonCode = eval.ReasonCode(reasonCode.String)
 	}
+	if len(explanationJSON) > 0 {
+		expl, err := unmarshalExplanation(explanationJSON)
+		if err != nil {
+			return nil, err
+		}
+		e.Explanation = expl
+	}
 	if closedAt.Valid {
 		t := closedAt.Time
 		e.ClosedAt = &t
 	}
 
 	return &e, nil
+}
+
+func marshalExplanation(expl *envelope.DecisionExplanation) (any, error) {
+	if expl == nil {
+		return nil, nil
+	}
+
+	b, err := json.Marshal(expl)
+	if err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+func unmarshalExplanation(raw []byte) (*envelope.DecisionExplanation, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+
+	var expl envelope.DecisionExplanation
+	if err := json.Unmarshal(raw, &expl); err != nil {
+		return nil, err
+	}
+	return &expl, nil
 }
 
 func nullableInt(v int) any {
