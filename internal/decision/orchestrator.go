@@ -312,3 +312,14 @@ func hasRequiredContext(ctxMap map[string]any, required []string) bool {
 
 	return true
 }
+
+func (o *Orchestrator) GetEnvelopeByID(ctx context.Context, id string) (*envelope.Envelope, error) {
+	if id == "" {
+		return nil, nil
+	}
+	return o.envelopes.GetByID(ctx, id)
+}
+
+func (o *Orchestrator) ListEnvelopes(ctx context.Context) ([]*envelope.Envelope, error) {
+	return o.envelopes.List(ctx)
+}

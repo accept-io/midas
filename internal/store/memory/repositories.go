@@ -165,6 +165,14 @@ func (r *EnvelopeRepo) GetByID(ctx context.Context, id string) (*envelope.Envelo
 	return r.items[id], nil
 }
 
+func (r *EnvelopeRepo) List(ctx context.Context) ([]*envelope.Envelope, error) {
+	var out []*envelope.Envelope
+	for _, v := range r.items {
+		out = append(out, v)
+	}
+	return out, nil
+}
+
 func (r *EnvelopeRepo) Create(ctx context.Context, e *envelope.Envelope) error {
 	r.items[e.ID] = e
 	return nil
@@ -174,3 +182,9 @@ func (r *EnvelopeRepo) Update(ctx context.Context, e *envelope.Envelope) error {
 	r.items[e.ID] = e
 	return nil
 }
+
+var _ surface.SurfaceRepository = (*SurfaceRepo)(nil)
+var _ agent.AgentRepository = (*AgentRepo)(nil)
+var _ authority.ProfileRepository = (*ProfileRepo)(nil)
+var _ authority.GrantRepository = (*GrantRepo)(nil)
+var _ envelope.EnvelopeRepository = (*EnvelopeRepo)(nil)

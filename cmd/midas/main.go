@@ -2,99 +2,47 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"log"
-	"time"
+	"os"
 
-	"github.com/accept-io/midas/internal/agent"
-	"github.com/accept-io/midas/internal/authority"
+	_ "github.com/lib/pq"
+
+	"github.com/accept-io/midas/internal/bootstrap"
 	"github.com/accept-io/midas/internal/decision"
 	"github.com/accept-io/midas/internal/httpapi"
 	"github.com/accept-io/midas/internal/policy"
+	"github.com/accept-io/midas/internal/store"
 	"github.com/accept-io/midas/internal/store/memory"
-	"github.com/accept-io/midas/internal/surface"
+	"github.com/accept-io/midas/internal/store/postgres"
 )
 
 func main() {
+	ctx := context.Background()
 
-	surfaces := memory.NewSurfaceRepo()
-	profiles := memory.NewProfileRepo()
-	grants := memory.NewGrantRepo()
-	agents := memory.NewAgentRepo()
-	envelopes := memory.NewEnvelopeRepo()
-
-	now := time.Now().UTC()
-
-	err := surfaces.Create(context.Background(), &surface.DecisionSurface{
-		ID:             "loan_auto_approval",
-		Name:           "Loan Auto Approval",
-		Domain:         "lending",
-		BusinessOwner:  "credit-risk",
-		TechnicalOwner: "midas",
-		Status:         surface.SurfaceStatusActive,
-		Version:        1,
-		EffectiveDate:  now.Add(-time.Hour),
-		CreatedAt:      now,
-		UpdatedAt:      now,
-	})
+	repos, backend, cleanup, err := buildRepositories(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	err = agents.Create(context.Background(), &agent.Agent{
-		ID:               "agent-credit-1",
-		Name:             "Credit Decision Agent",
-		Type:             agent.AgentTypeAI,
-		Owner:            "accept.io",
-		ModelVersion:     "v1",
-		Endpoint:         "local",
-		OperationalState: agent.OperationalStateActive,
-		CreatedAt:        now,
-		UpdatedAt:        now,
-	})
-	if err != nil {
-		log.Fatal(err)
+	if cleanup != nil {
+		defer cleanup()
 	}
 
-	err = profiles.Create(context.Background(), &authority.AuthorityProfile{
-		ID:                  "profile-loan-low",
-		SurfaceID:           "loan_auto_approval",
-		Name:                "Low Risk Loan Authority",
-		ConfidenceThreshold: 0.80,
-		PolicyReference:     "",
-		EscalationMode:      authority.EscalationModeAuto,
-		FailMode:            authority.FailModeClosed,
-		RequiredContextKeys: []string{"customer_id", "loan_amount"},
-		Version:             1,
-		EffectiveDate:       now.Add(-time.Hour),
-		CreatedAt:           now,
-		UpdatedAt:           now,
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	err = grants.Create(context.Background(), &authority.AuthorityGrant{
-		ID:            "grant-credit-1",
-		AgentID:       "agent-credit-1",
-		ProfileID:     "profile-loan-low",
-		GrantedBy:     "system",
-		EffectiveDate: now.Add(-time.Hour),
-		Status:        authority.GrantStatusActive,
-		CreatedAt:     now,
-		UpdatedAt:     now,
-	})
-	if err != nil {
-		log.Fatal(err)
+	if backend == "memory" {
+		err := bootstrap.SeedDemo(ctx, repos)
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	policies := policy.NoOpPolicyEvaluator{}
 
 	orchestrator, err := decision.NewOrchestrator(
-		surfaces,
-		profiles,
-		grants,
-		agents,
-		envelopes,
+		repos.Surfaces,
+		repos.Profiles,
+		repos.Grants,
+		repos.Agents,
+		repos.Envelopes,
 		policies,
 	)
 	if err != nil {
@@ -103,6 +51,59 @@ func main() {
 
 	srv := httpapi.NewServer(orchestrator)
 
-	log.Println("MIDAS listening on :8080")
+	log.Printf("MIDAS listening on :8080 (store=%s)", backend)
 	log.Fatal(srv.ListenAndServe(":8080"))
+}
+
+func buildRepositories(ctx context.Context) (*store.Repositories, string, func(), error) {
+	backend := os.Getenv("MIDAS_STORE")
+	if backend == "" {
+		backend = "memory"
+	}
+
+	switch backend {
+	case "postgres":
+		databaseURL := os.Getenv("DATABASE_URL")
+		if databaseURL == "" {
+			return nil, "", nil, logError("MIDAS_STORE=postgres but DATABASE_URL is not set")
+		}
+
+		db, err := sql.Open("postgres", databaseURL)
+		if err != nil {
+			return nil, "", nil, err
+		}
+
+		if err := db.PingContext(ctx); err != nil {
+			_ = db.Close()
+			return nil, "", nil, err
+		}
+
+		repos, err := postgres.NewRepositories(db)
+		if err != nil {
+			_ = db.Close()
+			return nil, "", nil, err
+		}
+
+		cleanup := func() {
+			if err := db.Close(); err != nil {
+				log.Printf("error closing database: %v", err)
+			}
+		}
+
+		return repos, backend, cleanup, nil
+
+	case "memory":
+		return memory.NewRepositories(), backend, nil, nil
+
+	default:
+		return nil, "", nil, logError("unsupported MIDAS_STORE: " + backend)
+	}
+}
+
+type simpleError string
+
+func (e simpleError) Error() string { return string(e) }
+
+func logError(msg string) error {
+	return simpleError(msg)
 }

@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -32,6 +33,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/healthz", s.handleHealth)
 	s.mux.HandleFunc("/readyz", s.handleReady)
 	s.mux.HandleFunc("/v1/evaluate", s.handleEvaluate)
+	s.mux.HandleFunc("/v1/envelopes/", s.handleGetEnvelope)
+	s.mux.HandleFunc("/v1/envelopes", s.handleListEnvelopes)
 }
 
 func (s *Server) ListenAndServe(addr string) error {
@@ -140,6 +143,69 @@ func (s *Server) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleGetEnvelope(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+
+	id := strings.TrimPrefix(r.URL.Path, "/v1/envelopes/")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "missing envelope id",
+		})
+		return
+	}
+
+	if s.orchestrator == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "orchestrator not configured",
+		})
+		return
+	}
+
+	env, err := s.orchestrator.GetEnvelopeByID(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	if env == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{
+			"error": "envelope not found",
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, env)
+}
+
+func (s *Server) handleListEnvelopes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+
+	if s.orchestrator == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "orchestrator not configured",
+		})
+		return
+	}
+
+	envs, err := s.orchestrator.ListEnvelopes(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, envs)
 }
 
 // toEvalRequest maps the HTTP request payload into the runtime evaluation contract.

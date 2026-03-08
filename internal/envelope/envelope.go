@@ -73,6 +73,7 @@ func (e *Envelope) Transition(next EnvelopeState) error {
 // EnvelopeRepository defines persistence operations for Envelope.
 type EnvelopeRepository interface {
 	GetByID(ctx context.Context, id string) (*Envelope, error)
+	List(ctx context.Context) ([]*Envelope, error)
 	Create(ctx context.Context, env *Envelope) error
 	Update(ctx context.Context, env *Envelope) error
 }
