@@ -7,41 +7,50 @@ permissions:
   id-token: write
   contents: read
 
-env:
-  RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
-  CONTAINER_APP_NAME: ${{ vars.CONTAINER_APP_NAME }}
-  REGISTRY_NAME: ${{ vars.REGISTRY_NAME }}
-  REGISTRY_LOGIN_SERVER: ${{ vars.REGISTRY_LOGIN_SERVER }}
-  IMAGE_NAME: midas-api
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
     environment: production
 
+    env:
+      RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
+      CONTAINER_APP_NAME: ${{ vars.CONTAINER_APP_NAME }}
+      REGISTRY_NAME: ${{ vars.REGISTRY_NAME }}
+      REGISTRY_LOGIN_SERVER: ${{ vars.REGISTRY_LOGIN_SERVER }}
+      IMAGE_NAME: midas-api
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Azure login with OIDC
+      - name: Azure login using OIDC
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Log in to Azure Container Registry
+      - name: Debug variables
+        run: |
+          echo "RESOURCE_GROUP=$RESOURCE_GROUP"
+          echo "CONTAINER_APP_NAME=$CONTAINER_APP_NAME"
+          echo "REGISTRY_NAME=$REGISTRY_NAME"
+          echo "REGISTRY_LOGIN_SERVER=$REGISTRY_LOGIN_SERVER"
+
+      - name: Login to Azure Container Registry
         run: az acr login --name $REGISTRY_NAME
 
-      - name: Build image
+      - name: Build Docker image
         run: |
-          docker build -t $REGISTRY_LOGIN_SERVER/$IMAGE_NAME:${{ github.sha }} .
+          docker build \
+          -t $REGISTRY_LOGIN_SERVER/$IMAGE_NAME:${{ github.sha }} .
 
-      - name: Push image
+      - name: Push Docker image
         run: |
-          docker push $REGISTRY_LOGIN_SERVER/$IMAGE_NAME:${{ github.sha }}
+          docker push \
+          $REGISTRY_LOGIN_SERVER/$IMAGE_NAME:${{ github.sha }}
 
-      - name: Deploy to Container App
+      - name: Deploy to Azure Container Apps
         uses: azure/container-apps-deploy-action@v1
         with:
           resourceGroup: ${{ env.RESOURCE_GROUP }}
