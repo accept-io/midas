@@ -56,6 +56,15 @@ func (r *AgentRepo) GetByID(ctx context.Context, id string) (*agent.Agent, error
 	return r.items[id], nil
 }
 
+func (r *EnvelopeRepo) GetByRequestID(ctx context.Context, requestID string) (*envelope.Envelope, error) {
+	for _, v := range r.items {
+		if v.RequestID == requestID {
+			return v, nil
+		}
+	}
+	return nil, nil
+}
+
 func (r *AgentRepo) Create(ctx context.Context, a *agent.Agent) error {
 	r.items[a.ID] = a
 	return nil

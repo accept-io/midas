@@ -35,6 +35,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/v1/evaluate", s.handleEvaluate)
 	s.mux.HandleFunc("/v1/envelopes/", s.handleGetEnvelope)
 	s.mux.HandleFunc("/v1/envelopes", s.handleListEnvelopes)
+	s.mux.HandleFunc("/v1/decisions/request/", s.handleGetDecisionByRequestID)
 }
 
 func (s *Server) ListenAndServe(addr string) error {
@@ -206,6 +207,45 @@ func (s *Server) handleListEnvelopes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, envs)
+}
+
+func (s *Server) handleGetDecisionByRequestID(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+
+	requestID := strings.TrimPrefix(r.URL.Path, "/v1/decisions/request/")
+	if requestID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "missing request id",
+		})
+		return
+	}
+
+	if s.orchestrator == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "orchestrator not configured",
+		})
+		return
+	}
+
+	env, err := s.orchestrator.GetEnvelopeByRequestID(r.Context(), requestID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	if env == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{
+			"error": "decision not found",
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, env)
 }
 
 // toEvalRequest maps the HTTP request payload into the runtime evaluation contract.

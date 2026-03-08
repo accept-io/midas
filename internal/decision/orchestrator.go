@@ -320,6 +320,13 @@ func (o *Orchestrator) GetEnvelopeByID(ctx context.Context, id string) (*envelop
 	return o.envelopes.GetByID(ctx, id)
 }
 
+func (o *Orchestrator) GetEnvelopeByRequestID(ctx context.Context, requestID string) (*envelope.Envelope, error) {
+	if requestID == "" {
+		return nil, nil
+	}
+	return o.envelopes.GetByRequestID(ctx, requestID)
+}
+
 func (o *Orchestrator) ListEnvelopes(ctx context.Context) ([]*envelope.Envelope, error) {
 	return o.envelopes.List(ctx)
 }

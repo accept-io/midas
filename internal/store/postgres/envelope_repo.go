@@ -54,6 +54,39 @@ func (r *EnvelopeRepo) GetByID(ctx context.Context, id string) (*envelope.Envelo
 	return e, nil
 }
 
+func (r *EnvelopeRepo) GetByRequestID(ctx context.Context, requestID string) (*envelope.Envelope, error) {
+	const q = `
+		SELECT
+			id,
+			request_id,
+			surface_id,
+			surface_version,
+			profile_id,
+			profile_version,
+			agent_id,
+			state,
+			outcome,
+			reason_code,
+			created_at,
+			updated_at,
+			closed_at
+		FROM operational_envelopes
+		WHERE request_id = $1
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`
+
+	e, err := scanEnvelopeRow(r.db.QueryRowContext(ctx, q, requestID))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	return e, nil
+}
+
 func (r *EnvelopeRepo) List(ctx context.Context) ([]*envelope.Envelope, error) {
 	const q = `
 		SELECT
