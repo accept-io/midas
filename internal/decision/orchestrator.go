@@ -144,12 +144,16 @@ func (o *Orchestrator) Evaluate(ctx context.Context, req eval.DecisionRequest) (
 	}
 
 	// Step 3: Authority chain resolution (grant + profile + chain validation)
-	_, p, outcome, reason, err := o.resolveAuthorityChain(ctx, req.AgentID, req.SurfaceID, now)
+	g, p, outcome, reason, err := o.resolveAuthorityChain(ctx, req.AgentID, req.SurfaceID, now)
 	if err != nil {
 		return EvaluationResult{}, err
 	}
 	if outcome != "" {
 		return o.finish(ctx, env, outcome, reason)
+	}
+
+	if err := o.appendAuthorityChainResolvedEvent(ctx, env, g, p); err != nil {
+		return EvaluationResult{}, err
 	}
 
 	// Record evidence references on the envelope
@@ -337,6 +341,10 @@ func (o *Orchestrator) finish(
 	env.Explanation.Result = string(outcome)
 	env.Explanation.Reason = string(reason)
 
+	if err := o.appendOutcomeRecordedEvent(ctx, env, outcome, reason); err != nil {
+		return EvaluationResult{}, err
+	}
+
 	switch outcome {
 	case eval.OutcomeEscalate:
 		if err := env.Transition(envelope.EnvelopeStateEscalated); err != nil {
@@ -426,4 +434,30 @@ func (o *Orchestrator) appendResolutionEvent(
 	payload map[string]any,
 ) error {
 	return o.appendAuditEvent(ctx, env, eventType, payload)
+}
+
+func (o *Orchestrator) appendAuthorityChainResolvedEvent(
+	ctx context.Context,
+	env *envelope.Envelope,
+	g *authority.AuthorityGrant,
+	p *authority.AuthorityProfile,
+) error {
+	return o.appendAuditEvent(ctx, env, audit.AuditEventAuthorityChainResolved, map[string]any{
+		"grant_id":        g.ID,
+		"profile_id":      p.ID,
+		"profile_version": p.Version,
+		"agent_id":        g.AgentID,
+	})
+}
+
+func (o *Orchestrator) appendOutcomeRecordedEvent(
+	ctx context.Context,
+	env *envelope.Envelope,
+	outcome eval.Outcome,
+	reason eval.ReasonCode,
+) error {
+	return o.appendAuditEvent(ctx, env, audit.AuditEventOutcomeRecorded, map[string]any{
+		"outcome":     string(outcome),
+		"reason_code": string(reason),
+	})
 }

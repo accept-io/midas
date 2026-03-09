@@ -173,6 +173,29 @@ func payloadString(t *testing.T, payload map[string]any, key string) string {
 	}
 }
 
+func payloadInt(t *testing.T, payload map[string]any, key string) int {
+	t.Helper()
+
+	v, ok := payload[key]
+	if !ok {
+		t.Fatalf("expected %s in payload, got %+v", key, payload)
+	}
+
+	switch n := v.(type) {
+	case int:
+		return n
+	case int32:
+		return int(n)
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	default:
+		t.Fatalf("expected %s to be numeric, got %T", key, v)
+		return 0
+	}
+}
+
 // TestEvaluate_WithinAuthority covers the full happy path where all checks pass.
 func TestEvaluate_WithinAuthority(t *testing.T) {
 	r := newRepos()
@@ -188,8 +211,8 @@ func TestEvaluate_WithinAuthority(t *testing.T) {
 	assertResult(t, result, eval.OutcomeExecute, eval.ReasonWithinAuthority)
 }
 
-// TestEvaluate_EmitsInitialAuditEvents verifies the first audit slices:
-// ENVELOPE_CREATED, STATE_TRANSITIONED, SURFACE_RESOLVED, AGENT_RESOLVED.
+// TestEvaluate_EmitsInitialAuditEvents verifies the current happy-path audit stream:
+// ENVELOPE_CREATED, STATE_TRANSITIONED, SURFACE_RESOLVED, AGENT_RESOLVED, AUTHORITY_CHAIN_RESOLVED.
 func TestEvaluate_EmitsInitialAuditEvents(t *testing.T) {
 	r := newRepos()
 	seedActiveSurface(t, r, "surf-1")
@@ -207,8 +230,8 @@ func TestEvaluate_EmitsInitialAuditEvents(t *testing.T) {
 		t.Fatalf("ListByEnvelopeID: %v", err)
 	}
 
-	if len(events) < 4 {
-		t.Fatalf("expected at least 4 audit events, got %d", len(events))
+	if len(events) < 5 {
+		t.Fatalf("expected at least 5 audit events, got %d", len(events))
 	}
 
 	if events[0].EventType != audit.AuditEventEnvelopeCreated {
@@ -235,21 +258,8 @@ func TestEvaluate_EmitsInitialAuditEvents(t *testing.T) {
 		t.Fatalf("expected surface_id %q, got %q", "surf-1", got)
 	}
 
-	surfaceVersion, ok := events[2].Payload["surface_version"]
-	if !ok {
-		t.Fatalf("expected surface_version in payload, got %+v", events[2].Payload)
-	}
-	switch v := surfaceVersion.(type) {
-	case int:
-		if v != 1 {
-			t.Fatalf("expected surface_version 1, got %d", v)
-		}
-	case float64:
-		if v != 1 {
-			t.Fatalf("expected surface_version 1, got %v", v)
-		}
-	default:
-		t.Fatalf("expected surface_version to be numeric, got %T", surfaceVersion)
+	if got := payloadInt(t, events[2].Payload, "surface_version"); got != 1 {
+		t.Fatalf("expected surface_version %d, got %d", 1, got)
 	}
 
 	if events[3].EventType != audit.AuditEventAgentResolved {
@@ -258,6 +268,64 @@ func TestEvaluate_EmitsInitialAuditEvents(t *testing.T) {
 
 	if got := payloadString(t, events[3].Payload, "agent_id"); got != "agent-1" {
 		t.Fatalf("expected agent_id %q, got %q", "agent-1", got)
+	}
+
+	if events[4].EventType != audit.AuditEventAuthorityChainResolved {
+		t.Fatalf("expected fifth event %q, got %q", audit.AuditEventAuthorityChainResolved, events[4].EventType)
+	}
+
+	if got := payloadString(t, events[4].Payload, "grant_id"); got != "grant-1" {
+		t.Fatalf("expected grant_id %q, got %q", "grant-1", got)
+	}
+
+	if got := payloadString(t, events[4].Payload, "profile_id"); got != "prof-1" {
+		t.Fatalf("expected profile_id %q, got %q", "prof-1", got)
+	}
+
+	if got := payloadInt(t, events[4].Payload, "profile_version"); got != 1 {
+		t.Fatalf("expected profile_version %d, got %d", 1, got)
+	}
+
+	if got := payloadString(t, events[4].Payload, "agent_id"); got != "agent-1" {
+		t.Fatalf("expected agent_id %q, got %q", "agent-1", got)
+	}
+}
+
+// TestEvaluate_EmitsOutcomeRecordedEvent verifies that finish() appends OUTCOME_RECORDED.
+func TestEvaluate_EmitsOutcomeRecordedEvent(t *testing.T) {
+	r := newRepos()
+	seedActiveSurface(t, r, "surf-1")
+	seedAgent(t, r, "agent-1")
+	seedProfile(t, r, "prof-1", "surf-1")
+	seedActiveGrant(t, r, "grant-1", "agent-1", "prof-1")
+
+	result, err := newOrchestrator(t, r).Evaluate(context.Background(), baseRequest("surf-1", "agent-1"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	events, err := r.audit.ListByEnvelopeID(context.Background(), result.EnvelopeID)
+	if err != nil {
+		t.Fatalf("ListByEnvelopeID: %v", err)
+	}
+
+	found := false
+	for _, ev := range events {
+		if ev.EventType == audit.AuditEventOutcomeRecorded {
+			found = true
+
+			if got := payloadString(t, ev.Payload, "outcome"); got != string(eval.OutcomeExecute) {
+				t.Fatalf("expected outcome %q, got %q", eval.OutcomeExecute, got)
+			}
+			if got := payloadString(t, ev.Payload, "reason_code"); got != string(eval.ReasonWithinAuthority) {
+				t.Fatalf("expected reason_code %q, got %q", eval.ReasonWithinAuthority, got)
+			}
+			break
+		}
+	}
+
+	if !found {
+		t.Fatal("expected OUTCOME_RECORDED event to be emitted")
 	}
 }
 
