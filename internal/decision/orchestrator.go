@@ -47,7 +47,6 @@ func NewOrchestrator(
 	auditRepo audit.AuditEventRepository,
 	policies policy.PolicyEvaluator,
 ) (*Orchestrator, error) {
-
 	if surfaces == nil || profiles == nil || grants == nil ||
 		agents == nil || envelopes == nil || auditRepo == nil || policies == nil {
 		return nil, ErrNilOrchestratorDependency
@@ -122,6 +121,13 @@ func (o *Orchestrator) Evaluate(ctx context.Context, req eval.DecisionRequest) (
 		return o.finish(ctx, env, outcome, reason)
 	}
 
+	if err := o.appendResolutionEvent(ctx, env, audit.AuditEventSurfaceResolved, map[string]any{
+		"surface_id":      s.ID,
+		"surface_version": s.Version,
+	}); err != nil {
+		return EvaluationResult{}, err
+	}
+
 	// Step 2: Agent resolution
 	a, outcome, reason, err := o.resolveAgent(ctx, req.AgentID)
 	if err != nil {
@@ -129,6 +135,12 @@ func (o *Orchestrator) Evaluate(ctx context.Context, req eval.DecisionRequest) (
 	}
 	if outcome != "" {
 		return o.finish(ctx, env, outcome, reason)
+	}
+
+	if err := o.appendResolutionEvent(ctx, env, audit.AuditEventAgentResolved, map[string]any{
+		"agent_id": a.ID,
+	}); err != nil {
+		return EvaluationResult{}, err
 	}
 
 	// Step 3: Authority chain resolution (grant + profile + chain validation)
@@ -405,4 +417,13 @@ func (o *Orchestrator) appendAuditEvent(
 	)
 
 	return o.audit.Append(ctx, ev)
+}
+
+func (o *Orchestrator) appendResolutionEvent(
+	ctx context.Context,
+	env *envelope.Envelope,
+	eventType audit.AuditEventType,
+	payload map[string]any,
+) error {
+	return o.appendAuditEvent(ctx, env, eventType, payload)
 }

@@ -154,6 +154,25 @@ func assertResult(t *testing.T, got decision.EvaluationResult, wantOutcome eval.
 	}
 }
 
+func payloadString(t *testing.T, payload map[string]any, key string) string {
+	t.Helper()
+
+	v, ok := payload[key]
+	if !ok {
+		t.Fatalf("expected %s in payload, got %+v", key, payload)
+	}
+
+	switch s := v.(type) {
+	case string:
+		return s
+	case envelope.EnvelopeState:
+		return string(s)
+	default:
+		t.Fatalf("expected %s to be string-like, got %T", key, v)
+		return ""
+	}
+}
+
 // TestEvaluate_WithinAuthority covers the full happy path where all checks pass.
 func TestEvaluate_WithinAuthority(t *testing.T) {
 	r := newRepos()
@@ -169,8 +188,8 @@ func TestEvaluate_WithinAuthority(t *testing.T) {
 	assertResult(t, result, eval.OutcomeExecute, eval.ReasonWithinAuthority)
 }
 
-// TestEvaluate_EmitsInitialAuditEvents verifies the first audit slice:
-// ENVELOPE_CREATED followed by STATE_TRANSITIONED to EVALUATING.
+// TestEvaluate_EmitsInitialAuditEvents verifies the first audit slices:
+// ENVELOPE_CREATED, STATE_TRANSITIONED, SURFACE_RESOLVED, AGENT_RESOLVED.
 func TestEvaluate_EmitsInitialAuditEvents(t *testing.T) {
 	r := newRepos()
 	seedActiveSurface(t, r, "surf-1")
@@ -188,8 +207,8 @@ func TestEvaluate_EmitsInitialAuditEvents(t *testing.T) {
 		t.Fatalf("ListByEnvelopeID: %v", err)
 	}
 
-	if len(events) < 2 {
-		t.Fatalf("expected at least 2 audit events, got %d", len(events))
+	if len(events) < 4 {
+		t.Fatalf("expected at least 4 audit events, got %d", len(events))
 	}
 
 	if events[0].EventType != audit.AuditEventEnvelopeCreated {
@@ -206,6 +225,39 @@ func TestEvaluate_EmitsInitialAuditEvents(t *testing.T) {
 
 	if got := payloadString(t, events[1].Payload, "to_state"); got != string(envelope.EnvelopeStateEvaluating) {
 		t.Fatalf("expected to_state %q, got %q", envelope.EnvelopeStateEvaluating, got)
+	}
+
+	if events[2].EventType != audit.AuditEventSurfaceResolved {
+		t.Fatalf("expected third event %q, got %q", audit.AuditEventSurfaceResolved, events[2].EventType)
+	}
+
+	if got := payloadString(t, events[2].Payload, "surface_id"); got != "surf-1" {
+		t.Fatalf("expected surface_id %q, got %q", "surf-1", got)
+	}
+
+	surfaceVersion, ok := events[2].Payload["surface_version"]
+	if !ok {
+		t.Fatalf("expected surface_version in payload, got %+v", events[2].Payload)
+	}
+	switch v := surfaceVersion.(type) {
+	case int:
+		if v != 1 {
+			t.Fatalf("expected surface_version 1, got %d", v)
+		}
+	case float64:
+		if v != 1 {
+			t.Fatalf("expected surface_version 1, got %v", v)
+		}
+	default:
+		t.Fatalf("expected surface_version to be numeric, got %T", surfaceVersion)
+	}
+
+	if events[3].EventType != audit.AuditEventAgentResolved {
+		t.Fatalf("expected fourth event %q, got %q", audit.AuditEventAgentResolved, events[3].EventType)
+	}
+
+	if got := payloadString(t, events[3].Payload, "agent_id"); got != "agent-1" {
+		t.Fatalf("expected agent_id %q, got %q", "agent-1", got)
 	}
 }
 
@@ -365,23 +417,4 @@ func TestEvaluate_ConsequenceExceedsLimit(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	assertResult(t, result, eval.OutcomeEscalate, eval.ReasonConsequenceExceedsLimit)
-}
-
-func payloadString(t *testing.T, payload map[string]any, key string) string {
-	t.Helper()
-
-	v, ok := payload[key]
-	if !ok {
-		t.Fatalf("expected %s in payload, got %+v", key, payload)
-	}
-
-	switch s := v.(type) {
-	case string:
-		return s
-	case envelope.EnvelopeState:
-		return string(s)
-	default:
-		t.Fatalf("expected %s to be string-like, got %T", key, v)
-		return ""
-	}
 }
