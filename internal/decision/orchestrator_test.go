@@ -111,6 +111,29 @@ func seedProfile(t *testing.T, r testRepos, id, surfaceID string) {
 	}
 }
 
+// seedProfileWithPolicy adds a profile with a policy reference.
+func seedProfileWithPolicy(t *testing.T, r testRepos, id, surfaceID, policyRef string) {
+	t.Helper()
+
+	err := r.profiles.Create(context.Background(), &authority.AuthorityProfile{
+		ID:                  id,
+		SurfaceID:           surfaceID,
+		Name:                "policy profile",
+		ConfidenceThreshold: 0.8,
+		ConsequenceThreshold: authority.Consequence{
+			Type:       value.ConsequenceTypeRiskRating,
+			RiskRating: value.RiskRatingHigh,
+		},
+		PolicyReference: policyRef,
+		FailMode:        authority.FailModeClosed,
+		Version:         1,
+		EffectiveDate:   time.Now().Add(-time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("seed profile %q: %v", id, err)
+	}
+}
+
 // seedActiveGrant creates an active grant linking agentID to profileID.
 func seedActiveGrant(t *testing.T, r testRepos, id, agentID, profileID string) {
 	t.Helper()
@@ -196,6 +219,21 @@ func payloadInt(t *testing.T, payload map[string]any, key string) int {
 	}
 }
 
+func payloadBool(t *testing.T, payload map[string]any, key string) bool {
+	t.Helper()
+
+	v, ok := payload[key]
+	if !ok {
+		t.Fatalf("expected %s in payload, got %+v", key, payload)
+	}
+
+	b, ok := v.(bool)
+	if !ok {
+		t.Fatalf("expected %s to be bool, got %T", key, v)
+	}
+	return b
+}
+
 // TestEvaluate_WithinAuthority covers the full happy path where all checks pass.
 func TestEvaluate_WithinAuthority(t *testing.T) {
 	r := newRepos()
@@ -211,8 +249,7 @@ func TestEvaluate_WithinAuthority(t *testing.T) {
 	assertResult(t, result, eval.OutcomeExecute, eval.ReasonWithinAuthority)
 }
 
-// TestEvaluate_EmitsInitialAuditEvents verifies the current happy-path audit stream:
-// ENVELOPE_CREATED, STATE_TRANSITIONED, SURFACE_RESOLVED, AGENT_RESOLVED, AUTHORITY_CHAIN_RESOLVED.
+// TestEvaluate_EmitsInitialAuditEvents verifies the current happy-path audit stream.
 func TestEvaluate_EmitsInitialAuditEvents(t *testing.T) {
 	r := newRepos()
 	seedActiveSurface(t, r, "surf-1")
@@ -230,8 +267,8 @@ func TestEvaluate_EmitsInitialAuditEvents(t *testing.T) {
 		t.Fatalf("ListByEnvelopeID: %v", err)
 	}
 
-	if len(events) < 5 {
-		t.Fatalf("expected at least 5 audit events, got %d", len(events))
+	if len(events) < 9 {
+		t.Fatalf("expected at least 9 audit events, got %d", len(events))
 	}
 
 	if events[0].EventType != audit.AuditEventEnvelopeCreated {
@@ -241,11 +278,9 @@ func TestEvaluate_EmitsInitialAuditEvents(t *testing.T) {
 	if events[1].EventType != audit.AuditEventStateTransitioned {
 		t.Fatalf("expected second event %q, got %q", audit.AuditEventStateTransitioned, events[1].EventType)
 	}
-
 	if got := payloadString(t, events[1].Payload, "from_state"); got != string(envelope.EnvelopeStateReceived) {
 		t.Fatalf("expected from_state %q, got %q", envelope.EnvelopeStateReceived, got)
 	}
-
 	if got := payloadString(t, events[1].Payload, "to_state"); got != string(envelope.EnvelopeStateEvaluating) {
 		t.Fatalf("expected to_state %q, got %q", envelope.EnvelopeStateEvaluating, got)
 	}
@@ -253,11 +288,9 @@ func TestEvaluate_EmitsInitialAuditEvents(t *testing.T) {
 	if events[2].EventType != audit.AuditEventSurfaceResolved {
 		t.Fatalf("expected third event %q, got %q", audit.AuditEventSurfaceResolved, events[2].EventType)
 	}
-
 	if got := payloadString(t, events[2].Payload, "surface_id"); got != "surf-1" {
 		t.Fatalf("expected surface_id %q, got %q", "surf-1", got)
 	}
-
 	if got := payloadInt(t, events[2].Payload, "surface_version"); got != 1 {
 		t.Fatalf("expected surface_version %d, got %d", 1, got)
 	}
@@ -265,7 +298,6 @@ func TestEvaluate_EmitsInitialAuditEvents(t *testing.T) {
 	if events[3].EventType != audit.AuditEventAgentResolved {
 		t.Fatalf("expected fourth event %q, got %q", audit.AuditEventAgentResolved, events[3].EventType)
 	}
-
 	if got := payloadString(t, events[3].Payload, "agent_id"); got != "agent-1" {
 		t.Fatalf("expected agent_id %q, got %q", "agent-1", got)
 	}
@@ -273,33 +305,63 @@ func TestEvaluate_EmitsInitialAuditEvents(t *testing.T) {
 	if events[4].EventType != audit.AuditEventAuthorityChainResolved {
 		t.Fatalf("expected fifth event %q, got %q", audit.AuditEventAuthorityChainResolved, events[4].EventType)
 	}
-
 	if got := payloadString(t, events[4].Payload, "grant_id"); got != "grant-1" {
 		t.Fatalf("expected grant_id %q, got %q", "grant-1", got)
 	}
-
 	if got := payloadString(t, events[4].Payload, "profile_id"); got != "prof-1" {
 		t.Fatalf("expected profile_id %q, got %q", "prof-1", got)
 	}
-
 	if got := payloadInt(t, events[4].Payload, "profile_version"); got != 1 {
 		t.Fatalf("expected profile_version %d, got %d", 1, got)
 	}
-
 	if got := payloadString(t, events[4].Payload, "agent_id"); got != "agent-1" {
 		t.Fatalf("expected agent_id %q, got %q", "agent-1", got)
 	}
+
+	if events[5].EventType != audit.AuditEventContextValidated {
+		t.Fatalf("expected sixth event %q, got %q", audit.AuditEventContextValidated, events[5].EventType)
+	}
+	if got := payloadBool(t, events[5].Payload, "passed"); !got {
+		t.Fatalf("expected context validation to pass")
+	}
+
+	if events[6].EventType != audit.AuditEventConfidenceChecked {
+		t.Fatalf("expected seventh event %q, got %q", audit.AuditEventConfidenceChecked, events[6].EventType)
+	}
+	if got := payloadBool(t, events[6].Payload, "passed"); !got {
+		t.Fatalf("expected confidence check to pass")
+	}
+
+	if events[7].EventType != audit.AuditEventConsequenceChecked {
+		t.Fatalf("expected eighth event %q, got %q", audit.AuditEventConsequenceChecked, events[7].EventType)
+	}
+	if got := payloadBool(t, events[7].Payload, "passed"); !got {
+		t.Fatalf("expected consequence check to pass")
+	}
+
+	if events[8].EventType != audit.AuditEventOutcomeRecorded {
+		t.Fatalf("expected ninth event %q, got %q", audit.AuditEventOutcomeRecorded, events[8].EventType)
+	}
+	if got := payloadString(t, events[8].Payload, "outcome"); got != string(eval.OutcomeExecute) {
+		t.Fatalf("expected outcome %q, got %q", eval.OutcomeExecute, got)
+	}
+	if got := payloadString(t, events[8].Payload, "reason_code"); got != string(eval.ReasonWithinAuthority) {
+		t.Fatalf("expected reason_code %q, got %q", eval.ReasonWithinAuthority, got)
+	}
 }
 
-// TestEvaluate_EmitsOutcomeRecordedEvent verifies that finish() appends OUTCOME_RECORDED.
-func TestEvaluate_EmitsOutcomeRecordedEvent(t *testing.T) {
+// TestEvaluate_EmitsPolicyEvaluatedEvent verifies policy-specific audit emission.
+func TestEvaluate_EmitsPolicyEvaluatedEvent(t *testing.T) {
 	r := newRepos()
 	seedActiveSurface(t, r, "surf-1")
 	seedAgent(t, r, "agent-1")
-	seedProfile(t, r, "prof-1", "surf-1")
+	seedProfileWithPolicy(t, r, "prof-1", "surf-1", "policy://allow")
 	seedActiveGrant(t, r, "grant-1", "agent-1", "prof-1")
 
-	result, err := newOrchestrator(t, r).Evaluate(context.Background(), baseRequest("surf-1", "agent-1"))
+	result, err := newOrchestrator(t, r).Evaluate(
+		context.Background(),
+		baseRequest("surf-1", "agent-1"),
+	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -311,21 +373,27 @@ func TestEvaluate_EmitsOutcomeRecordedEvent(t *testing.T) {
 
 	found := false
 	for _, ev := range events {
-		if ev.EventType == audit.AuditEventOutcomeRecorded {
+		if ev.EventType == audit.AuditEventPolicyEvaluated {
 			found = true
 
-			if got := payloadString(t, ev.Payload, "outcome"); got != string(eval.OutcomeExecute) {
-				t.Fatalf("expected outcome %q, got %q", eval.OutcomeExecute, got)
+			if got := payloadString(t, ev.Payload, "policy_reference"); got != "policy://allow" {
+				t.Fatalf("expected policy_reference %q, got %q", "policy://allow", got)
 			}
-			if got := payloadString(t, ev.Payload, "reason_code"); got != string(eval.ReasonWithinAuthority) {
-				t.Fatalf("expected reason_code %q, got %q", eval.ReasonWithinAuthority, got)
+			if got := payloadString(t, ev.Payload, "outcome"); got != "" {
+				t.Fatalf("expected empty outcome for allowed policy, got %q", got)
+			}
+			if got := payloadString(t, ev.Payload, "reason_code"); got != "" {
+				t.Fatalf("expected empty reason_code for allowed policy, got %q", got)
+			}
+			if got := payloadBool(t, ev.Payload, "allowed"); !got {
+				t.Fatalf("expected allowed=true")
 			}
 			break
 		}
 	}
 
 	if !found {
-		t.Fatal("expected OUTCOME_RECORDED event to be emitted")
+		t.Fatal("expected POLICY_EVALUATED event to be emitted")
 	}
 }
 

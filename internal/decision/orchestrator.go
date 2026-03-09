@@ -3,6 +3,7 @@ package decision
 import (
 	"context"
 	"errors"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -189,16 +190,28 @@ func (o *Orchestrator) Evaluate(ctx context.Context, req eval.DecisionRequest) (
 	}
 
 	// Step 4: Context validation
+	if err := o.appendContextValidatedEvent(ctx, env, p.RequiredContextKeys, req.Context); err != nil {
+		return EvaluationResult{}, err
+	}
+
 	if !hasRequiredContext(req.Context, p.RequiredContextKeys) {
 		return o.finish(ctx, env, eval.OutcomeRequestClarification, eval.ReasonInsufficientContext)
 	}
 
 	// Step 5: Confidence threshold
+	if err := o.appendConfidenceCheckedEvent(ctx, env, req.Confidence, p.ConfidenceThreshold); err != nil {
+		return EvaluationResult{}, err
+	}
+
 	if req.Confidence < p.ConfidenceThreshold {
 		return o.finish(ctx, env, eval.OutcomeEscalate, eval.ReasonConfidenceBelowThreshold)
 	}
 
 	// Step 6: Consequence threshold
+	if err := o.appendConsequenceCheckedEvent(ctx, env, req.Consequence, p.ConsequenceThreshold); err != nil {
+		return EvaluationResult{}, err
+	}
+
 	if authority.ExceedsConsequenceThreshold(req.Consequence, p.ConsequenceThreshold) {
 		return o.finish(ctx, env, eval.OutcomeEscalate, eval.ReasonConsequenceExceedsLimit)
 	}
@@ -208,6 +221,13 @@ func (o *Orchestrator) Evaluate(ctx context.Context, req eval.DecisionRequest) (
 	if err != nil {
 		return EvaluationResult{}, err
 	}
+
+	if p.PolicyReference != "" {
+		if err := o.appendPolicyEvaluatedEvent(ctx, env, p.PolicyReference, policyOutcome, policyReason); err != nil {
+			return EvaluationResult{}, err
+		}
+	}
+
 	if policyOutcome != "" {
 		return o.finish(ctx, env, policyOutcome, policyReason)
 	}
@@ -447,6 +467,80 @@ func (o *Orchestrator) appendAuthorityChainResolvedEvent(
 		"profile_id":      p.ID,
 		"profile_version": p.Version,
 		"agent_id":        g.AgentID,
+	})
+}
+
+func (o *Orchestrator) appendContextValidatedEvent(
+	ctx context.Context,
+	env *envelope.Envelope,
+	requiredKeys []string,
+	contextMap map[string]any,
+) error {
+	providedKeys := make([]string, 0, len(contextMap))
+	for k := range contextMap {
+		providedKeys = append(providedKeys, k)
+	}
+	sort.Strings(providedKeys)
+
+	required := append([]string(nil), requiredKeys...)
+	sort.Strings(required)
+
+	return o.appendAuditEvent(ctx, env, audit.AuditEventContextValidated, map[string]any{
+		"required_keys": required,
+		"provided_keys": providedKeys,
+		"passed":        hasRequiredContext(contextMap, requiredKeys),
+	})
+}
+
+func (o *Orchestrator) appendConfidenceCheckedEvent(
+	ctx context.Context,
+	env *envelope.Envelope,
+	provided float64,
+	threshold float64,
+) error {
+	return o.appendAuditEvent(ctx, env, audit.AuditEventConfidenceChecked, map[string]any{
+		"confidence_provided":  provided,
+		"confidence_threshold": threshold,
+		"passed":               provided >= threshold,
+	})
+}
+
+func (o *Orchestrator) appendConsequenceCheckedEvent(
+	ctx context.Context,
+	env *envelope.Envelope,
+	submitted *eval.Consequence,
+	threshold authority.Consequence,
+) error {
+	payload := map[string]any{
+		"threshold_type":        string(threshold.Type),
+		"threshold_amount":      threshold.Amount,
+		"threshold_currency":    threshold.Currency,
+		"threshold_risk_rating": string(threshold.RiskRating),
+		"passed":                !authority.ExceedsConsequenceThreshold(submitted, threshold),
+	}
+
+	if submitted != nil {
+		payload["submitted_type"] = string(submitted.Type)
+		payload["submitted_amount"] = submitted.Amount
+		payload["submitted_currency"] = submitted.Currency
+		payload["submitted_risk_rating"] = string(submitted.RiskRating)
+	}
+
+	return o.appendAuditEvent(ctx, env, audit.AuditEventConsequenceChecked, payload)
+}
+
+func (o *Orchestrator) appendPolicyEvaluatedEvent(
+	ctx context.Context,
+	env *envelope.Envelope,
+	policyRef string,
+	outcome eval.Outcome,
+	reason eval.ReasonCode,
+) error {
+	return o.appendAuditEvent(ctx, env, audit.AuditEventPolicyEvaluated, map[string]any{
+		"policy_reference": policyRef,
+		"outcome":          string(outcome),
+		"reason_code":      string(reason),
+		"allowed":          outcome == "",
 	})
 }
 
