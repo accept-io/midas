@@ -33,11 +33,11 @@ var ErrInvalidTransition = errors.New("invalid envelope state transition")
 // Evidence holds versioned references to the resolved authority chain.
 // References are stored, not copies of full configuration.
 type Evidence struct {
-	SurfaceID      string
-	SurfaceVersion int
-	ProfileID      string
-	ProfileVersion int
-	AgentID        string
+	SurfaceID      string `json:"surface_id"`
+	SurfaceVersion int    `json:"surface_version"`
+	ProfileID      string `json:"profile_id"`
+	ProfileVersion int    `json:"profile_version"`
+	AgentID        string `json:"agent_id"`
 }
 type DecisionExplanation struct {
 	SurfaceID string `json:"surface_id"`
@@ -63,16 +63,16 @@ type DecisionExplanation struct {
 
 // Envelope is the lifecycle object for a single evaluation request.
 type Envelope struct {
-	ID          string
-	RequestID   string
-	State       EnvelopeState
-	Evidence    Evidence
-	Explanation *DecisionExplanation
-	Outcome     eval.Outcome
-	ReasonCode  eval.ReasonCode
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-	ClosedAt    *time.Time
+	ID          string               `json:"id"`
+	RequestID   string               `json:"request_id"`
+	State       EnvelopeState        `json:"state"`
+	Evidence    Evidence             `json:"evidence"`
+	Explanation *DecisionExplanation `json:"explanation,omitempty"`
+	Outcome     eval.Outcome         `json:"outcome"`
+	ReasonCode  eval.ReasonCode      `json:"reason_code"`
+	CreatedAt   time.Time            `json:"created_at"`
+	UpdatedAt   time.Time            `json:"updated_at"`
+	ClosedAt    *time.Time           `json:"closed_at,omitempty"`
 }
 
 // Transition advances the envelope to the next state.
