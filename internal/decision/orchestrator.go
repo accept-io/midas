@@ -14,6 +14,7 @@ import (
 	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/eval"
 	"github.com/accept-io/midas/internal/policy"
+	"github.com/accept-io/midas/internal/store"
 	"github.com/accept-io/midas/internal/surface"
 )
 
@@ -26,45 +27,56 @@ type EvaluationResult struct {
 	EnvelopeID string
 }
 
+type RepositoryStore interface {
+	Repositories() (*store.Repositories, error)
+	WithTx(ctx context.Context, fn func(*store.Repositories) error) error
+}
+
 // Orchestrator coordinates the MIDAS evaluation flow.
-// It depends only on domain repository interfaces and policy boundary interfaces.
+
 type Orchestrator struct {
-	surfaces  surface.SurfaceRepository
-	profiles  authority.ProfileRepository
-	grants    authority.GrantRepository
-	agents    agent.AgentRepository
-	envelopes envelope.EnvelopeRepository
-	audit     audit.AuditEventRepository
-	policies  policy.PolicyEvaluator
+	store    RepositoryStore
+	policies policy.PolicyEvaluator
 }
 
 // NewOrchestrator constructs an Orchestrator with required dependencies.
 func NewOrchestrator(
-	surfaces surface.SurfaceRepository,
-	profiles authority.ProfileRepository,
-	grants authority.GrantRepository,
-	agents agent.AgentRepository,
-	envelopes envelope.EnvelopeRepository,
-	auditRepo audit.AuditEventRepository,
+	store RepositoryStore,
 	policies policy.PolicyEvaluator,
 ) (*Orchestrator, error) {
-	if surfaces == nil || profiles == nil || grants == nil ||
-		agents == nil || envelopes == nil || auditRepo == nil || policies == nil {
+
+	if store == nil || policies == nil {
 		return nil, ErrNilOrchestratorDependency
 	}
 
 	return &Orchestrator{
-		surfaces:  surfaces,
-		profiles:  profiles,
-		grants:    grants,
-		agents:    agents,
-		envelopes: envelopes,
-		audit:     auditRepo,
-		policies:  policies,
+		store:    store,
+		policies: policies,
 	}, nil
 }
 
-// Evaluate executes the MIDAS authority evaluation flow.
+// evaluate contains the full MIDAS authority evaluation flow.
+// This method runs inside a database transaction initiated by Evaluate().
+// All repository operations will commit together or roll back together.
+//
+// Sequence:
+// 1. Create envelope
+// ...
+// Evaluate executes the MIDAS authority evaluation flow inside a transaction.
+
+func (o *Orchestrator) Evaluate(ctx context.Context, req eval.DecisionRequest) (EvaluationResult, error) {
+	var result EvaluationResult
+
+	err := o.store.WithTx(ctx, func(repos *store.Repositories) error {
+		var err error
+		result, err = o.evaluate(ctx, repos, req)
+		return err
+	})
+
+	return result, err
+}
+
+// evaluate contains the full MIDAS authority evaluation flow.
 //
 // Sequence:
 // 1. Create envelope
@@ -76,7 +88,11 @@ func NewOrchestrator(
 // 7. Evaluate consequence threshold
 // 8. Evaluate policy
 // 9. Record outcome and close envelope
-func (o *Orchestrator) Evaluate(ctx context.Context, req eval.DecisionRequest) (EvaluationResult, error) {
+func (o *Orchestrator) evaluate(
+	ctx context.Context,
+	repos *store.Repositories,
+	req eval.DecisionRequest,
+) (EvaluationResult, error) {
 	now := time.Now().UTC()
 
 	if req.RequestID == "" {
@@ -91,22 +107,22 @@ func (o *Orchestrator) Evaluate(ctx context.Context, req eval.DecisionRequest) (
 		UpdatedAt: now,
 	}
 
-	if err := o.envelopes.Create(ctx, env); err != nil {
+	if err := repos.Envelopes.Create(ctx, env); err != nil {
 		return EvaluationResult{}, err
 	}
 
-	if err := o.appendAuditEvent(ctx, env, audit.AuditEventEnvelopeCreated, nil); err != nil {
+	if err := o.appendAuditEvent(ctx, repos.Audit, env, audit.AuditEventEnvelopeCreated, nil); err != nil {
 		return EvaluationResult{}, err
 	}
 
 	if err := env.Transition(envelope.EnvelopeStateEvaluating); err != nil {
 		return EvaluationResult{}, err
 	}
-	if err := o.envelopes.Update(ctx, env); err != nil {
+	if err := repos.Envelopes.Update(ctx, env); err != nil {
 		return EvaluationResult{}, err
 	}
 
-	if err := o.appendAuditEvent(ctx, env, audit.AuditEventStateTransitioned, map[string]any{
+	if err := o.appendAuditEvent(ctx, repos.Audit, env, audit.AuditEventStateTransitioned, map[string]any{
 		"from_state": envelope.EnvelopeStateReceived,
 		"to_state":   envelope.EnvelopeStateEvaluating,
 	}); err != nil {
@@ -114,15 +130,15 @@ func (o *Orchestrator) Evaluate(ctx context.Context, req eval.DecisionRequest) (
 	}
 
 	// Step 1: Surface resolution
-	s, outcome, reason, err := o.resolveSurface(ctx, req.SurfaceID, now)
+	s, outcome, reason, err := o.resolveSurface(ctx, repos.Surfaces, req.SurfaceID, now)
 	if err != nil {
 		return EvaluationResult{}, err
 	}
 	if outcome != "" {
-		return o.finish(ctx, env, outcome, reason)
+		return o.finish(ctx, repos, env, outcome, reason)
 	}
 
-	if err := o.appendResolutionEvent(ctx, env, audit.AuditEventSurfaceResolved, map[string]any{
+	if err := o.appendResolutionEvent(ctx, repos.Audit, env, audit.AuditEventSurfaceResolved, map[string]any{
 		"surface_id":      s.ID,
 		"surface_version": s.Version,
 	}); err != nil {
@@ -130,30 +146,30 @@ func (o *Orchestrator) Evaluate(ctx context.Context, req eval.DecisionRequest) (
 	}
 
 	// Step 2: Agent resolution
-	a, outcome, reason, err := o.resolveAgent(ctx, req.AgentID)
+	a, outcome, reason, err := o.resolveAgent(ctx, repos.Agents, req.AgentID)
 	if err != nil {
 		return EvaluationResult{}, err
 	}
 	if outcome != "" {
-		return o.finish(ctx, env, outcome, reason)
+		return o.finish(ctx, repos, env, outcome, reason)
 	}
 
-	if err := o.appendResolutionEvent(ctx, env, audit.AuditEventAgentResolved, map[string]any{
+	if err := o.appendResolutionEvent(ctx, repos.Audit, env, audit.AuditEventAgentResolved, map[string]any{
 		"agent_id": a.ID,
 	}); err != nil {
 		return EvaluationResult{}, err
 	}
 
 	// Step 3: Authority chain resolution (grant + profile + chain validation)
-	g, p, outcome, reason, err := o.resolveAuthorityChain(ctx, req.AgentID, req.SurfaceID, now)
+	g, p, outcome, reason, err := o.resolveAuthorityChain(ctx, repos.Grants, repos.Profiles, req.AgentID, req.SurfaceID, now)
 	if err != nil {
 		return EvaluationResult{}, err
 	}
 	if outcome != "" {
-		return o.finish(ctx, env, outcome, reason)
+		return o.finish(ctx, repos, env, outcome, reason)
 	}
 
-	if err := o.appendAuthorityChainResolvedEvent(ctx, env, g, p); err != nil {
+	if err := o.appendAuthorityChainResolvedEvent(ctx, repos.Audit, env, g, p); err != nil {
 		return EvaluationResult{}, err
 	}
 
@@ -185,35 +201,35 @@ func (o *Orchestrator) Evaluate(ctx context.Context, req eval.DecisionRequest) (
 		env.Explanation.ConsequenceProvidedRiskRating = string(req.Consequence.RiskRating)
 	}
 
-	if err := o.envelopes.Update(ctx, env); err != nil {
+	if err := repos.Envelopes.Update(ctx, env); err != nil {
 		return EvaluationResult{}, err
 	}
 
 	// Step 4: Context validation
-	if err := o.appendContextValidatedEvent(ctx, env, p.RequiredContextKeys, req.Context); err != nil {
+	if err := o.appendContextValidatedEvent(ctx, repos.Audit, env, p.RequiredContextKeys, req.Context); err != nil {
 		return EvaluationResult{}, err
 	}
 
 	if !hasRequiredContext(req.Context, p.RequiredContextKeys) {
-		return o.finish(ctx, env, eval.OutcomeRequestClarification, eval.ReasonInsufficientContext)
+		return o.finish(ctx, repos, env, eval.OutcomeRequestClarification, eval.ReasonInsufficientContext)
 	}
 
 	// Step 5: Confidence threshold
-	if err := o.appendConfidenceCheckedEvent(ctx, env, req.Confidence, p.ConfidenceThreshold); err != nil {
+	if err := o.appendConfidenceCheckedEvent(ctx, repos.Audit, env, req.Confidence, p.ConfidenceThreshold); err != nil {
 		return EvaluationResult{}, err
 	}
 
 	if req.Confidence < p.ConfidenceThreshold {
-		return o.finish(ctx, env, eval.OutcomeEscalate, eval.ReasonConfidenceBelowThreshold)
+		return o.finish(ctx, repos, env, eval.OutcomeEscalate, eval.ReasonConfidenceBelowThreshold)
 	}
 
 	// Step 6: Consequence threshold
-	if err := o.appendConsequenceCheckedEvent(ctx, env, req.Consequence, p.ConsequenceThreshold); err != nil {
+	if err := o.appendConsequenceCheckedEvent(ctx, repos.Audit, env, req.Consequence, p.ConsequenceThreshold); err != nil {
 		return EvaluationResult{}, err
 	}
 
 	if authority.ExceedsConsequenceThreshold(req.Consequence, p.ConsequenceThreshold) {
-		return o.finish(ctx, env, eval.OutcomeEscalate, eval.ReasonConsequenceExceedsLimit)
+		return o.finish(ctx, repos, env, eval.OutcomeEscalate, eval.ReasonConsequenceExceedsLimit)
 	}
 
 	// Step 7: Policy evaluation
@@ -223,25 +239,26 @@ func (o *Orchestrator) Evaluate(ctx context.Context, req eval.DecisionRequest) (
 	}
 
 	if p.PolicyReference != "" {
-		if err := o.appendPolicyEvaluatedEvent(ctx, env, p.PolicyReference, policyOutcome, policyReason); err != nil {
+		if err := o.appendPolicyEvaluatedEvent(ctx, repos.Audit, env, p.PolicyReference, policyOutcome, policyReason); err != nil {
 			return EvaluationResult{}, err
 		}
 	}
 
 	if policyOutcome != "" {
-		return o.finish(ctx, env, policyOutcome, policyReason)
+		return o.finish(ctx, repos, env, policyOutcome, policyReason)
 	}
 
 	// Step 8: All checks passed
-	return o.finish(ctx, env, eval.OutcomeExecute, eval.ReasonWithinAuthority)
+	return o.finish(ctx, repos, env, eval.OutcomeExecute, eval.ReasonWithinAuthority)
 }
 
 func (o *Orchestrator) resolveSurface(
 	ctx context.Context,
+	surfaces surface.SurfaceRepository,
 	surfaceID string,
 	at time.Time,
 ) (*surface.DecisionSurface, eval.Outcome, eval.ReasonCode, error) {
-	s, err := o.surfaces.FindActiveAt(ctx, surfaceID, at)
+	s, err := surfaces.FindActiveAt(ctx, surfaceID, at)
 	if err != nil {
 		return nil, "", "", err
 	}
@@ -257,9 +274,10 @@ func (o *Orchestrator) resolveSurface(
 
 func (o *Orchestrator) resolveAgent(
 	ctx context.Context,
+	agents agent.AgentRepository,
 	agentID string,
 ) (*agent.Agent, eval.Outcome, eval.ReasonCode, error) {
-	a, err := o.agents.GetByID(ctx, agentID)
+	a, err := agents.GetByID(ctx, agentID)
 	if err != nil {
 		return nil, "", "", err
 	}
@@ -272,25 +290,27 @@ func (o *Orchestrator) resolveAgent(
 
 func (o *Orchestrator) resolveAuthorityChain(
 	ctx context.Context,
+	grants authority.GrantRepository,
+	profiles authority.ProfileRepository,
 	agentID string,
 	surfaceID string,
 	at time.Time,
 ) (*authority.AuthorityGrant, *authority.AuthorityProfile, eval.Outcome, eval.ReasonCode, error) {
-	grants, err := o.grants.ListByAgent(ctx, agentID)
+	agentGrants, err := grants.ListByAgent(ctx, agentID)
 	if err != nil {
 		return nil, nil, "", "", err
 	}
-	if len(grants) == 0 {
+	if len(agentGrants) == 0 {
 		return nil, nil, eval.OutcomeReject, eval.ReasonNoActiveGrant, nil
 	}
 
 	var foundProfile bool
-	for _, g := range grants {
+	for _, g := range agentGrants {
 		if g == nil || g.Status != authority.GrantStatusActive {
 			continue
 		}
 
-		p, err := o.profiles.FindActiveAt(ctx, g.ProfileID, at)
+		p, err := profiles.FindActiveAt(ctx, g.ProfileID, at)
 		if err != nil {
 			return nil, nil, "", "", err
 		}
@@ -348,6 +368,7 @@ func (o *Orchestrator) evaluatePolicy(
 // Currently all envelopes are auto-closed in the same request.
 func (o *Orchestrator) finish(
 	ctx context.Context,
+	repos *store.Repositories,
 	env *envelope.Envelope,
 	outcome eval.Outcome,
 	reason eval.ReasonCode,
@@ -361,9 +382,11 @@ func (o *Orchestrator) finish(
 	env.Explanation.Result = string(outcome)
 	env.Explanation.Reason = string(reason)
 
-	if err := o.appendOutcomeRecordedEvent(ctx, env, outcome, reason); err != nil {
+	if err := o.appendOutcomeRecordedEvent(ctx, repos.Audit, env, outcome, reason); err != nil {
 		return EvaluationResult{}, err
 	}
+
+	prevState := env.State
 
 	switch outcome {
 	case eval.OutcomeEscalate:
@@ -376,14 +399,25 @@ func (o *Orchestrator) finish(
 		}
 	}
 
-	if err := o.envelopes.Update(ctx, env); err != nil {
+	if err := o.appendStateTransitionEvent(ctx, repos.Audit, env, prevState, env.State); err != nil {
 		return EvaluationResult{}, err
 	}
+
+	if err := repos.Envelopes.Update(ctx, env); err != nil {
+		return EvaluationResult{}, err
+	}
+
+	prevState = env.State
 
 	if err := env.Transition(envelope.EnvelopeStateClosed); err != nil {
 		return EvaluationResult{}, err
 	}
-	if err := o.envelopes.Update(ctx, env); err != nil {
+
+	if err := o.appendStateTransitionEvent(ctx, repos.Audit, env, prevState, envelope.EnvelopeStateClosed); err != nil {
+		return EvaluationResult{}, err
+	}
+
+	if err := repos.Envelopes.Update(ctx, env); err != nil {
 		return EvaluationResult{}, err
 	}
 
@@ -392,6 +426,19 @@ func (o *Orchestrator) finish(
 		ReasonCode: reason,
 		EnvelopeID: env.ID,
 	}, nil
+}
+
+func (o *Orchestrator) appendStateTransitionEvent(
+	ctx context.Context,
+	auditRepo audit.AuditEventRepository,
+	env *envelope.Envelope,
+	from envelope.EnvelopeState,
+	to envelope.EnvelopeState,
+) error {
+	return o.appendAuditEvent(ctx, auditRepo, env, audit.AuditEventStateTransitioned, map[string]any{
+		"from_state": string(from),
+		"to_state":   string(to),
+	})
 }
 
 func hasRequiredContext(ctxMap map[string]any, required []string) bool {
@@ -415,22 +462,35 @@ func (o *Orchestrator) GetEnvelopeByID(ctx context.Context, id string) (*envelop
 	if id == "" {
 		return nil, nil
 	}
-	return o.envelopes.GetByID(ctx, id)
+	repos, err := o.store.Repositories()
+	if err != nil {
+		return nil, err
+	}
+	return repos.Envelopes.GetByID(ctx, id)
 }
 
 func (o *Orchestrator) GetEnvelopeByRequestID(ctx context.Context, requestID string) (*envelope.Envelope, error) {
 	if requestID == "" {
 		return nil, nil
 	}
-	return o.envelopes.GetByRequestID(ctx, requestID)
+	repos, err := o.store.Repositories()
+	if err != nil {
+		return nil, err
+	}
+	return repos.Envelopes.GetByRequestID(ctx, requestID)
 }
 
 func (o *Orchestrator) ListEnvelopes(ctx context.Context) ([]*envelope.Envelope, error) {
-	return o.envelopes.List(ctx)
+	repos, err := o.store.Repositories()
+	if err != nil {
+		return nil, err
+	}
+	return repos.Envelopes.List(ctx)
 }
 
 func (o *Orchestrator) appendAuditEvent(
 	ctx context.Context,
+	auditRepo audit.AuditEventRepository,
 	env *envelope.Envelope,
 	eventType audit.AuditEventType,
 	payload map[string]any,
@@ -444,25 +504,27 @@ func (o *Orchestrator) appendAuditEvent(
 		payload,
 	)
 
-	return o.audit.Append(ctx, ev)
+	return auditRepo.Append(ctx, ev)
 }
 
 func (o *Orchestrator) appendResolutionEvent(
 	ctx context.Context,
+	auditRepo audit.AuditEventRepository,
 	env *envelope.Envelope,
 	eventType audit.AuditEventType,
 	payload map[string]any,
 ) error {
-	return o.appendAuditEvent(ctx, env, eventType, payload)
+	return o.appendAuditEvent(ctx, auditRepo, env, eventType, payload)
 }
 
 func (o *Orchestrator) appendAuthorityChainResolvedEvent(
 	ctx context.Context,
+	auditRepo audit.AuditEventRepository,
 	env *envelope.Envelope,
 	g *authority.AuthorityGrant,
 	p *authority.AuthorityProfile,
 ) error {
-	return o.appendAuditEvent(ctx, env, audit.AuditEventAuthorityChainResolved, map[string]any{
+	return o.appendAuditEvent(ctx, auditRepo, env, audit.AuditEventAuthorityChainResolved, map[string]any{
 		"grant_id":        g.ID,
 		"profile_id":      p.ID,
 		"profile_version": p.Version,
@@ -472,6 +534,7 @@ func (o *Orchestrator) appendAuthorityChainResolvedEvent(
 
 func (o *Orchestrator) appendContextValidatedEvent(
 	ctx context.Context,
+	auditRepo audit.AuditEventRepository,
 	env *envelope.Envelope,
 	requiredKeys []string,
 	contextMap map[string]any,
@@ -485,7 +548,7 @@ func (o *Orchestrator) appendContextValidatedEvent(
 	required := append([]string(nil), requiredKeys...)
 	sort.Strings(required)
 
-	return o.appendAuditEvent(ctx, env, audit.AuditEventContextValidated, map[string]any{
+	return o.appendAuditEvent(ctx, auditRepo, env, audit.AuditEventContextValidated, map[string]any{
 		"required_keys": required,
 		"provided_keys": providedKeys,
 		"passed":        hasRequiredContext(contextMap, requiredKeys),
@@ -494,11 +557,12 @@ func (o *Orchestrator) appendContextValidatedEvent(
 
 func (o *Orchestrator) appendConfidenceCheckedEvent(
 	ctx context.Context,
+	auditRepo audit.AuditEventRepository,
 	env *envelope.Envelope,
 	provided float64,
 	threshold float64,
 ) error {
-	return o.appendAuditEvent(ctx, env, audit.AuditEventConfidenceChecked, map[string]any{
+	return o.appendAuditEvent(ctx, auditRepo, env, audit.AuditEventConfidenceChecked, map[string]any{
 		"confidence_provided":  provided,
 		"confidence_threshold": threshold,
 		"passed":               provided >= threshold,
@@ -507,6 +571,7 @@ func (o *Orchestrator) appendConfidenceCheckedEvent(
 
 func (o *Orchestrator) appendConsequenceCheckedEvent(
 	ctx context.Context,
+	auditRepo audit.AuditEventRepository,
 	env *envelope.Envelope,
 	submitted *eval.Consequence,
 	threshold authority.Consequence,
@@ -526,17 +591,18 @@ func (o *Orchestrator) appendConsequenceCheckedEvent(
 		payload["submitted_risk_rating"] = string(submitted.RiskRating)
 	}
 
-	return o.appendAuditEvent(ctx, env, audit.AuditEventConsequenceChecked, payload)
+	return o.appendAuditEvent(ctx, auditRepo, env, audit.AuditEventConsequenceChecked, payload)
 }
 
 func (o *Orchestrator) appendPolicyEvaluatedEvent(
 	ctx context.Context,
+	auditRepo audit.AuditEventRepository,
 	env *envelope.Envelope,
 	policyRef string,
 	outcome eval.Outcome,
 	reason eval.ReasonCode,
 ) error {
-	return o.appendAuditEvent(ctx, env, audit.AuditEventPolicyEvaluated, map[string]any{
+	return o.appendAuditEvent(ctx, auditRepo, env, audit.AuditEventPolicyEvaluated, map[string]any{
 		"policy_reference": policyRef,
 		"outcome":          string(outcome),
 		"reason_code":      string(reason),
@@ -546,11 +612,12 @@ func (o *Orchestrator) appendPolicyEvaluatedEvent(
 
 func (o *Orchestrator) appendOutcomeRecordedEvent(
 	ctx context.Context,
+	auditRepo audit.AuditEventRepository,
 	env *envelope.Envelope,
 	outcome eval.Outcome,
 	reason eval.ReasonCode,
 ) error {
-	return o.appendAuditEvent(ctx, env, audit.AuditEventOutcomeRecorded, map[string]any{
+	return o.appendAuditEvent(ctx, auditRepo, env, audit.AuditEventOutcomeRecorded, map[string]any{
 		"outcome":     string(outcome),
 		"reason_code": string(reason),
 	})

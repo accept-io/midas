@@ -4,13 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+
+	"github.com/accept-io/midas/internal/store/sqltx"
 )
 
 type PostgresRepository struct {
-	db *sql.DB
+	db sqltx.DBTX
 }
 
-func NewPostgresRepository(db *sql.DB) *PostgresRepository {
+func NewPostgresRepository(db sqltx.DBTX) *PostgresRepository {
 	return &PostgresRepository{db: db}
 }
 

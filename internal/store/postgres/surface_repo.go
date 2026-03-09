@@ -7,14 +7,15 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/accept-io/midas/internal/store/sqltx"
 	"github.com/accept-io/midas/internal/surface"
 )
 
 type SurfaceRepo struct {
-	db *sql.DB
+	db sqltx.DBTX
 }
 
-func NewSurfaceRepo(db *sql.DB) (*SurfaceRepo, error) {
+func NewSurfaceRepo(db sqltx.DBTX) (*SurfaceRepo, error) {
 	if db == nil {
 		return nil, ErrNilDB
 	}

@@ -6,15 +6,16 @@ import (
 	"errors"
 
 	"github.com/accept-io/midas/internal/agent"
+	"github.com/accept-io/midas/internal/store/sqltx"
 )
 
 var ErrNilDB = errors.New("postgres db is nil")
 
 type AgentRepo struct {
-	db *sql.DB
+	db sqltx.DBTX
 }
 
-func NewAgentRepo(db *sql.DB) (*AgentRepo, error) {
+func NewAgentRepo(db sqltx.DBTX) (*AgentRepo, error) {
 	if db == nil {
 		return nil, ErrNilDB
 	}

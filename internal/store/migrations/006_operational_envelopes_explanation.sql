@@ -1,2 +1,2 @@
 ALTER TABLE operational_envelopes
-ADD COLUMN explanation_json JSONB NULL;
+    ADD COLUMN IF NOT EXISTS explanation_json JSONB;

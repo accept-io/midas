@@ -7,13 +7,14 @@ import (
 	"fmt"
 
 	"github.com/accept-io/midas/internal/authority"
+	"github.com/accept-io/midas/internal/store/sqltx"
 )
 
 type GrantRepo struct {
-	db *sql.DB
+	db sqltx.DBTX
 }
 
-func NewGrantRepo(db *sql.DB) (*GrantRepo, error) {
+func NewGrantRepo(db sqltx.DBTX) (*GrantRepo, error) {
 	if db == nil {
 		return nil, ErrNilDB
 	}

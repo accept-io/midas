@@ -5,8 +5,10 @@ import (
 	"time"
 
 	"github.com/accept-io/midas/internal/agent"
+	"github.com/accept-io/midas/internal/audit"
 	"github.com/accept-io/midas/internal/authority"
 	"github.com/accept-io/midas/internal/envelope"
+	"github.com/accept-io/midas/internal/store"
 	"github.com/accept-io/midas/internal/surface"
 )
 
@@ -190,6 +192,17 @@ func (r *EnvelopeRepo) Create(ctx context.Context, e *envelope.Envelope) error {
 func (r *EnvelopeRepo) Update(ctx context.Context, e *envelope.Envelope) error {
 	r.items[e.ID] = e
 	return nil
+}
+
+func NewRepositories() *store.Repositories {
+	return &store.Repositories{
+		Surfaces:  NewSurfaceRepo(),
+		Agents:    NewAgentRepo(),
+		Profiles:  NewProfileRepo(),
+		Grants:    NewGrantRepo(),
+		Envelopes: NewEnvelopeRepo(),
+		Audit:     audit.NewMemoryRepository(),
+	}
 }
 
 var _ surface.SurfaceRepository = (*SurfaceRepo)(nil)

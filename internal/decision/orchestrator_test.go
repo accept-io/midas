@@ -12,6 +12,7 @@ import (
 	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/eval"
 	"github.com/accept-io/midas/internal/policy"
+	"github.com/accept-io/midas/internal/store"
 	"github.com/accept-io/midas/internal/store/memory"
 	"github.com/accept-io/midas/internal/surface"
 	"github.com/accept-io/midas/internal/value"
@@ -41,13 +42,17 @@ func newRepos() testRepos {
 func newOrchestrator(t *testing.T, r testRepos) *decision.Orchestrator {
 	t.Helper()
 
+	memStore := memory.NewStoreWithRepositories(&store.Repositories{
+		Surfaces:  r.surfaces,
+		Agents:    r.agents,
+		Profiles:  r.profiles,
+		Grants:    r.grants,
+		Envelopes: r.envelopes,
+		Audit:     r.audit,
+	})
+
 	orch, err := decision.NewOrchestrator(
-		r.surfaces,
-		r.profiles,
-		r.grants,
-		r.agents,
-		r.envelopes,
-		r.audit,
+		memStore,
 		policy.NoOpPolicyEvaluator{},
 	)
 	if err != nil {

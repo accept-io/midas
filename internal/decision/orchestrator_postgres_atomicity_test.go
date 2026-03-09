@@ -1,0 +1,253 @@
+package decision_test
+
+import (
+	"context"
+	"database/sql"
+	"os"
+	"testing"
+	"time"
+
+	_ "github.com/lib/pq"
+
+	"github.com/accept-io/midas/internal/agent"
+	"github.com/accept-io/midas/internal/audit"
+	"github.com/accept-io/midas/internal/authority"
+	"github.com/accept-io/midas/internal/decision"
+	"github.com/accept-io/midas/internal/eval"
+	"github.com/accept-io/midas/internal/policy"
+	"github.com/accept-io/midas/internal/store"
+	"github.com/accept-io/midas/internal/store/postgres"
+	"github.com/accept-io/midas/internal/surface"
+	"github.com/accept-io/midas/internal/value"
+)
+
+type failAfterNAuditRepo struct {
+	inner     audit.AuditEventRepository
+	failAfter int
+	calls     int
+}
+
+func (r *failAfterNAuditRepo) Append(ctx context.Context, ev *audit.AuditEvent) error {
+	r.calls++
+	if r.calls >= r.failAfter {
+		return errForcedAuditFailure
+	}
+	return r.inner.Append(ctx, ev)
+}
+
+func (r *failAfterNAuditRepo) ListByEnvelopeID(ctx context.Context, envelopeID string) ([]*audit.AuditEvent, error) {
+	return r.inner.ListByEnvelopeID(ctx, envelopeID)
+}
+
+func (r *failAfterNAuditRepo) ListByRequestID(ctx context.Context, requestID string) ([]*audit.AuditEvent, error) {
+	return r.inner.ListByRequestID(ctx, requestID)
+}
+
+type wrappedTxStore struct {
+	base      *postgres.Store
+	failAfter int
+}
+
+func (s *wrappedTxStore) Repositories() (*store.Repositories, error) {
+	return s.base.Repositories()
+}
+
+func (s *wrappedTxStore) WithTx(ctx context.Context, fn func(*store.Repositories) error) error {
+	return s.base.WithTx(ctx, func(repos *store.Repositories) error {
+		wrapped := &store.Repositories{
+			Surfaces:  repos.Surfaces,
+			Agents:    repos.Agents,
+			Profiles:  repos.Profiles,
+			Grants:    repos.Grants,
+			Envelopes: repos.Envelopes,
+			Audit: &failAfterNAuditRepo{
+				inner:     repos.Audit,
+				failAfter: s.failAfter,
+			},
+		}
+		return fn(wrapped)
+	})
+}
+
+type forcedAuditFailure string
+
+func (e forcedAuditFailure) Error() string { return string(e) }
+
+const errForcedAuditFailure = forcedAuditFailure("forced audit append failure")
+
+func openAtomicityTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set; skipping postgres integration test")
+	}
+
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := db.PingContext(ctx); err != nil {
+		_ = db.Close()
+		t.Fatalf("db.PingContext: %v", err)
+	}
+
+	return db
+}
+
+func cleanupAtomicityTestData(t *testing.T, db *sql.DB) {
+	t.Helper()
+
+	statements := []string{
+		`DELETE FROM audit_events`,
+		`DELETE FROM operational_envelopes`,
+		`DELETE FROM agent_authorizations`,
+		`DELETE FROM authority_profiles`,
+		`DELETE FROM agents`,
+		`DELETE FROM decision_surfaces`,
+	}
+
+	for _, stmt := range statements {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("cleanup failed for %q: %v", stmt, err)
+		}
+	}
+}
+
+func seedAtomicityHappyPathData(t *testing.T, repos *store.Repositories) {
+	t.Helper()
+
+	ctx := context.Background()
+	now := time.Now().UTC().Add(-time.Hour)
+
+	if err := repos.Surfaces.Create(ctx, &surface.DecisionSurface{
+		ID:            "surf-atomic-1",
+		Name:          "atomic test surface",
+		Status:        surface.SurfaceStatusActive,
+		Version:       1,
+		EffectiveDate: now,
+	}); err != nil {
+		t.Fatalf("seed surface: %v", err)
+	}
+
+	if err := repos.Agents.Create(ctx, &agent.Agent{
+		ID:               "agent-atomic-1",
+		Name:             "atomic test agent",
+		Type:             agent.AgentTypeAI,
+		OperationalState: agent.OperationalStateActive,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}); err != nil {
+		t.Fatalf("seed agent: %v", err)
+	}
+
+	if err := repos.Profiles.Create(ctx, &authority.AuthorityProfile{
+		ID:                  "prof-atomic-1",
+		SurfaceID:           "surf-atomic-1",
+		Name:                "atomic test profile",
+		ConfidenceThreshold: 0.8,
+		ConsequenceThreshold: authority.Consequence{
+			Type:       value.ConsequenceTypeRiskRating,
+			RiskRating: value.RiskRatingHigh,
+		},
+		FailMode:      authority.FailModeOpen,
+		Version:       1,
+		EffectiveDate: now,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}); err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
+
+	if err := repos.Grants.Create(ctx, &authority.AuthorityGrant{
+		ID:            "grant-atomic-1",
+		AgentID:       "agent-atomic-1",
+		ProfileID:     "prof-atomic-1",
+		Status:        authority.GrantStatusActive,
+		EffectiveDate: now,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}); err != nil {
+		t.Fatalf("seed grant: %v", err)
+	}
+}
+
+func atomicityRequest() eval.DecisionRequest {
+	return eval.DecisionRequest{
+		RequestID:  "req-atomicity-1",
+		SurfaceID:  "surf-atomic-1",
+		AgentID:    "agent-atomic-1",
+		Confidence: 0.9,
+		Consequence: &eval.Consequence{
+			Type:       value.ConsequenceTypeRiskRating,
+			RiskRating: value.RiskRatingMedium,
+		},
+	}
+}
+
+func TestOrchestrator_Postgres_RollsBackEnvelopeAndAuditOnMidEvaluationFailure(t *testing.T) {
+	db := openAtomicityTestDB(t)
+	defer db.Close()
+
+	cleanupAtomicityTestData(t, db)
+
+	baseStore, err := postgres.NewStore(db)
+	if err != nil {
+		t.Fatalf("postgres.NewStore: %v", err)
+	}
+
+	repos, err := baseStore.Repositories()
+	if err != nil {
+		t.Fatalf("Repositories: %v", err)
+	}
+
+	seedAtomicityHappyPathData(t, repos)
+
+	// Fail on the second audit append:
+	// 1st append = ENVELOPE_CREATED succeeds
+	// 2nd append = STATE_TRANSITIONED fails
+	// By then envelope create/update have already happened inside the tx.
+	testStore := &wrappedTxStore{
+		base:      baseStore,
+		failAfter: 2,
+	}
+
+	orch, err := decision.NewOrchestrator(testStore, policy.NoOpPolicyEvaluator{})
+	if err != nil {
+		t.Fatalf("decision.NewOrchestrator: %v", err)
+	}
+
+	_, err = orch.Evaluate(context.Background(), atomicityRequest())
+	if err == nil {
+		t.Fatal("expected evaluation error, got nil")
+	}
+	if err.Error() != errForcedAuditFailure.Error() {
+		t.Fatalf("unexpected error: got %v, want %v", err, errForcedAuditFailure)
+	}
+
+	// Verify no envelope persisted for the failed request.
+	env, err := baseStore.Repositories()
+	if err != nil {
+		t.Fatalf("Repositories after failure: %v", err)
+	}
+
+	gotEnvelope, err := env.Envelopes.GetByRequestID(context.Background(), "req-atomicity-1")
+	if err != nil {
+		t.Fatalf("GetByRequestID: %v", err)
+	}
+	if gotEnvelope != nil {
+		t.Fatalf("expected no persisted envelope after rollback, got %+v", gotEnvelope)
+	}
+
+	events, err := env.Audit.ListByRequestID(context.Background(), "req-atomicity-1")
+	if err != nil {
+		t.Fatalf("ListByRequestID: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("expected no persisted audit events after rollback, got %d", len(events))
+	}
+}

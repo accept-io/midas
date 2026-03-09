@@ -1,6 +1,10 @@
 package audit
 
-import "time"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
 
 type AuditEvent struct {
 	ID         string
@@ -34,6 +38,7 @@ func NewEvent(
 	}
 
 	return &AuditEvent{
+		ID:              uuid.NewString(),
 		EnvelopeID:      envelopeID,
 		RequestID:       requestID,
 		EventType:       eventType,

@@ -10,13 +10,14 @@ import (
 
 	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/eval"
+	"github.com/accept-io/midas/internal/store/sqltx"
 )
 
 type EnvelopeRepo struct {
-	db *sql.DB
+	db sqltx.DBTX
 }
 
-func NewEnvelopeRepo(db *sql.DB) (*EnvelopeRepo, error) {
+func NewEnvelopeRepo(db sqltx.DBTX) (*EnvelopeRepo, error) {
 	if db == nil {
 		return nil, ErrNilDB
 	}

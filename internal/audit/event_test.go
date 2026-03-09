@@ -77,29 +77,44 @@ func TestNewEvent_SetsOccurredAt(t *testing.T) {
 	}
 }
 
-func TestNewEvent_LeavesRepositoryFieldsUnset(t *testing.T) {
+func TestNewEvent_InitializesEventIdentityAndLeavesComputedFieldsUnset(t *testing.T) {
 	ev := NewEvent(
 		"env-1",
 		"req-1",
 		AuditEventEnvelopeCreated,
 		EventPerformerSystem,
 		"midas-orchestrator",
-		nil,
+		map[string]any{"key": "value"},
 	)
 
-	if ev.ID != "" {
-		t.Fatalf("expected ID to be empty, got %s", ev.ID)
+	if ev.ID == "" {
+		t.Fatal("expected ID to be set")
 	}
-
+	if ev.EnvelopeID != "env-1" {
+		t.Fatalf("expected EnvelopeID %q, got %q", "env-1", ev.EnvelopeID)
+	}
+	if ev.RequestID != "req-1" {
+		t.Fatalf("expected RequestID %q, got %q", "req-1", ev.RequestID)
+	}
+	if ev.EventType != AuditEventEnvelopeCreated {
+		t.Fatalf("expected EventType %q, got %q", AuditEventEnvelopeCreated, ev.EventType)
+	}
+	if ev.PerformedByType != EventPerformerSystem {
+		t.Fatalf("expected PerformedByType %q, got %q", EventPerformerSystem, ev.PerformedByType)
+	}
+	if ev.PerformedByID != "midas-orchestrator" {
+		t.Fatalf("expected PerformedByID %q, got %q", "midas-orchestrator", ev.PerformedByID)
+	}
 	if ev.SequenceNo != 0 {
-		t.Fatalf("expected SequenceNo to be 0, got %d", ev.SequenceNo)
+		t.Fatalf("expected SequenceNo 0, got %d", ev.SequenceNo)
 	}
-
 	if ev.PrevHash != "" {
-		t.Fatalf("expected PrevHash to be empty, got %s", ev.PrevHash)
+		t.Fatalf("expected PrevHash empty, got %q", ev.PrevHash)
 	}
-
 	if ev.EventHash != "" {
-		t.Fatalf("expected EventHash to be empty, got %s", ev.EventHash)
+		t.Fatalf("expected EventHash empty, got %q", ev.EventHash)
+	}
+	if ev.OccurredAt.IsZero() {
+		t.Fatal("expected OccurredAt to be set")
 	}
 }

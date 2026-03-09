@@ -1,12 +1,14 @@
 CREATE TABLE agents (
-    id TEXT NOT NULL,
+    id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    kind TEXT NOT NULL,
+    type TEXT NOT NULL,
     owner TEXT,
-    status TEXT NOT NULL,
-    version INTEGER NOT NULL,
-    effective_date TIMESTAMPTZ NOT NULL,
+    model_version TEXT,
+    endpoint TEXT,
+    operational_state TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL,
-    PRIMARY KEY (id, version)
+    updated_at TIMESTAMPTZ NOT NULL
 );
+
+CREATE INDEX idx_agents_operational_state
+    ON agents (operational_state);

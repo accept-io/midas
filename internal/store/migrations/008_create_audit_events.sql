@@ -1,16 +1,15 @@
 CREATE TABLE audit_events (
-    id text PRIMARY KEY,
-    envelope_id text NOT NULL,
-    request_id text NOT NULL,
-    sequence_no integer NOT NULL,
-    event_type text NOT NULL,
-    performed_by_type text,
-    performed_by_id text,
-    payload_json jsonb NOT NULL,
-    prev_hash text,
-    event_hash text NOT NULL,
-    occurred_at timestamptz NOT NULL,
-    created_at timestamptz NOT NULL DEFAULT now(),
+    id TEXT PRIMARY KEY,
+    envelope_id TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    sequence_no INTEGER NOT NULL,
+    occurred_at TIMESTAMPTZ NOT NULL,
+    event_type TEXT NOT NULL,
+    performed_by_type TEXT NOT NULL,
+    performed_by_id TEXT NOT NULL,
+    payload_json JSONB,
+    prev_hash TEXT,
+    event_hash TEXT NOT NULL,
     UNIQUE (envelope_id, sequence_no)
 );
 

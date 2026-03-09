@@ -9,14 +9,15 @@ import (
 	"time"
 
 	"github.com/accept-io/midas/internal/authority"
+	"github.com/accept-io/midas/internal/store/sqltx"
 	"github.com/accept-io/midas/internal/value"
 )
 
 type ProfileRepo struct {
-	db *sql.DB
+	db sqltx.DBTX
 }
 
-func NewProfileRepo(db *sql.DB) (*ProfileRepo, error) {
+func NewProfileRepo(db sqltx.DBTX) (*ProfileRepo, error) {
 	if db == nil {
 		return nil, ErrNilDB
 	}

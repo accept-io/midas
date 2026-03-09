@@ -20,7 +20,7 @@ import (
 func main() {
 	ctx := context.Background()
 
-	repos, backend, cleanup, err := buildRepositories(ctx)
+	repos, repoStore, backend, cleanup, err := buildRepositories(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -36,12 +36,7 @@ func main() {
 	}
 
 	orchestrator, err := decision.NewOrchestrator(
-		repos.Surfaces,
-		repos.Profiles,
-		repos.Grants,
-		repos.Agents,
-		repos.Envelopes,
-		repos.Audit,
+		repoStore,
 		policy.NoOpPolicyEvaluator{},
 	)
 	if err != nil {
@@ -54,7 +49,7 @@ func main() {
 	log.Fatal(srv.ListenAndServe(":8080"))
 }
 
-func buildRepositories(ctx context.Context) (*store.Repositories, string, func(), error) {
+func buildRepositories(ctx context.Context) (*store.Repositories, decision.RepositoryStore, string, func(), error) {
 	backend := os.Getenv("MIDAS_STORE")
 	if backend == "" {
 		backend = "memory"
@@ -64,23 +59,29 @@ func buildRepositories(ctx context.Context) (*store.Repositories, string, func()
 	case "postgres":
 		databaseURL := os.Getenv("DATABASE_URL")
 		if databaseURL == "" {
-			return nil, "", nil, logError("MIDAS_STORE=postgres but DATABASE_URL is not set")
+			return nil, nil, "", nil, logError("MIDAS_STORE=postgres but DATABASE_URL is not set")
 		}
 
 		db, err := sql.Open("postgres", databaseURL)
 		if err != nil {
-			return nil, "", nil, err
+			return nil, nil, "", nil, err
 		}
 
 		if err := db.PingContext(ctx); err != nil {
 			_ = db.Close()
-			return nil, "", nil, err
+			return nil, nil, "", nil, err
 		}
 
-		repos, err := postgres.NewRepositories(db)
+		pgStore, err := postgres.NewStore(db)
 		if err != nil {
 			_ = db.Close()
-			return nil, "", nil, err
+			return nil, nil, "", nil, err
+		}
+
+		repos, err := pgStore.Repositories()
+		if err != nil {
+			_ = db.Close()
+			return nil, nil, "", nil, err
 		}
 
 		cleanup := func() {
@@ -89,13 +90,18 @@ func buildRepositories(ctx context.Context) (*store.Repositories, string, func()
 			}
 		}
 
-		return repos, backend, cleanup, nil
+		return repos, pgStore, backend, cleanup, nil
 
 	case "memory":
-		return memory.NewRepositories(), backend, nil, nil
+		memStore := memory.NewStore()
+		repos, err := memStore.Repositories()
+		if err != nil {
+			return nil, nil, "", nil, err
+		}
+		return repos, memStore, backend, nil, nil
 
 	default:
-		return nil, "", nil, logError("unsupported MIDAS_STORE: " + backend)
+		return nil, nil, "", nil, logError("unsupported MIDAS_STORE: " + backend)
 	}
 }
 

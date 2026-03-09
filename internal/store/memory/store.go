@@ -1,17 +1,29 @@
 package memory
 
 import (
-	"github.com/accept-io/midas/internal/audit"
+	"context"
+
 	"github.com/accept-io/midas/internal/store"
 )
 
-func NewRepositories() *store.Repositories {
-	return &store.Repositories{
-		Surfaces:  NewSurfaceRepo(),
-		Agents:    NewAgentRepo(),
-		Profiles:  NewProfileRepo(),
-		Grants:    NewGrantRepo(),
-		Envelopes: NewEnvelopeRepo(),
-		Audit:     audit.NewMemoryRepository(),
+type Store struct {
+	repos *store.Repositories
+}
+
+func NewStore() *Store {
+	return &Store{
+		repos: NewRepositories(),
 	}
+}
+
+func (s *Store) Repositories() (*store.Repositories, error) {
+	return s.repos, nil
+}
+
+func (s *Store) WithTx(ctx context.Context, fn func(*store.Repositories) error) error {
+	return fn(s.repos)
+}
+
+func NewStoreWithRepositories(repos *store.Repositories) *Store {
+	return &Store{repos: repos}
 }
