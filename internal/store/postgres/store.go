@@ -3,6 +3,7 @@ package postgres
 import (
 	"database/sql"
 
+	"github.com/accept-io/midas/internal/audit"
 	"github.com/accept-io/midas/internal/store"
 )
 
@@ -38,5 +39,6 @@ func NewRepositories(db *sql.DB) (*store.Repositories, error) {
 		Profiles:  profiles,
 		Grants:    grants,
 		Envelopes: envelopes,
+		Audit:     audit.NewPostgresRepository(db),
 	}, nil
 }

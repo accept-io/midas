@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/accept-io/midas/internal/agent"
+	"github.com/accept-io/midas/internal/audit"
 	"github.com/accept-io/midas/internal/authority"
 	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/eval"
@@ -32,6 +33,7 @@ type Orchestrator struct {
 	grants    authority.GrantRepository
 	agents    agent.AgentRepository
 	envelopes envelope.EnvelopeRepository
+	audit     audit.AuditEventRepository
 	policies  policy.PolicyEvaluator
 }
 
@@ -42,9 +44,12 @@ func NewOrchestrator(
 	grants authority.GrantRepository,
 	agents agent.AgentRepository,
 	envelopes envelope.EnvelopeRepository,
+	auditRepo audit.AuditEventRepository,
 	policies policy.PolicyEvaluator,
 ) (*Orchestrator, error) {
-	if surfaces == nil || profiles == nil || grants == nil || agents == nil || envelopes == nil || policies == nil {
+
+	if surfaces == nil || profiles == nil || grants == nil ||
+		agents == nil || envelopes == nil || auditRepo == nil || policies == nil {
 		return nil, ErrNilOrchestratorDependency
 	}
 
@@ -54,6 +59,7 @@ func NewOrchestrator(
 		grants:    grants,
 		agents:    agents,
 		envelopes: envelopes,
+		audit:     auditRepo,
 		policies:  policies,
 	}, nil
 }
@@ -89,10 +95,21 @@ func (o *Orchestrator) Evaluate(ctx context.Context, req eval.DecisionRequest) (
 		return EvaluationResult{}, err
 	}
 
+	if err := o.appendAuditEvent(ctx, env, audit.AuditEventEnvelopeCreated, nil); err != nil {
+		return EvaluationResult{}, err
+	}
+
 	if err := env.Transition(envelope.EnvelopeStateEvaluating); err != nil {
 		return EvaluationResult{}, err
 	}
 	if err := o.envelopes.Update(ctx, env); err != nil {
+		return EvaluationResult{}, err
+	}
+
+	if err := o.appendAuditEvent(ctx, env, audit.AuditEventStateTransitioned, map[string]any{
+		"from_state": envelope.EnvelopeStateReceived,
+		"to_state":   envelope.EnvelopeStateEvaluating,
+	}); err != nil {
 		return EvaluationResult{}, err
 	}
 
@@ -106,12 +123,12 @@ func (o *Orchestrator) Evaluate(ctx context.Context, req eval.DecisionRequest) (
 	}
 
 	// Step 2: Agent resolution
-	a, err := o.agents.GetByID(ctx, req.AgentID)
+	a, outcome, reason, err := o.resolveAgent(ctx, req.AgentID)
 	if err != nil {
 		return EvaluationResult{}, err
 	}
-	if a == nil {
-		return o.finish(ctx, env, eval.OutcomeReject, eval.ReasonAgentNotFound)
+	if outcome != "" {
+		return o.finish(ctx, env, outcome, reason)
 	}
 
 	// Step 3: Authority chain resolution (grant + profile + chain validation)
@@ -200,6 +217,21 @@ func (o *Orchestrator) resolveSurface(
 	}
 
 	return s, "", "", nil
+}
+
+func (o *Orchestrator) resolveAgent(
+	ctx context.Context,
+	agentID string,
+) (*agent.Agent, eval.Outcome, eval.ReasonCode, error) {
+	a, err := o.agents.GetByID(ctx, agentID)
+	if err != nil {
+		return nil, "", "", err
+	}
+	if a == nil {
+		return nil, eval.OutcomeReject, eval.ReasonAgentNotFound, nil
+	}
+
+	return a, "", "", nil
 }
 
 func (o *Orchestrator) resolveAuthorityChain(
@@ -355,4 +387,22 @@ func (o *Orchestrator) GetEnvelopeByRequestID(ctx context.Context, requestID str
 
 func (o *Orchestrator) ListEnvelopes(ctx context.Context) ([]*envelope.Envelope, error) {
 	return o.envelopes.List(ctx)
+}
+
+func (o *Orchestrator) appendAuditEvent(
+	ctx context.Context,
+	env *envelope.Envelope,
+	eventType audit.AuditEventType,
+	payload map[string]any,
+) error {
+	ev := audit.NewEvent(
+		env.ID,
+		env.RequestID,
+		eventType,
+		audit.EventPerformerSystem,
+		"midas-orchestrator",
+		payload,
+	)
+
+	return o.audit.Append(ctx, ev)
 }

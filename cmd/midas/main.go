@@ -35,15 +35,14 @@ func main() {
 		}
 	}
 
-	policies := policy.NoOpPolicyEvaluator{}
-
 	orchestrator, err := decision.NewOrchestrator(
 		repos.Surfaces,
 		repos.Profiles,
 		repos.Grants,
 		repos.Agents,
 		repos.Envelopes,
-		policies,
+		repos.Audit,
+		policy.NoOpPolicyEvaluator{},
 	)
 	if err != nil {
 		log.Fatal(err)

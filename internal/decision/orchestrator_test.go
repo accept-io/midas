@@ -6,8 +6,10 @@ import (
 	"time"
 
 	"github.com/accept-io/midas/internal/agent"
+	"github.com/accept-io/midas/internal/audit"
 	"github.com/accept-io/midas/internal/authority"
 	"github.com/accept-io/midas/internal/decision"
+	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/eval"
 	"github.com/accept-io/midas/internal/policy"
 	"github.com/accept-io/midas/internal/store/memory"
@@ -22,6 +24,7 @@ type testRepos struct {
 	grants    *memory.GrantRepo
 	agents    *memory.AgentRepo
 	envelopes *memory.EnvelopeRepo
+	audit     *audit.MemoryRepository
 }
 
 func newRepos() testRepos {
@@ -31,24 +34,33 @@ func newRepos() testRepos {
 		grants:    memory.NewGrantRepo(),
 		agents:    memory.NewAgentRepo(),
 		envelopes: memory.NewEnvelopeRepo(),
+		audit:     audit.NewMemoryRepository(),
 	}
 }
 
 func newOrchestrator(t *testing.T, r testRepos) *decision.Orchestrator {
 	t.Helper()
+
 	orch, err := decision.NewOrchestrator(
-		r.surfaces, r.profiles, r.grants, r.agents, r.envelopes,
+		r.surfaces,
+		r.profiles,
+		r.grants,
+		r.agents,
+		r.envelopes,
+		r.audit,
 		policy.NoOpPolicyEvaluator{},
 	)
 	if err != nil {
 		t.Fatalf("NewOrchestrator: %v", err)
 	}
+
 	return orch
 }
 
 // seedActiveSurface adds an active surface with the given ID.
 func seedActiveSurface(t *testing.T, r testRepos, id string) {
 	t.Helper()
+
 	err := r.surfaces.Create(context.Background(), &surface.DecisionSurface{
 		ID:            id,
 		Name:          "test surface",
@@ -64,6 +76,7 @@ func seedActiveSurface(t *testing.T, r testRepos, id string) {
 // seedAgent adds an agent with the given ID.
 func seedAgent(t *testing.T, r testRepos, id string) {
 	t.Helper()
+
 	err := r.agents.Create(context.Background(), &agent.Agent{
 		ID:               id,
 		Name:             "test agent",
@@ -79,6 +92,7 @@ func seedAgent(t *testing.T, r testRepos, id string) {
 // Default thresholds: confidence 0.8, consequence risk_rating/high.
 func seedProfile(t *testing.T, r testRepos, id, surfaceID string) {
 	t.Helper()
+
 	err := r.profiles.Create(context.Background(), &authority.AuthorityProfile{
 		ID:                  id,
 		SurfaceID:           surfaceID,
@@ -100,6 +114,7 @@ func seedProfile(t *testing.T, r testRepos, id, surfaceID string) {
 // seedActiveGrant creates an active grant linking agentID to profileID.
 func seedActiveGrant(t *testing.T, r testRepos, id, agentID, profileID string) {
 	t.Helper()
+
 	err := r.grants.Create(context.Background(), &authority.AuthorityGrant{
 		ID:            id,
 		AgentID:       agentID,
@@ -127,6 +142,7 @@ func baseRequest(surfaceID, agentID string) eval.DecisionRequest {
 
 func assertResult(t *testing.T, got decision.EvaluationResult, wantOutcome eval.Outcome, wantReason eval.ReasonCode) {
 	t.Helper()
+
 	if got.Outcome != wantOutcome {
 		t.Errorf("outcome: got %q, want %q", got.Outcome, wantOutcome)
 	}
@@ -153,10 +169,49 @@ func TestEvaluate_WithinAuthority(t *testing.T) {
 	assertResult(t, result, eval.OutcomeExecute, eval.ReasonWithinAuthority)
 }
 
+// TestEvaluate_EmitsInitialAuditEvents verifies the first audit slice:
+// ENVELOPE_CREATED followed by STATE_TRANSITIONED to EVALUATING.
+func TestEvaluate_EmitsInitialAuditEvents(t *testing.T) {
+	r := newRepos()
+	seedActiveSurface(t, r, "surf-1")
+	seedAgent(t, r, "agent-1")
+	seedProfile(t, r, "prof-1", "surf-1")
+	seedActiveGrant(t, r, "grant-1", "agent-1", "prof-1")
+
+	result, err := newOrchestrator(t, r).Evaluate(context.Background(), baseRequest("surf-1", "agent-1"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	events, err := r.audit.ListByEnvelopeID(context.Background(), result.EnvelopeID)
+	if err != nil {
+		t.Fatalf("ListByEnvelopeID: %v", err)
+	}
+
+	if len(events) < 2 {
+		t.Fatalf("expected at least 2 audit events, got %d", len(events))
+	}
+
+	if events[0].EventType != audit.AuditEventEnvelopeCreated {
+		t.Fatalf("expected first event %q, got %q", audit.AuditEventEnvelopeCreated, events[0].EventType)
+	}
+
+	if events[1].EventType != audit.AuditEventStateTransitioned {
+		t.Fatalf("expected second event %q, got %q", audit.AuditEventStateTransitioned, events[1].EventType)
+	}
+
+	if got := payloadString(t, events[1].Payload, "from_state"); got != string(envelope.EnvelopeStateReceived) {
+		t.Fatalf("expected from_state %q, got %q", envelope.EnvelopeStateReceived, got)
+	}
+
+	if got := payloadString(t, events[1].Payload, "to_state"); got != string(envelope.EnvelopeStateEvaluating) {
+		t.Fatalf("expected to_state %q, got %q", envelope.EnvelopeStateEvaluating, got)
+	}
+}
+
 // TestEvaluate_SurfaceNotFound covers a request where the surface ID is unknown.
 func TestEvaluate_SurfaceNotFound(t *testing.T) {
 	r := newRepos()
-	// surface not seeded
 
 	result, err := newOrchestrator(t, r).Evaluate(context.Background(), baseRequest("surf-missing", "agent-1"))
 	if err != nil {
@@ -168,6 +223,7 @@ func TestEvaluate_SurfaceNotFound(t *testing.T) {
 // TestEvaluate_SurfaceInactive covers a request against a surface that has been deactivated.
 func TestEvaluate_SurfaceInactive(t *testing.T) {
 	r := newRepos()
+
 	if err := r.surfaces.Create(context.Background(), &surface.DecisionSurface{
 		ID:     "surf-1",
 		Name:   "retired surface",
@@ -187,7 +243,6 @@ func TestEvaluate_SurfaceInactive(t *testing.T) {
 func TestEvaluate_AgentNotFound(t *testing.T) {
 	r := newRepos()
 	seedActiveSurface(t, r, "surf-1")
-	// agent not seeded
 
 	result, err := newOrchestrator(t, r).Evaluate(context.Background(), baseRequest("surf-1", "agent-missing"))
 	if err != nil {
@@ -201,7 +256,6 @@ func TestEvaluate_NoActiveGrant(t *testing.T) {
 	r := newRepos()
 	seedActiveSurface(t, r, "surf-1")
 	seedAgent(t, r, "agent-1")
-	// no grants seeded for agent-1
 
 	result, err := newOrchestrator(t, r).Evaluate(context.Background(), baseRequest("surf-1", "agent-1"))
 	if err != nil {
@@ -211,12 +265,11 @@ func TestEvaluate_NoActiveGrant(t *testing.T) {
 }
 
 // TestEvaluate_ProfileNotFound covers an agent with an active grant whose profile
-// cannot be resolved (profile ID not present in the repository).
+// cannot be resolved.
 func TestEvaluate_ProfileNotFound(t *testing.T) {
 	r := newRepos()
 	seedActiveSurface(t, r, "surf-1")
 	seedAgent(t, r, "agent-1")
-	// grant references a profile that does not exist in the repo
 	seedActiveGrant(t, r, "grant-1", "agent-1", "prof-missing")
 
 	result, err := newOrchestrator(t, r).Evaluate(context.Background(), baseRequest("surf-1", "agent-1"))
@@ -232,7 +285,6 @@ func TestEvaluate_GrantProfileSurfaceMismatch(t *testing.T) {
 	r := newRepos()
 	seedActiveSurface(t, r, "surf-1")
 	seedAgent(t, r, "agent-1")
-	// profile is registered against surf-2, not the requested surf-1
 	seedProfile(t, r, "prof-1", "surf-2")
 	seedActiveGrant(t, r, "grant-1", "agent-1", "prof-1")
 
@@ -243,12 +295,12 @@ func TestEvaluate_GrantProfileSurfaceMismatch(t *testing.T) {
 	assertResult(t, result, eval.OutcomeReject, eval.ReasonGrantProfileSurfaceMismatch)
 }
 
-// TestEvaluate_InsufficientContext covers a request that is missing context keys
-// declared as required by the authority profile.
+// TestEvaluate_InsufficientContext covers a request missing required context keys.
 func TestEvaluate_InsufficientContext(t *testing.T) {
 	r := newRepos()
 	seedActiveSurface(t, r, "surf-1")
 	seedAgent(t, r, "agent-1")
+
 	if err := r.profiles.Create(context.Background(), &authority.AuthorityProfile{
 		ID:                  "prof-1",
 		SurfaceID:           "surf-1",
@@ -261,10 +313,11 @@ func TestEvaluate_InsufficientContext(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+
 	seedActiveGrant(t, r, "grant-1", "agent-1", "prof-1")
 
 	req := baseRequest("surf-1", "agent-1")
-	req.Context = map[string]any{} // transaction_id is required but not supplied
+	req.Context = map[string]any{}
 
 	result, err := newOrchestrator(t, r).Evaluate(context.Background(), req)
 	if err != nil {
@@ -274,16 +327,16 @@ func TestEvaluate_InsufficientContext(t *testing.T) {
 }
 
 // TestEvaluate_ConfidenceBelowThreshold covers a request whose confidence score
-// falls below the profile's configured threshold.
+// falls below the profile threshold.
 func TestEvaluate_ConfidenceBelowThreshold(t *testing.T) {
 	r := newRepos()
 	seedActiveSurface(t, r, "surf-1")
 	seedAgent(t, r, "agent-1")
-	seedProfile(t, r, "prof-1", "surf-1") // threshold = 0.8
+	seedProfile(t, r, "prof-1", "surf-1")
 	seedActiveGrant(t, r, "grant-1", "agent-1", "prof-1")
 
 	req := baseRequest("surf-1", "agent-1")
-	req.Confidence = 0.5 // below 0.8
+	req.Confidence = 0.5
 
 	result, err := newOrchestrator(t, r).Evaluate(context.Background(), req)
 	if err != nil {
@@ -293,18 +346,18 @@ func TestEvaluate_ConfidenceBelowThreshold(t *testing.T) {
 }
 
 // TestEvaluate_ConsequenceExceedsLimit covers a request whose consequence severity
-// exceeds the profile's configured threshold.
+// exceeds the profile threshold.
 func TestEvaluate_ConsequenceExceedsLimit(t *testing.T) {
 	r := newRepos()
 	seedActiveSurface(t, r, "surf-1")
 	seedAgent(t, r, "agent-1")
-	seedProfile(t, r, "prof-1", "surf-1") // threshold = risk_rating/high
+	seedProfile(t, r, "prof-1", "surf-1")
 	seedActiveGrant(t, r, "grant-1", "agent-1", "prof-1")
 
 	req := baseRequest("surf-1", "agent-1")
 	req.Consequence = &eval.Consequence{
 		Type:       value.ConsequenceTypeRiskRating,
-		RiskRating: value.RiskRatingCritical, // exceeds high
+		RiskRating: value.RiskRatingCritical,
 	}
 
 	result, err := newOrchestrator(t, r).Evaluate(context.Background(), req)
@@ -312,4 +365,23 @@ func TestEvaluate_ConsequenceExceedsLimit(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	assertResult(t, result, eval.OutcomeEscalate, eval.ReasonConsequenceExceedsLimit)
+}
+
+func payloadString(t *testing.T, payload map[string]any, key string) string {
+	t.Helper()
+
+	v, ok := payload[key]
+	if !ok {
+		t.Fatalf("expected %s in payload, got %+v", key, payload)
+	}
+
+	switch s := v.(type) {
+	case string:
+		return s
+	case envelope.EnvelopeState:
+		return string(s)
+	default:
+		t.Fatalf("expected %s to be string-like, got %T", key, v)
+		return ""
+	}
 }
