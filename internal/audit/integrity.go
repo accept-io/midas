@@ -12,11 +12,16 @@ type EnvelopeRepository interface {
 	List(ctx context.Context) ([]*envelope.Envelope, error)
 }
 
+// AuditRepository is the minimal interface needed for integrity verification
+type AuditRepository interface {
+	ListByEnvelopeID(ctx context.Context, envelopeID string) ([]*AuditEvent, error)
+}
+
 // VerifyAuditIntegrity checks that all envelopes have complete, valid audit trails.
 func VerifyAuditIntegrity(
 	ctx context.Context,
 	envelopeRepo EnvelopeRepository,
-	auditRepo AuditEventRepository,
+	auditRepo AuditRepository, // ← Changed from AuditEventRepository
 ) error {
 	if envelopeRepo == nil {
 		return fmt.Errorf("envelope repository is nil")
@@ -24,7 +29,6 @@ func VerifyAuditIntegrity(
 	if auditRepo == nil {
 		return fmt.Errorf("audit repository is nil")
 	}
-
 	envelopes, err := envelopeRepo.List(ctx)
 	if err != nil {
 		return fmt.Errorf("listing envelopes: %w", err)
@@ -39,7 +43,7 @@ func VerifyAuditIntegrity(
 	return nil
 }
 
-func verifyEnvelope(ctx context.Context, auditRepo AuditEventRepository, env *envelope.Envelope) error {
+func verifyEnvelope(ctx context.Context, auditRepo AuditRepository, env *envelope.Envelope) error {
 	events, err := auditRepo.ListByEnvelopeID(ctx, env.ID)
 	if err != nil {
 		return fmt.Errorf("envelope %s: listing events: %w", env.ID, err)
@@ -104,7 +108,8 @@ func verifyEnvelope(ctx context.Context, auditRepo AuditEventRepository, env *en
 
 	toState, ok := finalEvent.Payload["to_state"].(string)
 	if !ok {
-		return fmt.Errorf("envelope %s: final event has non-string to_state payload", env.ID)
+		return fmt.Errorf("envelope %s: final event has non-string to_state payload",
+			env.ID)
 	}
 
 	if toState != string(env.State) {
