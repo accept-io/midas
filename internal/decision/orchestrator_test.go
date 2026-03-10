@@ -54,6 +54,7 @@ func newOrchestrator(t *testing.T, r testRepos) *decision.Orchestrator {
 	orch, err := decision.NewOrchestrator(
 		memStore,
 		policy.NoOpPolicyEvaluator{},
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("NewOrchestrator: %v", err)

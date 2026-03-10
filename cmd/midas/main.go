@@ -38,6 +38,7 @@ func main() {
 	orchestrator, err := decision.NewOrchestrator(
 		repoStore,
 		policy.NoOpPolicyEvaluator{},
+		nil,
 	)
 	if err != nil {
 		log.Fatal(err)
@@ -72,7 +73,7 @@ func buildRepositories(ctx context.Context) (*store.Repositories, decision.Repos
 			return nil, nil, "", nil, err
 		}
 
-		pgStore, err := postgres.NewStore(db)
+		pgStore, err := postgres.NewStore(db, nil)
 		if err != nil {
 			_ = db.Close()
 			return nil, nil, "", nil, err

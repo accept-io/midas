@@ -52,8 +52,8 @@ func (s *wrappedTxStore) Repositories() (*store.Repositories, error) {
 	return s.base.Repositories()
 }
 
-func (s *wrappedTxStore) WithTx(ctx context.Context, fn func(*store.Repositories) error) error {
-	return s.base.WithTx(ctx, func(repos *store.Repositories) error {
+func (s *wrappedTxStore) WithTx(ctx context.Context, operation string, fn func(*store.Repositories) error) error {
+	return s.base.WithTx(ctx, operation, func(repos *store.Repositories) error {
 		wrapped := &store.Repositories{
 			Surfaces:  repos.Surfaces,
 			Agents:    repos.Agents,
@@ -195,7 +195,7 @@ func TestOrchestrator_Postgres_RollsBackEnvelopeAndAuditOnMidEvaluationFailure(t
 
 	cleanupAtomicityTestData(t, db)
 
-	baseStore, err := postgres.NewStore(db)
+	baseStore, err := postgres.NewStore(db, nil)
 	if err != nil {
 		t.Fatalf("postgres.NewStore: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestOrchestrator_Postgres_RollsBackEnvelopeAndAuditOnMidEvaluationFailure(t
 		failAfter: 2,
 	}
 
-	orch, err := decision.NewOrchestrator(testStore, policy.NoOpPolicyEvaluator{})
+	orch, err := decision.NewOrchestrator(testStore, policy.NoOpPolicyEvaluator{}, nil)
 	if err != nil {
 		t.Fatalf("decision.NewOrchestrator: %v", err)
 	}

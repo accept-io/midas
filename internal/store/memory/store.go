@@ -20,7 +20,9 @@ func (s *Store) Repositories() (*store.Repositories, error) {
 	return s.repos, nil
 }
 
-func (s *Store) WithTx(ctx context.Context, fn func(*store.Repositories) error) error {
+func (s *Store) WithTx(ctx context.Context, operation string, fn func(*store.Repositories) error) error {
+	_ = ctx
+	_ = operation
 	return fn(s.repos)
 }
 

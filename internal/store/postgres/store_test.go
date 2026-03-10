@@ -52,14 +52,14 @@ func TestStore_WithTx_CommitsOnSuccess(t *testing.T) {
 
 	cleanupOperationalEnvelopes(t, db)
 
-	s, err := NewStore(db)
+	s, err := NewStore(db, nil)
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
 
 	ctx := context.Background()
 
-	err = s.WithTx(ctx, func(repos *store.Repositories) error {
+	err = s.WithTx(ctx, "test", func(repos *store.Repositories) error {
 		env := &envelope.Envelope{
 			ID:        "env-commit-1",
 			RequestID: "req-commit-1",
@@ -93,14 +93,14 @@ func TestStore_WithTx_RollsBackOnError(t *testing.T) {
 
 	cleanupOperationalEnvelopes(t, db)
 
-	s, err := NewStore(db)
+	s, err := NewStore(db, nil)
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
 
 	ctx := context.Background()
 
-	err = s.WithTx(ctx, func(repos *store.Repositories) error {
+	err = s.WithTx(ctx, "test", func(repos *store.Repositories) error {
 		env := &envelope.Envelope{
 			ID:        "env-rollback-1",
 			RequestID: "req-rollback-1",

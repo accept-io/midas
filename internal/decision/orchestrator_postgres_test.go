@@ -69,7 +69,7 @@ func cleanupPostgresTestData(t *testing.T, db *sql.DB) {
 func mustPostgresStore(t *testing.T, db *sql.DB) *postgres.Store {
 	t.Helper()
 
-	s, err := postgres.NewStore(db)
+	s, err := postgres.NewStore(db, nil)
 	if err != nil {
 		t.Fatalf("postgres.NewStore: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestOrchestrator_Postgres_PersistsCompleteDecisionRecord(t *testing.T) {
 
 	seedPostgresHappyPathData(t, repos)
 
-	orch, err := decision.NewOrchestrator(pgStore, policy.NoOpPolicyEvaluator{})
+	orch, err := decision.NewOrchestrator(pgStore, policy.NoOpPolicyEvaluator{}, nil)
 	if err != nil {
 		t.Fatalf("decision.NewOrchestrator: %v", err)
 	}

@@ -25,32 +25,35 @@ type EvaluationResult struct {
 	ReasonCode eval.ReasonCode
 	EnvelopeID string
 }
-
 type RepositoryStore interface {
 	Repositories() (*store.Repositories, error)
-	WithTx(ctx context.Context, fn func(*store.Repositories) error) error
+	WithTx(ctx context.Context, operation string, fn func(*store.Repositories) error) error
 }
 
 // Orchestrator coordinates the MIDAS evaluation flow.
-
 type Orchestrator struct {
 	store    RepositoryStore
 	policies policy.PolicyEvaluator
+	metrics  EvaluationRecorder
 }
 
 // NewOrchestrator constructs an Orchestrator with required dependencies.
 func NewOrchestrator(
 	store RepositoryStore,
 	policies policy.PolicyEvaluator,
+	metrics EvaluationRecorder,
 ) (*Orchestrator, error) {
-
 	if store == nil || policies == nil {
 		return nil, ErrNilOrchestratorDependency
+	}
+	if metrics == nil {
+		metrics = NoOpEvaluationRecorder{}
 	}
 
 	return &Orchestrator{
 		store:    store,
 		policies: policies,
+		metrics:  metrics,
 	}, nil
 }
 
@@ -64,15 +67,26 @@ func NewOrchestrator(
 // Evaluate executes the MIDAS authority evaluation flow inside a transaction.
 
 func (o *Orchestrator) Evaluate(ctx context.Context, req eval.DecisionRequest) (EvaluationResult, error) {
+	start := time.Now()
 	var result EvaluationResult
 
-	err := o.store.WithTx(ctx, func(repos *store.Repositories) error {
+	err := o.store.WithTx(ctx, "evaluation", func(repos *store.Repositories) error {
 		var err error
 		result, err = o.evaluate(ctx, repos, req)
 		return err
 	})
 
-	return result, err
+	duration := time.Since(start) // ✅ Calculate once, immediately after WithTx
+
+	if err != nil {
+		o.metrics.IncrementEvaluationFailure("persistence")
+		return result, err
+	}
+
+	o.metrics.RecordEvaluationDuration(string(result.Outcome), duration)
+	o.metrics.IncrementEvaluationOutcome(string(result.Outcome), string(result.ReasonCode))
+
+	return result, nil
 }
 
 // evaluate contains the full MIDAS authority evaluation flow.
@@ -122,8 +136,8 @@ func (o *Orchestrator) evaluate(
 	}
 
 	if err := o.appendAuditEvent(ctx, repos.Audit, env, audit.AuditEventStateTransitioned, map[string]any{
-		"from_state": envelope.EnvelopeStateReceived,
-		"to_state":   envelope.EnvelopeStateEvaluating,
+		"from_state": string(envelope.EnvelopeStateReceived),
+		"to_state":   string(envelope.EnvelopeStateEvaluating),
 	}); err != nil {
 		return EvaluationResult{}, err
 	}
