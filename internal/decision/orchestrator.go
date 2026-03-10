@@ -6,8 +6,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/accept-io/midas/internal/agent"
 	"github.com/accept-io/midas/internal/audit"
 	"github.com/accept-io/midas/internal/authority"
@@ -16,6 +14,7 @@ import (
 	"github.com/accept-io/midas/internal/policy"
 	"github.com/accept-io/midas/internal/store"
 	"github.com/accept-io/midas/internal/surface"
+	"github.com/google/uuid"
 )
 
 var ErrNilOrchestratorDependency = errors.New("orchestrator dependency is nil")
