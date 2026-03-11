@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/accept-io/midas/internal/audit"
@@ -36,58 +38,106 @@ func (s *Store) Repositories() (*store.Repositories, error) {
 }
 
 // WithTx executes fn with repositories bound to a transaction.
+// operation should describe the business workflow (e.g., "evaluation", "review", "admin_update").
 func (s *Store) WithTx(ctx context.Context, operation string, fn func(*store.Repositories) error) (err error) {
 	start := time.Now()
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
+		slog.Error("tx_begin_failed",
+			"operation", operation,
+			"error", err,
+		)
 		s.metrics.IncrementTransactionError(operation, "begin")
 		return err
 	}
 
 	defer func() {
 		if p := recover(); p != nil {
+			duration := time.Since(start)
+			slog.Error("tx_panic_recovered",
+				"operation", operation,
+				"duration_ms", duration.Milliseconds(),
+				"panic_value", fmt.Sprintf("%v", p),
+			)
 			s.metrics.IncrementTransactionError(operation, "panic")
 			s.metrics.IncrementTransactionRollback(operation)
-			s.metrics.RecordTransactionDuration(operation, "panic", time.Since(start))
-			_ = tx.Rollback()
+			s.metrics.RecordTransactionDuration(operation, "panic", duration)
+
+			// Attempt rollback and log if it fails
+			if rbErr := tx.Rollback(); rbErr != nil {
+				slog.Error("tx_rollback_failed_after_panic",
+					"operation", operation,
+					"rollback_error", rbErr,
+				)
+			}
 			panic(p)
 		}
 	}()
 
 	repos, err := newRepositories(tx)
 	if err != nil {
+		slog.Error("tx_repository_factory_failed",
+			"operation", operation,
+			"error", err,
+		)
 		s.metrics.IncrementTransactionError(operation, "repository_factory")
+
 		if rbErr := tx.Rollback(); rbErr != nil {
+			duration := time.Since(start)
+			slog.Error("tx_rollback_failed_after_factory_error",
+				"operation", operation,
+				"factory_error", err,
+				"rollback_error", rbErr,
+			)
 			s.metrics.IncrementTransactionError(operation, "rollback_after_factory_error")
-			s.metrics.RecordTransactionDuration(operation, "rollback_error", time.Since(start))
+			s.metrics.RecordTransactionDuration(operation, "rollback_error", duration)
 			return errors.Join(err, rbErr)
 		}
+
+		duration := time.Since(start)
 		s.metrics.IncrementTransactionRollback(operation)
-		s.metrics.RecordTransactionDuration(operation, "rollback", time.Since(start))
+		s.metrics.RecordTransactionDuration(operation, "rollback", duration)
 		return err
 	}
 
 	if err := fn(repos); err != nil {
-		s.metrics.IncrementTransactionError(operation, "callback")
+		// Callback returned error - may be business logic or repository failure
+		s.metrics.IncrementTransactionError(operation, "callback_returned_error")
+
 		if rbErr := tx.Rollback(); rbErr != nil {
+			duration := time.Since(start)
+			slog.Error("tx_rollback_failed_after_callback_error",
+				"operation", operation,
+				"callback_error", err,
+				"rollback_error", rbErr,
+			)
 			s.metrics.IncrementTransactionError(operation, "rollback_after_callback_error")
-			s.metrics.RecordTransactionDuration(operation, "rollback_error", time.Since(start))
+			s.metrics.RecordTransactionDuration(operation, "rollback_error", duration)
 			return errors.Join(err, rbErr)
 		}
+
+		duration := time.Since(start)
 		s.metrics.IncrementTransactionRollback(operation)
-		s.metrics.RecordTransactionDuration(operation, "rollback", time.Since(start))
+		s.metrics.RecordTransactionDuration(operation, "rollback", duration)
 		return err
 	}
 
 	if err := tx.Commit(); err != nil {
+		duration := time.Since(start)
+		slog.Error("tx_commit_failed",
+			"operation", operation,
+			"duration_ms", duration.Milliseconds(),
+			"error", err,
+		)
 		s.metrics.IncrementTransactionError(operation, "commit")
-		s.metrics.RecordTransactionDuration(operation, "commit_error", time.Since(start))
+		s.metrics.RecordTransactionDuration(operation, "commit_error", duration)
 		return err
 	}
 
+	duration := time.Since(start)
 	s.metrics.IncrementTransactionCommit(operation)
-	s.metrics.RecordTransactionDuration(operation, "commit", time.Since(start))
+	s.metrics.RecordTransactionDuration(operation, "commit", duration)
 	return nil
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"log"
+	"log/slog"
 	"os"
 
 	_ "github.com/lib/pq"
@@ -18,6 +19,16 @@ import (
 )
 
 func main() {
+	logLevel := slog.LevelInfo
+	if os.Getenv("MIDAS_LOG_LEVEL") == "debug" {
+		logLevel = slog.LevelDebug
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: logLevel,
+	}))
+	slog.SetDefault(logger)
+
 	ctx := context.Background()
 
 	repos, repoStore, backend, cleanup, err := buildRepositories(ctx)
@@ -27,6 +38,10 @@ func main() {
 	if cleanup != nil {
 		defer cleanup()
 	}
+
+	slog.Info("midas_starting",
+		"store_backend", backend,
+	)
 
 	if backend == "memory" {
 		err := bootstrap.SeedDemo(ctx, repos)
@@ -46,7 +61,10 @@ func main() {
 
 	srv := httpapi.NewServer(orchestrator)
 
-	log.Printf("MIDAS listening on :8080 (store=%s)", backend)
+	slog.Info("midas_listening",
+		"addr", ":8080",
+		"store_backend", backend,
+	)
 	log.Fatal(srv.ListenAndServe(":8080"))
 }
 
@@ -87,7 +105,9 @@ func buildRepositories(ctx context.Context) (*store.Repositories, decision.Repos
 
 		cleanup := func() {
 			if err := db.Close(); err != nil {
-				log.Printf("error closing database: %v", err)
+				slog.Error("database_close_failed",
+					"error", err,
+				)
 			}
 		}
 

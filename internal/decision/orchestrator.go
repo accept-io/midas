@@ -3,6 +3,7 @@ package decision
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sort"
 	"time"
 
@@ -70,18 +71,39 @@ func (o *Orchestrator) Evaluate(ctx context.Context, req eval.DecisionRequest) (
 	start := time.Now()
 	var result EvaluationResult
 
+	slog.Info("evaluation_started",
+		"request_id", req.RequestID,
+		"surface_id", req.SurfaceID,
+		"agent_id", req.AgentID,
+	)
+
 	err := o.store.WithTx(ctx, "evaluation", func(repos *store.Repositories) error {
 		var err error
 		result, err = o.evaluate(ctx, repos, req)
 		return err
 	})
 
-	duration := time.Since(start) // ✅ Calculate once, immediately after WithTx
+	duration := time.Since(start)
 
 	if err != nil {
+		slog.Error("evaluation_failed",
+			"request_id", req.RequestID,
+			"surface_id", req.SurfaceID,
+			"agent_id", req.AgentID,
+			"error", err,
+			"duration_ms", duration.Milliseconds(),
+		)
 		o.metrics.IncrementEvaluationFailure("persistence")
 		return result, err
 	}
+
+	slog.Info("evaluation_completed",
+		"request_id", req.RequestID,
+		"envelope_id", result.EnvelopeID,
+		"outcome", result.Outcome,
+		"reason_code", result.ReasonCode,
+		"duration_ms", duration.Milliseconds(),
+	)
 
 	o.metrics.RecordEvaluationDuration(string(result.Outcome), duration)
 	o.metrics.IncrementEvaluationOutcome(string(result.Outcome), string(result.ReasonCode))
@@ -151,6 +173,14 @@ func (o *Orchestrator) evaluate(
 		return o.finish(ctx, repos, env, outcome, reason)
 	}
 
+	slog.Debug("surface_resolved",
+		"request_id", req.RequestID,
+		"envelope_id", env.ID,
+		"surface_id", s.ID,
+		"surface_version", s.Version,
+		"surface_status", s.Status,
+	)
+
 	if err := o.appendResolutionEvent(ctx, repos.Audit, env, audit.AuditEventSurfaceResolved, map[string]any{
 		"surface_id":      s.ID,
 		"surface_version": s.Version,
@@ -167,6 +197,12 @@ func (o *Orchestrator) evaluate(
 		return o.finish(ctx, repos, env, outcome, reason)
 	}
 
+	slog.Debug("agent_resolved",
+		"request_id", req.RequestID,
+		"envelope_id", env.ID,
+		"agent_id", a.ID,
+	)
+
 	if err := o.appendResolutionEvent(ctx, repos.Audit, env, audit.AuditEventAgentResolved, map[string]any{
 		"agent_id": a.ID,
 	}); err != nil {
@@ -181,6 +217,15 @@ func (o *Orchestrator) evaluate(
 	if outcome != "" {
 		return o.finish(ctx, repos, env, outcome, reason)
 	}
+
+	slog.Debug("authority_chain_resolved",
+		"request_id", req.RequestID,
+		"envelope_id", env.ID,
+		"grant_id", g.ID,
+		"profile_id", p.ID,
+		"profile_version", p.Version,
+		"agent_id", g.AgentID,
+	)
 
 	if err := o.appendAuthorityChainResolvedEvent(ctx, repos.Audit, env, g, p); err != nil {
 		return EvaluationResult{}, err
@@ -356,22 +401,50 @@ func (o *Orchestrator) evaluatePolicy(
 		return "", "", nil
 	}
 
+	start := time.Now()
 	result, err := o.policies.Evaluate(ctx, policy.PolicyInput{
 		SurfaceID: req.SurfaceID,
 		AgentID:   req.AgentID,
 		Context:   req.Context,
 	})
+	duration := time.Since(start)
+
+	// Only log decision points and errors
 	if err != nil {
+		slog.Error("policy_evaluation_failed",
+			"request_id", req.RequestID,
+			"surface_id", req.SurfaceID,
+			"agent_id", req.AgentID,
+			"policy_reference", p.PolicyReference,
+			"fail_mode", p.FailMode,
+			"duration_ms", duration.Milliseconds(),
+			"error", err,
+		)
+
 		if p.FailMode == authority.FailModeOpen {
+			slog.Warn("policy_fail_open_applied",
+				"request_id", req.RequestID,
+				"surface_id", req.SurfaceID,
+				"agent_id", req.AgentID,
+				"policy_reference", p.PolicyReference,
+			)
 			return "", "", nil
 		}
 		return eval.OutcomeEscalate, eval.ReasonPolicyError, nil
 	}
 
 	if !result.Allowed {
+		slog.Info("policy_denied",
+			"request_id", req.RequestID,
+			"surface_id", req.SurfaceID,
+			"agent_id", req.AgentID,
+			"policy_reference", p.PolicyReference,
+			"duration_ms", duration.Milliseconds(),
+		)
 		return eval.OutcomeEscalate, eval.ReasonPolicyDeny, nil
 	}
 
+	// Happy path: no log (parent Evaluate() already logs final outcome)
 	return "", "", nil
 }
 
