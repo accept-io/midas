@@ -10,6 +10,7 @@ import (
 	_ "github.com/lib/pq"
 
 	"github.com/accept-io/midas/internal/bootstrap"
+	"github.com/accept-io/midas/internal/controlplane/apply"
 	"github.com/accept-io/midas/internal/decision"
 	"github.com/accept-io/midas/internal/httpapi"
 	"github.com/accept-io/midas/internal/policy"
@@ -59,7 +60,9 @@ func main() {
 		log.Fatal(err)
 	}
 
-	srv := httpapi.NewServer(orchestrator)
+	applyService := apply.NewService()
+
+	srv := httpapi.NewServerWithControlPlane(orchestrator, applyService)
 
 	slog.Info("midas_listening",
 		"addr", ":8080",

@@ -11,14 +11,19 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/accept-io/midas/internal/controlplane/approval"
+	cpTypes "github.com/accept-io/midas/internal/controlplane/types"
 	"github.com/accept-io/midas/internal/decision"
 	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/eval"
+	"github.com/accept-io/midas/internal/identity"
+	"github.com/accept-io/midas/internal/surface"
 	"github.com/accept-io/midas/internal/value"
 )
 
 const (
-	maxRequestBodyBytes  = 1 << 20 // 1 MiB
+	maxRequestBodyBytes  = 1 << 20  // 1 MiB
+	maxApplyBodyBytes    = 10 << 20 // 10 MiB for YAML bundles
 	defaultRequestSource = "api"
 	maxIdentifierLength  = 255
 )
@@ -33,17 +38,156 @@ type orchestrator interface {
 	ListEnvelopes(ctx context.Context) ([]*envelope.Envelope, error)
 }
 
+// controlPlaneService defines the contract for control plane operations.
+// This is optional - if nil, control plane endpoints return 501 Not Implemented.
+type controlPlaneService interface {
+	ApplyBundle(ctx context.Context, bundle []byte) (*cpTypes.ApplyResult, error)
+}
+
+type approvalService interface {
+	ApproveSurface(ctx context.Context, surfaceID string, submitter identity.Principal, approver identity.Principal) (*surface.DecisionSurface, error)
+}
 type Server struct {
 	mux          *http.ServeMux
 	orchestrator orchestrator
+	controlPlane controlPlaneService
+	approval     approvalService
+}
+
+type approveSurfaceRequest struct {
+	SubmittedBy  string `json:"submitted_by"`
+	ApproverID   string `json:"approver_id"`
+	ApproverName string `json:"approver_name,omitempty"`
+}
+
+type approveSurfaceResponse struct {
+	SurfaceID  string `json:"surface_id"`
+	Status     string `json:"status"`
+	ApprovedBy string `json:"approved_by"`
 }
 
 func NewServer(orchestrator orchestrator) *Server {
+	return NewServerWithControlPlane(orchestrator, nil)
+}
+
+func (s *Server) handleSurfaceActions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+
+	const prefix = "/v1/controlplane/surfaces/"
+	if !strings.HasPrefix(r.URL.Path, prefix) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+
+	rest := strings.TrimPrefix(r.URL.Path, prefix)
+	parts := strings.Split(strings.Trim(rest, "/"), "/")
+	if len(parts) != 2 || parts[1] != "approve" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+
+	surfaceID := strings.TrimSpace(parts[0])
+	if surfaceID == "" || !isValidIdentifier(surfaceID) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid surface id"})
+		return
+	}
+
+	if s.approval == nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{
+			"error": "approval service not configured",
+		})
+		return
+	}
+
+	rawBody, err := readRequestBody(w, r, maxRequestBodyBytes)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, errRequestBodyTooLarge) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		writeJSON(w, status, map[string]string{"error": err.Error()})
+		return
+	}
+
+	var req approveSurfaceRequest
+	if err := decodeStrictJSON(rawBody, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	req.SubmittedBy = strings.TrimSpace(req.SubmittedBy)
+	req.ApproverID = strings.TrimSpace(req.ApproverID)
+	req.ApproverName = strings.TrimSpace(req.ApproverName)
+
+	if !isValidIdentifier(req.ApproverID) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "approver_id must be a valid identifier",
+		})
+		return
+	}
+
+	if req.SubmittedBy != "" && !isValidIdentifier(req.SubmittedBy) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "submitted_by must be a valid identifier",
+		})
+		return
+	}
+
+	submitter := identity.Principal{
+		ID: req.SubmittedBy,
+	}
+	approver := identity.Principal{
+		ID:    req.ApproverID,
+		Name:  req.ApproverName,
+		Roles: []string{identity.RoleApprover},
+	}
+
+	updated, err := s.approval.ApproveSurface(r.Context(), surfaceID, submitter, approver)
+	if err != nil {
+		switch {
+		case errors.Is(err, approval.ErrSurfaceNotFound):
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "surface not found"})
+		case errors.Is(err, approval.ErrApprovalForbidden):
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "approver is not authorized to approve this surface"})
+		case errors.Is(err, approval.ErrInvalidStatus):
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "surface is not awaiting approval"})
+		default:
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, approveSurfaceResponse{
+		SurfaceID:  updated.ID,
+		Status:     string(updated.Status),
+		ApprovedBy: updated.ApprovedBy,
+	})
+}
+
+func NewServerWithServices(orchestrator orchestrator, controlPlane controlPlaneService, approvalSvc approvalService) *Server {
 	mux := http.NewServeMux()
 
 	s := &Server{
 		mux:          mux,
 		orchestrator: orchestrator,
+		controlPlane: controlPlane,
+		approval:     approvalSvc,
+	}
+	s.routes()
+
+	return s
+}
+
+func NewServerWithControlPlane(orchestrator orchestrator, controlPlane controlPlaneService) *Server {
+	mux := http.NewServeMux()
+
+	s := &Server{
+		mux:          mux,
+		orchestrator: orchestrator,
+		controlPlane: controlPlane,
 	}
 	s.routes()
 
@@ -58,6 +202,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/v1/envelopes/", s.handleGetEnvelope)
 	s.mux.HandleFunc("/v1/envelopes", s.handleListEnvelopes)
 	s.mux.HandleFunc("/v1/decisions/request/", s.handleGetDecisionByRequestID)
+	s.mux.HandleFunc("/v1/controlplane/apply", s.handleApplyBundle)
+	s.mux.HandleFunc("/v1/controlplane/surfaces/", s.handleSurfaceActions)
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -179,21 +325,17 @@ func (s *Server) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Default request_source to "api" if not provided.
 	if req.RequestSource == "" {
 		req.RequestSource = defaultRequestSource
 	}
 
-	// Generate request_id if absent; validate format if provided.
 	if req.RequestID == "" {
 		req.RequestID = uuid.NewString()
-	} else {
-		if !isValidIdentifier(req.RequestID) {
-			writeJSON(w, http.StatusBadRequest, map[string]string{
-				"error": "request_id contains invalid characters or exceeds length limit",
-			})
-			return
-		}
+	} else if !isValidIdentifier(req.RequestID) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "request_id contains invalid characters or exceeds length limit",
+		})
+		return
 	}
 
 	result, err := s.orchestrator.Evaluate(r.Context(), toEvalRequest(req), json.RawMessage(rawBody))
@@ -286,8 +428,6 @@ func (s *Server) handleCreateReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Map HTTP decision vocabulary to envelope enum.
-	// Accept both canonical (accept/reject) and legacy (approve/deny) for backward compat.
 	var reviewDecision envelope.ReviewDecision
 	switch strings.ToLower(req.Decision) {
 	case "accept", "approve", "approved":
@@ -314,11 +454,7 @@ func (s *Server) handleCreateReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The resolved envelope ID must match the request envelope ID (immutability invariant).
-	// If they differ, the orchestrator has violated its contract.
 	if resolvedEnvelope != nil && resolvedEnvelope.ID() != "" && resolvedEnvelope.ID() != req.EnvelopeID {
-		// Log this as a critical invariant violation in production.
-		// For now, preserve the request ID in the response to maintain API contract.
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
 			"error": "envelope identity invariant violated",
 		})
@@ -349,9 +485,7 @@ func (s *Server) handleGetEnvelope(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id := strings.TrimPrefix(r.URL.Path, prefix)
-	id = strings.TrimSpace(id)
-
+	id := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, prefix))
 	if id == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "missing envelope id",
@@ -380,8 +514,6 @@ func (s *Server) handleGetEnvelope(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The orchestrator contract should return ErrEnvelopeNotFound rather than (nil, nil).
-	// This check exists for defensive purposes during the error migration.
 	if env == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{
 			"error": "envelope not found",
@@ -429,9 +561,7 @@ func (s *Server) handleGetDecisionByRequestID(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	requestID := strings.TrimPrefix(r.URL.Path, prefix)
-	requestID = strings.TrimSpace(requestID)
-
+	requestID := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, prefix))
 	if requestID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "missing request id",
@@ -446,7 +576,6 @@ func (s *Server) handleGetDecisionByRequestID(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Request IDs are scoped by source (schema v2.1).
 	requestSource := strings.TrimSpace(r.URL.Query().Get("source"))
 	if requestSource == "" {
 		requestSource = defaultRequestSource
@@ -466,8 +595,6 @@ func (s *Server) handleGetDecisionByRequestID(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// The orchestrator contract should return ErrEnvelopeNotFound rather than (nil, nil).
-	// This check exists for defensive purposes during the error migration.
 	if env == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{
 			"error": "decision not found",
@@ -476,6 +603,52 @@ func (s *Server) handleGetDecisionByRequestID(w http.ResponseWriter, r *http.Req
 	}
 
 	writeJSON(w, http.StatusOK, env)
+}
+
+// ---------------------------------------------------------------------------
+// Control Plane - Apply Bundle
+// ---------------------------------------------------------------------------
+
+func (s *Server) handleApplyBundle(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+
+	if s.controlPlane == nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{
+			"error": "control plane not configured",
+		})
+		return
+	}
+
+	if !isAllowedYAMLContentType(r.Header.Get("Content-Type")) {
+		writeJSON(w, http.StatusUnsupportedMediaType, map[string]string{
+			"error": "content-type must be application/yaml, application/x-yaml, or text/yaml",
+		})
+		return
+	}
+
+	rawBody, err := readRequestBody(w, r, maxApplyBodyBytes)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, errRequestBodyTooLarge) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		writeJSON(w, status, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	result, err := s.controlPlane.ApplyBundle(r.Context(), rawBody)
+	if err != nil {
+		statusCode, errResp := mapApplyError(err)
+		writeJSON(w, statusCode, errResp)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
 }
 
 // ---------------------------------------------------------------------------
@@ -519,7 +692,6 @@ func mapDomainError(err error, entityType string) (int, map[string]string) {
 		return http.StatusOK, nil
 	}
 
-	// Typed sentinel error checks (preferred).
 	switch {
 	case errors.Is(err, decision.ErrEnvelopeNotFound):
 		msg := entityType + " not found"
@@ -537,9 +709,6 @@ func mapDomainError(err error, entityType string) (int, map[string]string) {
 		return http.StatusBadRequest, map[string]string{"error": err.Error()}
 	}
 
-	// TRANSITIONAL: String-matching fallback for errors not yet migrated to typed sentinels.
-	// This is brittle and will break silently if error messages change.
-	// Remove this block once all domain errors use typed sentinels.
 	errMsg := err.Error()
 	switch {
 	case strings.Contains(errMsg, "not found"):
@@ -554,7 +723,36 @@ func mapDomainError(err error, entityType string) (int, map[string]string) {
 	case strings.Contains(errMsg, "duplicate"):
 		return http.StatusConflict, map[string]string{"error": errMsg}
 	default:
-		// Unmapped error: log in production to identify gaps in error migration.
+		return http.StatusInternalServerError, map[string]string{"error": errMsg}
+	}
+}
+
+// mapApplyError translates control-plane apply errors to HTTP status codes.
+// TODO: Replace transitional string-matching with typed sentinels once the
+// control-plane package exposes canonical error values.
+func mapApplyError(err error) (int, map[string]string) {
+	if err == nil {
+		return http.StatusOK, nil
+	}
+
+	errMsg := err.Error()
+	switch {
+	case strings.Contains(errMsg, "validation"),
+		strings.Contains(errMsg, "invalid"),
+		strings.Contains(errMsg, "unsupported"),
+		strings.Contains(errMsg, "missing"),
+		strings.Contains(errMsg, "required"),
+		strings.Contains(errMsg, "duplicate"),
+		strings.Contains(errMsg, "parse"),
+		strings.Contains(errMsg, "yaml"):
+		return http.StatusBadRequest, map[string]string{"error": errMsg}
+
+	case strings.Contains(errMsg, "conflict"),
+		strings.Contains(errMsg, "already exists"),
+		strings.Contains(errMsg, "exists"):
+		return http.StatusConflict, map[string]string{"error": errMsg}
+
+	default:
 		return http.StatusInternalServerError, map[string]string{"error": errMsg}
 	}
 }
@@ -569,9 +767,6 @@ func methodNotAllowed(w http.ResponseWriter, allowed string) {
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
-
-	// Encoding failure is ignored here because once headers/status are written
-	// there is no useful recovery path for the handler.
 	_ = json.NewEncoder(w).Encode(v)
 }
 
@@ -604,14 +799,23 @@ func decodeStrictJSON(data []byte, dst any) error {
 		return errors.New("invalid JSON payload")
 	}
 
-	// Reject trailing tokens (e.g., multiple JSON objects or trailing garbage).
-	// If anything other than EOF is found, the input is malformed.
 	var extra any
 	if err := dec.Decode(&extra); err != io.EOF {
 		return errors.New("invalid JSON payload")
 	}
 
 	return nil
+}
+
+func isAllowedYAMLContentType(contentType string) bool {
+	contentType = strings.TrimSpace(contentType)
+	if contentType == "" {
+		return true
+	}
+
+	return strings.HasPrefix(contentType, "application/yaml") ||
+		strings.HasPrefix(contentType, "application/x-yaml") ||
+		strings.HasPrefix(contentType, "text/yaml")
 }
 
 // isValidIdentifier validates that an identifier is safe for use in URLs and storage.
@@ -622,7 +826,6 @@ func isValidIdentifier(id string) bool {
 	}
 
 	for _, r := range id {
-		// Reject path separators, null bytes, and control characters.
 		if r == '/' || r == '\\' || r == 0 || r < 32 || r == 127 {
 			return false
 		}

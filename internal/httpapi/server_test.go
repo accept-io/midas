@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	cpTypes "github.com/accept-io/midas/internal/controlplane/types"
 	"github.com/accept-io/midas/internal/decision"
 	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/eval"
@@ -1708,5 +1709,478 @@ func TestResponsesHaveJSONContentType(t *testing.T) {
 				t.Errorf("expected Content-Type to contain 'application/json', got %q", ct)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Mock Control Plane Service
+// ---------------------------------------------------------------------------
+
+type mockControlPlane struct {
+	applyBundleFn func(ctx context.Context, bundle []byte) (*cpTypes.ApplyResult, error)
+}
+
+func (m *mockControlPlane) ApplyBundle(ctx context.Context, bundle []byte) (*cpTypes.ApplyResult, error) {
+	if m.applyBundleFn != nil {
+		return m.applyBundleFn(ctx, bundle)
+	}
+	return nil, fmt.Errorf("applyBundle not implemented")
+}
+
+// ---------------------------------------------------------------------------
+// Test Helper for Headers
+// ---------------------------------------------------------------------------
+
+func performRequestWithHeaders(t *testing.T, srv *Server, method, path string, body []byte, headers map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+	var reqBody *bytes.Reader
+	if body != nil {
+		reqBody = bytes.NewReader(body)
+	} else {
+		reqBody = bytes.NewReader(nil)
+	}
+	req := httptest.NewRequest(method, path, reqBody)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	return rec
+}
+
+// ---------------------------------------------------------------------------
+// Control Plane - Apply Bundle Tests
+// ---------------------------------------------------------------------------
+
+func TestApplyBundle_Success(t *testing.T) {
+	yamlBundle := `---
+apiVersion: midas/v1
+kind: Surface
+metadata:
+  id: test-surface
+spec:
+  name: Test Surface
+  category: test
+  risk_tier: tier-1
+  status: active
+`
+
+	mockCP := &mockControlPlane{
+		applyBundleFn: func(ctx context.Context, bundle []byte) (*cpTypes.ApplyResult, error) {
+			if !bytes.Contains(bundle, []byte("test-surface")) {
+				t.Errorf("expected bundle to contain 'test-surface'")
+			}
+
+			result := &cpTypes.ApplyResult{}
+			result.AddCreated("Surface", "test-surface")
+			return result, nil
+		},
+	}
+
+	srv := NewServerWithControlPlane(&mockOrchestrator{}, mockCP)
+	rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/controlplane/apply",
+		[]byte(yamlBundle), map[string]string{"Content-Type": "application/yaml"})
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	resp := decodeJSON[cpTypes.ApplyResult](t, rec)
+	if resp.CreatedCount() != 1 {
+		t.Errorf("expected 1 created resource, got %d", resp.CreatedCount())
+	}
+	if len(resp.Results) != 1 || resp.Results[0].ID != "test-surface" {
+		t.Errorf("expected created resource 'test-surface'")
+	}
+}
+
+func TestApplyBundle_AllowedContentTypes(t *testing.T) {
+	yamlBundle := `---
+apiVersion: midas/v1
+kind: Surface
+metadata:
+  id: test-surface
+spec:
+  name: Test Surface
+  category: test
+  risk_tier: tier-1
+  status: active
+`
+
+	tests := []struct {
+		name        string
+		contentType string
+	}{
+		{"application/yaml", "application/yaml"},
+		{"application/x-yaml", "application/x-yaml"},
+		{"text/yaml", "text/yaml"},
+		{"no content-type", ""},
+		{"with charset", "application/yaml; charset=utf-8"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockCP := &mockControlPlane{
+				applyBundleFn: func(ctx context.Context, bundle []byte) (*cpTypes.ApplyResult, error) {
+					result := &cpTypes.ApplyResult{}
+					result.AddCreated("Surface", "test-surface")
+					return result, nil
+				},
+			}
+
+			srv := NewServerWithControlPlane(&mockOrchestrator{}, mockCP)
+			rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/controlplane/apply",
+				[]byte(yamlBundle), map[string]string{"Content-Type": tt.contentType})
+
+			if rec.Code != http.StatusOK {
+				t.Errorf("expected status 200 for %q, got %d", tt.contentType, rec.Code)
+			}
+		})
+	}
+}
+
+func TestApplyBundle_UnsupportedMediaType(t *testing.T) {
+	mockCP := &mockControlPlane{
+		applyBundleFn: func(ctx context.Context, bundle []byte) (*cpTypes.ApplyResult, error) {
+			t.Error("applyBundle should not be called for unsupported content type")
+			return nil, nil
+		},
+	}
+
+	srv := NewServerWithControlPlane(&mockOrchestrator{}, mockCP)
+	rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/controlplane/apply",
+		[]byte("some content"), map[string]string{"Content-Type": "application/json"})
+
+	if rec.Code != http.StatusUnsupportedMediaType {
+		t.Errorf("expected status 415, got %d", rec.Code)
+	}
+
+	errResp := decodeError(t, rec)
+	if !strings.Contains(errResp["error"], "application/yaml") {
+		t.Errorf("expected error to mention 'application/yaml', got %q", errResp["error"])
+	}
+}
+
+func TestApplyBundle_ValidationErrors(t *testing.T) {
+	yamlBundle := `---
+apiVersion: midas/v1
+kind: Surface
+metadata:
+  id: surf-1
+spec:
+  category: test
+  risk_tier: tier-1
+  status: active
+`
+
+	mockCP := &mockControlPlane{
+		applyBundleFn: func(ctx context.Context, bundle []byte) (*cpTypes.ApplyResult, error) {
+			// Validation errors are returned in ApplyResult.ValidationErrors
+			result := &cpTypes.ApplyResult{}
+			result.AddFieldError("Surface", "surf-1", "name", "required")
+			return result, nil
+		},
+	}
+
+	srv := NewServerWithControlPlane(&mockOrchestrator{}, mockCP)
+	rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/controlplane/apply",
+		[]byte(yamlBundle), map[string]string{"Content-Type": "application/yaml"})
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200 (validation errors in result), got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	resp := decodeJSON[cpTypes.ApplyResult](t, rec)
+	if resp.ValidationErrorCount() != 1 {
+		t.Errorf("expected 1 validation error, got %d", resp.ValidationErrorCount())
+	}
+	if len(resp.ValidationErrors) != 1 {
+		t.Fatalf("expected 1 validation error in array, got %d", len(resp.ValidationErrors))
+	}
+	if resp.ValidationErrors[0].Field != "name" {
+		t.Errorf("expected field 'name', got %q", resp.ValidationErrors[0].Field)
+	}
+}
+
+func TestApplyBundle_EmptyBody(t *testing.T) {
+	srv := NewServerWithControlPlane(&mockOrchestrator{}, &mockControlPlane{})
+	rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/controlplane/apply",
+		[]byte(""), map[string]string{"Content-Type": "application/yaml"})
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400 for empty body, got %d", rec.Code)
+	}
+
+	errResp := decodeError(t, rec)
+	if errResp["error"] != "request body must not be empty" {
+		t.Errorf("expected 'request body must not be empty' error, got %q", errResp["error"])
+	}
+}
+
+func TestApplyBundle_WhitespaceOnlyBody(t *testing.T) {
+	srv := NewServerWithControlPlane(&mockOrchestrator{}, &mockControlPlane{})
+	rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/controlplane/apply",
+		[]byte("   \n\t  "), map[string]string{"Content-Type": "application/yaml"})
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400 for whitespace-only body, got %d", rec.Code)
+	}
+
+	errResp := decodeError(t, rec)
+	if errResp["error"] != "request body must not be empty" {
+		t.Errorf("expected 'request body must not be empty' error, got %q", errResp["error"])
+	}
+}
+
+func TestApplyBundle_OversizedBody(t *testing.T) {
+	srv := NewServerWithControlPlane(&mockOrchestrator{}, &mockControlPlane{})
+	largeBody := bytes.Repeat([]byte("x"), (10<<20)+1) // 10 MiB + 1 byte
+
+	rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/controlplane/apply",
+		largeBody, map[string]string{"Content-Type": "application/yaml"})
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("expected status 413 for oversized body, got %d", rec.Code)
+	}
+
+	errResp := decodeError(t, rec)
+	if errResp["error"] != "request body too large" {
+		t.Errorf("expected 'request body too large' error, got %q", errResp["error"])
+	}
+}
+
+func TestApplyBundle_MethodNotAllowed(t *testing.T) {
+	srv := NewServerWithControlPlane(&mockOrchestrator{}, &mockControlPlane{})
+	rec := performRequest(t, srv, http.MethodGet, "/v1/controlplane/apply", nil)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected status 405, got %d", rec.Code)
+	}
+
+	if allow := rec.Header().Get("Allow"); allow != http.MethodPost {
+		t.Errorf("expected Allow header 'POST', got %q", allow)
+	}
+}
+
+func TestApplyBundle_NilControlPlane(t *testing.T) {
+	srv := NewServer(&mockOrchestrator{})
+	rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/controlplane/apply",
+		[]byte("some yaml"), map[string]string{"Content-Type": "application/yaml"})
+
+	if rec.Code != http.StatusNotImplemented {
+		t.Errorf("expected status 501 for nil control plane, got %d", rec.Code)
+	}
+
+	errResp := decodeError(t, rec)
+	if errResp["error"] != "control plane not configured" {
+		t.Errorf("expected 'control plane not configured' error, got %q", errResp["error"])
+	}
+}
+
+func TestApplyBundle_MultipleResources(t *testing.T) {
+	yamlBundle := `---
+apiVersion: midas/v1
+kind: Surface
+metadata:
+  id: surf-1
+spec:
+  name: Surface One
+  category: test
+  risk_tier: tier-1
+  status: active
+---
+apiVersion: midas/v1
+kind: Agent
+metadata:
+  id: agent-1
+spec:
+  name: Agent One
+  type: llm
+  runtime:
+    provider: anthropic
+    model: claude-sonnet-4
+  status: active
+`
+
+	mockCP := &mockControlPlane{
+		applyBundleFn: func(ctx context.Context, bundle []byte) (*cpTypes.ApplyResult, error) {
+			result := &cpTypes.ApplyResult{}
+			result.AddCreated("Surface", "surf-1")
+			result.AddCreated("Agent", "agent-1")
+			return result, nil
+		},
+	}
+
+	srv := NewServerWithControlPlane(&mockOrchestrator{}, mockCP)
+	rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/controlplane/apply",
+		[]byte(yamlBundle), map[string]string{"Content-Type": "application/yaml"})
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	resp := decodeJSON[cpTypes.ApplyResult](t, rec)
+	if resp.CreatedCount() != 2 {
+		t.Errorf("expected 2 created resources, got %d", resp.CreatedCount())
+	}
+}
+
+func TestApplyBundle_ParseErrors(t *testing.T) {
+	mockCP := &mockControlPlane{
+		applyBundleFn: func(ctx context.Context, bundle []byte) (*cpTypes.ApplyResult, error) {
+			return nil, errors.New("parse error: invalid yaml syntax")
+		},
+	}
+
+	srv := NewServerWithControlPlane(&mockOrchestrator{}, mockCP)
+	rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/controlplane/apply",
+		[]byte("invalid: [yaml}"), map[string]string{"Content-Type": "application/yaml"})
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400 for parse error, got %d", rec.Code)
+	}
+
+	errResp := decodeError(t, rec)
+	if !strings.Contains(errResp["error"], "parse") {
+		t.Errorf("expected error to mention 'parse', got %q", errResp["error"])
+	}
+}
+
+func TestApplyBundle_InfrastructureError(t *testing.T) {
+	mockCP := &mockControlPlane{
+		applyBundleFn: func(ctx context.Context, bundle []byte) (*cpTypes.ApplyResult, error) {
+			return nil, errors.New("database connection failed")
+		},
+	}
+
+	srv := NewServerWithControlPlane(&mockOrchestrator{}, mockCP)
+	rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/controlplane/apply",
+		[]byte("valid yaml"), map[string]string{"Content-Type": "application/yaml"})
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected status 500 for infrastructure error, got %d", rec.Code)
+	}
+
+	errResp := decodeError(t, rec)
+	if !strings.Contains(errResp["error"], "database") {
+		t.Errorf("expected error to mention 'database', got %q", errResp["error"])
+	}
+}
+
+func TestApplyBundle_MixedResults(t *testing.T) {
+	yamlBundle := `---
+apiVersion: midas/v1
+kind: Surface
+metadata:
+  id: surf-new
+spec:
+  name: New Surface
+  category: test
+  risk_tier: tier-1
+  status: active
+---
+apiVersion: midas/v1
+kind: Surface
+metadata:
+  id: surf-existing
+spec:
+  name: Existing Surface
+  category: test
+  risk_tier: tier-1
+  status: active
+`
+
+	mockCP := &mockControlPlane{
+		applyBundleFn: func(ctx context.Context, bundle []byte) (*cpTypes.ApplyResult, error) {
+			result := &cpTypes.ApplyResult{}
+			result.AddCreated("Surface", "surf-new")
+			result.AddConflict("Surface", "surf-existing", "already exists")
+			return result, nil
+		},
+	}
+
+	srv := NewServerWithControlPlane(&mockOrchestrator{}, mockCP)
+	rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/controlplane/apply",
+		[]byte(yamlBundle), map[string]string{"Content-Type": "application/yaml"})
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	resp := decodeJSON[cpTypes.ApplyResult](t, rec)
+	if resp.CreatedCount() != 1 {
+		t.Errorf("expected 1 created resource, got %d", resp.CreatedCount())
+	}
+	if resp.ConflictCount() != 1 {
+		t.Errorf("expected 1 conflict, got %d", resp.ConflictCount())
+	}
+}
+
+func TestApplyBundle_ResponseStructure(t *testing.T) {
+	yamlBundle := `---
+apiVersion: midas/v1
+kind: Surface
+metadata:
+  id: test-surface
+spec:
+  name: Test Surface
+  category: test
+  risk_tier: tier-1
+  status: active
+`
+
+	mockCP := &mockControlPlane{
+		applyBundleFn: func(ctx context.Context, bundle []byte) (*cpTypes.ApplyResult, error) {
+			result := &cpTypes.ApplyResult{}
+			result.AddCreated("Surface", "test-surface")
+			return result, nil
+		},
+	}
+
+	srv := NewServerWithControlPlane(&mockOrchestrator{}, mockCP)
+	rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/controlplane/apply",
+		[]byte(yamlBundle), map[string]string{"Content-Type": "application/yaml"})
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify response has JSON Content-Type
+	ct := rec.Header().Get("Content-Type")
+	if !strings.Contains(ct, "application/json") {
+		t.Errorf("expected Content-Type to contain 'application/json', got %q", ct)
+	}
+
+	// Verify response structure via counts and content (not nil-slice checks)
+	resp := decodeJSON[cpTypes.ApplyResult](t, rec)
+
+	if resp.CreatedCount() != 1 {
+		t.Errorf("expected 1 created resource, got %d", resp.CreatedCount())
+	}
+	if resp.ConflictCount() != 0 {
+		t.Errorf("expected 0 conflicts, got %d", resp.ConflictCount())
+	}
+	if resp.ApplyErrorCount() != 0 {
+		t.Errorf("expected 0 errors, got %d", resp.ApplyErrorCount())
+	}
+	if resp.UnchangedCount() != 0 {
+		t.Errorf("expected 0 unchanged, got %d", resp.UnchangedCount())
+	}
+	if resp.ValidationErrorCount() != 0 {
+		t.Errorf("expected 0 validation errors, got %d", resp.ValidationErrorCount())
+	}
+
+	// Verify actual content in Results array
+	if len(resp.Results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(resp.Results))
+	}
+	if resp.Results[0].Kind != "Surface" {
+		t.Errorf("expected kind 'Surface', got %q", resp.Results[0].Kind)
+	}
+	if resp.Results[0].ID != "test-surface" {
+		t.Errorf("expected id 'test-surface', got %q", resp.Results[0].ID)
+	}
+	if resp.Results[0].Status != cpTypes.ResourceStatusCreated {
+		t.Errorf("expected status 'created', got %q", resp.Results[0].Status)
 	}
 }
