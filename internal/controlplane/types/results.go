@@ -2,10 +2,11 @@ package types
 
 // ValidationError represents a single validation failure for a control plane resource.
 type ValidationError struct {
-	Kind    string `json:"kind"`            // Surface | Agent | Profile | Grant
-	ID      string `json:"id"`              // metadata.id from the document
-	Field   string `json:"field,omitempty"` // e.g. spec.surface_id
-	Message string `json:"message"`         // human-readable error description
+	Kind          string `json:"kind"`                     // Surface | Agent | Profile | Grant
+	ID            string `json:"id"`                       // metadata.id from the document
+	Field         string `json:"field,omitempty"`          // e.g. spec.surface_id
+	Message       string `json:"message"`                  // human-readable error description
+	DocumentIndex int    `json:"document_index,omitempty"` // 1-based position in a multi-document bundle
 }
 
 // ResourceStatus represents the outcome of applying a single resource.
