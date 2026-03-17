@@ -2,6 +2,7 @@ package decision_test
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -67,12 +68,18 @@ func newOrchestrator(t *testing.T, r testRepos) *decision.Orchestrator {
 func seedActiveSurface(t *testing.T, r testRepos, id string) {
 	t.Helper()
 
+	now := time.Now()
 	err := r.surfaces.Create(context.Background(), &surface.DecisionSurface{
-		ID:            id,
-		Name:          "test surface",
-		Status:        surface.SurfaceStatusActive,
-		Version:       1,
-		EffectiveDate: time.Now().Add(-time.Hour),
+		ID:             id,
+		Name:           "test surface",
+		Status:         surface.SurfaceStatusActive,
+		Version:        1,
+		EffectiveFrom:  now.Add(-time.Hour),
+		CreatedAt:      now,
+		UpdatedAt:      now,
+		BusinessOwner:  "test@example.com",
+		TechnicalOwner: "test@example.com",
+		Domain:         "test",
 	})
 	if err != nil {
 		t.Fatalf("seed surface %q: %v", id, err)
@@ -103,6 +110,7 @@ func seedProfile(t *testing.T, r testRepos, id, surfaceID string) {
 		ID:                  id,
 		SurfaceID:           surfaceID,
 		Name:                "test profile",
+		Status:              authority.ProfileStatusActive,
 		ConfidenceThreshold: 0.8,
 		ConsequenceThreshold: authority.Consequence{
 			Type:       value.ConsequenceTypeRiskRating,
@@ -125,6 +133,7 @@ func seedProfileWithPolicy(t *testing.T, r testRepos, id, surfaceID, policyRef s
 		ID:                  id,
 		SurfaceID:           surfaceID,
 		Name:                "policy profile",
+		Status:              authority.ProfileStatusActive,
 		ConfidenceThreshold: 0.8,
 		ConsequenceThreshold: authority.Consequence{
 			Type:       value.ConsequenceTypeRiskRating,
@@ -159,9 +168,10 @@ func seedActiveGrant(t *testing.T, r testRepos, id, agentID, profileID string) {
 // baseRequest returns a request that passes all default thresholds.
 func baseRequest(surfaceID, agentID string) eval.DecisionRequest {
 	return eval.DecisionRequest{
-		SurfaceID:  surfaceID,
-		AgentID:    agentID,
-		Confidence: 0.9,
+		RequestSource: "test-source", // ADD THIS LINE
+		SurfaceID:     surfaceID,
+		AgentID:       agentID,
+		Confidence:    0.9,
 		Consequence: &eval.Consequence{
 			Type:       value.ConsequenceTypeRiskRating,
 			RiskRating: value.RiskRatingMedium,
@@ -248,11 +258,11 @@ func TestEvaluate_WithinAuthority(t *testing.T) {
 	seedProfile(t, r, "prof-1", "surf-1")
 	seedActiveGrant(t, r, "grant-1", "agent-1", "prof-1")
 
-	result, err := newOrchestrator(t, r).Evaluate(context.Background(), baseRequest("surf-1", "agent-1"))
+	result, err := newOrchestrator(t, r).Evaluate(context.Background(), baseRequest("surf-1", "agent-1"), mustMarshalRequest(baseRequest("surf-1", "agent-1")))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	assertResult(t, result, eval.OutcomeExecute, eval.ReasonWithinAuthority)
+	assertResult(t, result, eval.OutcomeAccept, eval.ReasonWithinAuthority)
 }
 
 // TestEvaluate_EmitsInitialAuditEvents verifies the current happy-path audit stream.
@@ -263,7 +273,7 @@ func TestEvaluate_EmitsInitialAuditEvents(t *testing.T) {
 	seedProfile(t, r, "prof-1", "surf-1")
 	seedActiveGrant(t, r, "grant-1", "agent-1", "prof-1")
 
-	result, err := newOrchestrator(t, r).Evaluate(context.Background(), baseRequest("surf-1", "agent-1"))
+	result, err := newOrchestrator(t, r).Evaluate(context.Background(), baseRequest("surf-1", "agent-1"), mustMarshalRequest(baseRequest("surf-1", "agent-1")))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -281,8 +291,8 @@ func TestEvaluate_EmitsInitialAuditEvents(t *testing.T) {
 		t.Fatalf("expected first event %q, got %q", audit.AuditEventEnvelopeCreated, events[0].EventType)
 	}
 
-	if events[1].EventType != audit.AuditEventStateTransitioned {
-		t.Fatalf("expected second event %q, got %q", audit.AuditEventStateTransitioned, events[1].EventType)
+	if events[1].EventType != audit.AuditEventEvaluationStarted {
+		t.Fatalf("expected second event %q, got %q", audit.AuditEventEvaluationStarted, events[1].EventType)
 	}
 	if got := payloadString(t, events[1].Payload, "from_state"); got != string(envelope.EnvelopeStateReceived) {
 		t.Fatalf("expected from_state %q, got %q", envelope.EnvelopeStateReceived, got)
@@ -348,8 +358,8 @@ func TestEvaluate_EmitsInitialAuditEvents(t *testing.T) {
 	if events[8].EventType != audit.AuditEventOutcomeRecorded {
 		t.Fatalf("expected ninth event %q, got %q", audit.AuditEventOutcomeRecorded, events[8].EventType)
 	}
-	if got := payloadString(t, events[8].Payload, "outcome"); got != string(eval.OutcomeExecute) {
-		t.Fatalf("expected outcome %q, got %q", eval.OutcomeExecute, got)
+	if got := payloadString(t, events[8].Payload, "outcome"); got != string(eval.OutcomeAccept) {
+		t.Fatalf("expected outcome %q, got %q", eval.OutcomeAccept, got)
 	}
 	if got := payloadString(t, events[8].Payload, "reason_code"); got != string(eval.ReasonWithinAuthority) {
 		t.Fatalf("expected reason_code %q, got %q", eval.ReasonWithinAuthority, got)
@@ -364,10 +374,7 @@ func TestEvaluate_EmitsPolicyEvaluatedEvent(t *testing.T) {
 	seedProfileWithPolicy(t, r, "prof-1", "surf-1", "policy://allow")
 	seedActiveGrant(t, r, "grant-1", "agent-1", "prof-1")
 
-	result, err := newOrchestrator(t, r).Evaluate(
-		context.Background(),
-		baseRequest("surf-1", "agent-1"),
-	)
+	result, err := newOrchestrator(t, r).Evaluate(context.Background(), baseRequest("surf-1", "agent-1"), mustMarshalRequest(baseRequest("surf-1", "agent-1")))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -407,7 +414,7 @@ func TestEvaluate_EmitsPolicyEvaluatedEvent(t *testing.T) {
 func TestEvaluate_SurfaceNotFound(t *testing.T) {
 	r := newRepos()
 
-	result, err := newOrchestrator(t, r).Evaluate(context.Background(), baseRequest("surf-missing", "agent-1"))
+	result, err := newOrchestrator(t, r).Evaluate(context.Background(), baseRequest("surf-missing", "agent-1"), mustMarshalRequest(baseRequest("surf-missing", "agent-1")))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -418,15 +425,23 @@ func TestEvaluate_SurfaceNotFound(t *testing.T) {
 func TestEvaluate_SurfaceInactive(t *testing.T) {
 	r := newRepos()
 
+	now := time.Now()
 	if err := r.surfaces.Create(context.Background(), &surface.DecisionSurface{
-		ID:     "surf-1",
-		Name:   "retired surface",
-		Status: surface.SurfaceStatusInactive,
+		ID:             "surf-1",
+		Name:           "retired surface",
+		Status:         surface.SurfaceStatusRetired,
+		Version:        1,
+		EffectiveFrom:  now.Add(-time.Hour),
+		CreatedAt:      now,
+		UpdatedAt:      now,
+		BusinessOwner:  "test@example.com",
+		TechnicalOwner: "test@example.com",
+		Domain:         "test",
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	result, err := newOrchestrator(t, r).Evaluate(context.Background(), baseRequest("surf-1", "agent-1"))
+	result, err := newOrchestrator(t, r).Evaluate(context.Background(), baseRequest("surf-1", "agent-1"), mustMarshalRequest(baseRequest("surf-1", "agent-1")))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -438,7 +453,7 @@ func TestEvaluate_AgentNotFound(t *testing.T) {
 	r := newRepos()
 	seedActiveSurface(t, r, "surf-1")
 
-	result, err := newOrchestrator(t, r).Evaluate(context.Background(), baseRequest("surf-1", "agent-missing"))
+	result, err := newOrchestrator(t, r).Evaluate(context.Background(), baseRequest("surf-1", "agent-missing"), mustMarshalRequest(baseRequest("surf-1", "agent-missing")))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -451,7 +466,7 @@ func TestEvaluate_NoActiveGrant(t *testing.T) {
 	seedActiveSurface(t, r, "surf-1")
 	seedAgent(t, r, "agent-1")
 
-	result, err := newOrchestrator(t, r).Evaluate(context.Background(), baseRequest("surf-1", "agent-1"))
+	result, err := newOrchestrator(t, r).Evaluate(context.Background(), baseRequest("surf-1", "agent-1"), mustMarshalRequest(baseRequest("surf-1", "agent-1")))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -466,7 +481,7 @@ func TestEvaluate_ProfileNotFound(t *testing.T) {
 	seedAgent(t, r, "agent-1")
 	seedActiveGrant(t, r, "grant-1", "agent-1", "prof-missing")
 
-	result, err := newOrchestrator(t, r).Evaluate(context.Background(), baseRequest("surf-1", "agent-1"))
+	result, err := newOrchestrator(t, r).Evaluate(context.Background(), baseRequest("surf-1", "agent-1"), mustMarshalRequest(baseRequest("surf-1", "agent-1")))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -482,7 +497,7 @@ func TestEvaluate_GrantProfileSurfaceMismatch(t *testing.T) {
 	seedProfile(t, r, "prof-1", "surf-2")
 	seedActiveGrant(t, r, "grant-1", "agent-1", "prof-1")
 
-	result, err := newOrchestrator(t, r).Evaluate(context.Background(), baseRequest("surf-1", "agent-1"))
+	result, err := newOrchestrator(t, r).Evaluate(context.Background(), baseRequest("surf-1", "agent-1"), mustMarshalRequest(baseRequest("surf-1", "agent-1")))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -499,6 +514,7 @@ func TestEvaluate_InsufficientContext(t *testing.T) {
 		ID:                  "prof-1",
 		SurfaceID:           "surf-1",
 		Name:                "contextual profile",
+		Status:              authority.ProfileStatusActive,
 		ConfidenceThreshold: 0.8,
 		RequiredContextKeys: []string{"transaction_id"},
 		FailMode:            authority.FailModeOpen,
@@ -513,7 +529,7 @@ func TestEvaluate_InsufficientContext(t *testing.T) {
 	req := baseRequest("surf-1", "agent-1")
 	req.Context = map[string]any{}
 
-	result, err := newOrchestrator(t, r).Evaluate(context.Background(), req)
+	result, err := newOrchestrator(t, r).Evaluate(context.Background(), req, mustMarshalRequest(req))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -532,7 +548,7 @@ func TestEvaluate_ConfidenceBelowThreshold(t *testing.T) {
 	req := baseRequest("surf-1", "agent-1")
 	req.Confidence = 0.5
 
-	result, err := newOrchestrator(t, r).Evaluate(context.Background(), req)
+	result, err := newOrchestrator(t, r).Evaluate(context.Background(), req, mustMarshalRequest(req))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -554,9 +570,20 @@ func TestEvaluate_ConsequenceExceedsLimit(t *testing.T) {
 		RiskRating: value.RiskRatingCritical,
 	}
 
-	result, err := newOrchestrator(t, r).Evaluate(context.Background(), req)
+	result, err := newOrchestrator(t, r).Evaluate(context.Background(), req, mustMarshalRequest(req))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	assertResult(t, result, eval.OutcomeEscalate, eval.ReasonConsequenceExceedsLimit)
+}
+
+// mustMarshalRequest marshals a DecisionRequest to JSON for use as the raw
+// payload argument to Evaluate. These tests do not verify raw payload integrity
+// so a simple marshal is sufficient.
+func mustMarshalRequest(req eval.DecisionRequest) json.RawMessage {
+	b, err := json.Marshal(req)
+	if err != nil {
+		panic("mustMarshalRequest: " + err.Error())
+	}
+	return b
 }

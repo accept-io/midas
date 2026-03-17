@@ -29,3 +29,12 @@ Thumbs.db
 # Environment
 .env
 .env.local
+
+# Test artifacts
+coverage.out
+*.test
+*.prof
+
+# Database
+midas.db
+*.db-journal

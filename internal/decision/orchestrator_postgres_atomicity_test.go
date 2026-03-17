@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -105,7 +106,7 @@ func cleanupAtomicityTestData(t *testing.T, db *sql.DB) {
 	statements := []string{
 		`DELETE FROM audit_events`,
 		`DELETE FROM operational_envelopes`,
-		`DELETE FROM agent_authorizations`,
+		`DELETE FROM authority_grants`,
 		`DELETE FROM authority_profiles`,
 		`DELETE FROM agents`,
 		`DELETE FROM decision_surfaces`,
@@ -129,7 +130,7 @@ func seedAtomicityHappyPathData(t *testing.T, repos *store.Repositories) {
 		Name:          "atomic test surface",
 		Status:        surface.SurfaceStatusActive,
 		Version:       1,
-		EffectiveDate: now,
+		EffectiveFrom: now,
 	}); err != nil {
 		t.Fatalf("seed surface: %v", err)
 	}
@@ -149,16 +150,18 @@ func seedAtomicityHappyPathData(t *testing.T, repos *store.Repositories) {
 		ID:                  "prof-atomic-1",
 		SurfaceID:           "surf-atomic-1",
 		Name:                "atomic test profile",
+		Status:              authority.ProfileStatusActive,
 		ConfidenceThreshold: 0.8,
 		ConsequenceThreshold: authority.Consequence{
 			Type:       value.ConsequenceTypeRiskRating,
 			RiskRating: value.RiskRatingHigh,
 		},
-		FailMode:      authority.FailModeOpen,
-		Version:       1,
-		EffectiveDate: now,
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		EscalationMode: "auto", // ✅ FIXED: Added required field per schema constraint
+		FailMode:       authority.FailModeOpen,
+		Version:        1,
+		EffectiveDate:  now,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}); err != nil {
 		t.Fatalf("seed profile: %v", err)
 	}
@@ -178,10 +181,11 @@ func seedAtomicityHappyPathData(t *testing.T, repos *store.Repositories) {
 
 func atomicityRequest() eval.DecisionRequest {
 	return eval.DecisionRequest{
-		RequestID:  "req-atomicity-1",
-		SurfaceID:  "surf-atomic-1",
-		AgentID:    "agent-atomic-1",
-		Confidence: 0.9,
+		RequestSource: "test-source",
+		RequestID:     "req-atomicity-1",
+		SurfaceID:     "surf-atomic-1",
+		AgentID:       "agent-atomic-1",
+		Confidence:    0.9,
 		Consequence: &eval.Consequence{
 			Type:       value.ConsequenceTypeRiskRating,
 			RiskRating: value.RiskRatingMedium,
@@ -221,12 +225,14 @@ func TestOrchestrator_Postgres_RollsBackEnvelopeAndAuditOnMidEvaluationFailure(t
 		t.Fatalf("decision.NewOrchestrator: %v", err)
 	}
 
-	_, err = orch.Evaluate(context.Background(), atomicityRequest())
+	raw := []byte(`{"request_source":"test-source","request_id":"req-atomicity-1","surface_id":"surf-atomic-1","agent_id":"agent-atomic-1"}`)
+	_, err = orch.Evaluate(context.Background(), atomicityRequest(), raw)
 	if err == nil {
 		t.Fatal("expected evaluation error, got nil")
 	}
-	if err.Error() != errForcedAuditFailure.Error() {
-		t.Fatalf("unexpected error: got %v, want %v", err, errForcedAuditFailure)
+	// Check that the error contains the forced failure message (may be wrapped)
+	if !strings.Contains(err.Error(), errForcedAuditFailure.Error()) {
+		t.Fatalf("expected error to contain %q, got %q", errForcedAuditFailure.Error(), err.Error())
 	}
 
 	// Verify no envelope persisted for the failed request.
@@ -235,9 +241,9 @@ func TestOrchestrator_Postgres_RollsBackEnvelopeAndAuditOnMidEvaluationFailure(t
 		t.Fatalf("Repositories after failure: %v", err)
 	}
 
-	gotEnvelope, err := env.Envelopes.GetByRequestID(context.Background(), "req-atomicity-1")
+	gotEnvelope, err := env.Envelopes.GetByRequestScope(context.Background(), "req-atomicity-1", "test-source")
 	if err != nil {
-		t.Fatalf("GetByRequestID: %v", err)
+		t.Fatalf("GetByRequestScope: %v", err)
 	}
 	if gotEnvelope != nil {
 		t.Fatalf("expected no persisted envelope after rollback, got %+v", gotEnvelope)

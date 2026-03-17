@@ -40,7 +40,7 @@ func (r *MemoryRepository) Append(ctx context.Context, ev *AuditEvent) error {
 		return err
 	}
 
-	ev.EventHash = hash
+	ev.setHash(hash)
 
 	r.eventsByEnvelope[ev.EnvelopeID] = append(r.eventsByEnvelope[ev.EnvelopeID], ev)
 	r.eventsByRequest[ev.RequestID] = append(r.eventsByRequest[ev.RequestID], ev)

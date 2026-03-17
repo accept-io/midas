@@ -7,6 +7,7 @@ import (
 func TestNewEvent_NormalizesNilPayload(t *testing.T) {
 	ev := NewEvent(
 		"env-1",
+		"actor-1",
 		"req-1",
 		AuditEventEnvelopeCreated,
 		EventPerformerSystem,
@@ -30,6 +31,7 @@ func TestNewEvent_SetsBasicFields(t *testing.T) {
 
 	ev := NewEvent(
 		"env-123",
+		"actor-1",
 		"req-456",
 		AuditEventSurfaceResolved,
 		EventPerformerSystem,
@@ -65,6 +67,7 @@ func TestNewEvent_SetsBasicFields(t *testing.T) {
 func TestNewEvent_SetsOccurredAt(t *testing.T) {
 	ev := NewEvent(
 		"env-1",
+		"actor-1",
 		"req-1",
 		AuditEventEnvelopeCreated,
 		EventPerformerSystem,
@@ -80,6 +83,7 @@ func TestNewEvent_SetsOccurredAt(t *testing.T) {
 func TestNewEvent_InitializesEventIdentityAndLeavesComputedFieldsUnset(t *testing.T) {
 	ev := NewEvent(
 		"env-1",
+		"actor-1",
 		"req-1",
 		AuditEventEnvelopeCreated,
 		EventPerformerSystem,

@@ -16,16 +16,34 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 	now := time.Now().UTC()
 
 	err := repos.Surfaces.Create(ctx, &surface.DecisionSurface{
-		ID:             "loan_auto_approval",
-		Name:           "Loan Auto Approval",
-		Domain:         "lending",
+		// Identity
+		ID:      "loan_auto_approval",
+		Version: 1,
+
+		// Core Evaluation Fields
+		RequiredContext:   surface.ContextSchema{Fields: []surface.ContextField{}}, // Empty for now
+		ConsequenceTypes:  []surface.ConsequenceType{},                             // Empty for now
+		MinimumConfidence: 0.80,
+		FailureMode:       surface.FailureModeClosed,
+
+		// Registry & Metadata
+		Name:               "Loan Auto Approval",
+		Description:        "Auto loan approval decision surface",
+		Domain:             "lending",
+		DecisionType:       surface.DecisionTypeTactical,
+		ReversibilityClass: surface.ReversibilityConditionallyReversible,
+
+		// Lifecycle
+		Status:        surface.SurfaceStatusActive,
+		EffectiveFrom: now.Add(-time.Hour),
+
+		// Ownership
 		BusinessOwner:  "credit-risk",
 		TechnicalOwner: "midas",
-		Status:         surface.SurfaceStatusActive,
-		Version:        1,
-		EffectiveDate:  now.Add(-time.Hour),
-		CreatedAt:      now,
-		UpdatedAt:      now,
+
+		// Audit
+		CreatedAt: now,
+		UpdatedAt: now,
 	})
 	if err != nil {
 		return err

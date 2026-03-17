@@ -25,12 +25,19 @@ func NewProfileRepo(db sqltx.DBTX) (*ProfileRepo, error) {
 	return &ProfileRepo{db: db}, nil
 }
 
+// FindByID returns the latest version of a profile by its logical ID.
 func (r *ProfileRepo) FindByID(ctx context.Context, id string) (*authority.AuthorityProfile, error) {
 	const q = `
 		SELECT
 			id,
+			version,
 			surface_id,
 			name,
+			description,
+			status,
+			effective_date,
+			effective_until,
+			retired_at,
 			confidence_threshold,
 			consequence_type,
 			consequence_amount,
@@ -40,10 +47,11 @@ func (r *ProfileRepo) FindByID(ctx context.Context, id string) (*authority.Autho
 			escalation_mode,
 			fail_mode,
 			required_context_keys,
-			version,
-			effective_date,
 			created_at,
-			updated_at
+			updated_at,
+			created_by,
+			approved_by,
+			approved_at
 		FROM authority_profiles
 		WHERE id = $1
 		ORDER BY version DESC
@@ -61,12 +69,19 @@ func (r *ProfileRepo) FindByID(ctx context.Context, id string) (*authority.Autho
 	return p, nil
 }
 
-func (r *ProfileRepo) FindActiveAt(ctx context.Context, id string, at time.Time) (*authority.AuthorityProfile, error) {
+// FindByIDAndVersion retrieves a specific profile version.
+func (r *ProfileRepo) FindByIDAndVersion(ctx context.Context, id string, version int) (*authority.AuthorityProfile, error) {
 	const q = `
 		SELECT
 			id,
+			version,
 			surface_id,
 			name,
+			description,
+			status,
+			effective_date,
+			effective_until,
+			retired_at,
 			confidence_threshold,
 			consequence_type,
 			consequence_amount,
@@ -76,14 +91,64 @@ func (r *ProfileRepo) FindActiveAt(ctx context.Context, id string, at time.Time)
 			escalation_mode,
 			fail_mode,
 			required_context_keys,
-			version,
-			effective_date,
 			created_at,
-			updated_at
+			updated_at,
+			created_by,
+			approved_by,
+			approved_at
+		FROM authority_profiles
+		WHERE id = $1 AND version = $2
+	`
+
+	p, err := scanProfileRow(r.db.QueryRowContext(ctx, q, id, version))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	return p, nil
+}
+
+// FindActiveAt resolves the active version where:
+//   - status = 'active'
+//   - effective_date <= at
+//   - (effective_until IS NULL OR effective_until > at)
+//
+// Schema v2.1: Now checks status field in addition to date range.
+func (r *ProfileRepo) FindActiveAt(ctx context.Context, id string, at time.Time) (*authority.AuthorityProfile, error) {
+	const q = `
+		SELECT
+			id,
+			version,
+			surface_id,
+			name,
+			description,
+			status,
+			effective_date,
+			effective_until,
+			retired_at,
+			confidence_threshold,
+			consequence_type,
+			consequence_amount,
+			consequence_currency,
+			consequence_risk_rating,
+			policy_reference,
+			escalation_mode,
+			fail_mode,
+			required_context_keys,
+			created_at,
+			updated_at,
+			created_by,
+			approved_by,
+			approved_at
 		FROM authority_profiles
 		WHERE id = $1
+		  AND status = 'active'
 		  AND effective_date <= $2
-		ORDER BY effective_date DESC, version DESC
+		  AND (effective_until IS NULL OR effective_until > $2)
+		ORDER BY version DESC
 		LIMIT 1
 	`
 
@@ -102,8 +167,14 @@ func (r *ProfileRepo) ListBySurface(ctx context.Context, surfaceID string) ([]*a
 	const q = `
 		SELECT
 			id,
+			version,
 			surface_id,
 			name,
+			description,
+			status,
+			effective_date,
+			effective_until,
+			retired_at,
 			confidence_threshold,
 			consequence_type,
 			consequence_amount,
@@ -113,16 +184,72 @@ func (r *ProfileRepo) ListBySurface(ctx context.Context, surfaceID string) ([]*a
 			escalation_mode,
 			fail_mode,
 			required_context_keys,
-			version,
-			effective_date,
 			created_at,
-			updated_at
+			updated_at,
+			created_by,
+			approved_by,
+			approved_at
 		FROM authority_profiles
 		WHERE surface_id = $1
 		ORDER BY id, version DESC
 	`
 
 	rows, err := r.db.QueryContext(ctx, q, surfaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []*authority.AuthorityProfile
+
+	for rows.Next() {
+		p, err := scanProfileRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
+// ListVersions returns all versions of a profile ordered by version DESC.
+func (r *ProfileRepo) ListVersions(ctx context.Context, id string) ([]*authority.AuthorityProfile, error) {
+	const q = `
+		SELECT
+			id,
+			version,
+			surface_id,
+			name,
+			description,
+			status,
+			effective_date,
+			effective_until,
+			retired_at,
+			confidence_threshold,
+			consequence_type,
+			consequence_amount,
+			consequence_currency,
+			consequence_risk_rating,
+			policy_reference,
+			escalation_mode,
+			fail_mode,
+			required_context_keys,
+			created_at,
+			updated_at,
+			created_by,
+			approved_by,
+			approved_at
+		FROM authority_profiles
+		WHERE id = $1
+		ORDER BY version DESC
+	`
+
+	rows, err := r.db.QueryContext(ctx, q, id)
 	if err != nil {
 		return nil, err
 	}
@@ -154,8 +281,14 @@ func (r *ProfileRepo) Create(ctx context.Context, p *authority.AuthorityProfile)
 	const q = `
 		INSERT INTO authority_profiles (
 			id,
+			version,
 			surface_id,
 			name,
+			description,
+			status,
+			effective_date,
+			effective_until,
+			retired_at,
 			confidence_threshold,
 			consequence_type,
 			consequence_amount,
@@ -165,12 +298,13 @@ func (r *ProfileRepo) Create(ctx context.Context, p *authority.AuthorityProfile)
 			escalation_mode,
 			fail_mode,
 			required_context_keys,
-			version,
-			effective_date,
 			created_at,
-			updated_at
+			updated_at,
+			created_by,
+			approved_by,
+			approved_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23
 		)
 	`
 
@@ -178,8 +312,14 @@ func (r *ProfileRepo) Create(ctx context.Context, p *authority.AuthorityProfile)
 		ctx,
 		q,
 		p.ID,
+		p.Version,
 		p.SurfaceID,
 		p.Name,
+		nullableString(p.Description),
+		p.Status,
+		p.EffectiveDate,
+		nullableTime(p.EffectiveUntil),
+		nullableTime(p.RetiredAt),
 		p.ConfidenceThreshold,
 		p.ConsequenceThreshold.Type,
 		nullableAmount(p.ConsequenceThreshold),
@@ -189,10 +329,11 @@ func (r *ProfileRepo) Create(ctx context.Context, p *authority.AuthorityProfile)
 		p.EscalationMode,
 		p.FailMode,
 		requiredContextKeys,
-		p.Version,
-		p.EffectiveDate,
 		p.CreatedAt,
 		p.UpdatedAt,
+		nullableString(p.CreatedBy),
+		nullableString(p.ApprovedBy),
+		nullableTime(p.ApprovedAt),
 	)
 	return err
 }
@@ -208,17 +349,23 @@ func (r *ProfileRepo) Update(ctx context.Context, p *authority.AuthorityProfile)
 		SET
 			surface_id = $3,
 			name = $4,
-			confidence_threshold = $5,
-			consequence_type = $6,
-			consequence_amount = $7,
-			consequence_currency = $8,
-			consequence_risk_rating = $9,
-			policy_reference = $10,
-			escalation_mode = $11,
-			fail_mode = $12,
-			required_context_keys = $13,
-			effective_date = $14,
-			updated_at = $15
+			description = $5,
+			status = $6,
+			effective_date = $7,
+			effective_until = $8,
+			retired_at = $9,
+			confidence_threshold = $10,
+			consequence_type = $11,
+			consequence_amount = $12,
+			consequence_currency = $13,
+			consequence_risk_rating = $14,
+			policy_reference = $15,
+			escalation_mode = $16,
+			fail_mode = $17,
+			required_context_keys = $18,
+			updated_at = $19,
+			approved_by = $20,
+			approved_at = $21
 		WHERE id = $1
 		  AND version = $2
 	`
@@ -230,6 +377,11 @@ func (r *ProfileRepo) Update(ctx context.Context, p *authority.AuthorityProfile)
 		p.Version,
 		p.SurfaceID,
 		p.Name,
+		nullableString(p.Description),
+		p.Status,
+		p.EffectiveDate,
+		nullableTime(p.EffectiveUntil),
+		nullableTime(p.RetiredAt),
 		p.ConfidenceThreshold,
 		p.ConsequenceThreshold.Type,
 		nullableAmount(p.ConsequenceThreshold),
@@ -239,8 +391,9 @@ func (r *ProfileRepo) Update(ctx context.Context, p *authority.AuthorityProfile)
 		p.EscalationMode,
 		p.FailMode,
 		requiredContextKeys,
-		p.EffectiveDate,
 		p.UpdatedAt,
+		nullableString(p.ApprovedBy),
+		nullableTime(p.ApprovedAt),
 	)
 	if err != nil {
 		return err
@@ -264,18 +417,30 @@ type profileScanner interface {
 func scanProfileRow(row profileScanner) (*authority.AuthorityProfile, error) {
 	var (
 		p                    authority.AuthorityProfile
+		description          sql.NullString
+		effectiveUntil       sql.NullTime
+		retiredAt            sql.NullTime
 		consequenceType      value.ConsequenceType
 		consequenceAmount    sql.NullFloat64
 		consequenceCurrency  sql.NullString
 		consequenceRisk      sql.NullString
 		policyReference      sql.NullString
 		requiredContextBytes []byte
+		createdBy            sql.NullString
+		approvedBy           sql.NullString
+		approvedAt           sql.NullTime
 	)
 
 	err := row.Scan(
 		&p.ID,
+		&p.Version,
 		&p.SurfaceID,
 		&p.Name,
+		&description,
+		&p.Status,
+		&p.EffectiveDate,
+		&effectiveUntil,
+		&retiredAt,
 		&p.ConfidenceThreshold,
 		&consequenceType,
 		&consequenceAmount,
@@ -285,13 +450,26 @@ func scanProfileRow(row profileScanner) (*authority.AuthorityProfile, error) {
 		&p.EscalationMode,
 		&p.FailMode,
 		&requiredContextBytes,
-		&p.Version,
-		&p.EffectiveDate,
 		&p.CreatedAt,
 		&p.UpdatedAt,
+		&createdBy,
+		&approvedBy,
+		&approvedAt,
 	)
 	if err != nil {
 		return nil, err
+	}
+
+	if description.Valid {
+		p.Description = description.String
+	}
+	if effectiveUntil.Valid {
+		t := effectiveUntil.Time
+		p.EffectiveUntil = &t
+	}
+	if retiredAt.Valid {
+		t := retiredAt.Time
+		p.RetiredAt = &t
 	}
 
 	p.ConsequenceThreshold = authority.Consequence{
@@ -319,39 +497,22 @@ func scanProfileRow(row profileScanner) (*authority.AuthorityProfile, error) {
 		p.RequiredContextKeys = []string{}
 	}
 
+	if createdBy.Valid {
+		p.CreatedBy = createdBy.String
+	}
+	if approvedBy.Valid {
+		p.ApprovedBy = approvedBy.String
+	}
+	if approvedAt.Valid {
+		t := approvedAt.Time
+		p.ApprovedAt = &t
+	}
+
 	return &p, nil
 }
 
 func scanProfileRows(rows *sql.Rows) (*authority.AuthorityProfile, error) {
 	return scanProfileRow(rows)
-}
-
-func nullableAmount(c authority.Consequence) any {
-	if c.Type == value.ConsequenceTypeMonetary {
-		return c.Amount
-	}
-	return nil
-}
-
-func nullableCurrency(c authority.Consequence) any {
-	if c.Type == value.ConsequenceTypeMonetary {
-		return c.Currency
-	}
-	return nil
-}
-
-func nullableRiskRating(c authority.Consequence) any {
-	if c.Type == value.ConsequenceTypeRiskRating {
-		return string(c.RiskRating)
-	}
-	return nil
-}
-
-func nullableString(s string) any {
-	if s == "" {
-		return nil
-	}
-	return s
 }
 
 var _ authority.ProfileRepository = (*ProfileRepo)(nil)

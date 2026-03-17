@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"os"
 	"testing"
 	"time"
@@ -40,7 +41,14 @@ func openTestDB(t *testing.T) *sql.DB {
 func cleanupOperationalEnvelopes(t *testing.T, db *sql.DB) {
 	t.Helper()
 
-	_, err := db.Exec(`DELETE FROM operational_envelopes`)
+	// Delete audit events FIRST (child table with foreign key)
+	_, err := db.Exec(`DELETE FROM audit_events`)
+	if err != nil {
+		t.Fatalf("cleanup audit_events: %v", err)
+	}
+
+	// Then delete envelopes (parent table)
+	_, err = db.Exec(`DELETE FROM operational_envelopes`)
 	if err != nil {
 		t.Fatalf("cleanup operational_envelopes: %v", err)
 	}
@@ -60,12 +68,9 @@ func TestStore_WithTx_CommitsOnSuccess(t *testing.T) {
 	ctx := context.Background()
 
 	err = s.WithTx(ctx, "test", func(repos *store.Repositories) error {
-		env := &envelope.Envelope{
-			ID:        "env-commit-1",
-			RequestID: "req-commit-1",
-			State:     envelope.EnvelopeStateReceived,
-			CreatedAt: time.Now().UTC(),
-			UpdatedAt: time.Now().UTC(),
+		env, err := envelope.New("env-commit-1", "test-source", "req-commit-1", json.RawMessage(`{}`), time.Now().UTC())
+		if err != nil {
+			return err
 		}
 		return repos.Envelopes.Create(ctx, env)
 	})
@@ -101,12 +106,9 @@ func TestStore_WithTx_RollsBackOnError(t *testing.T) {
 	ctx := context.Background()
 
 	err = s.WithTx(ctx, "test", func(repos *store.Repositories) error {
-		env := &envelope.Envelope{
-			ID:        "env-rollback-1",
-			RequestID: "req-rollback-1",
-			State:     envelope.EnvelopeStateReceived,
-			CreatedAt: time.Now().UTC(),
-			UpdatedAt: time.Now().UTC(),
+		env, err := envelope.New("env-rollback-1", "test-source", "req-rollback-1", json.RawMessage(`{}`), time.Now().UTC())
+		if err != nil {
+			return err
 		}
 		if err := repos.Envelopes.Create(ctx, env); err != nil {
 			return err

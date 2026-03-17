@@ -47,21 +47,23 @@ func (r *PostgresRepository) Append(ctx context.Context, ev *AuditEvent) error {
 	if err != nil {
 		return err
 	}
-	ev.EventHash = hash
+	ev.setHash(hash)
 
 	payloadBytes, err := json.Marshal(ev.Payload)
 	if err != nil {
 		return err
 	}
 
+	// ✅ FIXED: Added request_source to the INSERT statement
 	_, err = r.db.ExecContext(ctx,
 		`INSERT INTO audit_events (
-			id, envelope_id, request_id, sequence_no, event_type,
+			id, envelope_id, request_source, request_id, sequence_no, event_type,
 			performed_by_type, performed_by_id, payload_json,
 			prev_hash, event_hash, occurred_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
 		ev.ID,
 		ev.EnvelopeID,
+		ev.RequestSource, // ✅ FIXED: Added this parameter
 		ev.RequestID,
 		ev.SequenceNo,
 		ev.EventType,
@@ -76,9 +78,10 @@ func (r *PostgresRepository) Append(ctx context.Context, ev *AuditEvent) error {
 }
 
 func (r *PostgresRepository) ListByEnvelopeID(ctx context.Context, envelopeID string) ([]*AuditEvent, error) {
+	// ✅ FIXED: Added request_source to the SELECT statement
 	const q = `
 		SELECT
-			id, envelope_id, request_id, sequence_no, event_type,
+			id, envelope_id, request_source, request_id, sequence_no, event_type,
 			performed_by_type, performed_by_id, payload_json,
 			prev_hash, event_hash, occurred_at
 		FROM audit_events
@@ -96,9 +99,10 @@ func (r *PostgresRepository) ListByEnvelopeID(ctx context.Context, envelopeID st
 }
 
 func (r *PostgresRepository) ListByRequestID(ctx context.Context, requestID string) ([]*AuditEvent, error) {
+	// ✅ FIXED: Added request_source to the SELECT statement
 	const q = `
 		SELECT
-			id, envelope_id, request_id, sequence_no, event_type,
+			id, envelope_id, request_source, request_id, sequence_no, event_type,
 			performed_by_type, performed_by_id, payload_json,
 			prev_hash, event_hash, occurred_at
 		FROM audit_events
@@ -127,9 +131,11 @@ func scanEventRows(rows *sql.Rows) ([]*AuditEvent, error) {
 			prevHash        sql.NullString
 		)
 
+		// ✅ FIXED: Added &ev.RequestSource to the Scan
 		if err := rows.Scan(
 			&ev.ID,
 			&ev.EnvelopeID,
+			&ev.RequestSource, // ✅ FIXED: Added this field
 			&ev.RequestID,
 			&ev.SequenceNo,
 			&ev.EventType,
@@ -152,6 +158,8 @@ func scanEventRows(rows *sql.Rows) ([]*AuditEvent, error) {
 		if prevHash.Valid {
 			ev.PrevHash = prevHash.String
 		}
+		// Keep Hash in sync with EventHash after scanning from the database.
+		ev.Hash = ev.EventHash
 
 		if len(payloadBytes) > 0 {
 			if err := json.Unmarshal(payloadBytes, &ev.Payload); err != nil {

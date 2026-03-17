@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: midas-postgres
+    environment:
+      POSTGRES_DB: midas
+      POSTGRES_USER: midas
+      POSTGRES_PASSWORD: midas
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./internal/store/postgres/schema.sql:/docker-entrypoint-initdb.d/schema.sql  # Back to this
+
+  midas:
+    build: .
+    container_name: midas-app
+    depends_on:
+      - postgres
+    environment:
+      DATABASE_URL: postgres://midas:midas@postgres:5432/midas?sslmode=disable
+    ports:
+      - "8080:8080"

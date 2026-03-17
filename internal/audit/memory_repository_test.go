@@ -11,6 +11,7 @@ func TestMemoryRepository_Append_AssignsSequenceNumbersPerEnvelope(t *testing.T)
 
 	ev1 := NewEvent(
 		"env-1",
+		"actor-1",
 		"req-1",
 		AuditEventEnvelopeCreated,
 		EventPerformerSystem,
@@ -20,6 +21,7 @@ func TestMemoryRepository_Append_AssignsSequenceNumbersPerEnvelope(t *testing.T)
 
 	ev2 := NewEvent(
 		"env-1",
+		"actor-1",
 		"req-1",
 		AuditEventStateTransitioned,
 		EventPerformerSystem,
@@ -53,6 +55,7 @@ func TestMemoryRepository_Append_SetsHashChain(t *testing.T) {
 
 	ev1 := NewEvent(
 		"env-1",
+		"actor-1",
 		"req-1",
 		AuditEventEnvelopeCreated,
 		EventPerformerSystem,
@@ -62,6 +65,7 @@ func TestMemoryRepository_Append_SetsHashChain(t *testing.T) {
 
 	ev2 := NewEvent(
 		"env-1",
+		"actor-1",
 		"req-1",
 		AuditEventStateTransitioned,
 		EventPerformerSystem,
@@ -103,6 +107,7 @@ func TestMemoryRepository_ListByEnvelopeID_ReturnsOrderedEvents(t *testing.T) {
 
 	ev1 := NewEvent(
 		"env-1",
+		"actor-1",
 		"req-1",
 		AuditEventEnvelopeCreated,
 		EventPerformerSystem,
@@ -112,6 +117,7 @@ func TestMemoryRepository_ListByEnvelopeID_ReturnsOrderedEvents(t *testing.T) {
 
 	ev2 := NewEvent(
 		"env-1",
+		"actor-1",
 		"req-1",
 		AuditEventSurfaceResolved,
 		EventPerformerSystem,
@@ -162,6 +168,7 @@ func TestMemoryRepository_ListByRequestID_ReturnsEvents(t *testing.T) {
 
 	ev1 := NewEvent(
 		"env-1",
+		"actor-1",
 		"req-123",
 		AuditEventEnvelopeCreated,
 		EventPerformerSystem,
@@ -171,6 +178,7 @@ func TestMemoryRepository_ListByRequestID_ReturnsEvents(t *testing.T) {
 
 	ev2 := NewEvent(
 		"env-1",
+		"actor-1",
 		"req-123",
 		AuditEventAgentResolved,
 		EventPerformerSystem,
@@ -208,6 +216,7 @@ func TestMemoryRepository_SequenceNumbersAreIndependentPerEnvelope(t *testing.T)
 
 	ev1 := NewEvent(
 		"env-1",
+		"actor-1",
 		"req-1",
 		AuditEventEnvelopeCreated,
 		EventPerformerSystem,
@@ -217,6 +226,7 @@ func TestMemoryRepository_SequenceNumbersAreIndependentPerEnvelope(t *testing.T)
 
 	ev2 := NewEvent(
 		"env-2",
+		"actor-2",
 		"req-2",
 		AuditEventEnvelopeCreated,
 		EventPerformerSystem,
@@ -226,6 +236,7 @@ func TestMemoryRepository_SequenceNumbersAreIndependentPerEnvelope(t *testing.T)
 
 	ev3 := NewEvent(
 		"env-1",
+		"actor-1",
 		"req-1",
 		AuditEventStateTransitioned,
 		EventPerformerSystem,
@@ -267,6 +278,7 @@ func TestMemoryRepository_ListMethods_ReturnCopiesOfSlices(t *testing.T) {
 
 	ev1 := NewEvent(
 		"env-1",
+		"actor-1",
 		"req-1",
 		AuditEventEnvelopeCreated,
 		EventPerformerSystem,
@@ -276,6 +288,7 @@ func TestMemoryRepository_ListMethods_ReturnCopiesOfSlices(t *testing.T) {
 
 	ev2 := NewEvent(
 		"env-1",
+		"actor-1",
 		"req-1",
 		AuditEventStateTransitioned,
 		EventPerformerSystem,

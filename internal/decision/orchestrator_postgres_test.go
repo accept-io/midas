@@ -53,7 +53,7 @@ func cleanupPostgresTestData(t *testing.T, db *sql.DB) {
 	statements := []string{
 		`DELETE FROM audit_events`,
 		`DELETE FROM operational_envelopes`,
-		`DELETE FROM agent_authorizations`,
+		`DELETE FROM authority_grants`,
 		`DELETE FROM authority_profiles`,
 		`DELETE FROM agents`,
 		`DELETE FROM decision_surfaces`,
@@ -97,7 +97,7 @@ func seedPostgresHappyPathData(t *testing.T, repos *store.Repositories) {
 		Name:          "test surface",
 		Status:        surface.SurfaceStatusActive,
 		Version:       1,
-		EffectiveDate: now,
+		EffectiveFrom: now,
 	}); err != nil {
 		t.Fatalf("seed surface: %v", err)
 	}
@@ -115,14 +115,16 @@ func seedPostgresHappyPathData(t *testing.T, repos *store.Repositories) {
 		ID:                  "prof-1",
 		SurfaceID:           "surf-1",
 		Name:                "test profile",
+		Status:              authority.ProfileStatusActive,
 		ConfidenceThreshold: 0.8,
 		ConsequenceThreshold: authority.Consequence{
 			Type:       value.ConsequenceTypeRiskRating,
 			RiskRating: value.RiskRatingHigh,
 		},
-		FailMode:      authority.FailModeOpen,
-		Version:       1,
-		EffectiveDate: now,
+		EscalationMode: "auto", // ✅ FIXED: Added required field per schema constraint
+		FailMode:       authority.FailModeOpen,
+		Version:        1,
+		EffectiveDate:  now,
 	}); err != nil {
 		t.Fatalf("seed profile: %v", err)
 	}
@@ -140,10 +142,11 @@ func seedPostgresHappyPathData(t *testing.T, repos *store.Repositories) {
 
 func basePostgresRequest() eval.DecisionRequest {
 	return eval.DecisionRequest{
-		RequestID:  "req-postgres-1",
-		SurfaceID:  "surf-1",
-		AgentID:    "agent-1",
-		Confidence: 0.9,
+		RequestSource: "test-source",
+		RequestID:     "req-postgres-1",
+		SurfaceID:     "surf-1",
+		AgentID:       "agent-1",
+		Confidence:    0.9,
 		Consequence: &eval.Consequence{
 			Type:       value.ConsequenceTypeRiskRating,
 			RiskRating: value.RiskRatingMedium,
@@ -167,13 +170,14 @@ func TestOrchestrator_Postgres_PersistsCompleteDecisionRecord(t *testing.T) {
 		t.Fatalf("decision.NewOrchestrator: %v", err)
 	}
 
-	result, err := orch.Evaluate(context.Background(), basePostgresRequest())
+	raw := []byte(`{"request_source":"test-source","request_id":"req-postgres-1","surface_id":"surf-1","agent_id":"agent-1"}`)
+	result, err := orch.Evaluate(context.Background(), basePostgresRequest(), raw)
 	if err != nil {
 		t.Fatalf("Evaluate: %v", err)
 	}
 
-	if result.Outcome != eval.OutcomeExecute {
-		t.Fatalf("outcome: got %q, want %q", result.Outcome, eval.OutcomeExecute)
+	if result.Outcome != eval.OutcomeAccept {
+		t.Fatalf("outcome: got %q, want %q", result.Outcome, eval.OutcomeAccept)
 	}
 	if result.ReasonCode != eval.ReasonWithinAuthority {
 		t.Fatalf("reason code: got %q, want %q", result.ReasonCode, eval.ReasonWithinAuthority)
@@ -193,29 +197,29 @@ func TestOrchestrator_Postgres_PersistsCompleteDecisionRecord(t *testing.T) {
 	if env.State != envelope.EnvelopeStateClosed {
 		t.Fatalf("state: got %q, want %q", env.State, envelope.EnvelopeStateClosed)
 	}
-	if env.Outcome != eval.OutcomeExecute {
-		t.Fatalf("envelope outcome: got %q, want %q", env.Outcome, eval.OutcomeExecute)
+	if env.Outcome() != eval.OutcomeAccept {
+		t.Fatalf("envelope outcome: got %q, want %q", env.Outcome(), eval.OutcomeAccept)
 	}
-	if env.ReasonCode != eval.ReasonWithinAuthority {
-		t.Fatalf("envelope reason: got %q, want %q", env.ReasonCode, eval.ReasonWithinAuthority)
+	if env.ReasonCode() != eval.ReasonWithinAuthority {
+		t.Fatalf("envelope reason: got %q, want %q", env.ReasonCode(), eval.ReasonWithinAuthority)
 	}
-	if env.Evidence.SurfaceID != "surf-1" {
-		t.Fatalf("surface evidence: got %q, want %q", env.Evidence.SurfaceID, "surf-1")
+	if env.Resolved.Authority.SurfaceID != "surf-1" {
+		t.Fatalf("surface evidence: got %q, want %q", env.Resolved.Authority.SurfaceID, "surf-1")
 	}
-	if env.Evidence.ProfileID != "prof-1" {
-		t.Fatalf("profile evidence: got %q, want %q", env.Evidence.ProfileID, "prof-1")
+	if env.Resolved.Authority.ProfileID != "prof-1" {
+		t.Fatalf("profile evidence: got %q, want %q", env.Resolved.Authority.ProfileID, "prof-1")
 	}
-	if env.Evidence.AgentID != "agent-1" {
-		t.Fatalf("agent evidence: got %q, want %q", env.Evidence.AgentID, "agent-1")
+	if env.Resolved.Authority.AgentID != "agent-1" {
+		t.Fatalf("agent evidence: got %q, want %q", env.Resolved.Authority.AgentID, "agent-1")
 	}
-	if env.Explanation == nil {
+	if env.Evaluation.Explanation == nil {
 		t.Fatal("expected explanation to be persisted")
 	}
-	if env.Explanation.Result != string(eval.OutcomeExecute) {
-		t.Fatalf("explanation result: got %q, want %q", env.Explanation.Result, eval.OutcomeExecute)
+	if env.Evaluation.Explanation.Result != string(eval.OutcomeAccept) {
+		t.Fatalf("explanation result: got %q, want %q", env.Evaluation.Explanation.Result, eval.OutcomeAccept)
 	}
-	if env.Explanation.Reason != string(eval.ReasonWithinAuthority) {
-		t.Fatalf("explanation reason: got %q, want %q", env.Explanation.Reason, eval.ReasonWithinAuthority)
+	if env.Evaluation.Explanation.Reason != string(eval.ReasonWithinAuthority) {
+		t.Fatalf("explanation reason: got %q, want %q", env.Evaluation.Explanation.Reason, eval.ReasonWithinAuthority)
 	}
 
 	events, err := repos.Audit.ListByEnvelopeID(context.Background(), result.EnvelopeID)
@@ -235,15 +239,12 @@ func TestOrchestrator_Postgres_PersistsCompleteDecisionRecord(t *testing.T) {
 	}
 
 	last := events[len(events)-1]
-	if last.EventType != audit.AuditEventStateTransitioned {
-		t.Fatalf("last event type: got %q, want %q", last.EventType, audit.AuditEventStateTransitioned)
+	if last.EventType != audit.AuditEventEnvelopeClosed {
+		t.Fatalf("last event type: got %q, want %q", last.EventType, audit.AuditEventEnvelopeClosed)
 	}
 
-	toState, ok := last.Payload["to_state"].(string)
-	if !ok {
-		t.Fatalf("expected last event to_state to be string, got %T", last.Payload["to_state"])
-	}
-	if toState != string(envelope.EnvelopeStateClosed) {
-		t.Fatalf("last event to_state: got %q, want %q", toState, envelope.EnvelopeStateClosed)
+	// ENVELOPE_CLOSED event doesn't have to_state/from_state - just verify it closed
+	if last.EventType != audit.AuditEventEnvelopeClosed {
+		t.Fatalf("expected final event to be ENVELOPE_CLOSED, got %q", last.EventType)
 	}
 }

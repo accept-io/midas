@@ -31,7 +31,7 @@ var baseTime = time.Date(2026, 3, 10, 10, 0, 0, 0, time.UTC)
 func TestVerifyAuditIntegrity_ValidChain(t *testing.T) {
 	ctx := context.Background()
 	env := &envelope.Envelope{
-		ID:    "env-1",
+		Identity: envelope.Identity{ID: "env-1"},
 		State: envelope.EnvelopeStateClosed,
 	}
 
@@ -40,7 +40,7 @@ func TestVerifyAuditIntegrity_ValidChain(t *testing.T) {
 
 	ev1 := &AuditEvent{
 		ID:              "ev-1",
-		EnvelopeID:      env.ID,
+		EnvelopeID:      env.ID(),
 		RequestID:       "req-1",
 		SequenceNo:      1,
 		EventType:       AuditEventEnvelopeCreated,
@@ -58,10 +58,10 @@ func TestVerifyAuditIntegrity_ValidChain(t *testing.T) {
 
 	ev2 := &AuditEvent{
 		ID:              "ev-2",
-		EnvelopeID:      env.ID,
+		EnvelopeID:      env.ID(),
 		RequestID:       "req-1",
 		SequenceNo:      2,
-		EventType:       AuditEventStateTransitioned,
+		EventType:       AuditEventEnvelopeClosed,
 		PerformedByType: EventPerformerSystem,
 		PerformedByID:   "test",
 		Payload: map[string]any{
@@ -82,7 +82,7 @@ func TestVerifyAuditIntegrity_ValidChain(t *testing.T) {
 	}
 	auditRepo := stubAuditRepo{
 		events: map[string][]*AuditEvent{
-			env.ID: {ev2, ev1}, // deliberately unsorted
+			env.ID(): {ev2, ev1}, // deliberately unsorted
 		},
 	}
 
@@ -94,7 +94,7 @@ func TestVerifyAuditIntegrity_ValidChain(t *testing.T) {
 func TestVerifyAuditIntegrity_HashMismatch(t *testing.T) {
 	ctx := context.Background()
 	env := &envelope.Envelope{
-		ID:    "env-1",
+		Identity: envelope.Identity{ID: "env-1"},
 		State: envelope.EnvelopeStateClosed,
 	}
 
@@ -103,7 +103,7 @@ func TestVerifyAuditIntegrity_HashMismatch(t *testing.T) {
 
 	ev1 := &AuditEvent{
 		ID:              "ev-1",
-		EnvelopeID:      env.ID,
+		EnvelopeID:      env.ID(),
 		RequestID:       "req-1",
 		SequenceNo:      1,
 		EventType:       AuditEventEnvelopeCreated,
@@ -121,10 +121,10 @@ func TestVerifyAuditIntegrity_HashMismatch(t *testing.T) {
 
 	ev2 := &AuditEvent{
 		ID:              "ev-2",
-		EnvelopeID:      env.ID,
+		EnvelopeID:      env.ID(),
 		RequestID:       "req-1",
 		SequenceNo:      2,
-		EventType:       AuditEventStateTransitioned,
+		EventType:       AuditEventEnvelopeClosed,
 		PerformedByType: EventPerformerSystem,
 		PerformedByID:   "test",
 		Payload: map[string]any{
@@ -141,7 +141,7 @@ func TestVerifyAuditIntegrity_HashMismatch(t *testing.T) {
 	}
 	auditRepo := stubAuditRepo{
 		events: map[string][]*AuditEvent{
-			env.ID: {ev1, ev2},
+			env.ID(): {ev1, ev2},
 		},
 	}
 
@@ -157,7 +157,7 @@ func TestVerifyAuditIntegrity_HashMismatch(t *testing.T) {
 func TestVerifyAuditIntegrity_StateMismatch(t *testing.T) {
 	ctx := context.Background()
 	env := &envelope.Envelope{
-		ID:    "env-1",
+		Identity: envelope.Identity{ID: "env-1"},
 		State: envelope.EnvelopeStateEscalated,
 	}
 
@@ -166,7 +166,7 @@ func TestVerifyAuditIntegrity_StateMismatch(t *testing.T) {
 
 	ev1 := &AuditEvent{
 		ID:              "ev-1",
-		EnvelopeID:      env.ID,
+		EnvelopeID:      env.ID(),
 		RequestID:       "req-1",
 		SequenceNo:      1,
 		EventType:       AuditEventEnvelopeCreated,
@@ -184,10 +184,10 @@ func TestVerifyAuditIntegrity_StateMismatch(t *testing.T) {
 
 	ev2 := &AuditEvent{
 		ID:              "ev-2",
-		EnvelopeID:      env.ID,
+		EnvelopeID:      env.ID(),
 		RequestID:       "req-1",
 		SequenceNo:      2,
-		EventType:       AuditEventStateTransitioned,
+		EventType:       AuditEventEnvelopeClosed,
 		PerformedByType: EventPerformerSystem,
 		PerformedByID:   "test",
 		Payload: map[string]any{
@@ -208,7 +208,7 @@ func TestVerifyAuditIntegrity_StateMismatch(t *testing.T) {
 	}
 	auditRepo := stubAuditRepo{
 		events: map[string][]*AuditEvent{
-			env.ID: {ev1, ev2},
+			env.ID(): {ev1, ev2},
 		},
 	}
 
@@ -224,7 +224,7 @@ func TestVerifyAuditIntegrity_StateMismatch(t *testing.T) {
 func TestVerifyAuditIntegrity_FirstEventWrongSequence(t *testing.T) {
 	ctx := context.Background()
 	env := &envelope.Envelope{
-		ID:    "env-1",
+		Identity: envelope.Identity{ID: "env-1"},
 		State: envelope.EnvelopeStateClosed,
 	}
 
@@ -232,7 +232,7 @@ func TestVerifyAuditIntegrity_FirstEventWrongSequence(t *testing.T) {
 
 	ev1 := &AuditEvent{
 		ID:              "ev-1",
-		EnvelopeID:      env.ID,
+		EnvelopeID:      env.ID(),
 		RequestID:       "req-1",
 		SequenceNo:      2, // Should be 1
 		EventType:       AuditEventEnvelopeCreated,
@@ -250,7 +250,7 @@ func TestVerifyAuditIntegrity_FirstEventWrongSequence(t *testing.T) {
 
 	envelopeRepo := stubEnvelopeRepo{items: []*envelope.Envelope{env}}
 	auditRepo := stubAuditRepo{
-		events: map[string][]*AuditEvent{env.ID: {ev1}},
+		events: map[string][]*AuditEvent{env.ID(): {ev1}},
 	}
 
 	err = VerifyAuditIntegrity(ctx, envelopeRepo, auditRepo)
@@ -265,7 +265,7 @@ func TestVerifyAuditIntegrity_FirstEventWrongSequence(t *testing.T) {
 func TestVerifyAuditIntegrity_FirstEventNonEmptyPrevHash(t *testing.T) {
 	ctx := context.Background()
 	env := &envelope.Envelope{
-		ID:    "env-1",
+		Identity: envelope.Identity{ID: "env-1"},
 		State: envelope.EnvelopeStateClosed,
 	}
 
@@ -273,7 +273,7 @@ func TestVerifyAuditIntegrity_FirstEventNonEmptyPrevHash(t *testing.T) {
 
 	ev1 := &AuditEvent{
 		ID:              "ev-1",
-		EnvelopeID:      env.ID,
+		EnvelopeID:      env.ID(),
 		RequestID:       "req-1",
 		SequenceNo:      1,
 		EventType:       AuditEventEnvelopeCreated,
@@ -291,7 +291,7 @@ func TestVerifyAuditIntegrity_FirstEventNonEmptyPrevHash(t *testing.T) {
 
 	envelopeRepo := stubEnvelopeRepo{items: []*envelope.Envelope{env}}
 	auditRepo := stubAuditRepo{
-		events: map[string][]*AuditEvent{env.ID: {ev1}},
+		events: map[string][]*AuditEvent{env.ID(): {ev1}},
 	}
 
 	err = VerifyAuditIntegrity(ctx, envelopeRepo, auditRepo)
@@ -306,7 +306,7 @@ func TestVerifyAuditIntegrity_FirstEventNonEmptyPrevHash(t *testing.T) {
 func TestVerifyAuditIntegrity_SequenceGap(t *testing.T) {
 	ctx := context.Background()
 	env := &envelope.Envelope{
-		ID:    "env-1",
+		Identity: envelope.Identity{ID: "env-1"},
 		State: envelope.EnvelopeStateClosed,
 	}
 
@@ -315,7 +315,7 @@ func TestVerifyAuditIntegrity_SequenceGap(t *testing.T) {
 
 	ev1 := &AuditEvent{
 		ID:              "ev-1",
-		EnvelopeID:      env.ID,
+		EnvelopeID:      env.ID(),
 		RequestID:       "req-1",
 		SequenceNo:      1,
 		EventType:       AuditEventEnvelopeCreated,
@@ -334,10 +334,10 @@ func TestVerifyAuditIntegrity_SequenceGap(t *testing.T) {
 	// Skip sequence 2, jump to 3
 	ev3 := &AuditEvent{
 		ID:              "ev-3",
-		EnvelopeID:      env.ID,
+		EnvelopeID:      env.ID(),
 		RequestID:       "req-1",
 		SequenceNo:      3, // Gap: should be 2
-		EventType:       AuditEventStateTransitioned,
+		EventType:       AuditEventEnvelopeClosed,
 		PerformedByType: EventPerformerSystem,
 		PerformedByID:   "test",
 		Payload: map[string]any{
@@ -355,7 +355,7 @@ func TestVerifyAuditIntegrity_SequenceGap(t *testing.T) {
 
 	envelopeRepo := stubEnvelopeRepo{items: []*envelope.Envelope{env}}
 	auditRepo := stubAuditRepo{
-		events: map[string][]*AuditEvent{env.ID: {ev1, ev3}},
+		events: map[string][]*AuditEvent{env.ID(): {ev1, ev3}},
 	}
 
 	err = VerifyAuditIntegrity(ctx, envelopeRepo, auditRepo)
@@ -370,7 +370,7 @@ func TestVerifyAuditIntegrity_SequenceGap(t *testing.T) {
 func TestVerifyAuditIntegrity_ChainBreak(t *testing.T) {
 	ctx := context.Background()
 	env := &envelope.Envelope{
-		ID:    "env-1",
+		Identity: envelope.Identity{ID: "env-1"},
 		State: envelope.EnvelopeStateClosed,
 	}
 
@@ -379,7 +379,7 @@ func TestVerifyAuditIntegrity_ChainBreak(t *testing.T) {
 
 	ev1 := &AuditEvent{
 		ID:              "ev-1",
-		EnvelopeID:      env.ID,
+		EnvelopeID:      env.ID(),
 		RequestID:       "req-1",
 		SequenceNo:      1,
 		EventType:       AuditEventEnvelopeCreated,
@@ -397,10 +397,10 @@ func TestVerifyAuditIntegrity_ChainBreak(t *testing.T) {
 
 	ev2 := &AuditEvent{
 		ID:              "ev-2",
-		EnvelopeID:      env.ID,
+		EnvelopeID:      env.ID(),
 		RequestID:       "req-1",
 		SequenceNo:      2,
-		EventType:       AuditEventStateTransitioned,
+		EventType:       AuditEventEnvelopeClosed,
 		PerformedByType: EventPerformerSystem,
 		PerformedByID:   "test",
 		Payload: map[string]any{
@@ -418,7 +418,7 @@ func TestVerifyAuditIntegrity_ChainBreak(t *testing.T) {
 
 	envelopeRepo := stubEnvelopeRepo{items: []*envelope.Envelope{env}}
 	auditRepo := stubAuditRepo{
-		events: map[string][]*AuditEvent{env.ID: {ev1, ev2}},
+		events: map[string][]*AuditEvent{env.ID(): {ev1, ev2}},
 	}
 
 	err = VerifyAuditIntegrity(ctx, envelopeRepo, auditRepo)
@@ -433,7 +433,7 @@ func TestVerifyAuditIntegrity_ChainBreak(t *testing.T) {
 func TestVerifyAuditIntegrity_FinalEventNotStateTransition(t *testing.T) {
 	ctx := context.Background()
 	env := &envelope.Envelope{
-		ID:    "env-1",
+		Identity: envelope.Identity{ID: "env-1"},
 		State: envelope.EnvelopeStateClosed,
 	}
 
@@ -442,7 +442,7 @@ func TestVerifyAuditIntegrity_FinalEventNotStateTransition(t *testing.T) {
 
 	ev1 := &AuditEvent{
 		ID:              "ev-1",
-		EnvelopeID:      env.ID,
+		EnvelopeID:      env.ID(),
 		RequestID:       "req-1",
 		SequenceNo:      1,
 		EventType:       AuditEventEnvelopeCreated,
@@ -458,13 +458,13 @@ func TestVerifyAuditIntegrity_FinalEventNotStateTransition(t *testing.T) {
 	}
 	ev1.EventHash = hash1
 
-	// Final event is NOT StateTransitioned
+	// Final event is NOT AuditEventEnvelopeClosed
 	ev2 := &AuditEvent{
 		ID:              "ev-2",
-		EnvelopeID:      env.ID,
+		EnvelopeID:      env.ID(),
 		RequestID:       "req-1",
 		SequenceNo:      2,
-		EventType:       AuditEventOutcomeRecorded, // Should be StateTransitioned
+		EventType:       AuditEventOutcomeRecorded, // Should be AuditEventEnvelopeClosed
 		PerformedByType: EventPerformerSystem,
 		PerformedByID:   "test",
 		Payload: map[string]any{
@@ -482,7 +482,7 @@ func TestVerifyAuditIntegrity_FinalEventNotStateTransition(t *testing.T) {
 
 	envelopeRepo := stubEnvelopeRepo{items: []*envelope.Envelope{env}}
 	auditRepo := stubAuditRepo{
-		events: map[string][]*AuditEvent{env.ID: {ev1, ev2}},
+		events: map[string][]*AuditEvent{env.ID(): {ev1, ev2}},
 	}
 
 	err = VerifyAuditIntegrity(ctx, envelopeRepo, auditRepo)
@@ -497,14 +497,14 @@ func TestVerifyAuditIntegrity_FinalEventNotStateTransition(t *testing.T) {
 func TestVerifyAuditIntegrity_NoAuditTrail(t *testing.T) {
 	ctx := context.Background()
 	env := &envelope.Envelope{
-		ID:    "env-1",
+		Identity: envelope.Identity{ID: "env-1"},
 		State: envelope.EnvelopeStateClosed,
 	}
 
 	envelopeRepo := stubEnvelopeRepo{items: []*envelope.Envelope{env}}
 	auditRepo := stubAuditRepo{
 		events: map[string][]*AuditEvent{
-			env.ID: {}, // Empty audit trail
+			env.ID(): {}, // Empty audit trail
 		},
 	}
 

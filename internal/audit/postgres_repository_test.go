@@ -50,6 +50,7 @@ func TestPostgresRepository_Append_AssignsSequenceAndHashChain(t *testing.T) {
 
 	ev1 := NewEvent(
 		"env-1",
+		"actor-1",
 		"req-1",
 		AuditEventEnvelopeCreated,
 		EventPerformerSystem,
@@ -61,6 +62,7 @@ func TestPostgresRepository_Append_AssignsSequenceAndHashChain(t *testing.T) {
 
 	ev2 := NewEvent(
 		"env-1",
+		"actor-1",
 		"req-1",
 		AuditEventStateTransitioned,
 		EventPerformerSystem,
@@ -117,6 +119,7 @@ func TestPostgresRepository_ListByEnvelopeID_ReturnsOrderedEvents(t *testing.T) 
 
 	ev1 := NewEvent(
 		"env-1",
+		"actor-1",
 		"req-1",
 		AuditEventEnvelopeCreated,
 		EventPerformerSystem,
@@ -127,6 +130,7 @@ func TestPostgresRepository_ListByEnvelopeID_ReturnsOrderedEvents(t *testing.T) 
 
 	ev2 := NewEvent(
 		"env-1",
+		"actor-1",
 		"req-1",
 		AuditEventSurfaceResolved,
 		EventPerformerSystem,
@@ -171,6 +175,7 @@ func TestPostgresRepository_ListByRequestID_ReturnsEvents(t *testing.T) {
 
 	ev1 := NewEvent(
 		"env-2",
+		"actor-2",
 		"req-xyz",
 		AuditEventEnvelopeCreated,
 		EventPerformerSystem,
@@ -181,6 +186,7 @@ func TestPostgresRepository_ListByRequestID_ReturnsEvents(t *testing.T) {
 
 	ev2 := NewEvent(
 		"env-2",
+		"actor-2",
 		"req-xyz",
 		AuditEventAgentResolved,
 		EventPerformerSystem,

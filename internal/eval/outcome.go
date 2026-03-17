@@ -4,10 +4,10 @@ package eval
 type Outcome string
 
 const (
-	OutcomeExecute              Outcome = "Execute"
-	OutcomeEscalate             Outcome = "Escalate"
-	OutcomeReject               Outcome = "Reject"
-	OutcomeRequestClarification Outcome = "RequestClarification"
+	OutcomeAccept               Outcome = "accept"
+	OutcomeEscalate             Outcome = "escalate"
+	OutcomeReject               Outcome = "reject"
+	OutcomeRequestClarification Outcome = "request_clarification"
 )
 
 // ReasonCode explains why a particular outcome was reached.
@@ -15,7 +15,7 @@ const (
 type ReasonCode string
 
 const (
-	// Execute reasons
+	// Accept reasons
 	ReasonWithinAuthority ReasonCode = "WITHIN_AUTHORITY"
 
 	// Escalation reasons
