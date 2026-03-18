@@ -3,9 +3,11 @@ package apply
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/accept-io/midas/internal/controlplane/parser"
 	"github.com/accept-io/midas/internal/controlplane/types"
+	"github.com/accept-io/midas/internal/surface"
 )
 
 func TestNewService(t *testing.T) {
@@ -263,10 +265,45 @@ func TestServiceApply_MixedInvalidBundle_ReturnsNoCreatedResults(t *testing.T) {
 
 type stubRepo struct{}
 
-func (stubRepo) CreateSurface(types.SurfaceDocument) error { return nil }
-func (stubRepo) CreateAgent(types.AgentDocument) error     { return nil }
-func (stubRepo) CreateProfile(types.ProfileDocument) error { return nil }
-func (stubRepo) CreateGrant(types.GrantDocument) error     { return nil }
+func (stubRepo) Create(ctx context.Context, s *surface.DecisionSurface) error {
+	return nil
+}
+
+func (stubRepo) Update(ctx context.Context, s *surface.DecisionSurface) error {
+	return nil
+}
+
+func (stubRepo) FindLatestByID(ctx context.Context, id string) (*surface.DecisionSurface, error) {
+	return nil, nil
+}
+
+func (stubRepo) FindByIDVersion(ctx context.Context, id string, version int) (*surface.DecisionSurface, error) {
+	return nil, nil
+}
+
+func (stubRepo) FindActiveAt(ctx context.Context, id string, at time.Time) (*surface.DecisionSurface, error) {
+	return nil, nil
+}
+
+func (stubRepo) ListVersions(ctx context.Context, id string) ([]*surface.DecisionSurface, error) {
+	return nil, nil
+}
+
+func (stubRepo) ListAll(ctx context.Context) ([]*surface.DecisionSurface, error) {
+	return nil, nil
+}
+
+func (stubRepo) ListByStatus(ctx context.Context, status surface.SurfaceStatus) ([]*surface.DecisionSurface, error) {
+	return nil, nil
+}
+
+func (stubRepo) ListByDomain(ctx context.Context, domain string) ([]*surface.DecisionSurface, error) {
+	return nil, nil
+}
+
+func (stubRepo) Search(ctx context.Context, criteria surface.SearchCriteria) ([]*surface.DecisionSurface, error) {
+	return nil, nil
+}
 
 func TestNewServiceWithRepo(t *testing.T) {
 	svc := NewServiceWithRepo(stubRepo{})
