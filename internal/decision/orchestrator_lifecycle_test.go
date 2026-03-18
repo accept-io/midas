@@ -158,9 +158,9 @@ func (r *fakeEnvelopeRepo) List(_ context.Context) ([]*envelope.Envelope, error)
 	return out, nil
 }
 
-func (r *fakeEnvelopeRepo) GetByRequestScope(_ context.Context, requestID string, requestSource string) (*envelope.Envelope, error) {
+func (r *fakeEnvelopeRepo) GetByRequestScope(_ context.Context, requestSource string, requestID string) (*envelope.Envelope, error) {
 	for _, env := range r.data {
-		if env.RequestID() == requestID && env.RequestSource() == requestSource {
+		if env.RequestSource() == requestSource && env.RequestID() == requestID {
 			return env, nil
 		}
 	}

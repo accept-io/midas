@@ -12,7 +12,7 @@ MIDAS is not a policy engine. OPA is embedded as a policy plugin behind a `Polic
 
 The evaluation flow is a deterministic sequence:
 
-1. **Surface & Profile Resolution** — look up surface, agent, grant, resolve profile. Version resolution: latest active version where `effective_date <= evaluation time`.
+1. **Surface & Profile Resolution** — look up surface, agent, grant, resolve profile. Version resolution: the version whose status is `active` and whose effective window contains the evaluation timestamp (`effective_from <= evaluation_time`).
 2. **Authority Chain Validation** — verify `grant.profile.surface_id == request.surface_id`.
 3. **Context Validation** — if the profile declares required context keys, check the request provides them.
 4. **Threshold Evaluation** — compare confidence and consequence against profile thresholds.
@@ -32,10 +32,16 @@ Agent → AuthorityGrant → AuthorityProfile → DecisionSurface
 ---
 
 ### DecisionSurface (`internal/surface/`)
-What is governed. ID, name, domain, business owner, technical owner, status (active/inactive/draft), version, effective date. Does NOT carry thresholds.
+Defines the governed decision boundary and its governance metadata. Does NOT carry authority thresholds or actor-scoped limits — those live on AuthorityProfile.
+
+Fields: ID, name, domain, business owner, technical owner, version, effective date, decision type, reversibility class, failure mode, consequence types, context schema (required keys), evidence requirements, compliance frameworks.
+
+Status lifecycle: `draft → review → active → deprecated → retired`. There is no `inactive` status. New surfaces enter `review` when applied via the control plane and become `active` only after explicit approval.
 
 ### AuthorityProfile (`internal/authority/`)
-How much authority is granted. Confidence threshold (`float64`), consequence threshold (`authority.Consequence`), consequence type, policy reference, escalation mode (auto/manual), fail mode (open/closed), required context keys (`[]string`), version, effective date. Multiple profiles per surface.
+Defines the executable authority limits for a given actor scope on a surface. Surfaces define _what_ is governed; profiles define _how much_ authority is permitted and under what conditions.
+
+Fields: confidence threshold (`float64`), consequence threshold (`authority.Consequence`), consequence type, policy reference, escalation mode (auto/manual), fail mode (open/closed), required context keys (`[]string`), version, effective date. Multiple profiles per surface.
 
 ### Agent (`internal/agent/`)
 Who is acting. ID, name, type (ai/service/operator), owner, model version, endpoint, operational state (active/suspended/revoked).
@@ -44,7 +50,7 @@ Who is acting. ID, name, type (ai/service/operator), owner, model version, endpo
 Thin link between agent and profile. Agent ID, profile ID, granted by, effective date, status (active/revoked/expired). No governance semantics.
 
 ### Envelope (`internal/envelope/`)
-Lifecycle object for every evaluation. Stores evidence as version references (resolved surface version, profile version, agent ID), not duplicated payloads. References `eval.Outcome` and `eval.ReasonCode`.
+Lifecycle object for every evaluation. Stores evidence as version references (resolved surface version, profile version, agent ID), not duplicated payloads. References `eval.Outcome` and `eval.ReasonCode`. Has five sections: Identity, Submitted, Resolved, Evaluation, Integrity.
 
 ### Consequence types
 Two consequence types exist:
@@ -83,16 +89,23 @@ Defined in `internal/eval/outcome.go` as typed constants:
 All interfaces are defined in their domain packages. Implementations live in `internal/store/postgres/`.
 
 **SurfaceRepository** (`internal/surface/`):
-- `FindByID(ctx, id) → (*DecisionSurface, error)`
-- `FindActiveAt(ctx, id, at time.Time) → (*DecisionSurface, error)` — resolves latest version where `effective_date <= at`
+- `FindLatestByID(ctx, id) → (*DecisionSurface, error)` — most recent version
+- `FindByIDVersion(ctx, id, version int) → (*DecisionSurface, error)` — specific version
+- `FindActiveAt(ctx, id, at time.Time) → (*DecisionSurface, error)` — version with status `active` and `effective_from <= at`
+- `ListVersions(ctx, id) → ([]*DecisionSurface, error)`
+- `ListAll(ctx) → ([]*DecisionSurface, error)`
+- `ListByStatus(ctx, status SurfaceStatus) → ([]*DecisionSurface, error)`
+- `ListByDomain(ctx, domain) → ([]*DecisionSurface, error)`
+- `Search(ctx, criteria SearchCriteria) → ([]*DecisionSurface, error)`
 - `Create(ctx, *DecisionSurface) → error`
 - `Update(ctx, *DecisionSurface) → error`
-- `List(ctx) → ([]*DecisionSurface, error)`
 
 **ProfileRepository** (`internal/authority/`):
 - `FindByID(ctx, id) → (*AuthorityProfile, error)`
-- `FindActiveAt(ctx, id, at time.Time) → (*AuthorityProfile, error)` — resolves latest version where `effective_date <= at`
+- `FindByIDAndVersion(ctx, id, version int) → (*AuthorityProfile, error)`
+- `FindActiveAt(ctx, id, at time.Time) → (*AuthorityProfile, error)` — version with status `active` and `effective_from <= at`
 - `ListBySurface(ctx, surfaceID) → ([]*AuthorityProfile, error)`
+- `ListVersions(ctx, id) → ([]*AuthorityProfile, error)`
 - `Create(ctx, *AuthorityProfile) → error`
 - `Update(ctx, *AuthorityProfile) → error`
 
@@ -102,6 +115,8 @@ All interfaces are defined in their domain packages. Implementations live in `in
 - `ListByAgent(ctx, agentID) → ([]*AuthorityGrant, error)`
 - `Create(ctx, *AuthorityGrant) → error`
 - `Revoke(ctx, id) → error`
+- `Suspend(ctx, id) → error`
+- `Reactivate(ctx, id) → error`
 
 **AgentRepository** (`internal/agent/`):
 - `GetByID(ctx, id) → (*Agent, error)`
@@ -111,10 +126,16 @@ All interfaces are defined in their domain packages. Implementations live in `in
 
 **EnvelopeRepository** (`internal/envelope/`):
 - `GetByID(ctx, id) → (*Envelope, error)`
+- `GetByRequestID(ctx, requestID) → (*Envelope, error)` — legacy single-key lookup
+- `GetByRequestScope(ctx, requestSource, requestID) → (*Envelope, error)` — preferred; scoped composite key (schema v2.1)
+- `List(ctx) → ([]*Envelope, error)`
 - `Create(ctx, *Envelope) → error`
 - `Update(ctx, *Envelope) → error`
 
-Note: `EnvelopeRepository` needs a `FindByRequestID` method (planned, not yet added).
+**AuditEventRepository** (`internal/audit/`):
+- `Append(ctx, ev *AuditEvent) → error`
+- `ListByEnvelopeID(ctx, envelopeID) → ([]*AuditEvent, error)`
+- `ListByRequestID(ctx, requestID) → ([]*AuditEvent, error)`
 
 ## Policy layer (`internal/policy/`)
 
@@ -128,11 +149,25 @@ Note: `EnvelopeRepository` needs a `FindByRequestID` method (planned, not yet ad
 
 OPA imports are not permitted outside `internal/policy/`.
 
+## Audit system (`internal/audit/`)
+
+**[Current implementation]** Hash-chained audit events anchor integrity independently of database state. All events are emitted synchronously inside the evaluation transaction — this is intentional, not incidental.
+
+**Event types** (`types.go`):
+- Lifecycle: `ENVELOPE_CREATED`, `EVALUATION_STARTED`, `OUTCOME_RECORDED`, `ESCALATION_PENDING`, `ENVELOPE_CLOSED`, `ESCALATION_REVIEWED`
+- Observational: `SURFACE_RESOLVED`, `AGENT_RESOLVED`, `AUTHORITY_CHAIN_RESOLVED`, `CONTEXT_VALIDATED`, `CONFIDENCE_CHECKED`, `CONSEQUENCE_CHECKED`, `POLICY_EVALUATED`
+
+**Hash chain** (`hash.go`): `ComputeEventHash` produces a SHA-256 digest over canonical JSON of the event fields. Each event's `PrevHash` points to the previous event's `EventHash`. First event has empty `PrevHash`.
+
+**Integrity verification** (`integrity.go`): `VerifyAuditIntegrity` walks all envelopes, checks hash chain continuity, sequence gaps, and that the final event hash matches `Integrity.FinalEventHash` on the envelope.
+
+**Orchestrator integration**: emits audit events at every evaluation step. First and final event hashes are anchored in the envelope's `Integrity` section.
+
 ## Envelope state machine (`internal/envelope/`)
 
 ```
 RECEIVED → EVALUATING → OUTCOME_RECORDED → CLOSED
-                      → ESCALATED → CLOSED
+                      → ESCALATED → AWAITING_REVIEW → CLOSED
 ```
 
 Transitions enforced by `Envelope.Transition(next)`. Returns `ErrInvalidTransition` for invalid edges. `ClosedAt` timestamp set automatically on transition to CLOSED.
@@ -141,7 +176,43 @@ Transitions enforced by `Envelope.Transition(next)`. Returns `ErrInvalidTransiti
 
 Wire format types (`evaluateRequest`, `evaluateResponse`) are separate from domain types. The `toEvalRequest` function maps HTTP payload to `eval.DecisionRequest`.
 
-The `Server` currently has a hardcoded response. Next step: inject `*decision.Orchestrator` into the server and call `Evaluate` from `handleEvaluate`.
+All routes are wired to the orchestrator and control-plane services:
+
+| Method | Path | Handler |
+|--------|------|---------|
+| GET | `/healthz` | `handleHealth` |
+| GET | `/readyz` | `handleReady` |
+| POST | `/v1/evaluate` | `handleEvaluate` — calls `orchestrator.Evaluate` |
+| POST | `/v1/reviews` | `handleCreateReview` — calls `orchestrator.ResolveEscalation` |
+| GET | `/v1/envelopes/{id}` | `handleGetEnvelope` |
+| GET | `/v1/envelopes` | `handleListEnvelopes` |
+| GET | `/v1/decisions/request/{requestID}` | `handleGetDecisionByRequestID` — calls `orchestrator.GetEnvelopeByRequestScope` |
+| POST | `/v1/controlplane/apply` | `handleApplyBundle` — applies YAML bundle |
+| POST | `/v1/controlplane/surfaces/{id}/approve` | `handleSurfaceActions` — approves surface in review state |
+
+ControlPlaneService and ApprovalService are optional; their endpoints return 501 if not injected.
+
+## Control plane (`internal/controlplane/`)
+
+**[Current implementation]** The control plane validates all resource kinds (surface, profile, grant, agent) on apply. Surface persistence is the first governed path — surface apply and approval are operational. Non-surface resources (Agent, Profile, Grant) are validated but persistence is not yet implemented.
+
+```
+internal/controlplane/
+  apply/
+    service.go        — ApplyBundle workflow; validates then optionally persists
+    surface_mapper.go — Converts SurfaceDocument → DecisionSurface domain model
+  approval/           — Surface approval workflow (ApprovalService)
+  parser/
+    parser.go         — ParseYAMLStream: multi-document YAML → []ParsedDocument
+  types/
+    documents.go      — Control-plane YAML schemas (SurfaceDocument, etc.)
+  validate/
+    validate.go       — ValidateBundle: structural validation before apply
+```
+
+**surface_mapper.go** **[Current implementation]**: `mapSurfaceDocumentToDecisionSurface` always sets status to `review`, enforcing the governance workflow. Applies safe defaults: Domain=`"default"`, DecisionType=`Operational`, ReversibilityClass=`ConditionallyReversible`, FailureMode=`Closed`, BusinessOwner/TechnicalOwner=`"unassigned"`. Enum fields are validated if provided; `minimum_confidence` is range-checked `[0.0, 1.0]`. Input `status` from the YAML document is validated but always overridden to `review` on persist.
+
+**[Near-term transition]**: Profile, grant, and agent persistence paths are next after surface.
 
 ## Package structure
 
@@ -155,15 +226,19 @@ internal/
   eval/            — Outcome, ReasonCode, DecisionRequest, Consequence (shared types)
   value/           — ConsequenceType, RiskRating (primitive value objects)
   policy/          — PolicyEvaluator interface, NoOpPolicyEvaluator
-  escalation/      — (empty, week 4)
-  review/          — (empty, week 4)
-  audit/           — (empty, week 2)
-  metrics/         — (empty, week 5)
-  events/          — (empty, week 4)
+  audit/           — AuditEvent, hash chain, integrity verification, AuditEventRepository
+  identity/        — Principal/actor identification types
+  escalation/      — (stub)
+  review/          — (stub)
+  metrics/         — (stub; hooks defined, no implementation)
+  events/          — (stub)
   httpapi/         — HTTP server, handlers, wire format mapping
+  bootstrap/       — Demo data seeding (uses SurfaceRepository.Create)
+  controlplane/    — YAML bundle parsing and application (see above)
   store/
-    postgres/      — Repository implementations (surface_repo.go, authority_repo.go, agent_repo.go, envelope_repo.go)
-    migrations/    — Sequential SQL migrations
+    postgres/      — Repository implementations + Store with WithTx
+    memory/        — In-memory implementations (used in tests)
+    sqltx/         — Transaction abstraction (dbtx.go)
 ```
 
 ## Key design rules
@@ -173,34 +248,28 @@ internal/
 - **Thresholds and policy live on the AuthorityProfile only.** Grants are semantically thin. Surfaces do not carry thresholds.
 - **Envelopes store evidence as references**, not copies of full configuration.
 - **Reason codes are typed constants** in `internal/eval/outcome.go`. Never use raw strings.
-- **Version resolution**: latest active version where `effective_date <= evaluation time`.
+- **Version resolution**: the version whose status is `active` and whose effective window contains the evaluation timestamp (`effective_from <= evaluation_time`).
 - **Authority chain validation** runs at evaluation time AND at grant creation time.
 - **Wire format types** (`evaluateRequest`) stay in `httpapi`. Domain types (`eval.DecisionRequest`) stay in `eval`. Map between them with explicit conversion functions.
 - **Consequence comparison** between `eval.Consequence` (submitted) and `authority.Consequence` (configured threshold) needs an explicit comparison function — the types are intentionally different.
+- **Control-plane apply always sets status to `review`** — surfaces must be explicitly approved before becoming active.
 
-## Postgres repo files
+## Postgres store files
 
 ```
 internal/store/postgres/
   surface_repo.go     — implements surface.SurfaceRepository
-  authority_repo.go   — implements authority.ProfileRepository and authority.GrantRepository
+  profile_repo.go     — implements authority.ProfileRepository
+  grant_repo.go       — implements authority.GrantRepository
   agent_repo.go       — implements agent.AgentRepository
   envelope_repo.go    — implements envelope.EnvelopeRepository
+  store.go            — Store with WithTx transaction wrapper
+  helpers.go          — SQL helper functions
+  schema.sql          — Full PostgreSQL schema (authoritative; no migration files)
+  setup-db.sh         — DB setup script
 ```
 
-## Migrations (planned)
-
-```
-internal/store/migrations/
-  001_decision_surfaces.sql
-  002_authority_profiles.sql
-  003_agents.sql
-  004_agent_authorizations.sql   (grants referencing profile ID)
-  005_operational_envelopes.sql
-  006_audit_records.sql          (week 2)
-  007_escalations.sql            (week 4)
-  008_human_reviews.sql          (week 4)
-```
+**No migration files**: the schema is maintained as a single `schema.sql` file applied in full. The `internal/store/migrations/` directory and its `.sql` files have been removed.
 
 ## Build and run
 
@@ -216,7 +285,7 @@ make tidy         # Run go mod tidy
 
 ## Community vs Enterprise
 
-This repo is the community edition (Apache 2.0). Enterprise features live in the separate `midas-enterprise` repo and must never leak into this codebase.
+This repository is the community edition (Apache 2.0). Enterprise-only capabilities belong in the separate enterprise codebase and should not be introduced here unless intentionally open-sourced.
 
 Safety features (like emergency authority revocation) are always community.
 
@@ -242,7 +311,9 @@ Safety features (like emergency authority revocation) are always community.
 10. All evaluations must be deterministic
 
 # Evaluation invariants
-Every evaluation must produce:
-- exactly one AuthorityOutcome
+Every orchestrated evaluation must produce:
+- exactly one Outcome
 - exactly one ReasonCode
 - exactly one Envelope
+
+Note: HTTP-layer validation rejections (malformed request, missing fields) may be returned before the orchestrator is invoked and do not produce an envelope.
