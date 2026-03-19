@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/accept-io/midas/internal/controlplane/apply"
 	cpTypes "github.com/accept-io/midas/internal/controlplane/types"
 	"github.com/accept-io/midas/internal/decision"
 	"github.com/accept-io/midas/internal/envelope"
@@ -1718,6 +1719,7 @@ func TestResponsesHaveJSONContentType(t *testing.T) {
 
 type mockControlPlane struct {
 	applyBundleFn func(ctx context.Context, bundle []byte) (*cpTypes.ApplyResult, error)
+	planBundleFn  func(ctx context.Context, bundle []byte) (*apply.ApplyPlan, error)
 }
 
 func (m *mockControlPlane) ApplyBundle(ctx context.Context, bundle []byte) (*cpTypes.ApplyResult, error) {
@@ -1725,6 +1727,13 @@ func (m *mockControlPlane) ApplyBundle(ctx context.Context, bundle []byte) (*cpT
 		return m.applyBundleFn(ctx, bundle)
 	}
 	return nil, fmt.Errorf("applyBundle not implemented")
+}
+
+func (m *mockControlPlane) PlanBundle(ctx context.Context, bundle []byte) (*apply.ApplyPlan, error) {
+	if m.planBundleFn != nil {
+		return m.planBundleFn(ctx, bundle)
+	}
+	return nil, fmt.Errorf("planBundle not implemented")
 }
 
 // ---------------------------------------------------------------------------
@@ -2028,7 +2037,7 @@ spec:
 func TestApplyBundle_ParseErrors(t *testing.T) {
 	mockCP := &mockControlPlane{
 		applyBundleFn: func(ctx context.Context, bundle []byte) (*cpTypes.ApplyResult, error) {
-			return nil, errors.New("parse error: invalid yaml syntax")
+			return nil, fmt.Errorf("%w: invalid yaml syntax", apply.ErrInvalidBundle)
 		},
 	}
 
@@ -2041,8 +2050,8 @@ func TestApplyBundle_ParseErrors(t *testing.T) {
 	}
 
 	errResp := decodeError(t, rec)
-	if !strings.Contains(errResp["error"], "parse") {
-		t.Errorf("expected error to mention 'parse', got %q", errResp["error"])
+	if !strings.Contains(errResp["error"], apply.ErrInvalidBundle.Error()) {
+		t.Errorf("expected error to mention %q, got %q", apply.ErrInvalidBundle.Error(), errResp["error"])
 	}
 }
 
@@ -2182,5 +2191,385 @@ spec:
 	}
 	if resp.Results[0].Status != cpTypes.ResourceStatusCreated {
 		t.Errorf("expected status 'created', got %q", resp.Results[0].Status)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Idempotency / scoped-replay HTTP tests
+// ---------------------------------------------------------------------------
+
+// TestEvaluate_ScopedConflictReturns409 verifies that the HTTP layer maps
+// ErrScopedRequestConflict → 409 Conflict.
+func TestEvaluate_ScopedConflictReturns409(t *testing.T) {
+	mock := &mockOrchestrator{
+		evaluateFn: func(ctx context.Context, req eval.DecisionRequest, raw json.RawMessage) (decision.EvaluationResult, error) {
+			return decision.EvaluationResult{}, decision.ErrScopedRequestConflict
+		},
+	}
+
+	srv := NewServer(mock)
+	payload := marshalJSON(t, map[string]any{
+		"surface_id":     "surf-1",
+		"agent_id":       "agent-1",
+		"confidence":     0.9,
+		"request_source": "svc-a",
+		"request_id":     "req-001",
+	})
+
+	rec := performRequest(t, srv, http.MethodPost, "/v1/evaluate", payload)
+
+	if rec.Code != http.StatusConflict {
+		t.Errorf("expected 409 Conflict, got %d", rec.Code)
+	}
+	errResp := decodeError(t, rec)
+	want := decision.ErrScopedRequestConflict.Error()
+	if errResp["error"] != want {
+		t.Errorf("error message: got %q, want %q", errResp["error"], want)
+	}
+}
+
+// TestEvaluate_ScopedConflictWrappedReturns409 verifies that wrapping
+// ErrScopedRequestConflict in another error still maps to 409
+// (errors.Is chain is preserved).
+func TestEvaluate_ScopedConflictWrappedReturns409(t *testing.T) {
+	wrappedErr := fmt.Errorf("inner: %w", decision.ErrScopedRequestConflict)
+	mock := &mockOrchestrator{
+		evaluateFn: func(ctx context.Context, req eval.DecisionRequest, raw json.RawMessage) (decision.EvaluationResult, error) {
+			return decision.EvaluationResult{}, wrappedErr
+		},
+	}
+
+	srv := NewServer(mock)
+	payload := marshalJSON(t, map[string]any{
+		"surface_id": "surf-1",
+		"agent_id":   "agent-1",
+		"confidence": 0.9,
+	})
+
+	rec := performRequest(t, srv, http.MethodPost, "/v1/evaluate", payload)
+
+	if rec.Code != http.StatusConflict {
+		t.Errorf("expected 409 Conflict for wrapped ErrScopedRequestConflict, got %d", rec.Code)
+	}
+}
+
+// TestEvaluate_ScopedConflictInDomainErrorMappingTable verifies the sentinel
+// error is covered by the typed sentinel table (regression guard against
+// future refactors that could silently break the mapping).
+func TestDomainErrorMapping_ScopedRequestConflict(t *testing.T) {
+	mock := &mockOrchestrator{
+		evaluateFn: func(ctx context.Context, req eval.DecisionRequest, raw json.RawMessage) (decision.EvaluationResult, error) {
+			return decision.EvaluationResult{}, decision.ErrScopedRequestConflict
+		},
+	}
+
+	srv := NewServer(mock)
+	payload := marshalJSON(t, map[string]any{
+		"surface_id": "surf-1",
+		"agent_id":   "agent-1",
+		"confidence": 0.9,
+	})
+
+	rec := performRequest(t, srv, http.MethodPost, "/v1/evaluate", payload)
+
+	if rec.Code != http.StatusConflict {
+		t.Errorf("ErrScopedRequestConflict must map to 409, got %d", rec.Code)
+	}
+
+	errResp := decodeError(t, rec)
+	if !strings.Contains(errResp["error"], "scoped request conflict") {
+		t.Errorf("error body should mention 'scoped request conflict', got %q", errResp["error"])
+	}
+}
+
+// TestEvaluate_SuccessfulReplayPassesThroughResult verifies that when the
+// orchestrator returns a successful result (idempotent replay), the HTTP layer
+// responds 200 with the correct fields.
+func TestEvaluate_SuccessfulReplayPassesThroughResult(t *testing.T) {
+	replayResult := decision.EvaluationResult{
+		Outcome:    eval.OutcomeAccept,
+		ReasonCode: eval.ReasonWithinAuthority,
+		EnvelopeID: "env-original-001",
+	}
+
+	mock := &mockOrchestrator{
+		evaluateFn: func(ctx context.Context, req eval.DecisionRequest, raw json.RawMessage) (decision.EvaluationResult, error) {
+			return replayResult, nil
+		},
+	}
+
+	srv := NewServer(mock)
+	payload := marshalJSON(t, map[string]any{
+		"surface_id":     "surf-1",
+		"agent_id":       "agent-1",
+		"confidence":     0.9,
+		"request_source": "svc-a",
+		"request_id":     "req-replay-01",
+	})
+
+	rec := performRequest(t, srv, http.MethodPost, "/v1/evaluate", payload)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("replay response must be 200, got %d", rec.Code)
+	}
+
+	resp := decodeJSON[evaluateResponse](t, rec)
+	if resp.EnvelopeID != "env-original-001" {
+		t.Errorf("EnvelopeID: got %q, want %q", resp.EnvelopeID, "env-original-001")
+	}
+	if resp.Outcome != string(eval.OutcomeAccept) {
+		t.Errorf("Outcome: got %q, want %q", resp.Outcome, eval.OutcomeAccept)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// POST /v1/controlplane/plan — dry-run plan endpoint
+// ---------------------------------------------------------------------------
+
+// TestPlanBundle_NotConfigured_Returns501 verifies that the plan endpoint
+// returns 501 when no control plane service is configured.
+func TestPlanBundle_NotConfigured_Returns501(t *testing.T) {
+	srv := NewServerWithControlPlane(&mockOrchestrator{}, nil)
+	rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/controlplane/plan",
+		[]byte("some: yaml"), map[string]string{"Content-Type": "application/yaml"})
+
+	if rec.Code != http.StatusNotImplemented {
+		t.Errorf("expected status 501, got %d", rec.Code)
+	}
+}
+
+// TestPlanBundle_MethodNotAllowed_Returns405 verifies that the plan endpoint
+// rejects non-POST methods.
+func TestPlanBundle_MethodNotAllowed_Returns405(t *testing.T) {
+	srv := NewServerWithControlPlane(&mockOrchestrator{}, &mockControlPlane{})
+	rec := performRequest(t, srv, http.MethodGet, "/v1/controlplane/plan", nil)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected status 405, got %d", rec.Code)
+	}
+}
+
+// TestPlanBundle_UnsupportedMediaType_Returns415 verifies that the plan
+// endpoint rejects non-YAML content types.
+func TestPlanBundle_UnsupportedMediaType_Returns415(t *testing.T) {
+	srv := NewServerWithControlPlane(&mockOrchestrator{}, &mockControlPlane{})
+	rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/controlplane/plan",
+		[]byte("{}"), map[string]string{"Content-Type": "application/json"})
+
+	if rec.Code != http.StatusUnsupportedMediaType {
+		t.Errorf("expected status 415, got %d", rec.Code)
+	}
+}
+
+// TestPlanBundle_EmptyBody_Returns400 verifies that an empty request body
+// returns 400.
+func TestPlanBundle_EmptyBody_Returns400(t *testing.T) {
+	srv := NewServerWithControlPlane(&mockOrchestrator{}, &mockControlPlane{})
+	rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/controlplane/plan",
+		[]byte(""), map[string]string{"Content-Type": "application/yaml"})
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400 for empty body, got %d", rec.Code)
+	}
+}
+
+// TestPlanBundle_ParseError_Returns400 verifies that a bundle that fails to
+// parse returns 400 (ErrInvalidBundle).
+func TestPlanBundle_ParseError_Returns400(t *testing.T) {
+	mockCP := &mockControlPlane{
+		planBundleFn: func(ctx context.Context, bundle []byte) (*apply.ApplyPlan, error) {
+			return nil, fmt.Errorf("%w: invalid yaml syntax", apply.ErrInvalidBundle)
+		},
+	}
+
+	srv := NewServerWithControlPlane(&mockOrchestrator{}, mockCP)
+	rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/controlplane/plan",
+		[]byte("some: yaml"), map[string]string{"Content-Type": "application/yaml"})
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400 for parse error, got %d", rec.Code)
+	}
+}
+
+// TestPlanBundle_ValidBundle_ReturnsPlanResult verifies that a successful
+// plan request returns a structured PlanResult with WouldApply and counts.
+func TestPlanBundle_ValidBundle_ReturnsPlanResult(t *testing.T) {
+	mockCP := &mockControlPlane{
+		planBundleFn: func(ctx context.Context, bundle []byte) (*apply.ApplyPlan, error) {
+			plan := &apply.ApplyPlan{
+				Entries: []apply.ApplyPlanEntry{
+					{
+						Kind:           "Surface",
+						ID:             "surf-1",
+						Action:         apply.ApplyActionCreate,
+						DocumentIndex:  1,
+						DecisionSource: apply.DecisionSourcePersistedState,
+					},
+				},
+			}
+			return plan, nil
+		},
+	}
+
+	srv := NewServerWithControlPlane(&mockOrchestrator{}, mockCP)
+	rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/controlplane/plan",
+		[]byte("some: yaml"), map[string]string{"Content-Type": "application/yaml"})
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	resp := decodeJSON[cpTypes.PlanResult](t, rec)
+	if !resp.WouldApply {
+		t.Error("expected WouldApply == true for create-only plan")
+	}
+	if resp.CreateCount != 1 {
+		t.Errorf("expected CreateCount == 1, got %d", resp.CreateCount)
+	}
+	if resp.InvalidCount != 0 {
+		t.Errorf("expected InvalidCount == 0, got %d", resp.InvalidCount)
+	}
+	if len(resp.Entries) != 1 {
+		t.Fatalf("expected 1 entry in plan result, got %d", len(resp.Entries))
+	}
+	if resp.Entries[0].Kind != "Surface" {
+		t.Errorf("expected entry kind 'Surface', got %q", resp.Entries[0].Kind)
+	}
+	if resp.Entries[0].Action != cpTypes.PlanEntryActionCreate {
+		t.Errorf("expected entry action %q, got %q", cpTypes.PlanEntryActionCreate, resp.Entries[0].Action)
+	}
+	if resp.Entries[0].DecisionSource != cpTypes.PlanEntryDecisionSourcePersistedState {
+		t.Errorf("expected DecisionSource %q, got %q",
+			cpTypes.PlanEntryDecisionSourcePersistedState, resp.Entries[0].DecisionSource)
+	}
+}
+
+// TestPlanBundle_PerformsNoWrites verifies that the plan endpoint never
+// results in repository writes. This is enforced at the service layer; the
+// HTTP test validates that calling /plan does not call apply's write path.
+func TestPlanBundle_HTTPNoWrites_ReturnsPlanResult(t *testing.T) {
+	writeCalled := false
+	mockCP := &mockControlPlane{
+		planBundleFn: func(ctx context.Context, bundle []byte) (*apply.ApplyPlan, error) {
+			// Simulate a pure-read plan with no writes.
+			return &apply.ApplyPlan{
+				Entries: []apply.ApplyPlanEntry{
+					{
+						Kind:           "Surface",
+						ID:             "surf-1",
+						Action:         apply.ApplyActionCreate,
+						DocumentIndex:  1,
+						DecisionSource: apply.DecisionSourcePersistedState,
+					},
+				},
+			}, nil
+		},
+		applyBundleFn: func(ctx context.Context, bundle []byte) (*cpTypes.ApplyResult, error) {
+			writeCalled = true
+			return nil, fmt.Errorf("apply must not be called by plan endpoint")
+		},
+	}
+
+	srv := NewServerWithControlPlane(&mockOrchestrator{}, mockCP)
+	rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/controlplane/plan",
+		[]byte("some: yaml"), map[string]string{"Content-Type": "application/yaml"})
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if writeCalled {
+		t.Error("plan endpoint must not trigger any write (ApplyBundle was called)")
+	}
+}
+
+// TestPlanBundle_InvalidBundle_WouldApplyFalse verifies that a plan response
+// for an invalid bundle has WouldApply == false and InvalidCount > 0.
+func TestPlanBundle_InvalidBundle_WouldApplyFalse(t *testing.T) {
+	mockCP := &mockControlPlane{
+		planBundleFn: func(ctx context.Context, bundle []byte) (*apply.ApplyPlan, error) {
+			return &apply.ApplyPlan{
+				Entries: []apply.ApplyPlanEntry{
+					{
+						Kind:           "Surface",
+						ID:             "surf-bad",
+						Action:         apply.ApplyActionInvalid,
+						DocumentIndex:  1,
+						DecisionSource: apply.DecisionSourceValidation,
+						ValidationErrors: []cpTypes.ValidationError{
+							{Kind: "Surface", ID: "surf-bad", Field: "metadata.name", Message: "required"},
+						},
+					},
+				},
+			}, nil
+		},
+	}
+
+	srv := NewServerWithControlPlane(&mockOrchestrator{}, mockCP)
+	rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/controlplane/plan",
+		[]byte("some: yaml"), map[string]string{"Content-Type": "application/yaml"})
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200 even for invalid plan (it's a dry-run), got %d", rec.Code)
+	}
+
+	resp := decodeJSON[cpTypes.PlanResult](t, rec)
+	if resp.WouldApply {
+		t.Error("expected WouldApply == false for invalid plan")
+	}
+	if resp.InvalidCount != 1 {
+		t.Errorf("expected InvalidCount == 1, got %d", resp.InvalidCount)
+	}
+	if len(resp.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(resp.Entries))
+	}
+	if len(resp.Entries[0].ValidationErrors) == 0 {
+		t.Error("expected ValidationErrors to be present in plan entry")
+	}
+}
+
+// TestPlanBundle_BundleDependency_DecisionSourceVisible verifies that the HTTP
+// response exposes DecisionSource == bundle_dependency for entries whose
+// references are satisfied within the same bundle.
+func TestPlanBundle_BundleDependency_DecisionSourceVisible(t *testing.T) {
+	mockCP := &mockControlPlane{
+		planBundleFn: func(ctx context.Context, bundle []byte) (*apply.ApplyPlan, error) {
+			return &apply.ApplyPlan{
+				Entries: []apply.ApplyPlanEntry{
+					{
+						Kind:           "Surface",
+						ID:             "surf-1",
+						Action:         apply.ApplyActionCreate,
+						DocumentIndex:  1,
+						DecisionSource: apply.DecisionSourcePersistedState,
+					},
+					{
+						Kind:           "Profile",
+						ID:             "profile-1",
+						Action:         apply.ApplyActionCreate,
+						DocumentIndex:  2,
+						DecisionSource: apply.DecisionSourceBundleDependency,
+					},
+				},
+			}, nil
+		},
+	}
+
+	srv := NewServerWithControlPlane(&mockOrchestrator{}, mockCP)
+	rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/controlplane/plan",
+		[]byte("some: yaml"), map[string]string{"Content-Type": "application/yaml"})
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	resp := decodeJSON[cpTypes.PlanResult](t, rec)
+	if len(resp.Entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(resp.Entries))
+	}
+
+	profileEntry := resp.Entries[1]
+	if profileEntry.DecisionSource != cpTypes.PlanEntryDecisionSourceBundleDependency {
+		t.Errorf("expected profile entry DecisionSource %q, got %q",
+			cpTypes.PlanEntryDecisionSourceBundleDependency, profileEntry.DecisionSource)
 	}
 }

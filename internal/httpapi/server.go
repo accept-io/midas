@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/accept-io/midas/internal/controlplane/apply"
 	"github.com/accept-io/midas/internal/controlplane/approval"
 	cpTypes "github.com/accept-io/midas/internal/controlplane/types"
 	"github.com/accept-io/midas/internal/decision"
@@ -42,6 +43,7 @@ type orchestrator interface {
 // This is optional - if nil, control plane endpoints return 501 Not Implemented.
 type controlPlaneService interface {
 	ApplyBundle(ctx context.Context, bundle []byte) (*cpTypes.ApplyResult, error)
+	PlanBundle(ctx context.Context, bundle []byte) (*apply.ApplyPlan, error)
 }
 
 type approvalService interface {
@@ -203,6 +205,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/v1/envelopes", s.handleListEnvelopes)
 	s.mux.HandleFunc("/v1/decisions/request/", s.handleGetDecisionByRequestID)
 	s.mux.HandleFunc("/v1/controlplane/apply", s.handleApplyBundle)
+	s.mux.HandleFunc("/v1/controlplane/plan", s.handlePlanBundle)
 	s.mux.HandleFunc("/v1/controlplane/surfaces/", s.handleSurfaceActions)
 }
 
@@ -652,6 +655,58 @@ func (s *Server) handleApplyBundle(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
+// Control Plane - Plan Bundle (dry-run)
+// ---------------------------------------------------------------------------
+
+// handlePlanBundle accepts the same YAML bundle format as handleApplyBundle and
+// returns a structured plan describing what would happen if the bundle were
+// applied. No writes occur.
+//
+// POST /v1/controlplane/plan
+func (s *Server) handlePlanBundle(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+
+	if s.controlPlane == nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{
+			"error": "control plane not configured",
+		})
+		return
+	}
+
+	if !isAllowedYAMLContentType(r.Header.Get("Content-Type")) {
+		writeJSON(w, http.StatusUnsupportedMediaType, map[string]string{
+			"error": "content-type must be application/yaml, application/x-yaml, or text/yaml",
+		})
+		return
+	}
+
+	rawBody, err := readRequestBody(w, r, maxApplyBodyBytes)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, errRequestBodyTooLarge) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		writeJSON(w, status, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	plan, err := s.controlPlane.PlanBundle(r.Context(), rawBody)
+	if err != nil {
+		statusCode, errResp := mapApplyError(err)
+		writeJSON(w, statusCode, errResp)
+		return
+	}
+
+	result := apply.PlanResultFromPlan(*plan)
+	writeJSON(w, http.StatusOK, result)
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -685,8 +740,6 @@ func toEvalRequest(req evaluateRequest) eval.DecisionRequest {
 }
 
 // mapDomainError translates domain errors to HTTP status codes and response bodies.
-// TODO: Remove TRANSITIONAL string-matching fallback once all orchestrator
-// errors are migrated to typed sentinels.
 func mapDomainError(err error, entityType string) (int, map[string]string) {
 	if err == nil {
 		return http.StatusOK, nil
@@ -707,6 +760,9 @@ func mapDomainError(err error, entityType string) (int, map[string]string) {
 	case errors.Is(err, decision.ErrEmptyIdentifier),
 		errors.Is(err, decision.ErrInvalidReviewDecision):
 		return http.StatusBadRequest, map[string]string{"error": err.Error()}
+
+	case errors.Is(err, decision.ErrScopedRequestConflict):
+		return http.StatusConflict, map[string]string{"error": err.Error()}
 	}
 
 	errMsg := err.Error()
@@ -728,32 +784,27 @@ func mapDomainError(err error, entityType string) (int, map[string]string) {
 }
 
 // mapApplyError translates control-plane apply errors to HTTP status codes.
-// TODO: Replace transitional string-matching with typed sentinels once the
-// control-plane package exposes canonical error values.
 func mapApplyError(err error) (int, map[string]string) {
 	if err == nil {
 		return http.StatusOK, nil
 	}
 
-	errMsg := err.Error()
 	switch {
-	case strings.Contains(errMsg, "validation"),
-		strings.Contains(errMsg, "invalid"),
-		strings.Contains(errMsg, "unsupported"),
-		strings.Contains(errMsg, "missing"),
-		strings.Contains(errMsg, "required"),
-		strings.Contains(errMsg, "duplicate"),
-		strings.Contains(errMsg, "parse"),
-		strings.Contains(errMsg, "yaml"):
-		return http.StatusBadRequest, map[string]string{"error": errMsg}
+	case errors.Is(err, apply.ErrInvalidBundle),
+		errors.Is(err, apply.ErrValidationFailed),
+		errors.Is(err, apply.ErrDuplicateResource),
+		errors.Is(err, apply.ErrUnsupportedUpdate):
+		return http.StatusBadRequest, map[string]string{"error": err.Error()}
 
-	case strings.Contains(errMsg, "conflict"),
-		strings.Contains(errMsg, "already exists"),
-		strings.Contains(errMsg, "exists"):
-		return http.StatusConflict, map[string]string{"error": errMsg}
+	case errors.Is(err, apply.ErrResourceConflict),
+		errors.Is(err, apply.ErrVersionConflict):
+		return http.StatusConflict, map[string]string{"error": err.Error()}
+
+	case errors.Is(err, apply.ErrReferentialIntegrity):
+		return http.StatusUnprocessableEntity, map[string]string{"error": err.Error()}
 
 	default:
-		return http.StatusInternalServerError, map[string]string{"error": errMsg}
+		return http.StatusInternalServerError, map[string]string{"error": err.Error()}
 	}
 }
 

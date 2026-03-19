@@ -1,16 +1,10 @@
 package decision_test
 
-// Accumulator Refactor Regression Tests
+// Accumulator Regression Tests
 //
-// This file documents and locks in the current orchestrator behavior before the
-// evaluation accumulator refactor described in docs/ENVELOPE_BUILD_ANALYSIS.md.
-//
-// Each test is annotated with:
-//   [current]  — what the code does today (these assertions pass now)
-//   [target]   — what the code will do after the accumulator refactor
-//
-// When the refactor lands, update only the [target] assertions. The test
-// structure and the audit/integrity assertions must continue to pass unchanged.
+// Locks in orchestrator persistence and audit behavior:
+// all evaluation writes are deferred to a single acc.persist() call at the end
+// of each evaluation path (Envelopes.Create → N×Audit.Append → Envelopes.Update).
 //
 // Run: go test ./internal/decision/... -run TestAccumulator
 //      go test ./internal/decision/... -run TestAuditEventOrdering
@@ -39,12 +33,13 @@ import (
 // =============================================================================
 // Spy infrastructure
 //
-// countingEnvelopeRepo and spyStore track the number of Envelopes.Create and
-// Envelopes.Update calls, which is what the accumulator refactor will reduce.
+// countingEnvelopeRepo and spyStore track the exact number of Envelopes.Create
+// and Envelopes.Update calls across an evaluation to enforce the single-flush
+// guarantee: Create=1, Update=1 per evaluation path.
 // =============================================================================
 
 // countingEnvelopeRepo wraps fakeEnvelopeRepo and increments Creates/Updates
-// on every call. Snapshot and restore are delegated to the inner repo so that
+// on every call. Snapshot and restore delegate to the inner repo so that
 // spyStore.WithTx can roll back cleanly.
 type countingEnvelopeRepo struct {
 	inner   *fakeEnvelopeRepo
@@ -193,16 +188,15 @@ func marshalReq(t *testing.T, req eval.DecisionRequest) json.RawMessage {
 // =============================================================================
 // Test 1: Persistence write counts — happy path
 //
-// Documents the exact number of Envelopes.Create, Envelopes.Update, and
+// Verifies the exact number of Envelopes.Create, Envelopes.Update, and
 // Audit.Append calls during a successful Accept evaluation.
 //
-// [current] Create=1, Update=8, Audit.Append=10
-// [target]  Create=1, Update=1, Audit.Append=10  (after accumulator refactor)
+// Create=1, Update=1, Audit.Append=10
 //
-// The refactor goal is to collapse the 8 intermediate Update calls into 1
-// final Update that flushes the complete envelope state. Audit.Append count
-// is unchanged because the sequential hash chain requires each event to be
-// appended individually in order.
+// All writes are deferred to a single acc.persistNew() call at the end of the
+// evaluation path: Envelopes.Create → N×Audit.Append → Envelopes.Update.
+// Audit.Append count is 10 because the sequential hash chain requires each
+// event to be appended individually in order.
 // =============================================================================
 
 func TestAccumulatorRegression_PersistenceCount_HappyPath(t *testing.T) {
@@ -223,29 +217,15 @@ func TestAccumulatorRegression_PersistenceCount_HappyPath(t *testing.T) {
 
 	// --- Envelope write counts ---
 
-	// [current] 1 Create: Envelopes.Create is called once at the start of evaluate().
-	// [target]  1 Create: unchanged after refactor (FK constraint requires row before Audit.Append).
+	// 1 Create: FK constraint requires the envelope row before any Audit.Append.
 	if s.envelopes.creates != 1 {
 		t.Errorf("Envelopes.Create: got %d calls, want 1", s.envelopes.creates)
 	}
 
-	// [current] 8 Updates — breakdown:
-	//   +1  after envelope.created event (persist FirstEventHash/FinalEventHash)
-	//   +2  applyStep(RECEIVED→EVALUATING): state update + integrity update (double-write per step)
-	//   +1  after resolving surface/agent/authority + seeding Evaluation section
-	//   +2  applyStep(EVALUATING→OUTCOME_RECORDED): state + integrity
-	//   +2  applyStep(OUTCOME_RECORDED→CLOSED): state + integrity
-	//
-	// [target] 1 Update — one final flush after all events are appended.
-	//
-	// If this assertion fails with value < 8, the refactor has already started.
-	// If it fails with value > 8, a new intermediate Update was added — review
-	// whether it is necessary or can be deferred.
-	const wantUpdates = 8
+	// 1 Update: single final flush after all events are appended.
+	const wantUpdates = 1
 	if s.envelopes.updates != wantUpdates {
-		t.Errorf("Envelopes.Update: got %d calls, want %d (current behavior)\n"+
-			"  If refactor is in progress, update expected value to 1.",
-			s.envelopes.updates, wantUpdates)
+		t.Errorf("Envelopes.Update: got %d calls, want %d", s.envelopes.updates, wantUpdates)
 	}
 
 	// --- Audit write counts ---
@@ -255,13 +235,11 @@ func TestAccumulatorRegression_PersistenceCount_HappyPath(t *testing.T) {
 		t.Fatalf("ListByEnvelopeID: %v", err)
 	}
 
-	// [current] 10 Audit.Append calls for Accept with no policy:
+	// 10 Audit.Append calls for Accept with no policy:
 	//   envelope_created, evaluation_started, surface_resolved, agent_resolved,
 	//   authority_chain_resolved, context_validated, confidence_checked,
 	//   consequence_checked, outcome_recorded, envelope_closed.
-	//
-	// [target] 10 — unchanged. Sequential hash chain (PrevHash dependency) requires
-	//   each event to be appended in order; they cannot be batched or reduced.
+	// Sequential hash chain (PrevHash dependency) requires each event in order.
 	const wantAuditEvents = 10
 	if len(events) != wantAuditEvents {
 		t.Errorf("Audit.Append: got %d events, want %d", len(events), wantAuditEvents)
@@ -272,7 +250,6 @@ func TestAccumulatorRegression_PersistenceCount_HappyPath(t *testing.T) {
 // Test 2: Audit event ordering — Accept, Reject, and Escalate paths
 //
 // Verifies the exact event type sequence for each outcome path.
-// These sequences must be preserved by the accumulator refactor.
 // =============================================================================
 
 func TestAuditEventOrdering_AllOutcomePaths(t *testing.T) {
@@ -445,11 +422,9 @@ func assertEventSequence(t *testing.T, events []*audit.AuditEvent, wantSeq []aud
 // Test 3: Integrity anchor correctness
 //
 // Verifies that the envelope's Integrity section correctly references the
-// audit hash chain after a complete evaluation. These properties must be
-// preserved exactly by the accumulator refactor.
-//
-// The accumulator refactor changes WHEN these values are persisted (later),
-// but not WHAT they contain. All assertions here must pass after the refactor.
+// audit hash chain after a complete evaluation. All integrity anchors
+// (FirstEventHash, FinalEventHash, AuditEventIDs) are written in the single
+// final Envelopes.Update issued by acc.persistNew().
 // =============================================================================
 
 func TestIntegrityAnchors_HashChainCorrectness(t *testing.T) {
@@ -478,9 +453,7 @@ func TestIntegrityAnchors_HashChainCorrectness(t *testing.T) {
 	}
 
 	// 1. FirstEventHash must equal the hash of the first audit event.
-	//    This is the chain anchor set immediately after the envelope_created event
-	//    is appended. After the refactor, it will be set the same way but
-	//    persisted only in the final Update.
+	//    Set by absorbPersistedEvent after the first Append; persisted in the final Update.
 	if env.Integrity.FirstEventHash == "" {
 		t.Error("Integrity.FirstEventHash is empty")
 	}
@@ -493,8 +466,8 @@ func TestIntegrityAnchors_HashChainCorrectness(t *testing.T) {
 	}
 
 	// 2. FinalEventHash must equal the hash of the last audit event.
-	//    Updated on every state transition; the final value reflects the
-	//    terminal event (envelope_closed for Accept path).
+	//    Updated by absorbPersistedEvent on each Append; final value reflects
+	//    the terminal event (envelope_closed for Accept path).
 	last := events[len(events)-1]
 	if env.Integrity.FinalEventHash == "" {
 		t.Error("Integrity.FinalEventHash is empty")
@@ -507,7 +480,6 @@ func TestIntegrityAnchors_HashChainCorrectness(t *testing.T) {
 	// 3. Verify the hash chain is unbroken across all events.
 	//    Event[n].PrevHash must equal Event[n-1].Hash.
 	//    SequenceNo must be monotonically increasing from 1.
-	//    This is the core tamper-evidence property; it must survive the refactor.
 	for i, ev := range events {
 		wantSeq := i + 1
 		if ev.SequenceNo != wantSeq {
@@ -531,30 +503,19 @@ func TestIntegrityAnchors_HashChainCorrectness(t *testing.T) {
 		}
 	}
 
-	// 4. AuditEventIDs documents which events the envelope tracks by ID.
-	//
-	//    [current] AuditEventIDs contains 7 of the 10 events for the Accept path.
-	//    The 3 "check" observational events (context_validated, confidence_checked,
-	//    consequence_checked) use appendAuditEvent() rather than appendObservationEvent()
-	//    and are therefore NOT added to AuditEventIDs or FinalEventHash at emit time.
-	//    They ARE in the audit table and in the hash chain, just not indexed here.
-	//
-	//    [target] After the accumulator refactor, ALL events should be tracked in
-	//    AuditEventIDs — the accumulator collects every event before persisting,
-	//    so the distinction between appendAuditEvent and appendObservationEvent
-	//    disappears at persist time.
+	// 4. AuditEventIDs tracks every event the envelope absorbed via absorbPersistedEvent.
+	//    The accumulator calls absorbPersistedEvent for every queued event — lifecycle
+	//    and observational — so the index is complete and the count matches the total
+	//    event count.
 	if len(env.Integrity.AuditEventIDs) == 0 {
 		t.Error("Integrity.AuditEventIDs is empty")
 	}
 
-	// Current behavior: 7 IDs tracked (envelope_created, evaluation_started,
-	// surface_resolved, agent_resolved, authority_chain_resolved,
-	// outcome_recorded, envelope_closed). Update this when refactor completes.
-	const wantTrackedIDs = 7
+	// All 10 events for the Accept path must be tracked.
+	const wantTrackedIDs = 10
 	if len(env.Integrity.AuditEventIDs) != wantTrackedIDs {
-		t.Errorf("Integrity.AuditEventIDs length: got %d, want %d (current)\n"+
-			"  After accumulator refactor, update expected value to %d (all events).",
-			len(env.Integrity.AuditEventIDs), wantTrackedIDs, len(events))
+		t.Errorf("Integrity.AuditEventIDs length: got %d, want %d",
+			len(env.Integrity.AuditEventIDs), wantTrackedIDs)
 	}
 
 	// All tracked IDs must correspond to real audit events.
@@ -575,17 +536,11 @@ func TestIntegrityAnchors_HashChainCorrectness(t *testing.T) {
 // Verifies the atomic-or-nothing guarantee: if any Audit.Append fails, the
 // entire transaction rolls back — no envelope row, no partial audit events.
 //
-// This test uses failure on the 3rd Append (surface_resolved), which means
-// the envelope has already been Created, Updated 3 times, and 2 audit events
-// appended before the failure. All of it must roll back.
-//
-// This is a harder rollback scenario than TestLifecycle_AuditFailureRollback
-// (which fails on the 2nd append). It verifies atomicity holds even when
-// more writes have accumulated inside the transaction.
-//
-// [current] and [target]: this guarantee must hold identically after the
-// accumulator refactor. If anything, the refactor makes rollback simpler
-// because fewer writes precede the failure point.
+// This test injects failure on the 3rd Append (surface_resolved). At that
+// point the envelope store has received Create + 2 successful Appends; all
+// writes must roll back. This complements TestLifecycle_AuditFailureRollback
+// (which fails on the 2nd append) by verifying atomicity holds when more
+// writes have accumulated before the failure.
 // =============================================================================
 
 func TestAccumulatorRegression_Rollback_AuditAppendFailure(t *testing.T) {
@@ -600,10 +555,8 @@ func TestAccumulatorRegression_Rollback_AuditAppendFailure(t *testing.T) {
 	//   append #2: evaluation_started  (succeeds)
 	//   append #3: surface_resolved    (fails — this is the target failure point)
 	//
-	// At failure time, the envelope store has already received:
-	//   Create #1 + Update #1 (integrity after envelope_created)
-	//   Update #2 (state=EVALUATING) + Update #3 (integrity after evaluation_started)
-	// All 4 of these writes must be rolled back.
+	// At failure time, the envelope store has received Create #1 + 2 Appends.
+	// All writes must be rolled back.
 	st.audit.failErr = sentinelErr
 	st.audit.failAfter = 2
 
@@ -650,15 +603,9 @@ func TestAccumulatorRegression_Rollback_AuditAppendFailure(t *testing.T) {
 // Test 5: Envelope state machine transition invariants
 //
 // Validates that the content invariants enforced by envelope.Transition()
-// are preserved. These invariants live in envelope.go, not orchestrator.go,
-// but the accumulator refactor will call Transition() (via applyTransition)
-// and must not bypass these checks.
-//
-// Tests are at the envelope package level to isolate from orchestrator logic.
-// If any of these fail after the refactor, the accumulator's applyTransition
-// is not calling env.Transition() correctly.
-//
-// [current] and [target]: identical. These invariants must not regress.
+// are preserved. These invariants live in envelope.go, but the orchestrator
+// calls Transition() via acc.transition() and must satisfy all preconditions
+// before each call. Tests here confirm those preconditions are always met.
 // =============================================================================
 
 func TestTransitionInvariants_ValidationPreserved(t *testing.T) {
@@ -718,8 +665,8 @@ func TestTransitionInvariants_ValidationPreserved(t *testing.T) {
 
 	t.Run("Closed_RequiresOutcomeAndReasonCode", func(t *testing.T) {
 		// OUTCOME_RECORDED → CLOSED requires both Outcome and ReasonCode.
-		// The orchestrator sets these in finish() before calling applyStep(CLOSED);
-		// the accumulator must maintain the same ordering.
+		// The orchestrator sets these in finish() before calling acc.transition(CLOSED);
+		// the accumulator enforces this ordering via envelope.Transition's content invariants.
 		env := makeEnv(t)
 
 		if err := env.Transition(envelope.EnvelopeStateEvaluating, testNow); err != nil {
@@ -759,8 +706,8 @@ func TestTransitionInvariants_ValidationPreserved(t *testing.T) {
 
 	t.Run("ClosedFromAwaitingReview_RequiresReview", func(t *testing.T) {
 		// AWAITING_REVIEW → CLOSED requires Review to be set.
-		// ResolveEscalation sets env.Review before calling applyStep(CLOSED);
-		// the accumulator must maintain the same ordering for the resolve path.
+		// ResolveEscalation sets env.Review before calling acc.transition(CLOSED);
+		// the accumulator enforces this via envelope.Transition's content invariants.
 		env := makeEnv(t)
 
 		// Drive to AWAITING_REVIEW through the escalation path.
@@ -823,4 +770,92 @@ func TestTransitionInvariants_ValidationPreserved(t *testing.T) {
 			t.Errorf("invalid re-transition on CLOSED envelope: got %v, want ErrEnvelopeClosed", err)
 		}
 	})
+}
+
+// =============================================================================
+// Test 6: ResolveEscalation persistence write counts
+//
+// Verifies that ResolveEscalation uses acc.persistExisting() — no Create, one
+// Update, exactly two audit events — and that the event order is correct:
+//   - Envelopes.Create = 0 (envelope already exists)
+//   - Envelopes.Update = 1 (single final flush)
+//   - Audit events     = 2 (escalation_reviewed, then envelope_closed)
+// =============================================================================
+
+func TestResolveEscalation_PersistenceCount(t *testing.T) {
+	ctx := context.Background()
+	s := newSpyStore()
+	seedSpyStore(s)
+
+	o := buildSpyOrchestrator(t, s, &allowAllPolicies{})
+
+	// First, create an escalated envelope by evaluating below confidence threshold.
+	req := eval.DecisionRequest{
+		RequestID:     "req-resolve-count-001",
+		RequestSource: "test-source",
+		SurfaceID:     testSurfaceID,
+		AgentID:       testAgentID,
+		Confidence:    0.10, // below 0.80 threshold → escalate
+	}
+	raw, _ := json.Marshal(req)
+	evalResult, err := o.Evaluate(ctx, req, raw)
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if evalResult.State != envelope.EnvelopeStateAwaitingReview {
+		t.Fatalf("expected AWAITING_REVIEW after escalation, got %q", evalResult.State)
+	}
+
+	// Capture write counts after the initial evaluation (baseline).
+	createsAfterEval := s.envelopes.creates
+	updatesAfterEval := s.envelopes.updates
+	auditCountAfterEval := len(s.audit.events)
+
+	// Now resolve the escalation.
+	resolved, err := o.ResolveEscalation(ctx, decision.EscalationResolution{
+		EnvelopeID:   evalResult.EnvelopeID,
+		Decision:     envelope.ReviewDecisionApproved,
+		ReviewerID:   "reviewer-jane",
+		ReviewerKind: "human",
+		Notes:        "approved after manual review",
+	})
+	if err != nil {
+		t.Fatalf("ResolveEscalation: %v", err)
+	}
+	if resolved.State != envelope.EnvelopeStateClosed {
+		t.Fatalf("expected CLOSED after resolution, got %q", resolved.State)
+	}
+
+	// --- Envelope write counts during ResolveEscalation only ---
+
+	// Create must not be called — the envelope already exists.
+	createsDelta := s.envelopes.creates - createsAfterEval
+	if createsDelta != 0 {
+		t.Errorf("Envelopes.Create called %d time(s) during ResolveEscalation, want 0", createsDelta)
+	}
+
+	// Exactly 1 Update — the single final persistExisting flush.
+	updatesDelta := s.envelopes.updates - updatesAfterEval
+	if updatesDelta != 1 {
+		t.Errorf("Envelopes.Update called %d time(s) during ResolveEscalation, want 1", updatesDelta)
+	}
+
+	// Exactly 2 audit events: escalation_reviewed + envelope_closed.
+	auditDelta := len(s.audit.events) - auditCountAfterEval
+	if auditDelta != 2 {
+		t.Errorf("Audit.Append called %d time(s) during ResolveEscalation, want 2", auditDelta)
+	}
+
+	// Verify the two new events are in the correct order.
+	newEvents := s.audit.events[auditCountAfterEval:]
+	if len(newEvents) == 2 {
+		if newEvents[0].EventType != audit.AuditEventEscalationReviewed {
+			t.Errorf("first ResolveEscalation event: got %q, want %q",
+				newEvents[0].EventType, audit.AuditEventEscalationReviewed)
+		}
+		if newEvents[1].EventType != audit.AuditEventEnvelopeClosed {
+			t.Errorf("second ResolveEscalation event: got %q, want %q",
+				newEvents[1].EventType, audit.AuditEventEnvelopeClosed)
+		}
+	}
 }

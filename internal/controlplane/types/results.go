@@ -1,5 +1,85 @@
 package types
 
+// PlanEntryAction mirrors the apply.ApplyAction values for use in the HTTP
+// plan response. It is intentionally a plain string type so the types package
+// remains free of a dependency on the apply package.
+type PlanEntryAction string
+
+const (
+	PlanEntryActionCreate    PlanEntryAction = "create"
+	PlanEntryActionConflict  PlanEntryAction = "conflict"
+	PlanEntryActionInvalid   PlanEntryAction = "invalid"
+	PlanEntryActionUnchanged PlanEntryAction = "unchanged"
+)
+
+// PlanEntryDecisionSource records how the planner resolved the action for an
+// entry. The value is informational and intended for dry-run callers.
+type PlanEntryDecisionSource string
+
+const (
+	// PlanEntryDecisionSourcePersistedState means the action was determined by
+	// inspecting persisted state via a repository lookup.
+	PlanEntryDecisionSourcePersistedState PlanEntryDecisionSource = "persisted_state"
+
+	// PlanEntryDecisionSourceBundleDependency means the action was determined
+	// by resolving a cross-document reference against another entry in the same
+	// bundle rather than persisted state.
+	PlanEntryDecisionSourceBundleDependency PlanEntryDecisionSource = "bundle_dependency"
+
+	// PlanEntryDecisionSourceValidation means the action was determined by a
+	// structural or referential-integrity validation failure.
+	PlanEntryDecisionSourceValidation PlanEntryDecisionSource = "validation"
+)
+
+// PlanEntry describes the planned action for a single document in a dry-run
+// plan response. It carries all fields needed for a caller to understand what
+// would happen and why.
+type PlanEntry struct {
+	// Kind is the document kind (Surface, Agent, Profile, Grant).
+	Kind string `json:"kind"`
+
+	// ID is the document metadata.id.
+	ID string `json:"id"`
+
+	// Action is the intended operation if the bundle were applied.
+	Action PlanEntryAction `json:"action"`
+
+	// DocumentIndex is the 1-based position in the original bundle.
+	DocumentIndex int `json:"document_index"`
+
+	// Message provides human-readable context for conflict and invalid entries.
+	Message string `json:"message,omitempty"`
+
+	// DecisionSource records how the planner arrived at the action.
+	DecisionSource PlanEntryDecisionSource `json:"decision_source,omitempty"`
+
+	// ValidationErrors holds structured validation errors for this entry.
+	// Populated when Action is invalid.
+	ValidationErrors []ValidationError `json:"validation_errors,omitempty"`
+}
+
+// PlanResult is the structured response returned by a dry-run plan request.
+// It describes what would happen for each document in the bundle without
+// persisting anything.
+type PlanResult struct {
+	// Entries describes the planned action for each document in bundle order.
+	Entries []PlanEntry `json:"entries"`
+
+	// WouldApply is true when the plan contains no invalid entries and at
+	// least one create entry — i.e., applying this bundle would succeed and
+	// produce at least one new resource.
+	WouldApply bool `json:"would_apply"`
+
+	// InvalidCount is the number of entries with action invalid.
+	InvalidCount int `json:"invalid_count"`
+
+	// ConflictCount is the number of entries with action conflict.
+	ConflictCount int `json:"conflict_count"`
+
+	// CreateCount is the number of entries with action create.
+	CreateCount int `json:"create_count"`
+}
+
 // ValidationError represents a single validation failure for a control plane resource.
 type ValidationError struct {
 	Kind          string `json:"kind"`                     // Surface | Agent | Profile | Grant

@@ -24,8 +24,8 @@ func NewService() *Service {
 	}
 }
 
-// NewServiceWithRepository is kept temporarily for backward compatibility.
-// The repository is not used in the current validation-only implementation.
+// NewServiceWithRepository constructs a control-plane service without a
+// backing repository. The parameter is accepted for interface compatibility.
 func NewServiceWithRepository(_ any) *Service {
 	return &Service{
 		applier: apply.NewServiceWithRepo(nil),
