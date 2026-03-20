@@ -46,7 +46,7 @@ func makeAuditRecord(actor, kind, id string, action controlaudit.Action) *contro
 }
 
 func newAuditServer(svc controlAuditService) *Server {
-	return NewServerFull(&mockOrchestrator{}, nil, nil, nil, svc)
+	return NewServerFull(&mockOrchestrator{}, nil, nil, nil, svc, nil)
 }
 
 // ---------------------------------------------------------------------------

@@ -345,6 +345,9 @@ CREATE TABLE authority_grants (
     revoked_at TIMESTAMPTZ,
     revoked_by TEXT,
     revocation_reason TEXT,
+    suspended_at TIMESTAMPTZ,
+    suspended_by TEXT,
+    suspend_reason TEXT,
 
     CONSTRAINT fk_grants_agent
         FOREIGN KEY (agent_id) REFERENCES agents(id),

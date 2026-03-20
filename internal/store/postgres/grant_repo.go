@@ -293,6 +293,59 @@ func (r *GrantRepo) Reactivate(ctx context.Context, id string) error {
 	return nil
 }
 
+// Update persists all mutable fields of a grant atomically. Used by grant
+// lifecycle governance (suspend, revoke, reinstate) to write actor, reason,
+// and timestamp fields in a single operation.
+func (r *GrantRepo) Update(ctx context.Context, g *authority.AuthorityGrant) error {
+	const q = `
+		UPDATE authority_grants
+		SET
+			status            = $2,
+			granted_by        = $3,
+			grant_reason      = $4,
+			effective_date    = $5,
+			expires_at        = $6,
+			revoked_at        = $7,
+			revoked_by        = $8,
+			revocation_reason = $9,
+			suspended_at      = $10,
+			suspended_by      = $11,
+			suspend_reason    = $12,
+			updated_at        = $13
+		WHERE id = $1
+	`
+
+	res, err := r.db.ExecContext(
+		ctx, q,
+		g.ID,
+		g.Status,
+		g.GrantedBy,
+		nullableString(g.GrantReason),
+		g.EffectiveDate,
+		nullableTime(g.ExpiresAt),
+		nullableTime(g.RevokedAt),
+		nullableString(g.RevokedBy),
+		nullableString(g.RevokeReason),
+		nullableTime(g.SuspendedAt),
+		nullableString(g.SuspendedBy),
+		nullableString(g.SuspendReason),
+		g.UpdatedAt,
+	)
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("grant not found: id=%s", g.ID)
+	}
+
+	return nil
+}
+
 type grantScanner interface {
 	Scan(dest ...any) error
 }
