@@ -582,6 +582,45 @@ CREATE INDEX idx_audit_events_payload_gin
     ON audit_events USING GIN (payload_json jsonb_path_ops);
 
 -- =============================================================================
+-- OUTBOX EVENTS
+-- =============================================================================
+-- Transactional outbox for reliable event delivery to downstream consumers.
+--
+-- Each row is written in the same database transaction as the domain state
+-- change that produced it. A dispatcher reads unpublished rows and delivers
+-- them to downstream systems, then marks them published. If the domain
+-- transaction rolls back, the outbox row is removed along with it.
+--
+-- Audit events and outbox events are separate concerns:
+--   - audit_events: hash-chained, append-only governance records.
+--   - outbox_events: routing envelopes for downstream integration.
+
+CREATE TABLE outbox_events (
+    id             TEXT PRIMARY KEY,
+    event_type     TEXT NOT NULL,
+    aggregate_type TEXT NOT NULL,
+    aggregate_id   TEXT NOT NULL,
+    topic          TEXT NOT NULL,
+    event_key      TEXT,
+    payload        JSONB NOT NULL DEFAULT '{}',
+    created_at     TIMESTAMPTZ NOT NULL,
+    published_at   TIMESTAMPTZ
+);
+
+CREATE INDEX idx_outbox_events_unpublished
+    ON outbox_events (created_at ASC)
+    WHERE published_at IS NULL;
+
+CREATE INDEX idx_outbox_events_aggregate
+    ON outbox_events (aggregate_type, aggregate_id);
+
+CREATE INDEX idx_outbox_events_event_type
+    ON outbox_events (event_type);
+
+COMMENT ON TABLE outbox_events IS
+'Transactional outbox: domain integration events written atomically with domain state. Dispatcher marks rows published after delivery.';
+
+-- =============================================================================
 -- VIEWS
 -- =============================================================================
 
@@ -659,6 +698,51 @@ COMMENT ON COLUMN operational_envelopes.resolved_profile_version IS
 
 COMMENT ON COLUMN audit_events.event_hash IS
 'SHA-256 hash over event material including prev_hash to form a tamper-evident per-envelope chain.';
+
+-- =============================================================================
+-- CONTROL-PLANE CONFIGURATION AUDIT TRAIL
+-- =============================================================================
+-- controlplane_audit_events is a separate, append-only table for control-plane
+-- governance history. It is distinct from audit_events (runtime decision audit).
+-- Records capture who changed what, when, and which version of which resource.
+
+CREATE TABLE IF NOT EXISTS controlplane_audit_events (
+    id               TEXT        NOT NULL PRIMARY KEY,
+    occurred_at      TIMESTAMPTZ NOT NULL,
+    actor            TEXT        NOT NULL,
+    action           TEXT        NOT NULL CHECK (action IN (
+                         'surface.created',
+                         'profile.created',
+                         'profile.versioned',
+                         'agent.created',
+                         'grant.created',
+                         'surface.approved',
+                         'surface.deprecated'
+                     )),
+    resource_kind    TEXT        NOT NULL CHECK (resource_kind IN ('surface', 'profile', 'agent', 'grant')),
+    resource_id      TEXT        NOT NULL,
+    resource_version INTEGER,
+    summary          TEXT        NOT NULL,
+    metadata         JSONB
+);
+
+CREATE INDEX IF NOT EXISTS idx_cp_audit_occurred_at    ON controlplane_audit_events (occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_cp_audit_resource_kind  ON controlplane_audit_events (resource_kind);
+CREATE INDEX IF NOT EXISTS idx_cp_audit_resource_id    ON controlplane_audit_events (resource_id);
+CREATE INDEX IF NOT EXISTS idx_cp_audit_actor          ON controlplane_audit_events (actor);
+CREATE INDEX IF NOT EXISTS idx_cp_audit_action         ON controlplane_audit_events (action);
+
+COMMENT ON TABLE controlplane_audit_events IS
+'Append-only control-plane governance audit trail. Records who changed what, when, and which version.';
+
+COMMENT ON COLUMN controlplane_audit_events.action IS
+'Typed action constant: surface.created | profile.created | profile.versioned | agent.created | grant.created | surface.approved | surface.deprecated';
+
+COMMENT ON COLUMN controlplane_audit_events.resource_version IS
+'Version of the resource at the time of the action. Null for resources without versioning (agent, grant).';
+
+COMMENT ON COLUMN controlplane_audit_events.metadata IS
+'Typed JSON metadata: surface_id for profiles, deprecation_reason and successor_surface_id for deprecation.';
 
 -- =============================================================================
 -- OPTIONAL HARDENING TRIGGER FOR AUDIT IMMUTABILITY

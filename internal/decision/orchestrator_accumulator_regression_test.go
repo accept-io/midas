@@ -73,6 +73,10 @@ func (c *countingEnvelopeRepo) List(ctx context.Context) ([]*envelope.Envelope, 
 	return c.inner.List(ctx)
 }
 
+func (c *countingEnvelopeRepo) ListByState(ctx context.Context, state envelope.EnvelopeState) ([]*envelope.Envelope, error) {
+	return c.inner.ListByState(ctx, state)
+}
+
 // spyStore is a RepositoryStore that exposes a countingEnvelopeRepo.
 // WithTx provides snapshot-based rollback semantics matching fakeStore.
 type spyStore struct {

@@ -2,250 +2,265 @@
 
 **Authority governance engine for autonomous decisions and side-effecting actions.**
 
-MIDAS determines whether an automated agent is within authority to perform a consequential action and produces a verifiable audit envelope explaining **why** the action was allowed, escalated, rejected, or requires clarification.
-
-Designed for environments where autonomous systems must operate safely within defined authority boundaries:
-
-- AI agents and agentic workflows
-- automated lending and credit decisions
-- financial transaction execution
-- customer operations automation
-- compliance-sensitive business processes
+MIDAS determines whether an automated agent is within authority to perform a consequential action, and produces a verifiable audit envelope explaining why the action was permitted, escalated, rejected, or requires clarification.
 
 ---
 
-## Why MIDAS Exists
+## What MIDAS is
 
-Modern systems increasingly delegate consequential decisions to software agents. Enterprises must still be able to answer:
-
-- Is this agent authorised to perform this action?
-- Under what confidence or risk thresholds?
-- Who delegated that authority, and for how long?
-- What policy rules apply at this decision surface?
-- Can we prove the decision was within bounds after the fact?
-
-MIDAS provides a **governance control plane** for these decisions.
-
-It evaluates requests against an authority model and produces a **tamper-evident audit trail** for every evaluation.
-
----
-
-## How MIDAS Fits In Your Architecture
-
-MIDAS runs as standalone infrastructure.
-
-Before executing a consequential action, your system calls MIDAS to request an authority decision.
+MIDAS is an **authority orchestration platform**. Before an autonomous actor executes a consequential action, it calls MIDAS. MIDAS evaluates the request against a governed authority model and returns a structured outcome.
 
 ```
-Agent / Service  →  MIDAS /v1/evaluate  →  EXECUTE | ESCALATE | REJECT | REQUEST_CLARIFICATION
+Agent / Service  →  POST /v1/evaluate  →  accept | escalate | reject | request_clarification
 ```
 
-MIDAS governs **the action**, not the intelligence behind it. A Gemini-based agent, a LangChain workflow, and a bespoke Go service all integrate the same way — via HTTP or the MIDAS client SDK.
+Every evaluation produces exactly one outcome, one reason code, and one tamper-evident audit envelope. The envelope is the durable governance record — it captures what was requested, what authority was resolved, why the outcome was reached, and a hash-chained audit trail that is verifiable independently of the database.
 
-Typical p99 evaluation latency is **under 10ms** using the in-memory store.
+MIDAS governs **the action**, not the intelligence behind it. A model-based agent, an automated workflow, and a human operator all integrate the same way.
 
 ---
 
-## Core Concepts
+## What MIDAS is not
+
+- **Not a policy engine.** OPA is embedded as a plugin behind a `PolicyEvaluator` interface. MIDAS evaluates authority; OPA evaluates policy. The boundary is intentional and enforced in the code.
+- **Not a workflow engine.** MIDAS does not orchestrate the business process after an outcome is returned. Routing an escalation to a case queue is the caller's responsibility.
+- **Not an identity provider.** MIDAS does not authenticate callers. Agent identity is registered in the authority model and referenced by ID at evaluation time.
+- **Not an event streaming platform.** The transactional outbox and Kafka integration are available for downstream integration, but MIDAS is not a broker.
+
+---
+
+## Core concepts
 
 ### Decision Surface
 
-A governed business capability where autonomous actions may occur. Each surface carries its own authority profile — confidence thresholds, consequence limits, and policy references.
+A governed business decision boundary. Defines *what* is governed: name, domain, owner, required context keys, consequence types, compliance frameworks. Does not carry authority thresholds — those live on the profile.
 
-Examples: `loan_auto_approval`, `payment_execution`, `customer_update`
-
-### Agent
-
-A system or AI model requesting authority to act. Agents must operate within a delegated authority grant — MIDAS does not permit self-authorization.
+Example surface IDs: `surf-loan-auto-approval`, `surf-payment-release`, `surf-customer-data-update`
 
 ### Authority Profile
 
-Defines the bounds of autonomous authority including:
+Defines *how much* autonomous authority is permitted on a surface. Carries confidence threshold, consequence limit, policy reference, escalation mode, fail mode, and required context keys. Multiple profiles can exist per surface.
 
-- confidence thresholds
-- consequence limits
-- policy references
-- required context fields
+### Agent
+
+An autonomous actor registered in MIDAS. May be an AI model, an automated service, or a human operator. Carries type, owner, model version, and operational state.
 
 ### Authority Grant
 
-Delegates an authority profile to an agent for a given surface. Without a valid grant, an agent cannot act — which is the failure mode MIDAS is designed to prevent.
+A thin link between an agent and a profile. The grant says "this agent operates under this profile's conditions." All governance semantics live on the profile.
 
 ### Envelope
 
-Full record of a governed evaluation including request metadata, authority evidence, decision explanation, and the complete audit event chain.
+The durable governance record for a single evaluation. Structured in five sections: Identity, Submitted (verbatim request snapshot), Resolved (authority chain MIDAS determined), Evaluation (outcome, explanation), and Integrity (hash-chained audit linkage).
 
-### Audit Event
+### Escalation
 
-Append-only, sequenced events linked with cryptographic hashes to form a tamper-evident audit trail. Each event is linked to its predecessor, making post-hoc tampering detectable.
+When an evaluation produces an `escalate` outcome, the envelope transitions to `awaiting_review`. A reviewer submits a decision via `POST /v1/reviews` to close it.
 
----
+### Audit events
 
-## Evaluation Flow
+Hash-chained, append-only events emitted synchronously inside the evaluation transaction. Each event's hash is derived from the previous event's hash. The final event hash is anchored in the envelope's Integrity section, making post-hoc tampering detectable.
 
-```
-Request
-  ↓ Surface Resolution
-  ↓ Agent Resolution
-  ↓ Authority Chain Resolution
-  ↓ Context Validation
-  ↓ Threshold Evaluation
-  ↓ Policy Evaluation
-  ↓ Outcome Recorded
-  ↓ Audit Envelope Persisted
-```
+### Outbox
 
-Possible outcomes: `EXECUTE` · `ESCALATE` · `REJECT` · `REQUEST_CLARIFICATION`
+Integration events (decision completed, escalated, surface approved, etc.) are written atomically with domain state into a Postgres outbox table. When the dispatcher is enabled, a background goroutine polls the outbox and publishes to Kafka. When disabled, outbox rows accumulate but no delivery occurs — all API functionality remains fully operational.
 
 ---
 
-## Quick Start
+## Architecture
 
-Run MIDAS locally:
+```
+┌────────────────────────────────┐
+│  Control plane                 │
+│  POST /v1/controlplane/apply   │  Define surfaces, profiles, agents, grants
+│  POST /v1/controlplane/plan    │  Dry-run validation
+│  POST /v1/controlplane/        │
+│    surfaces/{id}/approve       │  Promote surface to active
+│    surfaces/{id}/deprecate     │  Retire a surface
+└────────────────┬───────────────┘
+                 │
+                 ▼
+┌────────────────────────────────┐
+│  Authority model               │
+│  Surfaces · Profiles · Grants  │  Versioned, lifecycle-managed
+│  Agents                        │
+└────────────────┬───────────────┘
+                 │
+                 ▼
+┌────────────────────────────────┐
+│  Evaluation runtime            │
+│  POST /v1/evaluate             │  1. Surface & profile resolution
+│                                │  2. Authority chain validation
+│                                │  3. Context validation
+│                                │  4. Threshold evaluation
+│                                │  5. Policy check (OPA plugin)
+│                                │  6. Outcome recording + audit
+└────────────────┬───────────────┘
+                 │
+         ┌───────┴───────┐
+         ▼               ▼
+┌────────────────┐  ┌──────────────────────┐
+│  Envelope      │  │  Outbox              │
+│  Audit events  │  │  ↓ Kafka (optional)  │
+└────────────────┘  └──────────────────────┘
+```
+
+**Storage:** in-memory (default, demo data seeded automatically) or PostgreSQL.
+
+**Operating modes:** API-only (default) or event-driven (outbox dispatcher + Kafka).
+
+---
+
+## Quickstart
+
+### Prerequisites
+
+- Go 1.23+
+- Docker (for PostgreSQL or full compose stack)
+
+### Run with in-memory store
 
 ```bash
 go run ./cmd/midas
 ```
 
-Evaluate a decision:
+The in-memory store seeds demo data on startup. No database required.
+
+### Run with Docker Compose
 
 ```bash
-curl -X POST http://localhost:8080/v1/evaluate \
+docker compose up
+```
+
+This starts PostgreSQL and MIDAS together. The schema is applied from `internal/store/postgres/schema.sql` on first start.
+
+### Health check
+
+```bash
+curl http://localhost:8080/healthz
+# {"status":"ok","service":"midas"}
+```
+
+### Submit your first evaluation
+
+```bash
+curl -s -X POST http://localhost:8080/v1/evaluate \
   -H "Content-Type: application/json" \
   -d '{
-    "request_id": "REQ-123",
-    "timestamp": "2026-03-11T10:23:00Z",
-    "expires_at": "2026-03-11T10:23:30Z",
-    "surface_id": "loan_auto_approval",
-    "action": {
-      "type": "loan.approve",
-      "description": "Approve credit facility drawdown"
-    },
-    "agent": {
-      "id": "agent-credit-1",
-      "kind": "autonomous",
-      "confidence": 0.87,
-      "runtime": {
-        "model": "gemini-1.5-pro",
-        "version": "2.1.0"
-      }
-    },
-    "delegation": {
-      "initiated_by": "user:U456",
-      "session_id": "SESS-789",
-      "chain": ["user:U456", "service:credit-orchestrator", "agent:agent-credit-1"],
-      "scope": ["loan_auto_approval"],
-      "authorized_at": "2026-03-11T09:00:00Z",
-      "authorized_until": "2026-03-11T17:00:00Z"
-    },
+    "surface_id": "surf-loan-auto-approval",
+    "agent_id":   "agent-credit-001",
+    "confidence": 0.91,
     "consequence": {
-      "type": "monetary",
+      "type":   "monetary",
       "amount": 4500,
-      "currency": "GBP",
-      "reversible": false
+      "currency": "GBP"
     },
     "context": {
-      "customer_id": "C123",
-      "risk_band": "low",
-      "risk_band_source": "service:risk-engine",
-      "risk_band_evaluated_at": "2026-03-11T10:20:00Z"
-    }
-  }'
+      "customer_id": "C-8821",
+      "risk_band":   "low"
+    },
+    "request_id":     "req-demo-001",
+    "request_source": "lending-service"
+  }' | jq .
 ```
 
 Example response:
 
 ```json
 {
-  "request_id": "REQ-123",
-  "outcome": "EXECUTE",
-  "reason": "WITHIN_AUTHORITY",
-  "envelope_id": "ENV-456",
-  "evaluated_at": "2026-03-11T10:23:00Z",
-  "authority_evidence": {
-    "surface_id": "loan_auto_approval",
-    "grant_id": "GRN-789",
-    "profile_id": "PRF-001",
-    "confidence_threshold": 0.85,
-    "confidence_actual": 0.87,
-    "consequence_limit": 5000,
-    "consequence_actual": 4500
-  },
-  "audit_chain": {
-    "envelope_id": "ENV-456",
-    "event_count": 6,
-    "chain_valid": true,
-    "final_hash": "a3f8c2d1e9b74056..."
-  }
+  "outcome":     "accept",
+  "reason":      "WITHIN_AUTHORITY",
+  "envelope_id": "01927f3c-8e21-7a4b-b9d0-2c4f6e8a1d3e"
 }
 ```
 
-Retrieve the full decision envelope:
+Retrieve the full governance record:
 
-```
-GET /v1/decisions/request/{request_id}
-```
-
----
-
-## Storage Backends
-
-| Backend | Configuration |
-|---|---|
-| In-memory (default) | `MIDAS_STORE=memory` |
-| PostgreSQL | `MIDAS_STORE=postgres` |
-
----
-
-## Observability
-
-MIDAS includes three layers:
-
-**Metrics** — evaluation latency, evaluation outcomes, transaction lifecycle signals.
-
-**Structured Logging** — runtime diagnostics via Go `slog`.
-
-**Immutable Audit Trail** — every decision produces a chain of hashed, sequenced events. The built-in integrity verifier checks ordering, sequence continuity, hash chain linkage, and envelope state consistency.
-
----
-
-## Architecture Overview
-
-```
-Client / Agent
-  ↓
-MIDAS API
-  ↓
-Evaluation Engine
-  ↓
-Authority Model + Policy
-  ↓
-Envelope + Audit Events
-  ↓
-Persistence (Memory / PostgreSQL)
+```bash
+curl http://localhost:8080/v1/decisions/request/req-demo-001?source=lending-service | jq .
 ```
 
 ---
 
-## Project Status
+## Environment variables
 
-MIDAS is currently in **active development**.
+### Store
 
-### Available now
+| Variable       | Default    | Description |
+|----------------|------------|-------------|
+| `MIDAS_STORE`  | `memory`   | `memory` or `postgres` |
+| `DATABASE_URL` | _(none)_   | PostgreSQL connection string. Required when `MIDAS_STORE=postgres`. |
 
-- authority evaluation engine
-- transactional evaluation
-- immutable audit events
-- audit integrity verification
-- structured logging
-- in-memory and PostgreSQL persistence
+### Logging
 
-### In progress
+| Variable           | Default | Description |
+|--------------------|---------|-------------|
+| `MIDAS_LOG_LEVEL`  | `info`  | `info` or `debug` |
 
-- review workflow for escalated decisions
-- authority introspection APIs
-- administrative APIs for surfaces, profiles, and grants
-- metrics export
+### Dispatcher (event delivery)
+
+| Variable                         | Default | Description |
+|----------------------------------|---------|-------------|
+| `MIDAS_DISPATCHER_ENABLED`       | `false` | Set to `true` to start the outbox dispatcher. |
+| `MIDAS_DISPATCHER_PUBLISHER`     | `none`  | Publisher backend. `kafka` is the only valid value when enabled. |
+| `MIDAS_DISPATCHER_BATCH_SIZE`    | `100`   | Outbox rows per poll cycle. |
+| `MIDAS_DISPATCHER_POLL_INTERVAL` | `2s`    | Sleep between poll cycles (Go duration string). |
+| `MIDAS_DISPATCHER_MAX_BACKOFF`   | `30s`   | Maximum backoff on consecutive errors. |
+
+### Kafka
+
+| Variable                    | Default  | Description |
+|-----------------------------|----------|-------------|
+| `MIDAS_KAFKA_BROKERS`       | _(none)_ | Comma-separated `host:port` broker addresses. Required when publisher is `kafka`. |
+| `MIDAS_KAFKA_CLIENT_ID`     | `midas`  | Client identifier sent to the broker. |
+| `MIDAS_KAFKA_REQUIRED_ACKS` | `-1`     | Acknowledgement level: `-1` all ISRs, `0` none, `1` leader only. |
+| `MIDAS_KAFKA_WRITE_TIMEOUT` | _(none)_ | Per-message publish timeout. Zero means no timeout. |
+
+---
+
+## Make targets
+
+```bash
+make run          # Start locally (in-memory store)
+make build        # Build binary to bin/midas
+make test         # Run all tests (starts Docker Postgres)
+make test-unit    # Unit tests only (no database)
+make lint         # go vet ./...
+make tidy         # go mod tidy
+make docker       # Build container image
+```
+
+---
+
+## Project status
+
+MIDAS is in active development. The following capabilities are fully operational:
+
+- Authority evaluation engine with deterministic 6-step flow
+- Transactional evaluation (envelope, audit events, outbox written atomically)
+- Immutable hash-chained audit trail with integrity verification
+- Structured JSON logging with correlation IDs
+- In-memory and PostgreSQL persistence
+- Control plane: surface apply, plan (dry-run), approve, deprecate
+- Operator introspection: surfaces, profiles, agents, grants
+- Escalation queue (`GET /v1/escalations`) and review resolution (`POST /v1/reviews`)
+- Transactional outbox with optional Kafka dispatch
+- Full envelope lifecycle with five sections (Identity, Submitted, Resolved, Evaluation, Integrity)
+
+---
+
+## Documentation
+
+| Document | Contents |
+|----------|----------|
+| [docs/getting-started.md](docs/getting-started.md) | Prerequisites, quickstart, first evaluation walkthrough |
+| [docs/operator-journey.md](docs/operator-journey.md) | Step-by-step: apply → approve → active → deprecated |
+| [docs/control-plane.md](docs/control-plane.md) | Apply, plan, surface lifecycle, versioning semantics |
+| [docs/runtime-evaluation.md](docs/runtime-evaluation.md) | Evaluate endpoint, outcomes, idempotency, audit |
+| [docs/escalations.md](docs/escalations.md) | When escalations occur, how to list and resolve them |
+| [docs/events.md](docs/events.md) | Outbox, dispatcher, Kafka, event contracts |
+| [docs/http-api.md](docs/http-api.md) | Complete HTTP API reference |
+| [docs/architecture/architecture.md](docs/architecture/architecture.md) | Deep architecture overview |
 
 ---
 

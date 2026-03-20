@@ -462,13 +462,17 @@ Check `GET /v1/surfaces/{id}/recovery` at any point to see the current state and
 
 ### How to fix a bad profile version
 
-Profiles have no governance review checkpoint. The apply path sets `status=active` immediately. There is no approval workflow for profiles.
+Profiles follow the same governed lifecycle as surfaces: apply creates a `review` version, and explicit approval is required before the profile is used at evaluation time.
 
-1. **Apply a corrected profile version.** A new version is created and activated immediately.
+1. **Apply a corrected profile version.** A new version is created in `review` state. The bad active version remains effective for evaluations until you approve the corrected one.
 
-2. **Verify the new version is effective.** Check `GET /v1/profiles/{id}/recovery`. The `active_version` should reflect the new version.
+2. **Approve the corrected version.** `POST /v1/controlplane/profiles/{id}/approve` with `{"version": N, "approved_by": "operator@example.com"}`. The corrected version becomes active.
 
-3. **Check active grants.** If grants reference the old profile ID (grants use the logical profile ID, not a specific version), they will automatically resolve to the new active version at evaluation time.
+3. **Deprecate the bad version (optional but recommended).** `POST /v1/controlplane/profiles/{id}/deprecate` with `{"version": M, "deprecated_by": "operator@example.com"}`. This marks the old version deprecated, making the governance history explicit.
+
+4. **Verify the new version is effective.** Check `GET /v1/profiles/{id}/recovery`. The `active_version` should reflect the approved version, and `recommended_next_actions` should be empty.
+
+5. **Check active grants.** Grants reference the logical profile ID (not a specific version). At evaluation time, the runtime resolves the active profile version matching the evaluation timestamp.
 
 If the corrected profile has a future `effective_from`, it will not be active yet. The recovery endpoint warns about this and recommends re-applying with a past `effective_from`.
 
@@ -488,14 +492,14 @@ When a surface is deprecated with a successor:
 
 - Automatic rollback of a bad active surface to the previous version (would require history search for the prior active version — this must be done manually by applying and approving the corrected configuration).
 - Automatic migration of grants from a deprecated surface to its successor.
-- Profile deprecation via the apply path (profile status is always set to `active` on apply; there is no review state for profiles).
+- Automatic migration of profiles between surfaces (must be done by creating new profiles referencing the successor surface and updating grants).
 
 ---
 
 ## Key rules
 
 - **Surface and Profile reapply creates a new version.** Agent and Grant reapply returns conflict.
-- Surface `status` in the YAML is validated but always overridden to `review` on apply.
+- Surface and Profile `status` in the YAML is validated but always overridden to `review` on apply.
 - Profiles reference surfaces by `surface_id`. Grants reference both agents and profiles. If a referenced resource does not exist in the bundle or in the store, the entry is marked `invalid`.
 - Version resolution at evaluation time selects the version with `status = active` and `effective_from <= evaluation_timestamp`. If no such version exists, the evaluation returns `SURFACE_INACTIVE` or `PROFILE_NOT_FOUND`.
 - `GET /v1/surfaces/{id}` returns the *latest* version (highest version number). The runtime uses the *active* version. These differ during a governance review cycle.

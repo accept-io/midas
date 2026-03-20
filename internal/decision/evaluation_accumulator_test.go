@@ -21,6 +21,7 @@ import (
 	"github.com/accept-io/midas/internal/audit"
 	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/eval"
+	"github.com/accept-io/midas/internal/outbox"
 	"github.com/accept-io/midas/internal/store"
 )
 
@@ -148,6 +149,9 @@ func (r *accFakeEnvRepo) GetByRequestScope(_ context.Context, _, _ string) (*env
 	return nil, nil
 }
 func (r *accFakeEnvRepo) List(_ context.Context) ([]*envelope.Envelope, error) { return nil, nil }
+func (r *accFakeEnvRepo) ListByState(_ context.Context, _ envelope.EnvelopeState) ([]*envelope.Envelope, error) {
+	return nil, nil
+}
 
 // accFakeAuditRepo records Append calls, assigns a deterministic hash chain,
 // and injects failures after a configurable number of successful appends.
@@ -1200,4 +1204,352 @@ func TestAccumulatorPersistUpdate_EmptyQueue(t *testing.T) {
 	if acc.persisted {
 		t.Error("persisted flag set despite empty queue error")
 	}
+}
+
+// =============================================================================
+// Fake outbox repository
+// =============================================================================
+
+// accFakeOutboxRepo records Append calls and can inject failures.
+type accFakeOutboxRepo struct {
+	log       *accCallLog
+	events    []*outbox.OutboxEvent
+	appendErr error
+}
+
+func newAccFakeOutboxRepo(log *accCallLog) *accFakeOutboxRepo {
+	return &accFakeOutboxRepo{log: log}
+}
+
+func (r *accFakeOutboxRepo) Append(_ context.Context, ev *outbox.OutboxEvent) error {
+	if r.appendErr != nil {
+		return r.appendErr
+	}
+	r.log.record(fmt.Sprintf("outbox:%s", ev.EventType))
+	r.events = append(r.events, ev)
+	return nil
+}
+
+func (r *accFakeOutboxRepo) ListUnpublished(_ context.Context) ([]*outbox.OutboxEvent, error) {
+	return r.events, nil
+}
+
+func (r *accFakeOutboxRepo) ClaimUnpublished(_ context.Context, limit int) ([]*outbox.OutboxEvent, error) {
+	if limit <= 0 || len(r.events) == 0 {
+		return nil, nil
+	}
+	n := limit
+	if n > len(r.events) {
+		n = len(r.events)
+	}
+	return r.events[:n], nil
+}
+
+func (r *accFakeOutboxRepo) MarkPublished(_ context.Context, _ string) error {
+	return nil
+}
+
+// makeAccTestReposWithOutbox wires the fake repos (including outbox) into a
+// *store.Repositories.
+func makeAccTestReposWithOutbox(envRepo *accFakeEnvRepo, auditRepo *accFakeAuditRepo, outboxRepo *accFakeOutboxRepo) *store.Repositories {
+	return &store.Repositories{
+		Envelopes: envRepo,
+		Audit:     auditRepo,
+		Outbox:    outboxRepo,
+	}
+}
+
+// accMakeOutboxEvent returns a valid outbox event for test use.
+func accMakeOutboxEvent(t *testing.T) *outbox.OutboxEvent {
+	t.Helper()
+	ev, err := outbox.New(
+		outbox.EventDecisionCompleted,
+		"envelope",
+		"env-acc-001",
+		"midas.decisions",
+		"test-src:req-acc-001",
+		json.RawMessage(`{"outcome":"accept"}`),
+	)
+	if err != nil {
+		t.Fatalf("outbox.New: %v", err)
+	}
+	return ev
+}
+
+// =============================================================================
+// Test group 11: recordOutbox() validation
+// =============================================================================
+
+func TestAccumulatorRecordOutbox_Validation(t *testing.T) {
+	t.Run("nil event returns errAccumulatorNilOutboxEvent", func(t *testing.T) {
+		acc := accMakeAcc(t, accMakeEnv(t))
+		if err := acc.recordOutbox(nil); !errors.Is(err, errAccumulatorNilOutboxEvent) {
+			t.Errorf("expected errAccumulatorNilOutboxEvent, got: %v", err)
+		}
+	})
+
+	t.Run("returns errAccumulatorAlreadyPersisted after persist", func(t *testing.T) {
+		log := &accCallLog{}
+		env := accMakeEnv(t)
+		acc := accMakeAcc(t, env)
+		accDriveToAccept(t, acc)
+		if err := acc.persistNew(context.Background(), makeAccTestRepos(newAccFakeEnvRepo(log), newAccFakeAuditRepo(log))); err != nil {
+			t.Fatalf("persist: %v", err)
+		}
+		if err := acc.recordOutbox(accMakeOutboxEvent(t)); !errors.Is(err, errAccumulatorAlreadyPersisted) {
+			t.Errorf("expected errAccumulatorAlreadyPersisted, got: %v", err)
+		}
+	})
+
+	t.Run("queues without persisting", func(t *testing.T) {
+		acc := accMakeAcc(t, accMakeEnv(t))
+		if len(acc.pendingOutbox) != 0 {
+			t.Fatalf("new accumulator has %d pending outbox events, want 0", len(acc.pendingOutbox))
+		}
+		ev := accMakeOutboxEvent(t)
+		if err := acc.recordOutbox(ev); err != nil {
+			t.Fatalf("recordOutbox: %v", err)
+		}
+		if len(acc.pendingOutbox) != 1 {
+			t.Fatalf("after recordOutbox: got %d pending outbox events, want 1", len(acc.pendingOutbox))
+		}
+		if acc.pendingOutbox[0] != ev {
+			t.Error("pendingOutbox[0] is not the queued event pointer")
+		}
+		// No persistence must have occurred.
+		if acc.persisted {
+			t.Error("persisted flag set unexpectedly")
+		}
+	})
+
+	t.Run("multiple events queued in order", func(t *testing.T) {
+		acc := accMakeAcc(t, accMakeEnv(t))
+		ev1 := accMakeOutboxEvent(t)
+		ev2 := accMakeOutboxEvent(t)
+		if err := acc.recordOutbox(ev1); err != nil {
+			t.Fatalf("recordOutbox ev1: %v", err)
+		}
+		if err := acc.recordOutbox(ev2); err != nil {
+			t.Fatalf("recordOutbox ev2: %v", err)
+		}
+		if acc.pendingOutbox[0] != ev1 || acc.pendingOutbox[1] != ev2 {
+			t.Error("outbox events not queued in declaration order")
+		}
+	})
+}
+
+// =============================================================================
+// Test group 12: persistNew() flushes queued outbox events
+// =============================================================================
+
+func TestAccumulatorPersistNew_FlushesOutboxEvents(t *testing.T) {
+	t.Run("outbox event flushed after audit events and before update", func(t *testing.T) {
+		log := &accCallLog{}
+		envRepo := newAccFakeEnvRepo(log)
+		auditRepo := newAccFakeAuditRepo(log)
+		outboxRepo := newAccFakeOutboxRepo(log)
+		repos := makeAccTestReposWithOutbox(envRepo, auditRepo, outboxRepo)
+
+		env := accMakeEnv(t)
+		acc := accMakeAcc(t, env)
+		accDriveToAccept(t, acc) // queues 4 audit events
+		if err := acc.recordOutbox(accMakeOutboxEvent(t)); err != nil {
+			t.Fatalf("recordOutbox: %v", err)
+		}
+
+		if err := acc.persistNew(context.Background(), repos); err != nil {
+			t.Fatalf("persistNew: %v", err)
+		}
+
+		// Expected ordering: create → 4×audit append → outbox append → update
+		want := []string{
+			"create",
+			fmt.Sprintf("append:%s", audit.AuditEventEnvelopeCreated),
+			fmt.Sprintf("append:%s", audit.AuditEventEvaluationStarted),
+			fmt.Sprintf("append:%s", audit.AuditEventOutcomeRecorded),
+			fmt.Sprintf("append:%s", audit.AuditEventEnvelopeClosed),
+			fmt.Sprintf("outbox:%s", outbox.EventDecisionCompleted),
+			"update",
+		}
+		if len(log.ops) != len(want) {
+			t.Fatalf("call log: got %v, want %v", log.ops, want)
+		}
+		for i, op := range want {
+			if log.ops[i] != op {
+				t.Errorf("call[%d]: got %q, want %q", i, log.ops[i], op)
+			}
+		}
+
+		if len(outboxRepo.events) != 1 {
+			t.Errorf("expected 1 outbox row persisted, got %d", len(outboxRepo.events))
+		}
+	})
+
+	t.Run("nil repos.Outbox skips outbox flush without error", func(t *testing.T) {
+		log := &accCallLog{}
+		// repos without Outbox (nil)
+		repos := makeAccTestRepos(newAccFakeEnvRepo(log), newAccFakeAuditRepo(log))
+
+		env := accMakeEnv(t)
+		acc := accMakeAcc(t, env)
+		accDriveToAccept(t, acc)
+		if err := acc.recordOutbox(accMakeOutboxEvent(t)); err != nil {
+			t.Fatalf("recordOutbox: %v", err)
+		}
+
+		if err := acc.persistNew(context.Background(), repos); err != nil {
+			t.Fatalf("persistNew with nil Outbox repo: %v", err)
+		}
+
+		// Verify no "outbox:" entries in the call log — outbox was silently skipped.
+		for _, op := range log.ops {
+			if strings.HasPrefix(op, "outbox:") {
+				t.Errorf("outbox Append called despite nil repos.Outbox: %q", op)
+			}
+		}
+	})
+
+	t.Run("outbox append failure propagates and blocks update", func(t *testing.T) {
+		log := &accCallLog{}
+		envRepo := newAccFakeEnvRepo(log)
+		auditRepo := newAccFakeAuditRepo(log)
+		outboxRepo := newAccFakeOutboxRepo(log)
+		sentinelErr := errors.New("outbox: disk full")
+		outboxRepo.appendErr = sentinelErr
+		repos := makeAccTestReposWithOutbox(envRepo, auditRepo, outboxRepo)
+
+		env := accMakeEnv(t)
+		acc := accMakeAcc(t, env)
+		accDriveToAccept(t, acc)
+		if err := acc.recordOutbox(accMakeOutboxEvent(t)); err != nil {
+			t.Fatalf("recordOutbox: %v", err)
+		}
+
+		err := acc.persistNew(context.Background(), repos)
+		if !errors.Is(err, sentinelErr) {
+			t.Errorf("expected sentinel error, got: %v", err)
+		}
+
+		// Update must NOT have been called after outbox failure.
+		for _, op := range log.ops {
+			if op == "update" {
+				t.Error("Update called after outbox Append failure")
+			}
+		}
+		if acc.persisted {
+			t.Error("persisted flag set despite outbox failure")
+		}
+	})
+}
+
+// =============================================================================
+// Test group 13: persistExisting() flushes queued outbox events
+// =============================================================================
+
+func TestAccumulatorPersistExisting_FlushesOutboxEvents(t *testing.T) {
+	t.Run("outbox event flushed after audit events and before update", func(t *testing.T) {
+		log := &accCallLog{}
+		envRepo := newAccFakeEnvRepo(log)
+		auditRepo := newAccFakeAuditRepo(log)
+		outboxRepo := newAccFakeOutboxRepo(log)
+		repos := makeAccTestReposWithOutbox(envRepo, auditRepo, outboxRepo)
+
+		env := accMakeAwaitingReviewEnv(t)
+		acc, err := newExistingEnvelopeAccumulator(env)
+		if err != nil {
+			t.Fatalf("newExistingEnvelopeAccumulator: %v", err)
+		}
+
+		mustRecord(t, acc.recordObservation(env.RequestSource(), env.RequestID(),
+			audit.AuditEventEscalationReviewed, map[string]any{"decision": "APPROVED"}))
+		env.Review = &envelope.EscalationReview{
+			Decision:   envelope.ReviewDecisionApproved,
+			ReviewerID: "reviewer-1",
+			ReviewedAt: accTestNow,
+		}
+		if err := acc.transition(envelope.EnvelopeStateClosed, accTestNow); err != nil {
+			t.Fatalf("transition CLOSED: %v", err)
+		}
+		mustRecord(t, acc.recordLifecycle(env.RequestSource(), env.RequestID(),
+			audit.AuditEventEnvelopeClosed, nil))
+
+		// Queue a review_resolved outbox event.
+		reviewEv, outboxErr := outbox.New(
+			outbox.EventDecisionReviewResolved,
+			"envelope", env.ID(), "midas.decisions", "test-src:req-acc-001",
+			json.RawMessage(`{"decision":"APPROVED"}`),
+		)
+		if outboxErr != nil {
+			t.Fatalf("outbox.New: %v", outboxErr)
+		}
+		if err := acc.recordOutbox(reviewEv); err != nil {
+			t.Fatalf("recordOutbox: %v", err)
+		}
+
+		if err := acc.persistExisting(context.Background(), repos); err != nil {
+			t.Fatalf("persistExisting: %v", err)
+		}
+
+		// Expected ordering: 2×audit append → outbox append → update (no create)
+		want := []string{
+			fmt.Sprintf("append:%s", audit.AuditEventEscalationReviewed),
+			fmt.Sprintf("append:%s", audit.AuditEventEnvelopeClosed),
+			fmt.Sprintf("outbox:%s", outbox.EventDecisionReviewResolved),
+			"update",
+		}
+		if len(log.ops) != len(want) {
+			t.Fatalf("call log: got %v, want %v", log.ops, want)
+		}
+		for i, op := range want {
+			if log.ops[i] != op {
+				t.Errorf("call[%d]: got %q, want %q", i, log.ops[i], op)
+			}
+		}
+	})
+
+	t.Run("nil repos.Outbox skips outbox flush without error", func(t *testing.T) {
+		log := &accCallLog{}
+		// repos without Outbox (nil)
+		repos := makeAccTestRepos(newAccFakeEnvRepo(log), newAccFakeAuditRepo(log))
+
+		env := accMakeAwaitingReviewEnv(t)
+		acc, err := newExistingEnvelopeAccumulator(env)
+		if err != nil {
+			t.Fatalf("newExistingEnvelopeAccumulator: %v", err)
+		}
+		mustRecord(t, acc.recordObservation(env.RequestSource(), env.RequestID(),
+			audit.AuditEventEscalationReviewed, nil))
+		env.Review = &envelope.EscalationReview{
+			Decision:   envelope.ReviewDecisionApproved,
+			ReviewerID: "r1",
+			ReviewedAt: accTestNow,
+		}
+		if err := acc.transition(envelope.EnvelopeStateClosed, accTestNow); err != nil {
+			t.Fatalf("transition CLOSED: %v", err)
+		}
+		mustRecord(t, acc.recordLifecycle(env.RequestSource(), env.RequestID(),
+			audit.AuditEventEnvelopeClosed, nil))
+
+		reviewEv, outboxErr := outbox.New(
+			outbox.EventDecisionReviewResolved,
+			"envelope", env.ID(), "midas.decisions", "test-src:req-acc-001",
+			json.RawMessage(`{"decision":"APPROVED"}`),
+		)
+		if outboxErr != nil {
+			t.Fatalf("outbox.New: %v", outboxErr)
+		}
+		if err := acc.recordOutbox(reviewEv); err != nil {
+			t.Fatalf("recordOutbox: %v", err)
+		}
+
+		if err := acc.persistExisting(context.Background(), repos); err != nil {
+			t.Fatalf("persistExisting with nil Outbox repo: %v", err)
+		}
+
+		for _, op := range log.ops {
+			if strings.HasPrefix(op, "outbox:") {
+				t.Errorf("outbox Append called despite nil repos.Outbox: %q", op)
+			}
+		}
+	})
 }

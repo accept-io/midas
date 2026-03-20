@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/accept-io/midas/internal/controlaudit"
 	"github.com/accept-io/midas/internal/controlplane/parser"
 	"github.com/accept-io/midas/internal/controlplane/types"
 	"github.com/accept-io/midas/internal/controlplane/validate"
@@ -15,10 +16,11 @@ import (
 
 // Service coordinates control-plane apply operations.
 type Service struct {
-	surfaceRepo SurfaceRepository
-	agentRepo   AgentRepository
-	profileRepo ProfileRepository
-	grantRepo   GrantRepository
+	surfaceRepo      SurfaceRepository
+	agentRepo        AgentRepository
+	profileRepo      ProfileRepository
+	grantRepo        GrantRepository
+	controlAuditRepo controlaudit.Repository
 }
 
 // NewService constructs a new apply service with no repositories configured.
@@ -39,13 +41,14 @@ func NewServiceWithRepo(surfaceRepo surface.SurfaceRepository) *Service {
 // NewServiceWithRepos constructs an apply service with the full repository set.
 // Each repository enables repository-backed planning and execution for its
 // resource kind. Nil repository fields fall back to validation-only behaviour
-// for that kind.
+// for that kind. If ControlAudit is nil, audit events are silently skipped.
 func NewServiceWithRepos(repos RepositorySet) *Service {
 	return &Service{
-		surfaceRepo: repos.Surfaces,
-		agentRepo:   repos.Agents,
-		profileRepo: repos.Profiles,
-		grantRepo:   repos.Grants,
+		surfaceRepo:      repos.Surfaces,
+		agentRepo:        repos.Agents,
+		profileRepo:      repos.Profiles,
+		grantRepo:        repos.Grants,
+		controlAuditRepo: repos.ControlAudit,
 	}
 }
 
@@ -123,25 +126,32 @@ func PlanResultFromPlan(plan ApplyPlan) types.PlanResult {
 //   - conflict entries are not persisted; they are reported in the result
 //   - if no repositories are configured, all valid resources are recorded as created
 //     without persistence (validation-only mode)
-func (s *Service) Apply(ctx context.Context, docs []parser.ParsedDocument) types.ApplyResult {
+//
+// actor identifies who initiated the apply. It is recorded in control-plane audit
+// entries for each successfully persisted resource. Use ApplyBundle when parsing
+// a raw YAML bundle; actor is extracted from the X-MIDAS-ACTOR request header.
+func (s *Service) Apply(ctx context.Context, docs []parser.ParsedDocument, actor string) types.ApplyResult {
 	plan := s.Plan(ctx, docs)
-	return s.executePlan(ctx, plan)
+	return s.executePlan(ctx, plan, actor)
 }
 
 // ApplyBundle parses a raw YAML bundle and applies it through the validation
 // and apply pipeline.
 //
+// actor identifies who initiated the apply (e.g. from the X-MIDAS-ACTOR header).
+// If empty, "system" is used as a fallback actor in audit entries.
+//
 // Behavior:
 //   - parse failures return an error wrapping ErrInvalidBundle
 //   - successfully parsed bundles always return an ApplyResult
 //   - validation failures are represented inside ApplyResult, not as an error
-func (s *Service) ApplyBundle(ctx context.Context, yamlBytes []byte) (*types.ApplyResult, error) {
+func (s *Service) ApplyBundle(ctx context.Context, yamlBytes []byte, actor string) (*types.ApplyResult, error) {
 	docs, err := parser.ParseYAMLStream(yamlBytes)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidBundle, err)
 	}
 
-	result := s.Apply(ctx, docs)
+	result := s.Apply(ctx, docs, actor)
 	return &result, nil
 }
 
@@ -535,12 +545,17 @@ func (s *Service) planAgentEntry(ctx context.Context, doc parser.ParsedDocument,
 }
 
 // planProfileEntry inspects the current persisted state for a Profile document
-// and sets the entry action accordingly.
+// and sets the entry action and NewVersion accordingly.
 //
-// Profiles are identified by ID and are immutable once created in the apply path.
-// If a profile with the same ID already exists, the entry is marked as conflict:
-// there is no version-increment or update path for profiles in the current apply
-// flow. If the repository lookup fails, the entry is marked invalid.
+// Profiles follow a versioned lineage model: applying a profile document whose
+// logical ID already exists in persisted state creates a new version rather than
+// conflicting. This is the primary profile modification path — the caller
+// supplies an updated profile document, and apply appends it as version N+1.
+//
+// Entry.NewVersion is set to 1 for first-time creates, and to existing.Version+1
+// for subsequent creates. The executor reads NewVersion to assign the correct
+// version number when persisting. If the repository lookup fails, the entry is
+// marked invalid.
 func (s *Service) planProfileEntry(ctx context.Context, doc parser.ParsedDocument, entry *ApplyPlanEntry) {
 	profileDoc, ok := doc.Doc.(types.ProfileDocument)
 	if !ok {
@@ -566,18 +581,19 @@ func (s *Service) planProfileEntry(ctx context.Context, doc parser.ParsedDocumen
 		return
 	}
 
-	if existing != nil {
-		entry.Action = ApplyActionConflict
-		entry.DecisionSource = DecisionSourcePersistedState
-		entry.Message = fmt.Sprintf(
-			"profile %q already exists; profiles are immutable once created in the apply path",
-			profileDoc.Metadata.ID,
-		)
-		return
-	}
-
 	entry.Action = ApplyActionCreate
 	entry.DecisionSource = DecisionSourcePersistedState
+
+	if existing != nil {
+		// Append a new version to the existing profile lineage.
+		entry.NewVersion = existing.Version + 1
+		entry.Message = fmt.Sprintf(
+			"profile %q exists at version %d; will create version %d",
+			profileDoc.Metadata.ID, existing.Version, existing.Version+1,
+		)
+	} else {
+		entry.NewVersion = 1
+	}
 }
 
 // planGrantEntry inspects the current persisted state for a Grant document
@@ -647,8 +663,12 @@ func (s *Service) planGrantEntry(ctx context.Context, doc parser.ParsedDocument,
 // Conflict and unchanged entries are emitted in document order after creates.
 // This ordering ensures that resources are available to their dependants when
 // the backing store is inspected by subsequent steps in the same transaction.
-func (s *Service) executePlan(ctx context.Context, plan ApplyPlan) types.ApplyResult {
+func (s *Service) executePlan(ctx context.Context, plan ApplyPlan, actor string) types.ApplyResult {
 	var result types.ApplyResult
+
+	if actor == "" {
+		actor = "system"
+	}
 
 	// If any entry is invalid the entire bundle is rejected — validation errors
 	// are surfaced and no resources are persisted.
@@ -679,7 +699,6 @@ func (s *Service) executePlan(ctx context.Context, plan ApplyPlan) types.ApplyRe
 	}
 
 	now := time.Now().UTC()
-	createdBy := "system"
 
 	for _, entry := range orderedEntries(plan.Entries) {
 		switch entry.Action {
@@ -695,7 +714,7 @@ func (s *Service) executePlan(ctx context.Context, plan ApplyPlan) types.ApplyRe
 			switch entry.Kind {
 			case types.KindSurface:
 				if s.surfaceRepo != nil {
-					if err := s.applySurface(ctx, entry.Doc, now, createdBy, &result); err != nil {
+					if err := s.applySurface(ctx, entry.Doc, now, actor, &result); err != nil {
 						result.AddError(entry.Kind, entry.ID, err.Error())
 					}
 				} else {
@@ -703,7 +722,7 @@ func (s *Service) executePlan(ctx context.Context, plan ApplyPlan) types.ApplyRe
 				}
 			case types.KindAgent:
 				if s.agentRepo != nil {
-					if err := s.applyAgent(ctx, entry.Doc, now, &result); err != nil {
+					if err := s.applyAgent(ctx, entry.Doc, now, actor, &result); err != nil {
 						result.AddError(entry.Kind, entry.ID, err.Error())
 					}
 				} else {
@@ -711,7 +730,7 @@ func (s *Service) executePlan(ctx context.Context, plan ApplyPlan) types.ApplyRe
 				}
 			case types.KindProfile:
 				if s.profileRepo != nil {
-					if err := s.applyProfile(ctx, entry.Doc, now, createdBy, &result); err != nil {
+					if err := s.applyProfile(ctx, entry.Doc, now, actor, entry.NewVersion, &result); err != nil {
 						result.AddError(entry.Kind, entry.ID, err.Error())
 					}
 				} else {
@@ -719,7 +738,7 @@ func (s *Service) executePlan(ctx context.Context, plan ApplyPlan) types.ApplyRe
 				}
 			case types.KindGrant:
 				if s.grantRepo != nil {
-					if err := s.applyGrant(ctx, entry.Doc, now, &result); err != nil {
+					if err := s.applyGrant(ctx, entry.Doc, now, actor, &result); err != nil {
 						result.AddError(entry.Kind, entry.ID, err.Error())
 					}
 				} else {
@@ -736,6 +755,17 @@ func (s *Service) executePlan(ctx context.Context, plan ApplyPlan) types.ApplyRe
 	}
 
 	return result
+}
+
+// appendControlAudit appends a control-plane audit record. It is a no-op when
+// the controlAuditRepo is nil, preserving existing behaviour for callers that
+// do not configure the control audit repository.
+func (s *Service) appendControlAudit(ctx context.Context, rec *controlaudit.ControlAuditRecord) {
+	if s.controlAuditRepo == nil {
+		return
+	}
+	// Audit failures are logged but do not fail the apply operation itself.
+	_ = s.controlAuditRepo.Append(ctx, rec)
 }
 
 // orderedEntries returns plan entries sorted into dependency-respecting execution
@@ -788,7 +818,7 @@ func (s *Service) applySurface(
 	ctx context.Context,
 	doc parser.ParsedDocument,
 	now time.Time,
-	createdBy string,
+	actor string,
 	result *types.ApplyResult,
 ) error {
 	surfaceDoc, ok := doc.Doc.(types.SurfaceDocument)
@@ -806,7 +836,7 @@ func (s *Service) applySurface(
 		version = latest.Version + 1
 	}
 
-	ds, err := mapSurfaceDocumentToDecisionSurface(surfaceDoc, now, createdBy, version)
+	ds, err := mapSurfaceDocumentToDecisionSurface(surfaceDoc, now, actor, version)
 	if err != nil {
 		return fmt.Errorf("map surface document: %w", err)
 	}
@@ -816,6 +846,7 @@ func (s *Service) applySurface(
 	}
 
 	result.AddCreated(doc.Kind, doc.ID)
+	s.appendControlAudit(ctx, controlaudit.NewSurfaceCreatedRecord(actor, ds.ID, ds.Version))
 	return nil
 }
 
@@ -824,6 +855,7 @@ func (s *Service) applyAgent(
 	ctx context.Context,
 	doc parser.ParsedDocument,
 	now time.Time,
+	actor string,
 	result *types.ApplyResult,
 ) error {
 	agentDoc, ok := doc.Doc.(types.AgentDocument)
@@ -841,15 +873,19 @@ func (s *Service) applyAgent(
 	}
 
 	result.AddCreated(doc.Kind, doc.ID)
+	s.appendControlAudit(ctx, controlaudit.NewAgentCreatedRecord(actor, a.ID))
 	return nil
 }
 
 // applyProfile maps a ProfileDocument to an AuthorityProfile domain model and persists it.
+// version is the planned version number assigned by planProfileEntry: 1 for a
+// first-time create, N+1 when appending to an existing profile lineage.
 func (s *Service) applyProfile(
 	ctx context.Context,
 	doc parser.ParsedDocument,
 	now time.Time,
-	createdBy string,
+	actor string,
+	version int,
 	result *types.ApplyResult,
 ) error {
 	profileDoc, ok := doc.Doc.(types.ProfileDocument)
@@ -857,7 +893,7 @@ func (s *Service) applyProfile(
 		return fmt.Errorf("%w: invalid document payload for kind %q", ErrInvalidBundle, types.KindProfile)
 	}
 
-	p, err := mapProfileDocumentToAuthorityProfile(profileDoc, now, createdBy)
+	p, err := mapProfileDocumentToAuthorityProfile(profileDoc, now, actor, version)
 	if err != nil {
 		return fmt.Errorf("map profile document: %w", err)
 	}
@@ -867,6 +903,12 @@ func (s *Service) applyProfile(
 	}
 
 	result.AddCreated(doc.Kind, doc.ID)
+
+	if version == 1 {
+		s.appendControlAudit(ctx, controlaudit.NewProfileCreatedRecord(actor, p.ID, p.SurfaceID, version))
+	} else {
+		s.appendControlAudit(ctx, controlaudit.NewProfileVersionedRecord(actor, p.ID, p.SurfaceID, version))
+	}
 	return nil
 }
 
@@ -875,6 +917,7 @@ func (s *Service) applyGrant(
 	ctx context.Context,
 	doc parser.ParsedDocument,
 	now time.Time,
+	actor string,
 	result *types.ApplyResult,
 ) error {
 	grantDoc, ok := doc.Doc.(types.GrantDocument)
@@ -892,5 +935,6 @@ func (s *Service) applyGrant(
 	}
 
 	result.AddCreated(doc.Kind, doc.ID)
+	s.appendControlAudit(ctx, controlaudit.NewGrantCreatedRecord(actor, g.ID))
 	return nil
 }

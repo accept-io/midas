@@ -2599,6 +2599,8 @@ func TestPlanBundle_BundleDependency_DecisionSourceVisible(t *testing.T) {
 type mockApprovalService struct {
 	approveSurfaceFn   func(ctx context.Context, surfaceID string, submitter identity.Principal, approver identity.Principal) (*surface.DecisionSurface, error)
 	deprecateSurfaceFn func(ctx context.Context, surfaceID string, deprecatedBy string, reason string, successorID string) (*surface.DecisionSurface, error)
+	approveProfileFn   func(ctx context.Context, profileID string, version int, approvedBy string) (*authority.AuthorityProfile, error)
+	deprecateProfileFn func(ctx context.Context, profileID string, version int, deprecatedBy string) (*authority.AuthorityProfile, error)
 }
 
 func (m *mockApprovalService) ApproveSurface(ctx context.Context, surfaceID string, submitter identity.Principal, approver identity.Principal) (*surface.DecisionSurface, error) {
@@ -2613,6 +2615,20 @@ func (m *mockApprovalService) DeprecateSurface(ctx context.Context, surfaceID st
 		return m.deprecateSurfaceFn(ctx, surfaceID, deprecatedBy, reason, successorID)
 	}
 	return nil, fmt.Errorf("deprecateSurface not implemented")
+}
+
+func (m *mockApprovalService) ApproveProfile(ctx context.Context, profileID string, version int, approvedBy string) (*authority.AuthorityProfile, error) {
+	if m.approveProfileFn != nil {
+		return m.approveProfileFn(ctx, profileID, version, approvedBy)
+	}
+	return nil, fmt.Errorf("approveProfile not implemented")
+}
+
+func (m *mockApprovalService) DeprecateProfile(ctx context.Context, profileID string, version int, deprecatedBy string) (*authority.AuthorityProfile, error) {
+	if m.deprecateProfileFn != nil {
+		return m.deprecateProfileFn(ctx, profileID, version, deprecatedBy)
+	}
+	return nil, fmt.Errorf("deprecateProfile not implemented")
 }
 
 // ---------------------------------------------------------------------------

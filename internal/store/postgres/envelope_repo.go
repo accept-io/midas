@@ -147,6 +147,35 @@ func (r *EnvelopeRepo) List(ctx context.Context) ([]*envelope.Envelope, error) {
 	return out, nil
 }
 
+// ListByState returns all envelopes in the given lifecycle state, ordered by
+// creation time descending. An empty state returns all envelopes (same as List).
+func (r *EnvelopeRepo) ListByState(ctx context.Context, state envelope.EnvelopeState) ([]*envelope.Envelope, error) {
+	if state == "" {
+		return r.List(ctx)
+	}
+
+	q := `SELECT ` + selectCols + ` FROM operational_envelopes WHERE state = $1 ORDER BY created_at DESC, id DESC`
+
+	rows, err := r.db.QueryContext(ctx, q, string(state))
+	if err != nil {
+		return nil, fmt.Errorf("list envelopes by state: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*envelope.Envelope
+	for rows.Next() {
+		e, err := scanEnvelopeRow(rows)
+		if err != nil {
+			return nil, fmt.Errorf("list envelopes by state: scan row: %w", err)
+		}
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list envelopes by state: rows error: %w", err)
+	}
+	return out, nil
+}
+
 // ---------------------------------------------------------------------------
 // Create
 // ---------------------------------------------------------------------------

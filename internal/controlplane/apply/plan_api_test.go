@@ -501,7 +501,7 @@ func TestApply_CallsPlan_ThenExecutes(t *testing.T) {
 	}
 
 	plan := svcPlan.Plan(context.Background(), docs)
-	applyResult := svcApply.Apply(context.Background(), docs)
+	applyResult := svcApply.Apply(context.Background(), docs, "")
 
 	// Plan must show 4 create entries; Apply must show 4 created results.
 	createCount := 0

@@ -17,6 +17,7 @@ import (
 	"github.com/accept-io/midas/internal/authority"
 	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/eval"
+	"github.com/accept-io/midas/internal/outbox"
 	"github.com/accept-io/midas/internal/policy"
 	"github.com/accept-io/midas/internal/store"
 	"github.com/accept-io/midas/internal/surface"
@@ -565,9 +566,22 @@ func (o *Orchestrator) finish(
 			return EvaluationResult{}, err
 		}
 
+		// Queue decision.escalated outbox event. The accumulator flushes this
+		// atomically with the envelope and audit writes inside acc.persistNew.
+		if outboxEv, err := buildDecisionOutboxEvent(outbox.EventDecisionEscalated, env, outcome, reason); err != nil {
+			return EvaluationResult{}, wrapFailure(FailureCategoryEnvelopePersistence,
+				fmt.Errorf("construct outbox event decision.escalated: %w", err))
+		} else if outboxEv != nil {
+			if err := acc.recordOutbox(outboxEv); err != nil {
+				return EvaluationResult{}, wrapFailure(FailureCategoryEnvelopePersistence,
+					fmt.Errorf("queue outbox event decision.escalated: %w", err))
+			}
+		}
+
 		if err := acc.persistNew(ctx, repos); err != nil {
 			return EvaluationResult{}, categorizePersistErr(fmt.Errorf("persist evaluation: %w", err))
 		}
+
 		return EvaluationResult{
 			Outcome:     outcome,
 			ReasonCode:  reason,
@@ -606,9 +620,26 @@ func (o *Orchestrator) finish(
 		return EvaluationResult{}, err
 	}
 
+	// Queue decision.completed only for the Execute (accept) outcome. Other
+	// non-escalated outcomes (Reject, RequestClarification) do not produce a
+	// completed event because no downstream action is warranted. The accumulator
+	// flushes this atomically with the envelope and audit writes inside acc.persistNew.
+	if outcome == eval.OutcomeAccept {
+		if outboxEv, err := buildDecisionOutboxEvent(outbox.EventDecisionCompleted, env, outcome, reason); err != nil {
+			return EvaluationResult{}, wrapFailure(FailureCategoryEnvelopePersistence,
+				fmt.Errorf("construct outbox event decision.completed: %w", err))
+		} else if outboxEv != nil {
+			if err := acc.recordOutbox(outboxEv); err != nil {
+				return EvaluationResult{}, wrapFailure(FailureCategoryEnvelopePersistence,
+					fmt.Errorf("queue outbox event decision.completed: %w", err))
+			}
+		}
+	}
+
 	if err := acc.persistNew(ctx, repos); err != nil {
 		return EvaluationResult{}, categorizePersistErr(fmt.Errorf("persist evaluation: %w", err))
 	}
+
 	return EvaluationResult{
 		Outcome:     outcome,
 		ReasonCode:  reason,
@@ -616,6 +647,107 @@ func (o *Orchestrator) finish(
 		State:       env.State,
 		Explanation: explanationText,
 	}, nil
+}
+
+// buildDecisionOutboxEvent constructs a decision-domain outbox event for the
+// given eventType. The payload is produced by the typed builder in the outbox
+// package, ensuring schema consistency with the versioned event contracts.
+//
+// Returns (nil, nil) — not an error — when called with an empty eventType,
+// which allows callers to skip queuing cleanly using the "else if outboxEv != nil"
+// pattern without a separate nil check. In practice eventType is always set.
+//
+// Callers are responsible for queuing the returned event via acc.recordOutbox
+// before calling acc.persistNew or acc.persistExisting. The accumulator flushes
+// the event atomically inside the transaction.
+func buildDecisionOutboxEvent(
+	eventType outbox.EventType,
+	env *envelope.Envelope,
+	outcome eval.Outcome,
+	reason eval.ReasonCode,
+) (*outbox.OutboxEvent, error) {
+	if eventType == "" {
+		return nil, nil
+	}
+
+	var (
+		payload json.RawMessage
+		err     error
+	)
+	switch eventType {
+	case outbox.EventDecisionEscalated:
+		payload, err = outbox.BuildDecisionEscalatedEvent(
+			env.ID(),
+			env.RequestSource(),
+			env.RequestID(),
+			env.ResolvedSurfaceID,
+			env.ResolvedAgentID,
+			string(reason),
+		)
+	default:
+		// EventDecisionCompleted and any future decision event types.
+		payload, err = outbox.BuildDecisionCompletedEvent(
+			env.ID(),
+			env.RequestSource(),
+			env.RequestID(),
+			env.ResolvedSurfaceID,
+			env.ResolvedAgentID,
+			string(outcome),
+			string(reason),
+		)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("build outbox payload: %w", err)
+	}
+
+	ev, err := outbox.New(
+		eventType,
+		"envelope",
+		env.ID(),
+		"midas.decisions",
+		env.RequestSource()+":"+env.RequestID(),
+		payload,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("construct outbox event: %w", err)
+	}
+	return ev, nil
+}
+
+// buildDecisionReviewResolvedOutboxEvent constructs the decision.review_resolved
+// outbox event for a completed escalation resolution. The payload is produced
+// by the typed builder in the outbox package, ensuring schema consistency with
+// the versioned event contracts.
+//
+// Callers are responsible for queuing the returned event via acc.recordOutbox
+// before calling acc.persistExisting. The accumulator flushes the event
+// atomically inside the transaction.
+func buildDecisionReviewResolvedOutboxEvent(
+	env *envelope.Envelope,
+	res EscalationResolution,
+) (*outbox.OutboxEvent, error) {
+	payload, err := outbox.BuildDecisionReviewResolvedEvent(
+		env.ID(),
+		env.RequestSource(),
+		env.RequestID(),
+		string(res.Decision),
+		res.ReviewerID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("build outbox payload: %w", err)
+	}
+	ev, err := outbox.New(
+		outbox.EventDecisionReviewResolved,
+		"envelope",
+		env.ID(),
+		"midas.decisions",
+		env.RequestSource()+":"+env.RequestID(),
+		payload,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("construct outbox event: %w", err)
+	}
+	return ev, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -709,6 +841,18 @@ func (o *Orchestrator) ResolveEscalation(ctx context.Context, res EscalationReso
 			return fmt.Errorf("record envelope_closed: %w", err)
 		}
 
+		// Queue decision.review_resolved outbox event. The accumulator flushes this
+		// atomically with the audit writes and envelope update inside acc.persistExisting.
+		if outboxEv, oerr := buildDecisionReviewResolvedOutboxEvent(env, res); oerr != nil {
+			return wrapFailure(FailureCategoryEnvelopePersistence,
+				fmt.Errorf("construct outbox event decision.review_resolved: %w", oerr))
+		} else if outboxEv != nil {
+			if oerr := acc.recordOutbox(outboxEv); oerr != nil {
+				return wrapFailure(FailureCategoryEnvelopePersistence,
+					fmt.Errorf("queue outbox event decision.review_resolved: %w", oerr))
+			}
+		}
+
 		if err := acc.persistExisting(ctx, repos); err != nil {
 			return categorizePersistErr(fmt.Errorf("persist escalation resolution: %w", err))
 		}
@@ -776,6 +920,16 @@ func (o *Orchestrator) ListEnvelopes(ctx context.Context) ([]*envelope.Envelope,
 		return nil, err
 	}
 	return repos.Envelopes.List(ctx)
+}
+
+// ListEnvelopesByState returns all envelopes in the given lifecycle state.
+// An empty state returns all envelopes.
+func (o *Orchestrator) ListEnvelopesByState(ctx context.Context, state envelope.EnvelopeState) ([]*envelope.Envelope, error) {
+	repos, err := o.store.Repositories()
+	if err != nil {
+		return nil, err
+	}
+	return repos.Envelopes.ListByState(ctx, state)
 }
 
 // ---------------------------------------------------------------------------

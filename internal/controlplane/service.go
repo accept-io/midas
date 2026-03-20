@@ -41,10 +41,10 @@ func (s *Service) ApplyYAML(ctx context.Context, data []byte) types.ApplyResult 
 		return result
 	}
 
-	return s.applier.Apply(ctx, docs)
+	return s.applier.Apply(ctx, docs, "")
 }
 
 // ApplyDocuments applies an already-parsed bundle of control-plane documents.
 func (s *Service) ApplyDocuments(ctx context.Context, docs []parser.ParsedDocument) types.ApplyResult {
-	return s.applier.Apply(ctx, docs)
+	return s.applier.Apply(ctx, docs, "")
 }

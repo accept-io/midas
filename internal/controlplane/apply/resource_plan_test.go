@@ -409,12 +409,13 @@ func TestBuildApplyPlan_Profile_NotFound_ActionCreate(t *testing.T) {
 	}
 }
 
-// TestBuildApplyPlan_Profile_Exists_ActionConflict verifies that a valid profile
-// document whose ID already exists in persisted state is planned as conflict.
-func TestBuildApplyPlan_Profile_Exists_ActionConflict(t *testing.T) {
+// TestBuildApplyPlan_Profile_Exists_CreatesNewVersion verifies that a valid profile
+// document whose ID already exists in persisted state is planned as a new version
+// (not a conflict). Profiles follow a versioned lineage model.
+func TestBuildApplyPlan_Profile_Exists_CreatesNewVersion(t *testing.T) {
 	profileRepo := &controlledProfileRepo{
 		findByIDFn: func(_ context.Context, id string) (*authority.AuthorityProfile, error) {
-			return &authority.AuthorityProfile{ID: id}, nil
+			return &authority.AuthorityProfile{ID: id, Version: 1}, nil
 		},
 	}
 	svc := NewServiceWithRepos(RepositorySet{Profiles: profileRepo})
@@ -425,11 +426,74 @@ func TestBuildApplyPlan_Profile_Exists_ActionConflict(t *testing.T) {
 		t.Fatalf("expected 1 entry, got %d", len(plan.Entries))
 	}
 	entry := plan.Entries[0]
-	if entry.Action != ApplyActionConflict {
-		t.Errorf("expected action %q, got %q", ApplyActionConflict, entry.Action)
+	if entry.Action != ApplyActionCreate {
+		t.Errorf("expected action %q (new version), got %q", ApplyActionCreate, entry.Action)
+	}
+	if entry.NewVersion != 2 {
+		t.Errorf("expected NewVersion 2, got %d", entry.NewVersion)
 	}
 	if entry.Message == "" {
-		t.Error("expected non-empty conflict message")
+		t.Error("expected non-empty version message")
+	}
+}
+
+// TestBuildApplyPlan_Profile_New_AssignsVersion1 verifies that a valid profile
+// document with no persisted counterpart is planned as create with NewVersion=1.
+func TestBuildApplyPlan_Profile_New_AssignsVersion1(t *testing.T) {
+	profileRepo := &controlledProfileRepo{
+		findByIDFn: func(_ context.Context, _ string) (*authority.AuthorityProfile, error) {
+			return nil, nil
+		},
+	}
+	svc := NewServiceWithRepos(RepositorySet{Profiles: profileRepo})
+
+	plan := svc.buildApplyPlan(context.Background(), []parser.ParsedDocument{validProfile("profile-new")})
+
+	if len(plan.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(plan.Entries))
+	}
+	entry := plan.Entries[0]
+	if entry.Action != ApplyActionCreate {
+		t.Errorf("expected action %q, got %q", ApplyActionCreate, entry.Action)
+	}
+	if entry.NewVersion != 1 {
+		t.Errorf("expected NewVersion 1, got %d", entry.NewVersion)
+	}
+}
+
+// TestBuildApplyPlan_Profile_VersionIncrement verifies that repeated applies of
+// the same profile ID produce increasing version numbers. Uses the memory store
+// so the second plan sees the state written by the first apply.
+func TestBuildApplyPlan_Profile_VersionIncrement(t *testing.T) {
+	// Use a simple stub that simulates a repository with state.
+	currentVersion := 0
+	profileRepo := &controlledProfileRepo{
+		findByIDFn: func(_ context.Context, _ string) (*authority.AuthorityProfile, error) {
+			if currentVersion == 0 {
+				return nil, nil
+			}
+			return &authority.AuthorityProfile{ID: "prof-incr", Version: currentVersion}, nil
+		},
+	}
+	svc := NewServiceWithRepos(RepositorySet{Profiles: profileRepo})
+	ctx := context.Background()
+
+	// First apply — no existing version.
+	plan1 := svc.buildApplyPlan(ctx, []parser.ParsedDocument{validProfile("prof-incr")})
+	if len(plan1.Entries) != 1 || plan1.Entries[0].NewVersion != 1 {
+		t.Fatalf("first apply: expected NewVersion 1, got %d", plan1.Entries[0].NewVersion)
+	}
+
+	// Simulate executor persisting v1.
+	currentVersion = 1
+
+	// Second apply — existing version is 1.
+	plan2 := svc.buildApplyPlan(ctx, []parser.ParsedDocument{validProfile("prof-incr")})
+	if len(plan2.Entries) != 1 || plan2.Entries[0].NewVersion != 2 {
+		t.Fatalf("second apply: expected NewVersion 2, got %d", plan2.Entries[0].NewVersion)
+	}
+	if plan2.Entries[0].Action != ApplyActionCreate {
+		t.Errorf("expected action create on second apply, got %q", plan2.Entries[0].Action)
 	}
 }
 
@@ -570,7 +634,7 @@ func TestExecutePlan_AgentConflict_NoCreateCall(t *testing.T) {
 		},
 	}
 
-	result := svc.executePlan(context.Background(), plan)
+	result := svc.executePlan(context.Background(), plan, "")
 
 	if agentRepo.createCalled != 0 {
 		t.Errorf("expected Create to not be called for conflict entry, called %d times", agentRepo.createCalled)
@@ -591,7 +655,7 @@ func TestExecutePlan_AgentCreate_CallsRepository(t *testing.T) {
 	}
 	svc := NewServiceWithRepos(RepositorySet{Agents: agentRepo})
 
-	result := svc.Apply(context.Background(), []parser.ParsedDocument{validAgent("agent-new")})
+	result := svc.Apply(context.Background(), []parser.ParsedDocument{validAgent("agent-new")}, "")
 
 	if result.ValidationErrorCount() != 0 {
 		t.Fatalf("expected no validation errors, got %d", result.ValidationErrorCount())
@@ -624,7 +688,7 @@ func TestExecutePlan_ProfileConflict_NoCreateCall(t *testing.T) {
 		},
 	}
 
-	result := svc.executePlan(context.Background(), plan)
+	result := svc.executePlan(context.Background(), plan, "")
 
 	if profileRepo.createCalled != 0 {
 		t.Errorf("expected Create to not be called for conflict entry, called %d times", profileRepo.createCalled)
@@ -642,7 +706,7 @@ func TestExecutePlan_ProfileCreate_CallsRepository(t *testing.T) {
 	}
 	svc := NewServiceWithRepos(RepositorySet{Profiles: profileRepo})
 
-	result := svc.Apply(context.Background(), []parser.ParsedDocument{validProfile("profile-new")})
+	result := svc.Apply(context.Background(), []parser.ParsedDocument{validProfile("profile-new")}, "")
 
 	if result.ValidationErrorCount() != 0 {
 		t.Fatalf("expected no validation errors, got %d", result.ValidationErrorCount())
@@ -675,7 +739,7 @@ func TestExecutePlan_GrantConflict_NoCreateCall(t *testing.T) {
 		},
 	}
 
-	result := svc.executePlan(context.Background(), plan)
+	result := svc.executePlan(context.Background(), plan, "")
 
 	if grantRepo.createCalled != 0 {
 		t.Errorf("expected Create to not be called for conflict entry, called %d times", grantRepo.createCalled)
@@ -693,7 +757,7 @@ func TestExecutePlan_GrantCreate_CallsRepository(t *testing.T) {
 	}
 	svc := NewServiceWithRepos(RepositorySet{Grants: grantRepo})
 
-	result := svc.Apply(context.Background(), []parser.ParsedDocument{validGrant("grant-new")})
+	result := svc.Apply(context.Background(), []parser.ParsedDocument{validGrant("grant-new")}, "")
 
 	if result.ValidationErrorCount() != 0 {
 		t.Fatalf("expected no validation errors, got %d", result.ValidationErrorCount())
@@ -798,7 +862,7 @@ func TestApply_FullBundle_AllNew_AllCreated(t *testing.T) {
 		validGrantWithRefs("grant-1", "agent-1", "profile-1"),
 	}
 
-	result := svc.Apply(context.Background(), docs)
+	result := svc.Apply(context.Background(), docs, "")
 
 	if result.ValidationErrorCount() != 0 {
 		t.Fatalf("expected no validation errors, got %d: %+v", result.ValidationErrorCount(), result.ValidationErrors)
@@ -852,7 +916,7 @@ func TestApply_FullBundle_ExistingAgent_ConflictResult(t *testing.T) {
 		validGrantWithRefs("grant-1", "agent-existing", "profile-1"),
 	}
 
-	result := svc.Apply(context.Background(), docs)
+	result := svc.Apply(context.Background(), docs, "")
 
 	if result.ValidationErrorCount() != 0 {
 		t.Fatalf("expected no validation errors, got %d: %+v", result.ValidationErrorCount(), result.ValidationErrors)
@@ -882,7 +946,7 @@ func TestApply_NoRepos_AllResourceKinds_AllCreated(t *testing.T) {
 		validGrant("grant-1"),
 	}
 
-	result := svc.Apply(context.Background(), docs)
+	result := svc.Apply(context.Background(), docs, "")
 
 	if result.ValidationErrorCount() != 0 {
 		t.Fatalf("expected no validation errors, got %d: %+v", result.ValidationErrorCount(), result.ValidationErrors)
@@ -905,7 +969,7 @@ func TestApply_InvalidAgentInBundle_RejectsWholeBundle(t *testing.T) {
 		invalidAgent("agent-bad"),
 	}
 
-	result := svc.Apply(context.Background(), docs)
+	result := svc.Apply(context.Background(), docs, "")
 
 	if result.ValidationErrorCount() == 0 {
 		t.Fatal("expected validation errors for invalid agent, got none")
@@ -928,7 +992,7 @@ func TestNewServiceWithRepos_AllNil_ValidatesOnly(t *testing.T) {
 		t.Fatal("expected NewServiceWithRepos to return a non-nil service")
 	}
 
-	result := svc.Apply(context.Background(), []parser.ParsedDocument{validSurface("surf-1")})
+	result := svc.Apply(context.Background(), []parser.ParsedDocument{validSurface("surf-1")}, "")
 	if result.ValidationErrorCount() != 0 {
 		t.Fatalf("expected no validation errors, got %d", result.ValidationErrorCount())
 	}

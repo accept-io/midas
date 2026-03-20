@@ -84,6 +84,22 @@ type AuthorityProfile struct {
 	ApprovedAt *time.Time
 }
 
+// CanTransitionTo validates whether a profile lifecycle transition is permitted.
+//
+// Valid transitions:
+//   - review → active   (approval)
+//   - active → deprecated (deprecation)
+func (p *AuthorityProfile) CanTransitionTo(next ProfileStatus) bool {
+	switch p.Status {
+	case ProfileStatusReview:
+		return next == ProfileStatusActive
+	case ProfileStatusActive:
+		return next == ProfileStatusDeprecated
+	default:
+		return false
+	}
+}
+
 // GrantStatus represents the lifecycle state of an AuthorityGrant.
 type GrantStatus string
 
@@ -152,6 +168,9 @@ type GrantRepository interface {
 	FindActiveByAgentAndProfile(ctx context.Context, agentID, profileID string) (*AuthorityGrant, error)
 
 	ListByAgent(ctx context.Context, agentID string) ([]*AuthorityGrant, error)
+
+	// ListByProfile returns all grants linked to the given profile ID.
+	ListByProfile(ctx context.Context, profileID string) ([]*AuthorityGrant, error)
 
 	Create(ctx context.Context, g *AuthorityGrant) error
 

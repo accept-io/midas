@@ -26,7 +26,7 @@ func TestErrInvalidBundle_IsCheckable(t *testing.T) {
 
 func TestApplyBundle_ParseError_WrapsErrInvalidBundle(t *testing.T) {
 	svc := NewService()
-	_, err := svc.ApplyBundle(context.Background(), []byte("not: valid: yaml: {{{{"))
+	_, err := svc.ApplyBundle(context.Background(), []byte("not: valid: yaml: {{{{"), "")
 	if err == nil {
 		t.Fatal("expected error for unparseable bundle, got nil")
 	}
@@ -37,7 +37,7 @@ func TestApplyBundle_ParseError_WrapsErrInvalidBundle(t *testing.T) {
 
 func TestApplyBundle_EmptyBundle_WrapsErrInvalidBundle(t *testing.T) {
 	svc := NewService()
-	_, err := svc.ApplyBundle(context.Background(), []byte("---"))
+	_, err := svc.ApplyBundle(context.Background(), []byte("---"), "")
 	if err == nil {
 		t.Fatal("expected error for empty bundle, got nil")
 	}
@@ -219,7 +219,7 @@ func TestExecutePlan_ValidPlan_ProducesCreatedResults(t *testing.T) {
 	}
 
 	plan := svc.buildApplyPlan(context.Background(), docs)
-	result := svc.executePlan(context.Background(), plan)
+	result := svc.executePlan(context.Background(), plan, "")
 
 	if result.ValidationErrorCount() != 0 {
 		t.Fatalf("expected no validation errors, got %d", result.ValidationErrorCount())
@@ -234,7 +234,7 @@ func TestExecutePlan_InvalidPlan_ReturnsValidationErrorsOnly(t *testing.T) {
 	docs := []parser.ParsedDocument{invalidSurface("surf-bad")}
 
 	plan := svc.buildApplyPlan(context.Background(), docs)
-	result := svc.executePlan(context.Background(), plan)
+	result := svc.executePlan(context.Background(), plan, "")
 
 	if result.ValidationErrorCount() == 0 {
 		t.Fatal("expected validation errors, got none")
@@ -251,10 +251,10 @@ func TestApplyMatchesBuildPlanThenExecutePlan(t *testing.T) {
 		validSurface("surf-2"),
 	}
 
-	directResult := svc.Apply(context.Background(), docs)
+	directResult := svc.Apply(context.Background(), docs, "")
 
 	plan := svc.buildApplyPlan(context.Background(), docs)
-	splitResult := svc.executePlan(context.Background(), plan)
+	splitResult := svc.executePlan(context.Background(), plan, "")
 
 	if directResult.CreatedCount() != splitResult.CreatedCount() {
 		t.Errorf("Apply() and buildApplyPlan+executePlan() disagree: created %d vs %d",
@@ -481,7 +481,7 @@ func TestExecutePlan_ConflictEntry_NoCreateCall(t *testing.T) {
 		},
 	}
 
-	result := svc.executePlan(context.Background(), plan)
+	result := svc.executePlan(context.Background(), plan, "")
 
 	if repo.createCalled != 0 {
 		t.Errorf("expected Create to not be called for conflict entry, called %d times", repo.createCalled)
@@ -516,7 +516,7 @@ func TestExecutePlan_UnchangedEntry_NoCreateCall(t *testing.T) {
 		},
 	}
 
-	result := svc.executePlan(context.Background(), plan)
+	result := svc.executePlan(context.Background(), plan, "")
 
 	if repo.createCalled != 0 {
 		t.Errorf("expected Create to not be called for unchanged entry, called %d times", repo.createCalled)
@@ -544,7 +544,7 @@ func TestApply_ConflictSurface_ReturnsConflictResult(t *testing.T) {
 	}
 	svc := NewServiceWithRepo(repo)
 
-	result := svc.Apply(context.Background(), []parser.ParsedDocument{validSurface("surf-pending")})
+	result := svc.Apply(context.Background(), []parser.ParsedDocument{validSurface("surf-pending")}, "")
 
 	if result.ValidationErrorCount() != 0 {
 		t.Fatalf("expected no validation errors, got %d", result.ValidationErrorCount())
@@ -570,7 +570,7 @@ func TestApply_NewSurface_WithRepo_ReturnsCreated(t *testing.T) {
 	}
 	svc := NewServiceWithRepo(repo)
 
-	result := svc.Apply(context.Background(), []parser.ParsedDocument{validSurface("surf-brand-new")})
+	result := svc.Apply(context.Background(), []parser.ParsedDocument{validSurface("surf-brand-new")}, "")
 
 	if result.ValidationErrorCount() != 0 {
 		t.Fatalf("expected no validation errors, got %d", result.ValidationErrorCount())
@@ -596,7 +596,7 @@ func TestApply_InvalidBundle_WithRepo_StillRejectsAll(t *testing.T) {
 	}
 	svc := NewServiceWithRepo(repo)
 
-	result := svc.Apply(context.Background(), []parser.ParsedDocument{invalidSurface("surf-bad")})
+	result := svc.Apply(context.Background(), []parser.ParsedDocument{invalidSurface("surf-bad")}, "")
 
 	if result.ValidationErrorCount() == 0 {
 		t.Fatal("expected validation errors for invalid bundle")

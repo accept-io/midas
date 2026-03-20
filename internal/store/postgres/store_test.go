@@ -41,15 +41,18 @@ func openTestDB(t *testing.T) *sql.DB {
 func cleanupOperationalEnvelopes(t *testing.T, db *sql.DB) {
 	t.Helper()
 
-	// Delete audit events FIRST (child table with foreign key)
-	_, err := db.Exec(`DELETE FROM audit_events`)
-	if err != nil {
+	// Delete outbox events (no FK to other domain tables)
+	if _, err := db.Exec(`DELETE FROM outbox_events`); err != nil {
+		t.Fatalf("cleanup outbox_events: %v", err)
+	}
+
+	// Delete audit events FIRST (child table with foreign key to operational_envelopes)
+	if _, err := db.Exec(`DELETE FROM audit_events`); err != nil {
 		t.Fatalf("cleanup audit_events: %v", err)
 	}
 
 	// Then delete envelopes (parent table)
-	_, err = db.Exec(`DELETE FROM operational_envelopes`)
-	if err != nil {
+	if _, err := db.Exec(`DELETE FROM operational_envelopes`); err != nil {
 		t.Fatalf("cleanup operational_envelopes: %v", err)
 	}
 }
