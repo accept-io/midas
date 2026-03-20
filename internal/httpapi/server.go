@@ -56,6 +56,8 @@ type controlPlaneService interface {
 type approvalService interface {
 	ApproveSurface(ctx context.Context, surfaceID string, submitter identity.Principal, approver identity.Principal) (*surface.DecisionSurface, error)
 	DeprecateSurface(ctx context.Context, surfaceID string, deprecatedBy string, reason string, successorID string) (*surface.DecisionSurface, error)
+	ApproveProfile(ctx context.Context, profileID string, version int, approvedBy string) (*authority.AuthorityProfile, error)
+	DeprecateProfile(ctx context.Context, profileID string, version int, deprecatedBy string) (*authority.AuthorityProfile, error)
 }
 
 // introspectionService defines the read-only operator visibility contract.
@@ -114,6 +116,29 @@ type deprecateSurfaceResponse struct {
 	Status             string `json:"status"`
 	DeprecationReason  string `json:"deprecation_reason,omitempty"`
 	SuccessorSurfaceID string `json:"successor_surface_id,omitempty"`
+}
+
+type approveProfileRequest struct {
+	Version    int    `json:"version"`
+	ApprovedBy string `json:"approved_by"`
+}
+
+type approveProfileResponse struct {
+	ProfileID  string `json:"profile_id"`
+	Version    int    `json:"version"`
+	Status     string `json:"status"`
+	ApprovedBy string `json:"approved_by"`
+}
+
+type deprecateProfileRequest struct {
+	Version      int    `json:"version"`
+	DeprecatedBy string `json:"deprecated_by"`
+}
+
+type deprecateProfileResponse struct {
+	ProfileID string `json:"profile_id"`
+	Version   int    `json:"version"`
+	Status    string `json:"status"`
 }
 
 // surfaceResponse is the wire format for GET /v1/surfaces/{id}.
@@ -437,6 +462,140 @@ func (s *Server) handleDeprecateSurface(w http.ResponseWriter, r *http.Request, 
 	})
 }
 
+// handleProfileActions dispatches POST /v1/controlplane/profiles/{id}/{action}.
+func (s *Server) handleProfileActions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+
+	const prefix = "/v1/controlplane/profiles/"
+	if !strings.HasPrefix(r.URL.Path, prefix) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+
+	rest := strings.TrimPrefix(r.URL.Path, prefix)
+	parts := strings.Split(strings.Trim(rest, "/"), "/")
+	if len(parts) != 2 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+
+	profileID := strings.TrimSpace(parts[0])
+	if profileID == "" || !isValidIdentifier(profileID) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid profile id"})
+		return
+	}
+
+	action := parts[1]
+	switch action {
+	case "approve":
+		s.handleApproveProfile(w, r, profileID)
+	case "deprecate":
+		s.handleDeprecateProfile(w, r, profileID)
+	default:
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+	}
+}
+
+// handleApproveProfile processes POST /v1/controlplane/profiles/{id}/approve.
+// It transitions a profile version from review to active status.
+func (s *Server) handleApproveProfile(w http.ResponseWriter, r *http.Request, profileID string) {
+	if s.approval == nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "approval service not configured"})
+		return
+	}
+
+	rawBody, err := readRequestBody(w, r, maxRequestBodyBytes)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, errRequestBodyTooLarge) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		writeJSON(w, status, map[string]string{"error": err.Error()})
+		return
+	}
+
+	var req approveProfileRequest
+	if err := decodeStrictJSON(rawBody, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	req.ApprovedBy = strings.TrimSpace(req.ApprovedBy)
+	if !isValidIdentifier(req.ApprovedBy) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "approved_by must be a valid identifier"})
+		return
+	}
+	if req.Version < 1 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "version must be >= 1"})
+		return
+	}
+
+	updated, err := s.approval.ApproveProfile(r.Context(), profileID, req.Version, req.ApprovedBy)
+	if err != nil {
+		statusCode, errResp := mapApprovalError(err)
+		writeJSON(w, statusCode, errResp)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, approveProfileResponse{
+		ProfileID:  updated.ID,
+		Version:    updated.Version,
+		Status:     string(updated.Status),
+		ApprovedBy: updated.ApprovedBy,
+	})
+}
+
+// handleDeprecateProfile processes POST /v1/controlplane/profiles/{id}/deprecate.
+// It transitions a profile version from active to deprecated status.
+func (s *Server) handleDeprecateProfile(w http.ResponseWriter, r *http.Request, profileID string) {
+	if s.approval == nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "approval service not configured"})
+		return
+	}
+
+	rawBody, err := readRequestBody(w, r, maxRequestBodyBytes)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, errRequestBodyTooLarge) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		writeJSON(w, status, map[string]string{"error": err.Error()})
+		return
+	}
+
+	var req deprecateProfileRequest
+	if err := decodeStrictJSON(rawBody, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	req.DeprecatedBy = strings.TrimSpace(req.DeprecatedBy)
+	if !isValidIdentifier(req.DeprecatedBy) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "deprecated_by must be a valid identifier"})
+		return
+	}
+	if req.Version < 1 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "version must be >= 1"})
+		return
+	}
+
+	updated, err := s.approval.DeprecateProfile(r.Context(), profileID, req.Version, req.DeprecatedBy)
+	if err != nil {
+		statusCode, errResp := mapApprovalError(err)
+		writeJSON(w, statusCode, errResp)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, deprecateProfileResponse{
+		ProfileID: updated.ID,
+		Version:   updated.Version,
+		Status:    string(updated.Status),
+	})
+}
+
 func NewServerWithServices(orchestrator orchestrator, controlPlane controlPlaneService, approvalSvc approvalService) *Server {
 	return NewServerWithAllServices(orchestrator, controlPlane, approvalSvc, nil)
 }
@@ -502,6 +661,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/v1/controlplane/plan", s.handlePlanBundle)
 	s.mux.HandleFunc("/v1/controlplane/audit", s.handleListControlAudit)
 	s.mux.HandleFunc("/v1/controlplane/surfaces/", s.handleSurfaceActions)
+	s.mux.HandleFunc("/v1/controlplane/profiles/", s.handleProfileActions)
 	// Operator introspection
 	s.mux.HandleFunc("/v1/surfaces/", s.handleGetSurfaceOrVersions)
 	s.mux.HandleFunc("/v1/profiles/", s.handleGetProfileOrVersions)
@@ -1741,11 +1901,17 @@ func mapApprovalError(err error) (int, map[string]string) {
 	switch {
 	case errors.Is(err, approval.ErrSurfaceNotFound):
 		return http.StatusNotFound, map[string]string{"error": "surface not found"}
+	case errors.Is(err, approval.ErrProfileNotFound):
+		return http.StatusNotFound, map[string]string{"error": "profile not found"}
 	case errors.Is(err, approval.ErrApprovalForbidden):
 		return http.StatusForbidden, map[string]string{"error": "approver is not authorized to approve this surface"}
 	case errors.Is(err, approval.ErrInvalidStatus):
 		return http.StatusConflict, map[string]string{"error": err.Error()}
 	case errors.Is(err, approval.ErrInvalidTransition):
+		return http.StatusConflict, map[string]string{"error": err.Error()}
+	case errors.Is(err, approval.ErrProfileNotInReview):
+		return http.StatusConflict, map[string]string{"error": err.Error()}
+	case errors.Is(err, approval.ErrProfileNotActive):
 		return http.StatusConflict, map[string]string{"error": err.Error()}
 	default:
 		return http.StatusInternalServerError, map[string]string{"error": err.Error()}

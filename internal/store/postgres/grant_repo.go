@@ -130,6 +130,48 @@ func (r *GrantRepo) ListByAgent(ctx context.Context, agentID string) ([]*authori
 	return out, nil
 }
 
+func (r *GrantRepo) ListByProfile(ctx context.Context, profileID string) ([]*authority.AuthorityGrant, error) {
+	const q = `
+		SELECT
+			id,
+			agent_id,
+			profile_id,
+			granted_by,
+			status,
+			effective_date,
+			expires_at,
+			revoked_at,
+			revoked_by,
+			created_at,
+			updated_at
+		FROM authority_grants
+		WHERE profile_id = $1
+		ORDER BY effective_date DESC, created_at DESC
+	`
+
+	rows, err := r.db.QueryContext(ctx, q, profileID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []*authority.AuthorityGrant
+
+	for rows.Next() {
+		g, err := scanGrantRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, g)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
 func (r *GrantRepo) Create(ctx context.Context, g *authority.AuthorityGrant) error {
 	const q = `
 		INSERT INTO authority_grants (

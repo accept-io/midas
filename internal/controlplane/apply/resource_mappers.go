@@ -55,10 +55,12 @@ func mapAgentType(docType string) (agent.AgentType, error) {
 // mapProfileDocumentToAuthorityProfile converts a validated ProfileDocument into
 // an AuthorityProfile domain model ready for persistence.
 //
-// New profiles are always persisted at version 1 with status active. The document
-// schema does not carry a governance review workflow for profiles in the current
-// apply path. Timestamps are normalized to UTC.
-func mapProfileDocumentToAuthorityProfile(doc types.ProfileDocument, now time.Time, createdBy string) (*authority.AuthorityProfile, error) {
+// version is the version number assigned by the planner: 1 for a first-time
+// create, N+1 when appending to an existing profile lineage. Profiles are
+// persisted with status active; the document schema does not carry a governance
+// review workflow for profiles in the current apply path. Timestamps are
+// normalized to UTC.
+func mapProfileDocumentToAuthorityProfile(doc types.ProfileDocument, now time.Time, createdBy string, version int) (*authority.AuthorityProfile, error) {
 	now = now.UTC()
 
 	consequence, err := mapConsequenceThreshold(doc.Spec.Authority.ConsequenceThreshold)
@@ -82,10 +84,10 @@ func mapProfileDocumentToAuthorityProfile(doc types.ProfileDocument, now time.Ti
 
 	return &authority.AuthorityProfile{
 		ID:                   strings.TrimSpace(doc.Metadata.ID),
-		Version:              1,
+		Version:              version,
 		SurfaceID:            strings.TrimSpace(doc.Spec.SurfaceID),
 		Name:                 strings.TrimSpace(doc.Metadata.Name),
-		Status:               authority.ProfileStatusActive,
+		Status:               authority.ProfileStatusReview,
 		EffectiveDate:        effectiveFrom,
 		ConfidenceThreshold:  doc.Spec.Authority.DecisionConfidenceThreshold,
 		ConsequenceThreshold: consequence,

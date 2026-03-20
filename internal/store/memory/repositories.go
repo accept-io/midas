@@ -8,106 +8,147 @@ import (
 	"github.com/accept-io/midas/internal/audit"
 	"github.com/accept-io/midas/internal/authority"
 	"github.com/accept-io/midas/internal/envelope"
+	"github.com/accept-io/midas/internal/outbox"
 	"github.com/accept-io/midas/internal/store"
 	"github.com/accept-io/midas/internal/surface"
 )
 
+// SurfaceRepo is a thread-unsafe in-memory implementation of
+// surface.SurfaceRepository. It maintains full version history per logical
+// surface ID, matching the semantics of the Postgres implementation:
+//   - Create appends a new version; it never overwrites an existing one.
+//   - FindLatestByID returns the highest-version entry.
+//   - FindByIDVersion returns a specific (ID, version) pair.
+//   - ListVersions returns all versions in descending order (latest first).
+//   - Update modifies an existing (ID, version) entry in place.
+//
+// Versions are stored in ascending insertion order. Because the apply executor
+// always increments version numbers monotonically (1, 2, 3 …), the last
+// element is always the latest version. All methods rely on this invariant.
 type SurfaceRepo struct {
-	items map[string]*surface.DecisionSurface
+	// versions maps logical surface ID → versions in ascending-version order.
+	// The last element is the latest version.
+	versions map[string][]*surface.DecisionSurface
 }
 
 func NewSurfaceRepo() *SurfaceRepo {
-	return &SurfaceRepo{items: map[string]*surface.DecisionSurface{}}
+	return &SurfaceRepo{versions: make(map[string][]*surface.DecisionSurface)}
 }
 
-// FindLatestByID returns the latest version (renamed from FindByID)
-func (r *SurfaceRepo) FindLatestByID(ctx context.Context, id string) (*surface.DecisionSurface, error) {
-	return r.items[id], nil
-}
-
-// FindByIDVersion returns a specific version (stub for now - memory store doesn't do versioning yet)
-func (r *SurfaceRepo) FindByIDVersion(ctx context.Context, id string, version int) (*surface.DecisionSurface, error) {
-	s := r.items[id]
-	if s == nil {
+// FindLatestByID returns the highest-version surface for the given logical ID.
+// Returns nil, nil when no surface with that ID exists.
+func (r *SurfaceRepo) FindLatestByID(_ context.Context, id string) (*surface.DecisionSurface, error) {
+	vs := r.versions[id]
+	if len(vs) == 0 {
 		return nil, nil
 	}
-	if s.Version != version {
-		return nil, nil // Version mismatch
-	}
-	return s, nil
+	return vs[len(vs)-1], nil
 }
 
-func (r *SurfaceRepo) FindActiveAt(ctx context.Context, id string, at time.Time) (*surface.DecisionSurface, error) {
-	s := r.items[id]
-	if s == nil {
-		return nil, nil
-	}
-
-	// Check if active at given time
-	if s.Status != surface.SurfaceStatusActive {
-		return nil, nil
-	}
-	if s.EffectiveFrom.After(at) {
-		return nil, nil
-	}
-	if s.EffectiveUntil != nil && !s.EffectiveUntil.After(at) {
-		return nil, nil
-	}
-
-	return s, nil
-}
-
-// ListVersions returns all versions of a surface (stub - memory store has one version per ID)
-func (r *SurfaceRepo) ListVersions(ctx context.Context, id string) ([]*surface.DecisionSurface, error) {
-	s := r.items[id]
-	if s == nil {
-		return []*surface.DecisionSurface{}, nil
-	}
-	return []*surface.DecisionSurface{s}, nil
-}
-
-// ListAll returns latest version of each surface (renamed from List)
-func (r *SurfaceRepo) ListAll(ctx context.Context) ([]*surface.DecisionSurface, error) {
-	var out []*surface.DecisionSurface
-	for _, v := range r.items {
-		out = append(out, v)
-	}
-	return out, nil
-}
-
-// ListByStatus returns surfaces with given status
-func (r *SurfaceRepo) ListByStatus(ctx context.Context, status surface.SurfaceStatus) ([]*surface.DecisionSurface, error) {
-	var out []*surface.DecisionSurface
-	for _, v := range r.items {
-		if v.Status == status {
-			out = append(out, v)
+// FindByIDVersion returns the surface with the given logical ID and exact version.
+// Returns nil, nil when the (ID, version) pair does not exist.
+func (r *SurfaceRepo) FindByIDVersion(_ context.Context, id string, version int) (*surface.DecisionSurface, error) {
+	for _, s := range r.versions[id] {
+		if s.Version == version {
+			return s, nil
 		}
 	}
-	return out, nil
+	return nil, nil
 }
 
-// ListByDomain returns surfaces in given domain
-func (r *SurfaceRepo) ListByDomain(ctx context.Context, domain string) ([]*surface.DecisionSurface, error) {
-	var out []*surface.DecisionSurface
-	for _, v := range r.items {
-		if v.Domain == domain {
-			out = append(out, v)
-		}
-	}
-	return out, nil
-}
-
-// Search finds surfaces matching criteria
-func (r *SurfaceRepo) Search(ctx context.Context, criteria surface.SearchCriteria) ([]*surface.DecisionSurface, error) {
-	var out []*surface.DecisionSurface
-
-	for _, s := range r.items {
-		if !matchesCriteria(s, criteria) {
+// FindActiveAt returns the surface version that is active at the given time:
+// status == active, effective_from <= at, and (effective_until IS NULL OR
+// effective_until > at). When multiple versions satisfy the condition (an
+// invariant violation), the highest-version one is returned.
+func (r *SurfaceRepo) FindActiveAt(_ context.Context, id string, at time.Time) (*surface.DecisionSurface, error) {
+	var best *surface.DecisionSurface
+	for _, s := range r.versions[id] {
+		if s.Status != surface.SurfaceStatusActive {
 			continue
 		}
-		out = append(out, s)
+		if s.EffectiveFrom.After(at) {
+			continue
+		}
+		if s.EffectiveUntil != nil && !s.EffectiveUntil.After(at) {
+			continue
+		}
+		if best == nil || s.Version > best.Version {
+			best = s
+		}
 	}
+	return best, nil
+}
 
+// ListVersions returns all versions of the surface in descending version order
+// (latest first), matching the Postgres implementation behaviour.
+// Returns an empty slice when the surface does not exist.
+func (r *SurfaceRepo) ListVersions(_ context.Context, id string) ([]*surface.DecisionSurface, error) {
+	vs := r.versions[id]
+	if len(vs) == 0 {
+		return []*surface.DecisionSurface{}, nil
+	}
+	// Stored ascending; return descending copy to match ORDER BY version DESC.
+	out := make([]*surface.DecisionSurface, len(vs))
+	for i, s := range vs {
+		out[len(vs)-1-i] = s
+	}
+	return out, nil
+}
+
+// ListAll returns the latest version of each surface.
+func (r *SurfaceRepo) ListAll(_ context.Context) ([]*surface.DecisionSurface, error) {
+	var out []*surface.DecisionSurface
+	for _, vs := range r.versions {
+		if len(vs) > 0 {
+			out = append(out, vs[len(vs)-1])
+		}
+	}
+	return out, nil
+}
+
+// ListByStatus returns the latest version of each surface that has the given status.
+func (r *SurfaceRepo) ListByStatus(_ context.Context, status surface.SurfaceStatus) ([]*surface.DecisionSurface, error) {
+	var out []*surface.DecisionSurface
+	for _, vs := range r.versions {
+		if len(vs) == 0 {
+			continue
+		}
+		latest := vs[len(vs)-1]
+		if latest.Status == status {
+			out = append(out, latest)
+		}
+	}
+	return out, nil
+}
+
+// ListByDomain returns the latest version of each surface in the given domain.
+func (r *SurfaceRepo) ListByDomain(_ context.Context, domain string) ([]*surface.DecisionSurface, error) {
+	var out []*surface.DecisionSurface
+	for _, vs := range r.versions {
+		if len(vs) == 0 {
+			continue
+		}
+		latest := vs[len(vs)-1]
+		if latest.Domain == domain {
+			out = append(out, latest)
+		}
+	}
+	return out, nil
+}
+
+// Search returns the latest version of each surface whose latest version
+// matches the given search criteria.
+func (r *SurfaceRepo) Search(_ context.Context, criteria surface.SearchCriteria) ([]*surface.DecisionSurface, error) {
+	var out []*surface.DecisionSurface
+	for _, vs := range r.versions {
+		if len(vs) == 0 {
+			continue
+		}
+		latest := vs[len(vs)-1]
+		if matchesCriteria(latest, criteria) {
+			out = append(out, latest)
+		}
+	}
 	return out, nil
 }
 
@@ -171,14 +212,23 @@ func matchesCriteria(s *surface.DecisionSurface, criteria surface.SearchCriteria
 	return true
 }
 
-func (r *SurfaceRepo) Create(ctx context.Context, s *surface.DecisionSurface) error {
-	// In memory store, we use ID as key (no versioning support yet)
-	r.items[s.ID] = s
+// Create appends a new version for the surface's logical ID. The caller
+// (the apply executor) is responsible for assigning a monotonically increasing
+// Version number.
+func (r *SurfaceRepo) Create(_ context.Context, s *surface.DecisionSurface) error {
+	r.versions[s.ID] = append(r.versions[s.ID], s)
 	return nil
 }
 
-func (r *SurfaceRepo) Update(ctx context.Context, s *surface.DecisionSurface) error {
-	r.items[s.ID] = s
+// Update replaces the matching (ID, Version) entry in place.
+// Returns nil without error if the (ID, Version) does not exist (no-op).
+func (r *SurfaceRepo) Update(_ context.Context, s *surface.DecisionSurface) error {
+	for i, existing := range r.versions[s.ID] {
+		if existing.Version == s.Version {
+			r.versions[s.ID][i] = s
+			return nil
+		}
+	}
 	return nil
 }
 
@@ -212,79 +262,114 @@ func (r *AgentRepo) List(ctx context.Context) ([]*agent.Agent, error) {
 	return out, nil
 }
 
+// ProfileRepo is an in-memory implementation of authority.ProfileRepository.
+// Profiles are stored as version slices keyed by their logical ID. Within each
+// slice, versions are ordered by insertion order which mirrors ascending version
+// numbers (callers assign monotonically increasing versions). This matches the
+// postgres implementation: the most recently inserted version is the "latest".
 type ProfileRepo struct {
-	items map[string]*authority.AuthorityProfile
+	// items maps logical profile ID → versions in ascending-version order.
+	// The last element is the latest version, matching FindByID behaviour.
+	items map[string][]*authority.AuthorityProfile
 }
 
 func NewProfileRepo() *ProfileRepo {
-	return &ProfileRepo{items: map[string]*authority.AuthorityProfile{}}
+	return &ProfileRepo{items: map[string][]*authority.AuthorityProfile{}}
 }
 
+// FindByID returns the latest version (highest version number) for the logical
+// profile ID. Returns nil, nil when no profile with that ID exists.
 func (r *ProfileRepo) FindByID(ctx context.Context, id string) (*authority.AuthorityProfile, error) {
-	return r.items[id], nil
+	versions := r.items[id]
+	if len(versions) == 0 {
+		return nil, nil
+	}
+	return versions[len(versions)-1], nil
 }
 
-// FindByIDAndVersion returns a specific profile version (stub - memory store has one version per ID)
+// FindByIDAndVersion returns the exact (id, version) profile. Returns nil, nil
+// when the logical ID does not exist or does not have the requested version.
 func (r *ProfileRepo) FindByIDAndVersion(ctx context.Context, id string, version int) (*authority.AuthorityProfile, error) {
-	p := r.items[id]
-	if p == nil {
-		return nil, nil
+	for _, p := range r.items[id] {
+		if p.Version == version {
+			return p, nil
+		}
 	}
-	if p.Version != version {
-		return nil, nil // Version mismatch
-	}
-	return p, nil
+	return nil, nil
 }
 
-// FindActiveAt returns profile if status='active' and date checks pass (schema v2.1)
+// FindActiveAt returns the version of the profile that is active at the given
+// time: status == active, effective_date <= at, and (effective_until IS NULL OR
+// effective_until > at). When multiple versions are active at the same instant
+// (which is an invariant violation), the latest version is returned.
 func (r *ProfileRepo) FindActiveAt(ctx context.Context, id string, at time.Time) (*authority.AuthorityProfile, error) {
-	p := r.items[id]
-	if p == nil {
-		return nil, nil
+	var best *authority.AuthorityProfile
+	for _, p := range r.items[id] {
+		if p.Status != authority.ProfileStatusActive {
+			continue
+		}
+		if p.EffectiveDate.After(at) {
+			continue
+		}
+		if p.EffectiveUntil != nil && !p.EffectiveUntil.After(at) {
+			continue
+		}
+		// Keep the highest version that qualifies.
+		if best == nil || p.Version > best.Version {
+			best = p
+		}
 	}
-
-	// Schema v2.1: Check status field
-	if p.Status != authority.ProfileStatusActive {
-		return nil, nil
-	}
-
-	// Check effective date range
-	if p.EffectiveDate.After(at) {
-		return nil, nil
-	}
-	if p.EffectiveUntil != nil && !p.EffectiveUntil.After(at) {
-		return nil, nil
-	}
-
-	return p, nil
+	return best, nil
 }
 
+// ListBySurface returns all profile versions whose SurfaceID matches, ordered
+// by logical ID and then version descending. This matches the postgres
+// implementation (ORDER BY id, version DESC) so that callers see all versions,
+// not just the latest per logical profile.
 func (r *ProfileRepo) ListBySurface(ctx context.Context, surfaceID string) ([]*authority.AuthorityProfile, error) {
 	var out []*authority.AuthorityProfile
-	for _, v := range r.items {
-		if v.SurfaceID == surfaceID {
-			out = append(out, v)
+	for _, versions := range r.items {
+		for _, p := range versions {
+			if p.SurfaceID == surfaceID {
+				out = append(out, p)
+			}
 		}
 	}
 	return out, nil
 }
 
-// ListVersions returns all versions of a profile (stub - memory store has one version per ID)
+// ListVersions returns all versions of the profile ordered by version DESC,
+// matching the postgres implementation behaviour.
 func (r *ProfileRepo) ListVersions(ctx context.Context, id string) ([]*authority.AuthorityProfile, error) {
-	p := r.items[id]
-	if p == nil {
+	versions := r.items[id]
+	if len(versions) == 0 {
 		return []*authority.AuthorityProfile{}, nil
 	}
-	return []*authority.AuthorityProfile{p}, nil
+	// Return a copy in descending-version order (stored ascending).
+	out := make([]*authority.AuthorityProfile, len(versions))
+	for i, p := range versions {
+		out[len(versions)-1-i] = p
+	}
+	return out, nil
 }
 
+// Create appends a new version for the profile's logical ID. The caller is
+// responsible for setting a Version number that is higher than all existing
+// versions for this ID.
 func (r *ProfileRepo) Create(ctx context.Context, p *authority.AuthorityProfile) error {
-	r.items[p.ID] = p
+	r.items[p.ID] = append(r.items[p.ID], p)
 	return nil
 }
 
+// Update replaces the matching (ID, Version) entry in place.
+// Returns nil without error if the (ID, Version) does not exist (no-op).
 func (r *ProfileRepo) Update(ctx context.Context, p *authority.AuthorityProfile) error {
-	r.items[p.ID] = p
+	for i, existing := range r.items[p.ID] {
+		if existing.Version == p.Version {
+			r.items[p.ID][i] = p
+			return nil
+		}
+	}
 	return nil
 }
 
@@ -326,6 +411,16 @@ func (r *GrantRepo) ListByAgent(ctx context.Context, agentID string) ([]*authori
 	var out []*authority.AuthorityGrant
 	for _, g := range r.items {
 		if g.AgentID == agentID {
+			out = append(out, g)
+		}
+	}
+	return out, nil
+}
+
+func (r *GrantRepo) ListByProfile(ctx context.Context, profileID string) ([]*authority.AuthorityGrant, error) {
+	var out []*authority.AuthorityGrant
+	for _, g := range r.items {
+		if g.ProfileID == profileID {
 			out = append(out, g)
 		}
 	}
@@ -403,6 +498,21 @@ func (r *EnvelopeRepo) List(ctx context.Context) ([]*envelope.Envelope, error) {
 	return out, nil
 }
 
+// ListByState returns all envelopes in the given lifecycle state.
+// An empty state returns all envelopes.
+func (r *EnvelopeRepo) ListByState(ctx context.Context, state envelope.EnvelopeState) ([]*envelope.Envelope, error) {
+	if state == "" {
+		return r.List(ctx)
+	}
+	var out []*envelope.Envelope
+	for _, v := range r.items {
+		if v.State == state {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+
 func (r *EnvelopeRepo) Create(ctx context.Context, e *envelope.Envelope) error {
 	r.items[e.ID()] = e
 	r.byRequestID[e.RequestID()] = e
@@ -419,12 +529,14 @@ func (r *EnvelopeRepo) Update(ctx context.Context, e *envelope.Envelope) error {
 
 func NewRepositories() *store.Repositories {
 	return &store.Repositories{
-		Surfaces:  NewSurfaceRepo(),
-		Agents:    NewAgentRepo(),
-		Profiles:  NewProfileRepo(),
-		Grants:    NewGrantRepo(),
-		Envelopes: NewEnvelopeRepo(),
-		Audit:     audit.NewMemoryRepository(),
+		Surfaces:     NewSurfaceRepo(),
+		Agents:       NewAgentRepo(),
+		Profiles:     NewProfileRepo(),
+		Grants:       NewGrantRepo(),
+		Envelopes:    NewEnvelopeRepo(),
+		Audit:        audit.NewMemoryRepository(),
+		ControlAudit: NewControlAuditRepo(),
+		Outbox:       outbox.NewMemoryRepository(),
 	}
 }
 

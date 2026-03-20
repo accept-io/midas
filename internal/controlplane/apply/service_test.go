@@ -24,7 +24,7 @@ func TestNewService(t *testing.T) {
 func TestServiceApply_EmptyBundle(t *testing.T) {
 	svc := NewService()
 
-	result := svc.Apply(context.Background(), nil)
+	result := svc.Apply(context.Background(), nil, "")
 
 	if result.ValidationErrorCount() != 0 {
 		t.Fatalf("expected no validation errors, got %d", result.ValidationErrorCount())
@@ -133,7 +133,7 @@ func TestServiceApply_ValidBundle_ReturnsCreatedResults(t *testing.T) {
 		},
 	}
 
-	result := svc.Apply(context.Background(), docs)
+	result := svc.Apply(context.Background(), docs, "")
 
 	if result.ValidationErrorCount() != 0 {
 		t.Fatalf("expected no validation errors, got %d: %+v", result.ValidationErrorCount(), result.ValidationErrors)
@@ -175,7 +175,7 @@ func TestServiceApply_InvalidBundle_ReturnsValidationErrorsOnly(t *testing.T) {
 		},
 	}
 
-	result := svc.Apply(context.Background(), docs)
+	result := svc.Apply(context.Background(), docs, "")
 
 	if result.ValidationErrorCount() == 0 {
 		t.Fatal("expected validation errors, got none")
@@ -247,7 +247,7 @@ func TestServiceApply_MixedInvalidBundle_ReturnsNoCreatedResults(t *testing.T) {
 		},
 	}
 
-	result := svc.Apply(context.Background(), docs)
+	result := svc.Apply(context.Background(), docs, "")
 
 	if result.ValidationErrorCount() == 0 {
 		t.Fatal("expected validation errors, got none")

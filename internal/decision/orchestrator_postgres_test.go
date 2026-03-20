@@ -51,6 +51,7 @@ func cleanupPostgresTestData(t *testing.T, db *sql.DB) {
 
 	// Child tables first, then parents.
 	statements := []string{
+		`DELETE FROM outbox_events`,
 		`DELETE FROM audit_events`,
 		`DELETE FROM operational_envelopes`,
 		`DELETE FROM authority_grants`,

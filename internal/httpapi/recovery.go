@@ -270,10 +270,12 @@ func (s *IntrospectionService) GetProfileRecovery(ctx context.Context, id string
 		VersionCount:     len(versions),
 		Versions:         versionEntries,
 		ActiveGrantCount: activeGrantCount,
-		// Profiles have no governance review checkpoint: the apply path sets
-		// status=active immediately. There is no approval workflow for profiles.
-		CapabilityNote: "profiles are persisted with status=active immediately on apply; " +
-			"there is no review/approval checkpoint for profiles in the current implementation",
+		// Profiles follow a governed lifecycle: apply creates status=review,
+		// explicit approval via POST /v1/controlplane/profiles/{id}/approve
+		// transitions to active. Deprecation is explicit via POST
+		// /v1/controlplane/profiles/{id}/deprecate.
+		CapabilityNote: "profiles follow a governed review→active→deprecated lifecycle; " +
+			"apply creates a review version, explicit approval is required before runtime use",
 	}
 
 	if activeVersion != nil {
@@ -324,19 +326,36 @@ func buildProfileRecoveryWarnings(latest *authority.AuthorityProfile, active *au
 func buildProfileRecoveryActions(active *authority.AuthorityProfile, activeGrantCount int, allVersions []*authority.AuthorityProfile) []string {
 	var actions []string
 
+	now := time.Now().UTC()
+
+	// Count review versions pending approval.
+	var reviewCount int
+	for _, v := range allVersions {
+		if v.Status == authority.ProfileStatusReview {
+			reviewCount++
+		}
+	}
+
 	if active == nil {
-		// Check if there are future-dated versions causing the gap.
-		now := time.Now().UTC()
+		if reviewCount > 0 {
+			// No active version but there is a review version — needs approval.
+			actions = append(actions, "approve latest review version to activate updated authority")
+		}
+		// Check if there are future-dated active versions causing the gap.
 		for _, v := range allVersions {
 			if v.Status == authority.ProfileStatusActive && v.EffectiveDate.After(now) {
 				actions = append(actions, "re-apply profile with an effective_date in the past to restore evaluation eligibility")
 				break
 			}
 		}
-	}
-
-	if active != nil && activeGrantCount > 0 {
-		actions = append(actions, "inspect dependent grants before deprecating this profile version")
+	} else {
+		// Active version exists — surface approval or deprecation guidance.
+		if reviewCount > 0 {
+			actions = append(actions, "approve latest review version to activate updated authority")
+		}
+		if activeGrantCount > 0 {
+			actions = append(actions, "inspect dependent grants before deprecating this profile version")
+		}
 	}
 
 	if actions == nil {

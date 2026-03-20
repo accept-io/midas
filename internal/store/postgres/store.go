@@ -167,14 +167,27 @@ func newRepositories(db sqltx.DBTX) (*store.Repositories, error) {
 		return nil, err
 	}
 
+	outboxRepo, err := NewOutboxRepo(db)
+	if err != nil {
+		return nil, err
+	}
+
 	auditRepo := audit.NewPostgresRepository(db)
 
+	controlAuditRepo, err := NewControlAuditRepo(db)
+	if err != nil {
+		return nil, err
+	}
+
 	return &store.Repositories{
-		Surfaces:  surfaces,
-		Agents:    agents,
-		Profiles:  profiles,
-		Grants:    grants,
-		Envelopes: envelopes,
-		Audit:     auditRepo,
+		Surfaces:     surfaces,
+		Agents:       agents,
+		Profiles:     profiles,
+		Grants:       grants,
+		Envelopes:    envelopes,
+		Audit:        auditRepo,
+		ControlAudit: controlAuditRepo,
+		Outbox:       outboxRepo,
 	}, nil
 }
+

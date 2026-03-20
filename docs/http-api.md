@@ -369,6 +369,69 @@ curl -s -X POST \
 | `409` | Surface not in `active` status |
 | `501` | Approval service not configured |
 
+### POST /v1/controlplane/profiles/{id}/approve
+
+Promote a profile version from `review` to `active`. Only `review` profiles can be approved.
+
+```bash
+curl -s -X POST \
+  http://localhost:8080/v1/controlplane/profiles/prof-payment-limits/approve \
+  -H "Content-Type: application/json" \
+  -d '{
+    "version":     1,
+    "approved_by": "user-governance-lead"
+  }'
+```
+
+```json
+{
+  "profile_id":  "prof-payment-limits",
+  "version":     1,
+  "status":      "active",
+  "approved_by": "user-governance-lead"
+}
+```
+
+**Error cases**
+
+| Status | Condition |
+|--------|-----------|
+| `400` | Missing `approved_by`, invalid identifier, or `version` < 1 |
+| `404` | Profile not found |
+| `409` | Profile not in `review` status |
+| `501` | Approval service not configured |
+
+### POST /v1/controlplane/profiles/{id}/deprecate
+
+Move a profile version from `active` to `deprecated`. Only `active` profiles can be deprecated.
+
+```bash
+curl -s -X POST \
+  http://localhost:8080/v1/controlplane/profiles/prof-payment-limits/deprecate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "version":       1,
+    "deprecated_by": "user-governance-lead"
+  }'
+```
+
+```json
+{
+  "profile_id": "prof-payment-limits",
+  "version":    1,
+  "status":     "deprecated"
+}
+```
+
+**Error cases**
+
+| Status | Condition |
+|--------|-----------|
+| `400` | Missing `deprecated_by`, invalid identifier, or `version` < 1 |
+| `404` | Profile not found |
+| `409` | Profile not in `active` status |
+| `501` | Approval service not configured |
+
 ---
 
 ## Operator introspection
@@ -490,7 +553,7 @@ curl -s http://localhost:8080/v1/profiles/prof-payments-standard/recovery | jq .
 | `version_count` | int | Total number of versions for this profile. |
 | `versions` | array | All versions: `version`, `status`, `effective_from`. |
 | `active_grant_count` | int | Active grants referencing this profile. `-1` if grants reader not wired. |
-| `capability_note` | string | Honest description of profile lifecycle behaviour (no review/approval checkpoint). |
+| `capability_note` | string | Description of profile lifecycle: governed review→active→deprecated, explicit approval required. |
 | `warnings` | array | Deterministic operator warnings about current state. |
 | `recommended_next_actions` | array | Deterministic recommended actions derived from current state. |
 

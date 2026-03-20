@@ -77,13 +77,22 @@ type ApplyPlanEntry struct {
 	ValidationErrors []types.ValidationError
 
 	// Message provides additional human-readable context, populated for
-	// conflict and invalid entries.
+	// conflict and invalid entries, and for profile version-create entries.
 	Message string
 
 	// DecisionSource records how the planner arrived at the action. This
 	// field is informational and intended for dry-run callers that need to
 	// understand the rationale for each planned action.
 	DecisionSource DecisionSource
+
+	// NewVersion is the version number that the executor will assign when
+	// persisting this entry. It is only meaningful for Profile entries with
+	// Action == ApplyActionCreate; it is zero for all other resource kinds.
+	//
+	// Version 1 means the profile is being created for the first time.
+	// Version > 1 means a new version is being appended to an existing
+	// profile lineage.
+	NewVersion int
 
 	// Doc is the underlying parsed document, available for the executor phase.
 	Doc parser.ParsedDocument

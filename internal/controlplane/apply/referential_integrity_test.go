@@ -53,7 +53,7 @@ func TestRefIntegrity_Profile_PersistedSurface_Succeeds(t *testing.T) {
 	docs := []parser.ParsedDocument{
 		validProfileWithSurface("profile-new", "surf-persisted"),
 	}
-	result := svc.Apply(context.Background(), docs)
+	result := svc.Apply(context.Background(), docs, "")
 
 	if result.ValidationErrorCount() != 0 {
 		t.Fatalf("expected no validation errors, got %d: %+v", result.ValidationErrorCount(), result.ValidationErrors)
@@ -82,7 +82,7 @@ func TestRefIntegrity_Profile_InBundleSurface_Succeeds(t *testing.T) {
 		validSurface("surf-new"),
 		validProfileWithSurface("profile-new", "surf-new"),
 	}
-	result := svc.Apply(context.Background(), docs)
+	result := svc.Apply(context.Background(), docs, "")
 
 	if result.ValidationErrorCount() != 0 {
 		t.Fatalf("expected no validation errors, got %d: %+v", result.ValidationErrorCount(), result.ValidationErrors)
@@ -111,7 +111,7 @@ func TestRefIntegrity_Profile_MissingSurface_Fails(t *testing.T) {
 	docs := []parser.ParsedDocument{
 		validProfileWithSurface("profile-orphan", "surf-does-not-exist"),
 	}
-	result := svc.Apply(context.Background(), docs)
+	result := svc.Apply(context.Background(), docs, "")
 
 	if result.ValidationErrorCount() == 0 {
 		t.Fatal("expected validation errors for profile with missing surface reference, got none")
@@ -176,7 +176,7 @@ func TestRefIntegrity_Grant_PersistedAgent_Succeeds(t *testing.T) {
 	docs := []parser.ParsedDocument{
 		validGrantWithRefs("grant-new", "agent-persisted", "profile-persisted"),
 	}
-	result := svc.Apply(context.Background(), docs)
+	result := svc.Apply(context.Background(), docs, "")
 
 	if result.ValidationErrorCount() != 0 {
 		t.Fatalf("expected no validation errors, got %d: %+v", result.ValidationErrorCount(), result.ValidationErrors)
@@ -212,7 +212,7 @@ func TestRefIntegrity_Grant_InBundleAgentAndProfile_Succeeds(t *testing.T) {
 		validProfileWithSurface("profile-a", "surf-a"),
 		validGrantWithRefs("grant-a", "agent-a", "profile-a"),
 	}
-	result := svc.Apply(context.Background(), docs)
+	result := svc.Apply(context.Background(), docs, "")
 
 	if result.ValidationErrorCount() != 0 {
 		t.Fatalf("expected no validation errors, got %d: %+v", result.ValidationErrorCount(), result.ValidationErrors)
@@ -247,7 +247,7 @@ func TestRefIntegrity_Grant_MissingAgent_Fails(t *testing.T) {
 	docs := []parser.ParsedDocument{
 		validGrantWithRefs("grant-orphan", "agent-missing", "profile-exists"),
 	}
-	result := svc.Apply(context.Background(), docs)
+	result := svc.Apply(context.Background(), docs, "")
 
 	if result.ValidationErrorCount() == 0 {
 		t.Fatal("expected validation errors for grant with missing agent reference, got none")
@@ -294,7 +294,7 @@ func TestRefIntegrity_Grant_MissingProfile_Fails(t *testing.T) {
 	docs := []parser.ParsedDocument{
 		validGrantWithRefs("grant-orphan", "agent-exists", "profile-missing"),
 	}
-	result := svc.Apply(context.Background(), docs)
+	result := svc.Apply(context.Background(), docs, "")
 
 	if result.ValidationErrorCount() == 0 {
 		t.Fatal("expected validation errors for grant with missing profile reference, got none")
@@ -365,7 +365,7 @@ func TestRefIntegrity_MixedBundle_DependencyOrderPreserved(t *testing.T) {
 		validAgent("agent-1"),
 		validSurface("surf-1"),
 	}
-	result := svc.Apply(context.Background(), docs)
+	result := svc.Apply(context.Background(), docs, "")
 
 	if result.ValidationErrorCount() != 0 {
 		t.Fatalf("expected no validation errors, got %d: %+v", result.ValidationErrorCount(), result.ValidationErrors)
@@ -413,7 +413,7 @@ func TestRefIntegrity_InvalidDependency_NothingPersisted(t *testing.T) {
 	docs := []parser.ParsedDocument{
 		validProfileWithSurface("profile-bad", "surf-nonexistent"),
 	}
-	result := svc.Apply(context.Background(), docs)
+	result := svc.Apply(context.Background(), docs, "")
 
 	if result.ValidationErrorCount() == 0 {
 		t.Fatal("expected validation errors for unresolvable reference, got none")
@@ -430,20 +430,21 @@ func TestRefIntegrity_InvalidDependency_NothingPersisted(t *testing.T) {
 	}
 }
 
-// TestRefIntegrity_ConflictEntryDoesNotSatisfyRef verifies that a conflict
-// entry (resource already exists) does not count as a bundle create provider.
-// A grant referencing a profile that is in conflict in the same bundle must
-// still resolve the reference against persisted state.
-func TestRefIntegrity_ConflictEntryDoesNotSatisfyRef(t *testing.T) {
+// TestRefIntegrity_ExistingProfileSatisfiesGrantRef verifies that a profile
+// document whose logical ID already exists in persisted state is planned as a
+// new-version create (not a conflict) and therefore satisfies the grant's
+// referential integrity check within the same bundle. Both profile and grant
+// should be created.
+func TestRefIntegrity_ExistingProfileSatisfiesGrantRef(t *testing.T) {
 	agentRepo := &controlledAgentRepo{
 		getByIDFn: func(_ context.Context, id string) (*agent.Agent, error) {
 			return &agent.Agent{ID: id}, nil // agent always exists
 		},
 	}
-	// Profile already exists → conflict.
+	// Profile already exists at v1 → planner creates v2 (not conflict).
 	profileRepo := &controlledProfileRepo{
 		findByIDFn: func(_ context.Context, id string) (*authority.AuthorityProfile, error) {
-			return &authority.AuthorityProfile{ID: id}, nil
+			return &authority.AuthorityProfile{ID: id, Version: 1}, nil
 		},
 	}
 	grantRepo := &controlledGrantRepo{
@@ -451,26 +452,24 @@ func TestRefIntegrity_ConflictEntryDoesNotSatisfyRef(t *testing.T) {
 	}
 	svc := NewServiceWithRepos(RepositorySet{Agents: agentRepo, Profiles: profileRepo, Grants: grantRepo})
 
-	// The profile document is in the bundle but will be a conflict (already exists).
-	// The grant references it. Since the profile is a conflict (not a create), it
-	// does not contribute to bundleCreates. However, the grant's reference to
-	// "profile-conflict" is still satisfiable via the profile repo (which returns
-	// it as existing). The grant should therefore succeed.
+	// The profile document is in the bundle and will create a new version (v2).
+	// The grant references that profile. Since the profile is a create (new version),
+	// it contributes to bundleCreates, satisfying the grant's reference.
+	// Both profile and grant should be created.
 	docs := []parser.ParsedDocument{
-		validProfileWithSurface("profile-conflict", "payment.execute"),
-		validGrantWithRefs("grant-new", "agent-exists", "profile-conflict"),
+		validProfileWithSurface("profile-existing", "payment.execute"),
+		validGrantWithRefs("grant-new", "agent-exists", "profile-existing"),
 	}
-	result := svc.Apply(context.Background(), docs)
+	result := svc.Apply(context.Background(), docs, "")
 
 	if result.ValidationErrorCount() != 0 {
 		t.Fatalf("expected no validation errors, got %d: %+v", result.ValidationErrorCount(), result.ValidationErrors)
 	}
-	// Profile is conflict; grant is created (profile exists in repo).
-	if result.ConflictCount() != 1 {
-		t.Errorf("expected 1 conflict (profile), got %d", result.ConflictCount())
+	if result.ConflictCount() != 0 {
+		t.Errorf("expected 0 conflicts (profiles never conflict), got %d", result.ConflictCount())
 	}
-	if result.CreatedCount() != 1 {
-		t.Errorf("expected 1 created (grant), got %d", result.CreatedCount())
+	if result.CreatedCount() != 2 {
+		t.Errorf("expected 2 created (profile new version + grant), got %d", result.CreatedCount())
 	}
 }
 

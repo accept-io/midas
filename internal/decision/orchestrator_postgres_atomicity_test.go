@@ -61,6 +61,7 @@ func (s *wrappedTxStore) WithTx(ctx context.Context, operation string, fn func(*
 			Profiles:  repos.Profiles,
 			Grants:    repos.Grants,
 			Envelopes: repos.Envelopes,
+			Outbox:    repos.Outbox,
 			Audit: &failAfterNAuditRepo{
 				inner:     repos.Audit,
 				failAfter: s.failAfter,
@@ -104,6 +105,7 @@ func cleanupAtomicityTestData(t *testing.T, db *sql.DB) {
 	t.Helper()
 
 	statements := []string{
+		`DELETE FROM outbox_events`,
 		`DELETE FROM audit_events`,
 		`DELETE FROM operational_envelopes`,
 		`DELETE FROM authority_grants`,
@@ -241,7 +243,7 @@ func TestOrchestrator_Postgres_RollsBackEnvelopeAndAuditOnMidEvaluationFailure(t
 		t.Fatalf("Repositories after failure: %v", err)
 	}
 
-	gotEnvelope, err := env.Envelopes.GetByRequestScope(context.Background(), "req-atomicity-1", "test-source")
+	gotEnvelope, err := env.Envelopes.GetByRequestScope(context.Background(), "test-source", "req-atomicity-1")
 	if err != nil {
 		t.Fatalf("GetByRequestScope: %v", err)
 	}

@@ -2,7 +2,12 @@
   "permissions": {
     "allow": [
       "Bash(go build:*)",
-      "Bash(go test:*)"
+      "Bash(go test:*)",
+      "Bash(./test.sh)",
+      "Bash(MSYS_NO_PATHCONV=1 docker run --rm --network midas_default -v \"/c/Users/phil/dev/accept/midas:/app\" -w /app -e DATABASE_URL=\"postgresql://midas:midas@postgres:5432/midas?sslmode=disable\" golang:1.25-alpine sh -c \"go test ./internal/decision/... -v -run TestOrchestrator_Outbox 2>&1\")",
+      "Bash(./test.sh 2)",
+      "Read(//tmp/**)",
+      "Bash(bash /c/Users/phil/dev/accept/midas/test.sh)"
     ]
   }
 }

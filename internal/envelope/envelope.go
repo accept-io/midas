@@ -425,6 +425,9 @@ type EnvelopeRepository interface {
 	// GetByRequestScope retrieves by (request_source, request_id) - preferred for schema v2.1
 	GetByRequestScope(ctx context.Context, requestSource, requestID string) (*Envelope, error)
 	List(ctx context.Context) ([]*Envelope, error)
+	// ListByState returns all envelopes in the given lifecycle state.
+	// An empty state returns all envelopes (equivalent to List).
+	ListByState(ctx context.Context, state EnvelopeState) ([]*Envelope, error)
 	Create(ctx context.Context, env *Envelope) error
 	Update(ctx context.Context, env *Envelope) error
 }

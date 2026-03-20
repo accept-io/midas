@@ -158,6 +158,19 @@ func (r *fakeEnvelopeRepo) List(_ context.Context) ([]*envelope.Envelope, error)
 	return out, nil
 }
 
+func (r *fakeEnvelopeRepo) ListByState(_ context.Context, state envelope.EnvelopeState) ([]*envelope.Envelope, error) {
+	if state == "" {
+		return r.List(context.Background())
+	}
+	var out []*envelope.Envelope
+	for _, v := range r.data {
+		if v.State == state {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+
 func (r *fakeEnvelopeRepo) GetByRequestScope(_ context.Context, requestSource string, requestID string) (*envelope.Envelope, error) {
 	for _, env := range r.data {
 		if env.RequestSource() == requestSource && env.RequestID() == requestID {
@@ -493,6 +506,18 @@ func (r *fakeGrantRepo) Reactivate(_ context.Context, grantID string) error {
 		}
 	}
 	return errors.New("grant not found")
+}
+
+func (r *fakeGrantRepo) ListByProfile(_ context.Context, profileID string) ([]*authority.AuthorityGrant, error) {
+	var out []*authority.AuthorityGrant
+	for _, grants := range r.grants {
+		for _, g := range grants {
+			if g.ProfileID == profileID {
+				out = append(out, g)
+			}
+		}
+	}
+	return out, nil
 }
 
 type fakeProfileRepo struct {

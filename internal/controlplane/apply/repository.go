@@ -5,6 +5,7 @@ import (
 
 	"github.com/accept-io/midas/internal/agent"
 	"github.com/accept-io/midas/internal/authority"
+	"github.com/accept-io/midas/internal/controlaudit"
 	"github.com/accept-io/midas/internal/surface"
 )
 
@@ -29,8 +30,9 @@ type GrantRepository interface {
 }
 
 type RepositorySet struct {
-	Surfaces SurfaceRepository
-	Agents   AgentRepository
-	Profiles ProfileRepository
-	Grants   GrantRepository
+	Surfaces     SurfaceRepository
+	Agents       AgentRepository
+	Profiles     ProfileRepository
+	Grants       GrantRepository
+	ControlAudit controlaudit.Repository
 }

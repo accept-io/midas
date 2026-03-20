@@ -8,6 +8,7 @@ import (
 
 	"github.com/accept-io/midas/internal/audit"
 	"github.com/accept-io/midas/internal/envelope"
+	"github.com/accept-io/midas/internal/outbox"
 	"github.com/accept-io/midas/internal/store"
 )
 
@@ -44,26 +45,34 @@ var (
 	// errAccumulatorMissingOutcome is returned by persistNew when the envelope
 	// has no Outcome set. An outcome must be recorded before persisting.
 	errAccumulatorMissingOutcome = errors.New("envelope must have Evaluation.Outcome set before persisting")
+
+	// errAccumulatorNilOutboxEvent is returned by recordOutbox when ev is nil.
+	errAccumulatorNilOutboxEvent = errors.New("outbox event must not be nil")
 )
 
-// evaluationAccumulator builds envelope state and audit events in memory,
-// then flushes the complete result atomically.
+// evaluationAccumulator builds envelope state, audit events, and outbox events
+// in memory, then flushes the complete result atomically.
 //
 // Two persistence modes cover the two orchestrator flows:
 //
-//   - persistNew (Evaluate): Create → N×Append → Update
+//   - persistNew (Evaluate): Create → N×Audit.Append → N×Outbox.Append → Update
 //     Creates a new envelope row, satisfying the FK constraint before any
-//     audit rows are appended.
+//     audit rows are appended. Outbox rows are flushed after audit rows and
+//     before the final Envelopes.Update.
 //
-//   - persistExisting (ResolveEscalation): N×Append → Update
-//     The envelope row already exists; only audit events and the updated
-//     state are written.
+//   - persistExisting (ResolveEscalation): N×Audit.Append → N×Outbox.Append → Update
+//     The envelope row already exists; only audit events, outbox events, and
+//     the updated state are written.
 //
 // Integrity guarantees:
 //   - Hash chain intact: Appends run in declaration order; the repository
 //     assigns SequenceNo, PrevHash, and EventHash.
 //   - Integrity anchors complete: absorbPersistedEvent updates FirstEventHash,
 //     FinalEventHash, and AuditEventIDs after every successful Append.
+//
+// Outbox nil-safety: if repos.Outbox is nil, the outbox flush is skipped
+// without error. This preserves existing behaviour when the outbox is not
+// configured (e.g. in-memory stores used for unit tests).
 //
 // FAILURE SEMANTICS: If any persist call returns an error the accumulator must
 // be discarded. The caller's transaction rollback removes any DB writes made
@@ -82,6 +91,7 @@ var (
 //	// ... resolve authority, check thresholds, record observations ...
 //	acc.transition(envelope.EnvelopeStateClosed, now)
 //	acc.recordLifecycle(src, rid, audit.AuditEventEnvelopeClosed, nil)
+//	acc.recordOutbox(ev) // optional; orchestrator constructs and queues
 //	return acc.persistNew(ctx, repos)
 //
 // Usage — escalation resolution (ResolveEscalation path):
@@ -91,17 +101,20 @@ var (
 //	acc.recordObservation(src, rid, audit.AuditEventEscalationReviewed, payload)
 //	acc.transition(envelope.EnvelopeStateClosed, now)
 //	acc.recordLifecycle(src, rid, audit.AuditEventEnvelopeClosed, payload)
+//	acc.recordOutbox(ev) // optional
 //	return acc.persistExisting(ctx, repos)
 type evaluationAccumulator struct {
-	env           *envelope.Envelope
-	pendingEvents []*audit.AuditEvent
-	persisted     bool // true after a successful persist call; guards against reuse
+	env            *envelope.Envelope
+	pendingEvents  []*audit.AuditEvent
+	pendingOutbox  []*outbox.OutboxEvent
+	persisted      bool // true after a successful persist call; guards against reuse
 }
 
 // newEvaluationAccumulator creates an accumulator for a new evaluation.
 // Requires env to be non-nil and in RECEIVED state.
 // pendingEvents is pre-allocated with capacity 16, which covers the longest
-// evaluation path without reallocation.
+// evaluation path without reallocation. pendingOutbox is pre-allocated with
+// capacity 2, covering the common case of one decision outbox event per evaluation.
 func newEvaluationAccumulator(env *envelope.Envelope) (*evaluationAccumulator, error) {
 	if env == nil {
 		return nil, errAccumulatorNilEnvelope
@@ -112,6 +125,7 @@ func newEvaluationAccumulator(env *envelope.Envelope) (*evaluationAccumulator, e
 	return &evaluationAccumulator{
 		env:           env,
 		pendingEvents: make([]*audit.AuditEvent, 0, 16),
+		pendingOutbox: make([]*outbox.OutboxEvent, 0, 2),
 	}, nil
 }
 
@@ -128,6 +142,7 @@ func newExistingEnvelopeAccumulator(env *envelope.Envelope) (*evaluationAccumula
 	return &evaluationAccumulator{
 		env:           env,
 		pendingEvents: make([]*audit.AuditEvent, 0, 4),
+		pendingOutbox: make([]*outbox.OutboxEvent, 0, 1),
 	}, nil
 }
 
@@ -220,6 +235,27 @@ func (a *evaluationAccumulator) recordLifecycle(
 	return a.recordEvent(ev)
 }
 
+// recordOutbox queues an outbox event for atomic persistence alongside the
+// envelope and audit events. No DB write occurs here.
+//
+// The orchestrator is responsible for constructing the event (deciding WHAT to
+// emit); the accumulator is responsible for flushing it inside the transaction
+// (owning HOW it is persisted).
+//
+// Returns an error if:
+//   - the accumulator has already been persisted
+//   - ev is nil
+func (a *evaluationAccumulator) recordOutbox(ev *outbox.OutboxEvent) error {
+	if a.persisted {
+		return errAccumulatorAlreadyPersisted
+	}
+	if ev == nil {
+		return errAccumulatorNilOutboxEvent
+	}
+	a.pendingOutbox = append(a.pendingOutbox, ev)
+	return nil
+}
+
 // absorbPersistedEvent updates the envelope's Integrity section to reflect an
 // audit event that has just been successfully appended to the repository.
 // It must be called after each successful Audit.Append, in the same order
@@ -237,16 +273,35 @@ func (a *evaluationAccumulator) absorbPersistedEvent(ev *audit.AuditEvent) {
 	a.env.Integrity.AuditEventIDs = append(a.env.Integrity.AuditEventIDs, ev.ID)
 }
 
-// flushEventsAndUpdate appends all queued events in declaration order, absorbing
-// each into Integrity, then writes the final envelope state in a single Update.
-// Called by persistNew and persistExisting after their respective pre-flight checks.
+// flushEventsAndUpdate appends all queued audit events in declaration order,
+// absorbing each into Integrity, then flushes any queued outbox events (if
+// repos.Outbox is non-nil), then writes the final envelope state in a single
+// Update. Called by persistNew and persistExisting after their respective
+// pre-flight checks.
+//
+// Write ordering:
+//  1. N×Audit.Append (in declaration order)
+//  2. N×Outbox.Append (in declaration order) — skipped when repos.Outbox is nil
+//  3. Envelopes.Update
 func (a *evaluationAccumulator) flushEventsAndUpdate(ctx context.Context, repos *store.Repositories) error {
+	// 1. Flush audit events and update integrity anchors.
 	for _, ev := range a.pendingEvents {
 		if err := repos.Audit.Append(ctx, ev); err != nil {
 			return fmt.Errorf("audit append %s [envelope %s]: %w", ev.EventType, a.env.ID(), err)
 		}
 		a.absorbPersistedEvent(ev)
 	}
+
+	// 2. Flush outbox events. Skip silently when the outbox repo is not configured.
+	if repos.Outbox != nil {
+		for _, ev := range a.pendingOutbox {
+			if err := repos.Outbox.Append(ctx, ev); err != nil {
+				return fmt.Errorf("outbox append %s [envelope %s]: %w", ev.EventType, a.env.ID(), err)
+			}
+		}
+	}
+
+	// 3. Write final envelope state.
 	if err := repos.Envelopes.Update(ctx, a.env); err != nil {
 		return fmt.Errorf("persist final envelope state [%s]: %w", a.env.ID(), err)
 	}
@@ -258,7 +313,11 @@ func (a *evaluationAccumulator) flushEventsAndUpdate(ctx context.Context, repos 
 //  1. Envelopes.Create — establishes the envelope row before any audit rows.
 //     Required by the FK constraint: audit_events.envelope_id → operational_envelopes(id).
 //
-//  2. N×Audit.Append + Envelopes.Update — via flushEventsAndUpdate.
+//  2. N×Audit.Append — in declaration order, absorbPersistedEvent after each.
+//
+//  3. N×Outbox.Append — in declaration order; skipped if repos.Outbox is nil.
+//
+//  4. Envelopes.Update — single final write with the complete updated state.
 //
 // Pre-flight checks:
 //   - accumulator must not have been persisted already
@@ -300,12 +359,13 @@ func (a *evaluationAccumulator) persistNew(
 	return nil
 }
 
-// persistExisting writes queued audit events and a final envelope update for
-// an already-persisted envelope. Does NOT call Envelopes.Create.
+// persistExisting writes queued audit and outbox events and a final envelope
+// update for an already-persisted envelope. Does NOT call Envelopes.Create.
 //
 // Steps (via flushEventsAndUpdate):
-//  1. N×Audit.Append — in declaration order, absorbPersistedEvent after each
-//  2. Envelopes.Update — single final write with the complete updated state
+//  1. N×Audit.Append — in declaration order, absorbPersistedEvent after each.
+//  2. N×Outbox.Append — in declaration order; skipped if repos.Outbox is nil.
+//  3. Envelopes.Update — single final write with the complete updated state.
 //
 // Pre-flight checks:
 //   - accumulator must not have been persisted already
