@@ -84,13 +84,22 @@ type controlAuditService interface {
 	ListAudit(ctx context.Context, f controlaudit.ListFilter) ([]*controlaudit.ControlAuditRecord, error)
 }
 
+// grantLifecycleService manages operational grant lifecycle: suspend, revoke, reinstate.
+// If nil, the grant lifecycle endpoints return 501 Not Implemented.
+type grantLifecycleService interface {
+	SuspendGrant(ctx context.Context, grantID, suspendedBy, reason string) (*authority.AuthorityGrant, error)
+	RevokeGrant(ctx context.Context, grantID, revokedBy, reason string) (*authority.AuthorityGrant, error)
+	ReinstateGrant(ctx context.Context, grantID, reinstatedBy string) (*authority.AuthorityGrant, error)
+}
+
 type Server struct {
-	mux           *http.ServeMux
-	orchestrator  orchestrator
-	controlPlane  controlPlaneService
-	approval      approvalService
-	introspection introspectionService
-	controlAudit  controlAuditService
+	mux            *http.ServeMux
+	orchestrator   orchestrator
+	controlPlane   controlPlaneService
+	approval       approvalService
+	introspection  introspectionService
+	controlAudit   controlAuditService
+	grantLifecycle grantLifecycleService
 }
 
 type approveSurfaceRequest struct {
@@ -596,6 +605,205 @@ func (s *Server) handleDeprecateProfile(w http.ResponseWriter, r *http.Request, 
 	})
 }
 
+// ---------------------------------------------------------------------------
+// Grant Lifecycle Actions
+// ---------------------------------------------------------------------------
+
+type suspendGrantRequest struct {
+	SuspendedBy string `json:"suspended_by"`
+	Reason      string `json:"reason,omitempty"`
+}
+
+type revokeGrantRequest struct {
+	RevokedBy string `json:"revoked_by"`
+	Reason    string `json:"reason,omitempty"`
+}
+
+type reinstateGrantRequest struct {
+	ReinstatedBy string `json:"reinstated_by"`
+}
+
+type grantLifecycleResponse struct {
+	GrantID string `json:"grant_id"`
+	Status  string `json:"status"`
+	AgentID string `json:"agent_id"`
+}
+
+// handleGrantActions dispatches POST /v1/controlplane/grants/{id}/{action}.
+func (s *Server) handleGrantActions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+
+	const prefix = "/v1/controlplane/grants/"
+	if !strings.HasPrefix(r.URL.Path, prefix) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+
+	rest := strings.TrimPrefix(r.URL.Path, prefix)
+	parts := strings.Split(strings.Trim(rest, "/"), "/")
+	if len(parts) != 2 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+
+	grantID := strings.TrimSpace(parts[0])
+	action := parts[1]
+
+	if grantID == "" || !isValidIdentifier(grantID) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid grant id"})
+		return
+	}
+
+	if s.grantLifecycle == nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{
+			"error": "grant lifecycle service not configured",
+		})
+		return
+	}
+
+	switch action {
+	case "suspend":
+		s.handleSuspendGrant(w, r, grantID)
+	case "revoke":
+		s.handleRevokeGrant(w, r, grantID)
+	case "reinstate":
+		s.handleReinstateGrant(w, r, grantID)
+	default:
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+	}
+}
+
+func (s *Server) handleSuspendGrant(w http.ResponseWriter, r *http.Request, grantID string) {
+	rawBody, err := readRequestBody(w, r, maxRequestBodyBytes)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, errRequestBodyTooLarge) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		writeJSON(w, status, map[string]string{"error": err.Error()})
+		return
+	}
+
+	var req suspendGrantRequest
+	if err := decodeStrictJSON(rawBody, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	req.SuspendedBy = strings.TrimSpace(req.SuspendedBy)
+	if !isValidIdentifier(req.SuspendedBy) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "suspended_by must be a valid identifier"})
+		return
+	}
+
+	updated, err := s.grantLifecycle.SuspendGrant(r.Context(), grantID, req.SuspendedBy, req.Reason)
+	if err != nil {
+		code, resp := mapGrantError(err)
+		writeJSON(w, code, resp)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, grantLifecycleResponse{
+		GrantID: updated.ID,
+		Status:  string(updated.Status),
+		AgentID: updated.AgentID,
+	})
+}
+
+func (s *Server) handleRevokeGrant(w http.ResponseWriter, r *http.Request, grantID string) {
+	rawBody, err := readRequestBody(w, r, maxRequestBodyBytes)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, errRequestBodyTooLarge) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		writeJSON(w, status, map[string]string{"error": err.Error()})
+		return
+	}
+
+	var req revokeGrantRequest
+	if err := decodeStrictJSON(rawBody, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	req.RevokedBy = strings.TrimSpace(req.RevokedBy)
+	if !isValidIdentifier(req.RevokedBy) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "revoked_by must be a valid identifier"})
+		return
+	}
+
+	updated, err := s.grantLifecycle.RevokeGrant(r.Context(), grantID, req.RevokedBy, req.Reason)
+	if err != nil {
+		code, resp := mapGrantError(err)
+		writeJSON(w, code, resp)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, grantLifecycleResponse{
+		GrantID: updated.ID,
+		Status:  string(updated.Status),
+		AgentID: updated.AgentID,
+	})
+}
+
+func (s *Server) handleReinstateGrant(w http.ResponseWriter, r *http.Request, grantID string) {
+	rawBody, err := readRequestBody(w, r, maxRequestBodyBytes)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, errRequestBodyTooLarge) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		writeJSON(w, status, map[string]string{"error": err.Error()})
+		return
+	}
+
+	var req reinstateGrantRequest
+	if err := decodeStrictJSON(rawBody, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	req.ReinstatedBy = strings.TrimSpace(req.ReinstatedBy)
+	if !isValidIdentifier(req.ReinstatedBy) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "reinstated_by must be a valid identifier"})
+		return
+	}
+
+	updated, err := s.grantLifecycle.ReinstateGrant(r.Context(), grantID, req.ReinstatedBy)
+	if err != nil {
+		code, resp := mapGrantError(err)
+		writeJSON(w, code, resp)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, grantLifecycleResponse{
+		GrantID: updated.ID,
+		Status:  string(updated.Status),
+		AgentID: updated.AgentID,
+	})
+}
+
+func mapGrantError(err error) (int, map[string]string) {
+	switch {
+	case errors.Is(err, approval.ErrGrantNotFound):
+		return http.StatusNotFound, map[string]string{"error": "grant not found"}
+	case errors.Is(err, approval.ErrGrantNotActive):
+		return http.StatusConflict, map[string]string{"error": err.Error()}
+	case errors.Is(err, approval.ErrGrantNotSuspended):
+		return http.StatusConflict, map[string]string{"error": err.Error()}
+	case errors.Is(err, approval.ErrGrantRevoked):
+		return http.StatusConflict, map[string]string{"error": err.Error()}
+	case errors.Is(err, approval.ErrInvalidGrantTransition):
+		return http.StatusConflict, map[string]string{"error": err.Error()}
+	default:
+		return http.StatusInternalServerError, map[string]string{"error": err.Error()}
+	}
+}
+
 func NewServerWithServices(orchestrator orchestrator, controlPlane controlPlaneService, approvalSvc approvalService) *Server {
 	return NewServerWithAllServices(orchestrator, controlPlane, approvalSvc, nil)
 }
@@ -608,27 +816,30 @@ func NewServerWithAllServices(
 	approvalSvc approvalService,
 	introspectionSvc introspectionService,
 ) *Server {
-	return NewServerFull(orch, controlPlane, approvalSvc, introspectionSvc, nil)
+	return NewServerFull(orch, controlPlane, approvalSvc, introspectionSvc, nil, nil)
 }
 
 // NewServerFull constructs a Server with all services including the control-plane
-// audit service. Any service may be nil; its endpoints will return 501 Not Implemented.
+// audit and grant lifecycle services. Any service may be nil; its endpoints
+// will return 501 Not Implemented.
 func NewServerFull(
 	orch orchestrator,
 	controlPlane controlPlaneService,
 	approvalSvc approvalService,
 	introspectionSvc introspectionService,
 	controlAuditSvc controlAuditService,
+	grantSvc grantLifecycleService,
 ) *Server {
 	mux := http.NewServeMux()
 
 	s := &Server{
-		mux:           mux,
-		orchestrator:  orch,
-		controlPlane:  controlPlane,
-		approval:      approvalSvc,
-		introspection: introspectionSvc,
-		controlAudit:  controlAuditSvc,
+		mux:            mux,
+		orchestrator:   orch,
+		controlPlane:   controlPlane,
+		approval:       approvalSvc,
+		introspection:  introspectionSvc,
+		controlAudit:   controlAuditSvc,
+		grantLifecycle: grantSvc,
 	}
 	s.routes()
 
@@ -662,6 +873,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/v1/controlplane/audit", s.handleListControlAudit)
 	s.mux.HandleFunc("/v1/controlplane/surfaces/", s.handleSurfaceActions)
 	s.mux.HandleFunc("/v1/controlplane/profiles/", s.handleProfileActions)
+	s.mux.HandleFunc("/v1/controlplane/grants/", s.handleGrantActions)
 	// Operator introspection
 	s.mux.HandleFunc("/v1/surfaces/", s.handleGetSurfaceOrVersions)
 	s.mux.HandleFunc("/v1/profiles/", s.handleGetProfileOrVersions)

@@ -94,7 +94,7 @@ func main() {
 		controlAuditSvc = httpapi.NewControlAuditReadService(repos.ControlAudit)
 	}
 
-	srv := httpapi.NewServerFull(orchestrator, applyService, nil, introspectionSvc, controlAuditSvc)
+	srv := httpapi.NewServerFull(orchestrator, applyService, nil, introspectionSvc, controlAuditSvc, nil)
 
 	// --- Dispatcher: build ---
 	// BuildDispatcher returns a wiring with nil Dispatcher only when

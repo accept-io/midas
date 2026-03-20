@@ -21,6 +21,7 @@ vendor/
 *.swp
 *.swo
 *~
+.claude/
 
 # OS
 .DS_Store
@@ -34,6 +35,7 @@ Thumbs.db
 coverage.out
 *.test
 *.prof
+
 
 # Database
 midas.db

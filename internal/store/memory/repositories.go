@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/accept-io/midas/internal/agent"
@@ -458,6 +459,15 @@ func (r *GrantRepo) Reactivate(ctx context.Context, id string) error {
 			g.Status = authority.GrantStatusActive
 		}
 	}
+	return nil
+}
+
+func (r *GrantRepo) Update(_ context.Context, g *authority.AuthorityGrant) error {
+	if _, ok := r.items[g.ID]; !ok {
+		return errors.New("grant not found")
+	}
+	cp := *g
+	r.items[g.ID] = &cp
 	return nil
 }
 

@@ -520,6 +520,21 @@ func (r *fakeGrantRepo) ListByProfile(_ context.Context, profileID string) ([]*a
 	return out, nil
 }
 
+func (r *fakeGrantRepo) Update(_ context.Context, g *authority.AuthorityGrant) error {
+	if r.grants == nil {
+		return errors.New("grant not found")
+	}
+	for agentID, grants := range r.grants {
+		for i, existing := range grants {
+			if existing.ID == g.ID {
+				r.grants[agentID][i] = g
+				return nil
+			}
+		}
+	}
+	return errors.New("grant not found")
+}
+
 type fakeProfileRepo struct {
 	profiles map[string]*authority.AuthorityProfile // keyed by profileID
 }
