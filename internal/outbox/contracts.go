@@ -72,3 +72,61 @@ type SurfaceDeprecatedEvent struct {
 	DeprecatedBy string `json:"deprecated_by"`
 	Timestamp    string `json:"timestamp"`
 }
+
+// ProfileApprovedEvent is the payload for EventProfileApproved.
+// Emitted when ApproveProfile successfully transitions a profile from review
+// to active.
+type ProfileApprovedEvent struct {
+	EventVersion string `json:"event_version"`
+	ProfileID    string `json:"profile_id"`
+	SurfaceID    string `json:"surface_id"`
+	ApprovedBy   string `json:"approved_by"`
+	Timestamp    string `json:"timestamp"`
+}
+
+// ProfileDeprecatedEvent is the payload for EventProfileDeprecated.
+// Emitted when DeprecateProfile successfully transitions a profile from active
+// to deprecated.
+type ProfileDeprecatedEvent struct {
+	EventVersion  string `json:"event_version"`
+	ProfileID     string `json:"profile_id"`
+	SurfaceID     string `json:"surface_id"`
+	DeprecatedBy  string `json:"deprecated_by"`
+	Timestamp     string `json:"timestamp"`
+}
+
+// GrantSuspendedEvent is the payload for EventGrantSuspended.
+// Emitted when SuspendGrant successfully transitions a grant from active to
+// suspended.
+type GrantSuspendedEvent struct {
+	EventVersion string `json:"event_version"`
+	GrantID      string `json:"grant_id"`
+	AgentID      string `json:"agent_id"`
+	ProfileID    string `json:"profile_id"`
+	SuspendedBy  string `json:"suspended_by"`
+	Reason       string `json:"reason,omitempty"`
+	Timestamp    string `json:"timestamp"`
+}
+
+// GrantRevokedEvent is the payload for EventGrantRevoked.
+// Emitted when RevokeGrant permanently revokes a grant.
+type GrantRevokedEvent struct {
+	EventVersion string `json:"event_version"`
+	GrantID      string `json:"grant_id"`
+	AgentID      string `json:"agent_id"`
+	ProfileID    string `json:"profile_id"`
+	RevokedBy    string `json:"revoked_by"`
+	Reason       string `json:"reason,omitempty"`
+	Timestamp    string `json:"timestamp"`
+}
+
+// GrantReinstatedEvent is the payload for EventGrantReinstated.
+// Emitted when ReinstateGrant restores a suspended grant to active.
+type GrantReinstatedEvent struct {
+	EventVersion  string `json:"event_version"`
+	GrantID       string `json:"grant_id"`
+	AgentID       string `json:"agent_id"`
+	ProfileID     string `json:"profile_id"`
+	ReinstatedBy  string `json:"reinstated_by"`
+	Timestamp     string `json:"timestamp"`
+}

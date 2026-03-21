@@ -72,6 +72,25 @@ const (
 	// EventSurfaceDeprecated is emitted when DeprecateSurface successfully
 	// transitions a surface from active to deprecated.
 	EventSurfaceDeprecated EventType = "surface.deprecated"
+
+	// EventProfileApproved is emitted when ApproveProfile successfully
+	// transitions a profile from review to active.
+	EventProfileApproved EventType = "profile.approved"
+
+	// EventProfileDeprecated is emitted when DeprecateProfile successfully
+	// transitions a profile from active to deprecated.
+	EventProfileDeprecated EventType = "profile.deprecated"
+
+	// EventGrantSuspended is emitted when SuspendGrant successfully
+	// transitions a grant from active to suspended.
+	EventGrantSuspended EventType = "grant.suspended"
+
+	// EventGrantRevoked is emitted when RevokeGrant permanently revokes a grant.
+	EventGrantRevoked EventType = "grant.revoked"
+
+	// EventGrantReinstated is emitted when ReinstateGrant restores a suspended
+	// grant to active.
+	EventGrantReinstated EventType = "grant.reinstated"
 )
 
 // OutboxEvent is a single row in the outbox_events table.

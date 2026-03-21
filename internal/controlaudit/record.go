@@ -37,6 +37,21 @@ const (
 
 	// ActionSurfaceDeprecated is emitted when a surface is deprecated.
 	ActionSurfaceDeprecated Action = "surface.deprecated"
+
+	// ActionProfileApproved is emitted when a profile is approved and transitions to active.
+	ActionProfileApproved Action = "profile.approved"
+
+	// ActionProfileDeprecated is emitted when a profile is deprecated.
+	ActionProfileDeprecated Action = "profile.deprecated"
+
+	// ActionGrantSuspended is emitted when a grant is temporarily suspended.
+	ActionGrantSuspended Action = "grant.suspended"
+
+	// ActionGrantRevoked is emitted when a grant is permanently revoked.
+	ActionGrantRevoked Action = "grant.revoked"
+
+	// ActionGrantReinstated is emitted when a suspended grant is reinstated to active.
+	ActionGrantReinstated Action = "grant.reinstated"
 )
 
 // ResourceKind mirrors the control-plane document kinds to avoid a circular import.
@@ -59,6 +74,9 @@ type Metadata struct {
 
 	// SuccessorSurfaceID is the successor surface ID recorded on deprecation.
 	SuccessorSurfaceID string `json:"successor_surface_id,omitempty"`
+
+	// Reason is a generic operator-supplied reason, used for grant lifecycle actions.
+	Reason string `json:"reason,omitempty"`
 }
 
 // ControlAuditRecord is an immutable control-plane governance event. Once
@@ -183,6 +201,79 @@ func NewSurfaceDeprecatedRecord(actor, surfaceID string, version int, reason, su
 		intPtr(version),
 		"surface deprecated: "+surfaceID+" v"+itoa(version),
 		meta,
+	)
+}
+
+// NewProfileApprovedRecord builds a record for a profile approval.
+func NewProfileApprovedRecord(actor, profileID string, version int) *ControlAuditRecord {
+	return newRecord(
+		actor,
+		ActionProfileApproved,
+		ResourceKindProfile,
+		profileID,
+		intPtr(version),
+		"profile approved: "+profileID+" v"+itoa(version),
+		nil,
+	)
+}
+
+// NewProfileDeprecatedRecord builds a record for a profile deprecation.
+func NewProfileDeprecatedRecord(actor, profileID string, version int) *ControlAuditRecord {
+	return newRecord(
+		actor,
+		ActionProfileDeprecated,
+		ResourceKindProfile,
+		profileID,
+		intPtr(version),
+		"profile deprecated: "+profileID+" v"+itoa(version),
+		nil,
+	)
+}
+
+// NewGrantSuspendedRecord builds a record for a grant suspension.
+func NewGrantSuspendedRecord(actor, grantID, reason string) *ControlAuditRecord {
+	var meta *Metadata
+	if reason != "" {
+		meta = &Metadata{Reason: reason}
+	}
+	return newRecord(
+		actor,
+		ActionGrantSuspended,
+		ResourceKindGrant,
+		grantID,
+		nil,
+		"grant suspended: "+grantID,
+		meta,
+	)
+}
+
+// NewGrantRevokedRecord builds a record for a grant revocation.
+func NewGrantRevokedRecord(actor, grantID, reason string) *ControlAuditRecord {
+	var meta *Metadata
+	if reason != "" {
+		meta = &Metadata{Reason: reason}
+	}
+	return newRecord(
+		actor,
+		ActionGrantRevoked,
+		ResourceKindGrant,
+		grantID,
+		nil,
+		"grant revoked: "+grantID,
+		meta,
+	)
+}
+
+// NewGrantReinstatedRecord builds a record for a grant reinstatement.
+func NewGrantReinstatedRecord(actor, grantID string) *ControlAuditRecord {
+	return newRecord(
+		actor,
+		ActionGrantReinstated,
+		ResourceKindGrant,
+		grantID,
+		nil,
+		"grant reinstated: "+grantID,
+		nil,
 	)
 }
 

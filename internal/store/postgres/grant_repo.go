@@ -22,23 +22,29 @@ func NewGrantRepo(db sqltx.DBTX) (*GrantRepo, error) {
 	return &GrantRepo{db: db}, nil
 }
 
+// grantColumns is the canonical SELECT column list for authority_grants.
+// All read methods use this list; it must match the column order in scanGrantRow.
+const grantColumns = `
+	id,
+	agent_id,
+	profile_id,
+	granted_by,
+	grant_reason,
+	status,
+	effective_date,
+	expires_at,
+	revoked_at,
+	revoked_by,
+	revocation_reason,
+	suspended_at,
+	suspended_by,
+	suspend_reason,
+	created_at,
+	updated_at
+`
+
 func (r *GrantRepo) FindByID(ctx context.Context, id string) (*authority.AuthorityGrant, error) {
-	const q = `
-		SELECT
-			id,
-			agent_id,
-			profile_id,
-			granted_by,
-			status,
-			effective_date,
-			expires_at,
-			revoked_at,
-			revoked_by,
-			created_at,
-			updated_at
-		FROM authority_grants
-		WHERE id = $1
-	`
+	q := `SELECT` + grantColumns + `FROM authority_grants WHERE id = $1`
 
 	g, err := scanGrantRow(r.db.QueryRowContext(ctx, q, id))
 	if err != nil {
@@ -54,19 +60,7 @@ func (r *GrantRepo) FindByID(ctx context.Context, id string) (*authority.Authori
 // FindActiveByAgentAndProfile returns the active grant linking agentID to profileID.
 // Schema v2.1: Checks status='active' AND effective_date <= now AND (expires_at IS NULL OR expires_at > now)
 func (r *GrantRepo) FindActiveByAgentAndProfile(ctx context.Context, agentID, profileID string) (*authority.AuthorityGrant, error) {
-	const q = `
-		SELECT
-			id,
-			agent_id,
-			profile_id,
-			granted_by,
-			status,
-			effective_date,
-			expires_at,
-			revoked_at,
-			revoked_by,
-			created_at,
-			updated_at
+	q := `SELECT` + grantColumns + `
 		FROM authority_grants
 		WHERE agent_id = $1
 		  AND profile_id = $2
@@ -89,19 +83,7 @@ func (r *GrantRepo) FindActiveByAgentAndProfile(ctx context.Context, agentID, pr
 }
 
 func (r *GrantRepo) ListByAgent(ctx context.Context, agentID string) ([]*authority.AuthorityGrant, error) {
-	const q = `
-		SELECT
-			id,
-			agent_id,
-			profile_id,
-			granted_by,
-			status,
-			effective_date,
-			expires_at,
-			revoked_at,
-			revoked_by,
-			created_at,
-			updated_at
+	q := `SELECT` + grantColumns + `
 		FROM authority_grants
 		WHERE agent_id = $1
 		ORDER BY effective_date DESC, created_at DESC
@@ -116,7 +98,7 @@ func (r *GrantRepo) ListByAgent(ctx context.Context, agentID string) ([]*authori
 	var out []*authority.AuthorityGrant
 
 	for rows.Next() {
-		g, err := scanGrantRows(rows)
+		g, err := scanGrantRow(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -131,19 +113,7 @@ func (r *GrantRepo) ListByAgent(ctx context.Context, agentID string) ([]*authori
 }
 
 func (r *GrantRepo) ListByProfile(ctx context.Context, profileID string) ([]*authority.AuthorityGrant, error) {
-	const q = `
-		SELECT
-			id,
-			agent_id,
-			profile_id,
-			granted_by,
-			status,
-			effective_date,
-			expires_at,
-			revoked_at,
-			revoked_by,
-			created_at,
-			updated_at
+	q := `SELECT` + grantColumns + `
 		FROM authority_grants
 		WHERE profile_id = $1
 		ORDER BY effective_date DESC, created_at DESC
@@ -158,7 +128,7 @@ func (r *GrantRepo) ListByProfile(ctx context.Context, profileID string) ([]*aut
 	var out []*authority.AuthorityGrant
 
 	for rows.Next() {
-		g, err := scanGrantRows(rows)
+		g, err := scanGrantRow(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -179,15 +149,20 @@ func (r *GrantRepo) Create(ctx context.Context, g *authority.AuthorityGrant) err
 			agent_id,
 			profile_id,
 			granted_by,
+			grant_reason,
 			status,
 			effective_date,
 			expires_at,
 			revoked_at,
 			revoked_by,
+			revocation_reason,
+			suspended_at,
+			suspended_by,
+			suspend_reason,
 			created_at,
 			updated_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
 		)
 	`
 
@@ -198,11 +173,16 @@ func (r *GrantRepo) Create(ctx context.Context, g *authority.AuthorityGrant) err
 		g.AgentID,
 		g.ProfileID,
 		g.GrantedBy,
+		nullableString(g.GrantReason),
 		g.Status,
 		g.EffectiveDate,
 		nullableTime(g.ExpiresAt),
 		nullableTime(g.RevokedAt),
 		nullableString(g.RevokedBy),
+		nullableString(g.RevokeReason),
+		nullableTime(g.SuspendedAt),
+		nullableString(g.SuspendedBy),
+		nullableString(g.SuspendReason),
 		g.CreatedAt,
 		g.UpdatedAt,
 	)
@@ -350,12 +330,19 @@ type grantScanner interface {
 	Scan(dest ...any) error
 }
 
+// scanGrantRow scans the canonical column set defined by grantColumns.
+// Column order must match grantColumns exactly.
 func scanGrantRow(row grantScanner) (*authority.AuthorityGrant, error) {
 	var (
-		g         authority.AuthorityGrant
-		expiresAt sql.NullTime
-		revokedAt sql.NullTime
-		revokedBy sql.NullString
+		g                 authority.AuthorityGrant
+		grantReason       sql.NullString
+		expiresAt         sql.NullTime
+		revokedAt         sql.NullTime
+		revokedBy         sql.NullString
+		revocationReason  sql.NullString
+		suspendedAt       sql.NullTime
+		suspendedBy       sql.NullString
+		suspendReason     sql.NullString
 	)
 
 	err := row.Scan(
@@ -363,11 +350,16 @@ func scanGrantRow(row grantScanner) (*authority.AuthorityGrant, error) {
 		&g.AgentID,
 		&g.ProfileID,
 		&g.GrantedBy,
+		&grantReason,
 		&g.Status,
 		&g.EffectiveDate,
 		&expiresAt,
 		&revokedAt,
 		&revokedBy,
+		&revocationReason,
+		&suspendedAt,
+		&suspendedBy,
+		&suspendReason,
 		&g.CreatedAt,
 		&g.UpdatedAt,
 	)
@@ -375,6 +367,9 @@ func scanGrantRow(row grantScanner) (*authority.AuthorityGrant, error) {
 		return nil, err
 	}
 
+	if grantReason.Valid {
+		g.GrantReason = grantReason.String
+	}
 	if expiresAt.Valid {
 		t := expiresAt.Time
 		g.ExpiresAt = &t
@@ -386,12 +381,21 @@ func scanGrantRow(row grantScanner) (*authority.AuthorityGrant, error) {
 	if revokedBy.Valid {
 		g.RevokedBy = revokedBy.String
 	}
+	if revocationReason.Valid {
+		g.RevokeReason = revocationReason.String
+	}
+	if suspendedAt.Valid {
+		t := suspendedAt.Time
+		g.SuspendedAt = &t
+	}
+	if suspendedBy.Valid {
+		g.SuspendedBy = suspendedBy.String
+	}
+	if suspendReason.Valid {
+		g.SuspendReason = suspendReason.String
+	}
 
 	return &g, nil
-}
-
-func scanGrantRows(rows *sql.Rows) (*authority.AuthorityGrant, error) {
-	return scanGrantRow(rows)
 }
 
 var _ authority.GrantRepository = (*GrantRepo)(nil)

@@ -128,3 +128,88 @@ func BuildSurfaceDeprecatedEvent(surfaceID, deprecatedBy string) (json.RawMessag
 	}
 	return json.RawMessage(b), nil
 }
+
+// BuildProfileApprovedEvent constructs the payload for EventProfileApproved.
+func BuildProfileApprovedEvent(profileID, surfaceID, approvedBy string) (json.RawMessage, error) {
+	ev := ProfileApprovedEvent{
+		EventVersion: eventVersion,
+		ProfileID:    profileID,
+		SurfaceID:    surfaceID,
+		ApprovedBy:   approvedBy,
+		Timestamp:    nowTimestamp(),
+	}
+	b, err := json.Marshal(ev)
+	if err != nil {
+		return nil, fmt.Errorf("marshal ProfileApprovedEvent: %w", err)
+	}
+	return json.RawMessage(b), nil
+}
+
+// BuildProfileDeprecatedEvent constructs the payload for EventProfileDeprecated.
+func BuildProfileDeprecatedEvent(profileID, surfaceID, deprecatedBy string) (json.RawMessage, error) {
+	ev := ProfileDeprecatedEvent{
+		EventVersion: eventVersion,
+		ProfileID:    profileID,
+		SurfaceID:    surfaceID,
+		DeprecatedBy: deprecatedBy,
+		Timestamp:    nowTimestamp(),
+	}
+	b, err := json.Marshal(ev)
+	if err != nil {
+		return nil, fmt.Errorf("marshal ProfileDeprecatedEvent: %w", err)
+	}
+	return json.RawMessage(b), nil
+}
+
+// BuildGrantSuspendedEvent constructs the payload for EventGrantSuspended.
+func BuildGrantSuspendedEvent(grantID, agentID, profileID, suspendedBy, reason string) (json.RawMessage, error) {
+	ev := GrantSuspendedEvent{
+		EventVersion: eventVersion,
+		GrantID:      grantID,
+		AgentID:      agentID,
+		ProfileID:    profileID,
+		SuspendedBy:  suspendedBy,
+		Reason:       reason,
+		Timestamp:    nowTimestamp(),
+	}
+	b, err := json.Marshal(ev)
+	if err != nil {
+		return nil, fmt.Errorf("marshal GrantSuspendedEvent: %w", err)
+	}
+	return json.RawMessage(b), nil
+}
+
+// BuildGrantRevokedEvent constructs the payload for EventGrantRevoked.
+func BuildGrantRevokedEvent(grantID, agentID, profileID, revokedBy, reason string) (json.RawMessage, error) {
+	ev := GrantRevokedEvent{
+		EventVersion: eventVersion,
+		GrantID:      grantID,
+		AgentID:      agentID,
+		ProfileID:    profileID,
+		RevokedBy:    revokedBy,
+		Reason:       reason,
+		Timestamp:    nowTimestamp(),
+	}
+	b, err := json.Marshal(ev)
+	if err != nil {
+		return nil, fmt.Errorf("marshal GrantRevokedEvent: %w", err)
+	}
+	return json.RawMessage(b), nil
+}
+
+// BuildGrantReinstatedEvent constructs the payload for EventGrantReinstated.
+func BuildGrantReinstatedEvent(grantID, agentID, profileID, reinstatedBy string) (json.RawMessage, error) {
+	ev := GrantReinstatedEvent{
+		EventVersion: eventVersion,
+		GrantID:      grantID,
+		AgentID:      agentID,
+		ProfileID:    profileID,
+		ReinstatedBy: reinstatedBy,
+		Timestamp:    nowTimestamp(),
+	}
+	b, err := json.Marshal(ev)
+	if err != nil {
+		return nil, fmt.Errorf("marshal GrantReinstatedEvent: %w", err)
+	}
+	return json.RawMessage(b), nil
+}
