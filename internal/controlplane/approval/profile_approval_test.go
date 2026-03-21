@@ -7,6 +7,7 @@ import (
 
 	"github.com/accept-io/midas/internal/authority"
 	"github.com/accept-io/midas/internal/controlplane/approval"
+	"github.com/accept-io/midas/internal/outbox"
 )
 
 // fakeProfileRepo is a minimal in-memory ProfileRepository for approval tests.
@@ -169,5 +170,87 @@ func TestDeprecateProfile_NotFound_ReturnsError(t *testing.T) {
 	_, err := svc.DeprecateProfile(context.Background(), "nonexistent", 1, "operator")
 	if err == nil {
 		t.Fatal("expected error for not found, got nil")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Outbox emission for profile lifecycle
+// ---------------------------------------------------------------------------
+
+// fakeOutboxRepo captures outbox events for assertions.
+type fakeOutboxRepo struct {
+	appended []*outbox.OutboxEvent
+}
+
+func (f *fakeOutboxRepo) Append(_ context.Context, ev *outbox.OutboxEvent) error {
+	f.appended = append(f.appended, ev)
+	return nil
+}
+
+func (f *fakeOutboxRepo) ListUnpublished(_ context.Context) ([]*outbox.OutboxEvent, error) {
+	return nil, nil
+}
+
+func (f *fakeOutboxRepo) ClaimUnpublished(_ context.Context, _ int) ([]*outbox.OutboxEvent, error) {
+	return nil, nil
+}
+
+func (f *fakeOutboxRepo) MarkPublished(_ context.Context, _ string) error {
+	return nil
+}
+
+func TestApproveProfile_EmitsOutboxEvent(t *testing.T) {
+	profile := makeReviewProfile("prof-outbox-1", 1)
+	repo := newFakeProfileRepo(profile)
+	ob := &fakeOutboxRepo{}
+	svc := approval.NewServiceWithProfileAndOutbox(nil, repo, approval.Policy{}, ob, nil)
+
+	if _, err := svc.ApproveProfile(context.Background(), "prof-outbox-1", 1, "operator@example.com"); err != nil {
+		t.Fatalf("ApproveProfile: unexpected error: %v", err)
+	}
+
+	if len(ob.appended) != 1 {
+		t.Fatalf("expected 1 outbox event, got %d", len(ob.appended))
+	}
+	if ob.appended[0].EventType != outbox.EventProfileApproved {
+		t.Errorf("expected event type profile.approved, got %s", ob.appended[0].EventType)
+	}
+	if ob.appended[0].AggregateType != "profile" {
+		t.Errorf("expected aggregate_type profile, got %s", ob.appended[0].AggregateType)
+	}
+	if ob.appended[0].AggregateID != "prof-outbox-1" {
+		t.Errorf("expected aggregate_id prof-outbox-1, got %s", ob.appended[0].AggregateID)
+	}
+}
+
+func TestDeprecateProfile_EmitsOutboxEvent(t *testing.T) {
+	profile := makeActiveProfile("prof-outbox-2", 1)
+	repo := newFakeProfileRepo(profile)
+	ob := &fakeOutboxRepo{}
+	svc := approval.NewServiceWithProfileAndOutbox(nil, repo, approval.Policy{}, ob, nil)
+
+	if _, err := svc.DeprecateProfile(context.Background(), "prof-outbox-2", 1, "operator@example.com"); err != nil {
+		t.Fatalf("DeprecateProfile: unexpected error: %v", err)
+	}
+
+	if len(ob.appended) != 1 {
+		t.Fatalf("expected 1 outbox event, got %d", len(ob.appended))
+	}
+	if ob.appended[0].EventType != outbox.EventProfileDeprecated {
+		t.Errorf("expected event type profile.deprecated, got %s", ob.appended[0].EventType)
+	}
+	if ob.appended[0].AggregateType != "profile" {
+		t.Errorf("expected aggregate_type profile, got %s", ob.appended[0].AggregateType)
+	}
+}
+
+func TestApproveProfile_NilOutbox_DoesNotEmitEvent(t *testing.T) {
+	profile := makeReviewProfile("prof-nilob-1", 1)
+	repo := newFakeProfileRepo(profile)
+	// NewServiceWithProfile wires no outbox — must not panic
+	svc := approval.NewServiceWithProfile(nil, repo, approval.Policy{})
+
+	if _, err := svc.ApproveProfile(context.Background(), "prof-nilob-1", 1, "operator"); err != nil {
+		t.Fatalf("ApproveProfile: unexpected error: %v", err)
 	}
 }

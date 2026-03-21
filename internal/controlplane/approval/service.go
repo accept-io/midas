@@ -274,6 +274,54 @@ func (s *Service) DeprecateSurface(ctx context.Context, surfaceID string, deprec
 	return current, nil
 }
 
+// appendProfileApprovedEvent appends a profile.approved outbox event.
+// It is a no-op when s.outbox is nil.
+func (s *Service) appendProfileApprovedEvent(ctx context.Context, p *authority.AuthorityProfile) error {
+	if s.outbox == nil {
+		return nil
+	}
+	payload, err := outbox.BuildProfileApprovedEvent(p.ID, p.SurfaceID, p.ApprovedBy)
+	if err != nil {
+		return fmt.Errorf("build outbox payload profile.approved: %w", err)
+	}
+	ev, err := outbox.New(
+		outbox.EventProfileApproved,
+		"profile",
+		p.ID,
+		"midas.profiles",
+		p.ID,
+		payload,
+	)
+	if err != nil {
+		return fmt.Errorf("construct outbox event profile.approved: %w", err)
+	}
+	return s.outbox.Append(ctx, ev)
+}
+
+// appendProfileDeprecatedEvent appends a profile.deprecated outbox event.
+// It is a no-op when s.outbox is nil.
+func (s *Service) appendProfileDeprecatedEvent(ctx context.Context, p *authority.AuthorityProfile, deprecatedBy string) error {
+	if s.outbox == nil {
+		return nil
+	}
+	payload, err := outbox.BuildProfileDeprecatedEvent(p.ID, p.SurfaceID, deprecatedBy)
+	if err != nil {
+		return fmt.Errorf("build outbox payload profile.deprecated: %w", err)
+	}
+	ev, err := outbox.New(
+		outbox.EventProfileDeprecated,
+		"profile",
+		p.ID,
+		"midas.profiles",
+		p.ID,
+		payload,
+	)
+	if err != nil {
+		return fmt.Errorf("construct outbox event profile.deprecated: %w", err)
+	}
+	return s.outbox.Append(ctx, ev)
+}
+
 // ApproveProfile promotes a profile from review to active.
 //
 // Only profiles in review status may be approved. Profiles in any other status
@@ -310,6 +358,12 @@ func (s *Service) ApproveProfile(ctx context.Context, profileID string, version 
 		return nil, err
 	}
 
+	if err := s.appendProfileApprovedEvent(ctx, current); err != nil {
+		return nil, fmt.Errorf("outbox append profile.approved: %w", err)
+	}
+
+	s.appendControlAudit(ctx, controlaudit.NewProfileApprovedRecord(approvedBy, current.ID, current.Version))
+
 	return current, nil
 }
 
@@ -341,6 +395,12 @@ func (s *Service) DeprecateProfile(ctx context.Context, profileID string, versio
 	if err := s.profileRepo.Update(ctx, current); err != nil {
 		return nil, err
 	}
+
+	if err := s.appendProfileDeprecatedEvent(ctx, current, deprecatedBy); err != nil {
+		return nil, fmt.Errorf("outbox append profile.deprecated: %w", err)
+	}
+
+	s.appendControlAudit(ctx, controlaudit.NewProfileDeprecatedRecord(deprecatedBy, current.ID, current.Version))
 
 	return current, nil
 }
