@@ -23,6 +23,7 @@ run_in_docker() {
     -v "$(pwd):/app" \
     -w /app \
     -e DATABASE_URL="postgresql://midas:midas@postgres:5432/midas?sslmode=disable" \
+    -e MIDAS_TEST_DATABASE_URL="postgresql://midas:midas@postgres:5432/midas?sslmode=disable" \
     golang:1.25-alpine \
     sh -c "$cmd"
 }
