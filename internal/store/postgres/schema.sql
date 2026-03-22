@@ -720,7 +720,12 @@ CREATE TABLE IF NOT EXISTS controlplane_audit_events (
                          'agent.created',
                          'grant.created',
                          'surface.approved',
-                         'surface.deprecated'
+                         'surface.deprecated',
+                         'profile.approved',
+                         'profile.deprecated',
+                         'grant.suspended',
+                         'grant.revoked',
+                         'grant.reinstated'
                      )),
     resource_kind    TEXT        NOT NULL CHECK (resource_kind IN ('surface', 'profile', 'agent', 'grant')),
     resource_id      TEXT        NOT NULL,
@@ -739,7 +744,7 @@ COMMENT ON TABLE controlplane_audit_events IS
 'Append-only control-plane governance audit trail. Records who changed what, when, and which version.';
 
 COMMENT ON COLUMN controlplane_audit_events.action IS
-'Typed action constant: surface.created | profile.created | profile.versioned | agent.created | grant.created | surface.approved | surface.deprecated';
+'Typed action constant: surface.created | profile.created | profile.versioned | agent.created | grant.created | surface.approved | surface.deprecated | profile.approved | profile.deprecated | grant.suspended | grant.revoked | grant.reinstated';
 
 COMMENT ON COLUMN controlplane_audit_events.resource_version IS
 'Version of the resource at the time of the action. Null for resources without versioning (agent, grant).';
