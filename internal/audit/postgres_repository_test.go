@@ -39,11 +39,36 @@ func resetAuditEventsTable(t *testing.T, db *sql.DB) {
 	}
 }
 
+// insertTestEnvelope inserts a minimal valid operational_envelopes row so that
+// audit event appends satisfy the fk_audit_events_envelope FK constraint.
+// A cleanup is registered to remove the envelope's audit events then the
+// envelope itself after the test completes, respecting the FK direction.
+func insertTestEnvelope(t *testing.T, db *sql.DB, id, requestSource, requestID string) {
+	t.Helper()
+	now := time.Now().UTC()
+	_, err := db.Exec(`
+		INSERT INTO operational_envelopes
+			(id, request_source, request_id, schema_version, state,
+			 resolved_json, integrity_json, created_at, updated_at)
+		VALUES ($1, $2, $3, 1, 'received', '{}', '{}', $4, $4)
+		ON CONFLICT (id) DO NOTHING`,
+		id, requestSource, requestID, now,
+	)
+	if err != nil {
+		t.Fatalf("insertTestEnvelope %q: %v", id, err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec(`DELETE FROM audit_events WHERE envelope_id = $1`, id)
+		_, _ = db.Exec(`DELETE FROM operational_envelopes WHERE id = $1`, id)
+	})
+}
+
 func TestPostgresRepository_Append_AssignsSequenceAndHashChain(t *testing.T) {
 	db := openTestDB(t)
 	defer db.Close()
 
 	resetAuditEventsTable(t, db)
+	insertTestEnvelope(t, db, "env-1", "actor-1", "req-1")
 
 	repo := NewPostgresRepository(db)
 	ctx := context.Background()
@@ -113,6 +138,7 @@ func TestPostgresRepository_ListByEnvelopeID_ReturnsOrderedEvents(t *testing.T) 
 	defer db.Close()
 
 	resetAuditEventsTable(t, db)
+	insertTestEnvelope(t, db, "env-1", "actor-1", "req-1")
 
 	repo := NewPostgresRepository(db)
 	ctx := context.Background()
@@ -169,6 +195,7 @@ func TestPostgresRepository_ListByRequestID_ReturnsEvents(t *testing.T) {
 	defer db.Close()
 
 	resetAuditEventsTable(t, db)
+	insertTestEnvelope(t, db, "env-2", "actor-2", "req-xyz")
 
 	repo := NewPostgresRepository(db)
 	ctx := context.Background()
