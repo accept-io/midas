@@ -290,6 +290,49 @@ func TestControlAuditRepo_Postgres_NullableVersionAndMetadata(t *testing.T) {
 	}
 }
 
+// TestControlAuditRepo_Postgres_AllActionConstants verifies that every action
+// constant defined in the controlaudit package can be written to Postgres
+// without violating the CHECK constraint on controlplane_audit_events.action.
+// This test exists to catch schema/code drift: if a new action constant is
+// added to record.go but not to the CHECK constraint, this test will fail.
+func TestControlAuditRepo_Postgres_AllActionConstants(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	if _, err := db.Exec(`DELETE FROM controlplane_audit_events`); err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+	t.Cleanup(func() { db.Exec(`DELETE FROM controlplane_audit_events`) }) //nolint
+
+	repo, err := NewControlAuditRepo(db)
+	if err != nil {
+		t.Fatalf("NewControlAuditRepo: %v", err)
+	}
+
+	ctx := context.Background()
+
+	records := []*controlaudit.ControlAuditRecord{
+		controlaudit.NewSurfaceCreatedRecord("actor", "surf-1", 1),
+		controlaudit.NewProfileCreatedRecord("actor", "prof-1", "surf-1", 1),
+		controlaudit.NewProfileVersionedRecord("actor", "prof-1", "surf-1", 2),
+		controlaudit.NewAgentCreatedRecord("actor", "agent-1"),
+		controlaudit.NewGrantCreatedRecord("actor", "grant-1"),
+		controlaudit.NewSurfaceApprovedRecord("actor", "surf-1", 1),
+		controlaudit.NewSurfaceDeprecatedRecord("actor", "surf-1", 1, "replaced", ""),
+		controlaudit.NewProfileApprovedRecord("actor", "prof-1", 1),
+		controlaudit.NewProfileDeprecatedRecord("actor", "prof-1", 1),
+		controlaudit.NewGrantSuspendedRecord("actor", "grant-1", "policy violation"),
+		controlaudit.NewGrantRevokedRecord("actor", "grant-1", "permanent"),
+		controlaudit.NewGrantReinstatedRecord("actor", "grant-1"),
+	}
+
+	for _, rec := range records {
+		if err := repo.Append(ctx, rec); err != nil {
+			t.Errorf("Append action %q failed: %v", rec.Action, err)
+		}
+	}
+}
+
 func TestControlAuditRepo_Postgres_LimitEnforced(t *testing.T) {
 	db := openTestDB(t)
 	defer db.Close()
