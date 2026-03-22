@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go vet:*)",
+      "Bash(bash /c/Users/phil/dev/accept/midas/test.sh unit)",
+      "Bash(bash /c/Users/phil/dev/accept/midas/test.sh build)",
+      "Bash(bash /c/Users/phil/dev/accept/midas/test.sh vet)",
+      "Bash(bash /c/Users/phil/dev/accept/midas/test.sh decision)",
+      "Bash(ls -la /c/Users/phil/dev/accept/midas/docs/*.md /c/Users/phil/dev/accept/midas/README.md)",
+      "Read(//c/Users/phil/.claude/projects/c--Users-phil-dev-accept-midas/**)",
+      "Bash(grep -n \"type Policy\\\\|Policy interface\" internal/controlplane/approval/*.go)"
+    ]
+  }
+}

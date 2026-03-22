@@ -17,6 +17,7 @@ import (
 	"github.com/accept-io/midas/internal/authority"
 	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/eval"
+	"github.com/accept-io/midas/internal/outbox"
 	"github.com/accept-io/midas/internal/policy"
 	"github.com/accept-io/midas/internal/store"
 	"github.com/accept-io/midas/internal/surface"
@@ -35,6 +36,12 @@ var (
 	ErrEnvelopeNotAwaitingReview = errors.New("envelope is not awaiting review")
 	ErrEnvelopeAlreadyClosed     = errors.New("envelope is already closed")
 	ErrInvalidReviewDecision     = errors.New("decision must be APPROVED or REJECTED")
+
+	// ErrScopedRequestConflict is returned when a duplicate (request_source,
+	// request_id) pair is submitted with a different payload hash than the
+	// original. This indicates request identity reuse with a mutated body and
+	// is always a caller error.
+	ErrScopedRequestConflict = errors.New("scoped request conflict: same (request_source, request_id) submitted with a different payload")
 )
 
 // FailureCategory represents a typed classification of evaluation failures
@@ -49,6 +56,7 @@ const (
 	FailureCategoryPolicyEvaluation    FailureCategory = "policy_evaluation"
 	FailureCategoryAuthorityResolution FailureCategory = "authority_resolution"
 	FailureCategoryResolveReview       FailureCategory = "resolve_review"
+	FailureCategoryIdempotencyConflict FailureCategory = "idempotency_conflict"
 	FailureCategoryUnknown             FailureCategory = "unknown"
 )
 
@@ -78,6 +86,22 @@ func wrapFailure(category FailureCategory, err error) error {
 		return nil
 	}
 	return &categorizedError{category: category, err: err}
+}
+
+// categorizePersistErr inspects an accumulator persist error and wraps it with
+// the appropriate failure category. Persist errors can originate from three
+// repository calls — Create, Audit.Append, or Update — with distinct categories.
+// The error message prefixes are stable internal strings produced by the accumulator.
+func categorizePersistErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "audit append ") {
+		return wrapFailure(FailureCategoryAuditAppend, err)
+	}
+	// "create envelope" and "persist final envelope state" are both envelope persistence.
+	return wrapFailure(FailureCategoryEnvelopePersistence, err)
 }
 
 // ---------------------------------------------------------------------------
@@ -212,19 +236,22 @@ func (o *Orchestrator) Evaluate(ctx context.Context, req eval.DecisionRequest, r
 }
 
 // evaluate runs inside the transaction opened by Evaluate.
+// All state transitions and audit events are accumulated in-memory via
+// evaluationAccumulator; acc.persistNew() at the end of finish() issues the
+// sole database write: Envelopes.Create → N×Audit.Append → Envelopes.Update.
 //
 // Sequence:
-//  1. Create envelope and anchor first-event integrity
-//  2. RECEIVED → EVALUATING
+//  1. Create in-memory envelope and evaluationAccumulator
+//  2. Queue envelope.created; transition RECEIVED → EVALUATING in memory
 //  3. Resolve surface
 //  4. Resolve agent
 //  5. Resolve authority chain
-//  6. Populate Resolved and Evaluation sections + denormalized authority chain (schema v2.1)
+//  6. Populate Resolved and Evaluation sections
 //  7. Validate required context
 //  8. Evaluate confidence threshold
 //  9. Evaluate consequence threshold
-//  10. Evaluate policy
-//  11. Record outcome → terminal or AWAITING_REVIEW
+// 10. Evaluate policy
+// 11. Delegate to finish() to record outcome and flush via acc.persistNew()
 func (o *Orchestrator) evaluate(
 	ctx context.Context,
 	repos *store.Repositories,
@@ -233,7 +260,7 @@ func (o *Orchestrator) evaluate(
 ) (EvaluationResult, error) {
 	now := o.clock().UTC()
 
-	// Schema v2.1: request_source is required for scoped idempotency
+	// request_source is required for scoped idempotency
 	if req.RequestSource == "" {
 		return EvaluationResult{}, errors.New("request_source is required")
 	}
@@ -244,41 +271,72 @@ func (o *Orchestrator) evaluate(
 	submittedHashBytes := sha256.Sum256(raw)
 	submittedHash := hex.EncodeToString(submittedHashBytes[:])
 
-	// Schema v2.1: envelope.New now takes request_source
+	// ---------------------------------------------------------------------------
+	// Scoped idempotency check
+	//
+	// Look up (request_source, request_id) before creating a new envelope.
+	// Two cases:
+	//   1. Exact replay (same payload hash): return the existing result without
+	//      creating a second envelope.
+	//   2. Hash mismatch: the caller is reusing a scoped identity with a mutated
+	//      body. This is always a caller error; return ErrScopedRequestConflict.
+	// ---------------------------------------------------------------------------
+	existing, err := repos.Envelopes.GetByRequestScope(ctx, req.RequestSource, req.RequestID)
+	if err != nil {
+		return EvaluationResult{}, fmt.Errorf("idempotency lookup: %w", err)
+	}
+	if existing != nil {
+		if existing.Integrity.SubmittedHash == submittedHash {
+			// Exact replay — return the original decision without side effects.
+			slog.Info("evaluation_replayed",
+				"request_source", req.RequestSource,
+				"request_id", req.RequestID,
+				"envelope_id", existing.ID(),
+				"outcome", existing.Evaluation.Outcome,
+				"reason_code", existing.Evaluation.ReasonCode,
+			)
+			return resultFromEnvelope(existing), nil
+		}
+		// Same scope, different payload — deterministic conflict error.
+		slog.Warn("idempotency_conflict",
+			"request_source", req.RequestSource,
+			"request_id", req.RequestID,
+			"existing_envelope_id", existing.ID(),
+			"existing_hash", existing.Integrity.SubmittedHash,
+			"submitted_hash", submittedHash,
+		)
+		return EvaluationResult{}, wrapFailure(FailureCategoryIdempotencyConflict, ErrScopedRequestConflict)
+	}
+
 	env, err := envelope.New(uuid.NewString(), req.RequestSource, req.RequestID, raw, now)
 	if err != nil {
 		return EvaluationResult{}, err
 	}
 	env.Integrity.SubmittedHash = submittedHash
 
-	if err := repos.Envelopes.Create(ctx, env); err != nil {
-		return EvaluationResult{}, fmt.Errorf("create envelope: %w", err)
+	acc, err := newEvaluationAccumulator(env)
+	if err != nil {
+		return EvaluationResult{}, fmt.Errorf("create accumulator: %w", err)
 	}
 
-	// Emit envelope.created — the only event emitted outside applyStep.
-	//
-	// Invariant: Integrity.FirstEventHash and AuditEventIDs[0] always refer
-	// to this event. The guard in applyStep is a safety net only; this
-	// assignment here is the source of truth.
-	firstEvent, err := o.appendAuditEventWithResult(ctx, repos.Audit, env,
+	// Queue envelope.created. The accumulator's persist() will Create the
+	// envelope row and Append all events in a single atomic sequence at the
+	// end of finish(). No DB writes happen here.
+	if err := acc.recordLifecycle(env.RequestSource(), env.RequestID(),
 		audit.AuditEventEnvelopeCreated,
 		buildGovernancePayload(req, submittedHash),
-	)
-	if err != nil {
-		return EvaluationResult{}, fmt.Errorf("audit event envelope.created: %w", err)
-	}
-	env.Integrity.AuditEventIDs = append(env.Integrity.AuditEventIDs, firstEvent.ID)
-	env.Integrity.FirstEventHash = firstEvent.Hash
-	env.Integrity.FinalEventHash = firstEvent.Hash
-	if err := repos.Envelopes.Update(ctx, env); err != nil {
-		return EvaluationResult{}, fmt.Errorf("persist integrity after envelope.created: %w", err)
+	); err != nil {
+		return EvaluationResult{}, fmt.Errorf("record envelope.created: %w", err)
 	}
 
 	// RECEIVED → EVALUATING
-	if _, err := o.applyStep(ctx, repos, env, now,
-		envelope.EnvelopeStateEvaluating,
+	from := env.State
+	if err := acc.transition(envelope.EnvelopeStateEvaluating, now); err != nil {
+		return EvaluationResult{}, wrapFailure(FailureCategoryInvalidTransition, err)
+	}
+	if err := acc.recordLifecycle(env.RequestSource(), env.RequestID(),
 		audit.AuditEventEvaluationStarted,
-		nil,
+		map[string]any{"from_state": string(from), "to_state": string(envelope.EnvelopeStateEvaluating)},
 	); err != nil {
 		return EvaluationResult{}, err
 	}
@@ -289,10 +347,10 @@ func (o *Orchestrator) evaluate(
 		return EvaluationResult{}, err
 	}
 	if outcome != "" {
-		return o.finish(ctx, repos, env, outcome, reason)
+		return o.finish(ctx, repos, acc, env, outcome, reason)
 	}
 	slog.Debug("surface_resolved", "request_id", req.RequestID, "surface_id", s.ID)
-	if err := o.appendObservationEvent(ctx, repos.Audit, env, audit.AuditEventSurfaceResolved, map[string]any{
+	if err := acc.recordObservation(env.RequestSource(), env.RequestID(), audit.AuditEventSurfaceResolved, map[string]any{
 		"surface_id": s.ID, "surface_version": s.Version,
 	}); err != nil {
 		return EvaluationResult{}, err
@@ -304,10 +362,10 @@ func (o *Orchestrator) evaluate(
 		return EvaluationResult{}, err
 	}
 	if outcome != "" {
-		return o.finish(ctx, repos, env, outcome, reason)
+		return o.finish(ctx, repos, acc, env, outcome, reason)
 	}
 	slog.Debug("agent_resolved", "request_id", req.RequestID, "agent_id", a.ID)
-	if err := o.appendObservationEvent(ctx, repos.Audit, env, audit.AuditEventAgentResolved, map[string]any{
+	if err := acc.recordObservation(env.RequestSource(), env.RequestID(), audit.AuditEventAgentResolved, map[string]any{
 		"agent_id": a.ID,
 	}); err != nil {
 		return EvaluationResult{}, err
@@ -319,10 +377,10 @@ func (o *Orchestrator) evaluate(
 		return EvaluationResult{}, err
 	}
 	if outcome != "" {
-		return o.finish(ctx, repos, env, outcome, reason)
+		return o.finish(ctx, repos, acc, env, outcome, reason)
 	}
 	slog.Debug("authority_chain_resolved", "request_id", req.RequestID, "grant_id", g.ID, "profile_id", p.ID)
-	if err := o.appendObservationEvent(ctx, repos.Audit, env, audit.AuditEventAuthorityChainResolved, map[string]any{
+	if err := acc.recordObservation(env.RequestSource(), env.RequestID(), audit.AuditEventAuthorityChainResolved, map[string]any{
 		"grant_id": g.ID, "profile_id": p.ID, "profile_version": p.Version, "agent_id": g.AgentID,
 	}); err != nil {
 		return EvaluationResult{}, err
@@ -366,7 +424,7 @@ func (o *Orchestrator) evaluate(
 		}
 	}
 
-	// Schema v2.1: Populate denormalized authority chain fields for database indexing
+	// Populate denormalized authority chain fields for database indexing.
 	env.ResolvedSurfaceID = s.ID
 	env.ResolvedSurfaceVersion = s.Version
 	env.ResolvedProfileID = p.ID
@@ -401,32 +459,31 @@ func (o *Orchestrator) evaluate(
 		env.Evaluation.Explanation.ConsequenceProvidedRiskRating = string(req.Consequence.RiskRating)
 		env.Evaluation.Explanation.ConsequenceReversible = req.Consequence.Reversible
 	}
-	if err := repos.Envelopes.Update(ctx, env); err != nil {
-		return EvaluationResult{}, fmt.Errorf("persist resolved+evaluation: %w", err)
-	}
+	// Resolved and Evaluation sections are populated in-memory; acc.persistNew()
+	// at the end of finish() flushes everything in a single Envelopes.Update.
 
 	// Step 4: Context
-	if err := o.appendContextValidatedEvent(ctx, repos.Audit, env, p.RequiredContextKeys, req.Context); err != nil {
+	if err := o.appendContextValidatedEvent(acc, env, p.RequiredContextKeys, req.Context); err != nil {
 		return EvaluationResult{}, err
 	}
 	if !hasRequiredContext(req.Context, p.RequiredContextKeys) {
-		return o.finish(ctx, repos, env, eval.OutcomeRequestClarification, eval.ReasonInsufficientContext)
+		return o.finish(ctx, repos, acc, env, eval.OutcomeRequestClarification, eval.ReasonInsufficientContext)
 	}
 
 	// Step 5: Confidence
-	if err := o.appendConfidenceCheckedEvent(ctx, repos.Audit, env, req.Confidence, p.ConfidenceThreshold); err != nil {
+	if err := o.appendConfidenceCheckedEvent(acc, env, req.Confidence, p.ConfidenceThreshold); err != nil {
 		return EvaluationResult{}, err
 	}
 	if req.Confidence < p.ConfidenceThreshold {
-		return o.finish(ctx, repos, env, eval.OutcomeEscalate, eval.ReasonConfidenceBelowThreshold)
+		return o.finish(ctx, repos, acc, env, eval.OutcomeEscalate, eval.ReasonConfidenceBelowThreshold)
 	}
 
 	// Step 6: Consequence
-	if err := o.appendConsequenceCheckedEvent(ctx, repos.Audit, env, req.Consequence, p.ConsequenceThreshold); err != nil {
+	if err := o.appendConsequenceCheckedEvent(acc, env, req.Consequence, p.ConsequenceThreshold); err != nil {
 		return EvaluationResult{}, err
 	}
 	if authority.ExceedsConsequenceThreshold(req.Consequence, p.ConsequenceThreshold) {
-		return o.finish(ctx, repos, env, eval.OutcomeEscalate, eval.ReasonConsequenceExceedsLimit)
+		return o.finish(ctx, repos, acc, env, eval.OutcomeEscalate, eval.ReasonConsequenceExceedsLimit)
 	}
 
 	// Step 7: Policy
@@ -435,29 +492,34 @@ func (o *Orchestrator) evaluate(
 		return EvaluationResult{}, err
 	}
 	if p.PolicyReference != "" {
-		if err := o.appendPolicyEvaluatedEvent(ctx, repos.Audit, env, p.PolicyReference, policyOutcome, policyReason); err != nil {
+		if err := o.appendPolicyEvaluatedEvent(acc, env, p.PolicyReference, policyOutcome, policyReason); err != nil {
 			return EvaluationResult{}, err
 		}
 	}
 	if policyOutcome != "" {
-		return o.finish(ctx, repos, env, policyOutcome, policyReason)
+		return o.finish(ctx, repos, acc, env, policyOutcome, policyReason)
 	}
 
-	return o.finish(ctx, repos, env, eval.OutcomeAccept, eval.ReasonWithinAuthority)
+	return o.finish(ctx, repos, acc, env, eval.OutcomeAccept, eval.ReasonWithinAuthority)
 }
 
 // ---------------------------------------------------------------------------
 // finish
 // ---------------------------------------------------------------------------
 
-// finish records the evaluation outcome and drives the envelope to its
-// terminal or pending-review state.
+// finish records the evaluation outcome, drives the envelope to its terminal
+// state via the accumulator, and flushes everything to the database atomically.
 //
-// Escalated:    EVALUATING → ESCALATED → AWAITING_REVIEW (left open)
+// Escalated:     EVALUATING → ESCALATED → AWAITING_REVIEW
 // Non-escalated: EVALUATING → OUTCOME_RECORDED → CLOSED
+//
+// acc.persist() is the sole DB write for the entire evaluation: it creates the
+// envelope row, appends all queued events (lifecycle + observational) in order,
+// and writes the final envelope state in one transaction-safe sequence.
 func (o *Orchestrator) finish(
 	ctx context.Context,
 	repos *store.Repositories,
+	acc *evaluationAccumulator,
 	env *envelope.Envelope,
 	outcome eval.Outcome,
 	reason eval.ReasonCode,
@@ -475,20 +537,51 @@ func (o *Orchestrator) finish(
 	explanationText := buildExplanationText(env, outcome, reason)
 
 	if outcome == eval.OutcomeEscalate {
-		if _, err := o.applyStep(ctx, repos, env, now,
-			envelope.EnvelopeStateEscalated,
+		// EVALUATING → ESCALATED
+		from := env.State
+		if err := acc.transition(envelope.EnvelopeStateEscalated, now); err != nil {
+			return EvaluationResult{}, wrapFailure(FailureCategoryInvalidTransition, err)
+		}
+		if err := acc.recordLifecycle(env.RequestSource(), env.RequestID(),
 			audit.AuditEventOutcomeRecorded,
-			map[string]any{"outcome": string(outcome), "reason_code": string(reason)},
+			map[string]any{
+				"outcome": string(outcome), "reason_code": string(reason),
+				"from_state": string(from), "to_state": string(envelope.EnvelopeStateEscalated),
+			},
 		); err != nil {
 			return EvaluationResult{}, err
 		}
-		if _, err := o.applyStep(ctx, repos, env, now,
-			envelope.EnvelopeStateAwaitingReview,
+
+		// ESCALATED → AWAITING_REVIEW
+		from = env.State
+		if err := acc.transition(envelope.EnvelopeStateAwaitingReview, now); err != nil {
+			return EvaluationResult{}, wrapFailure(FailureCategoryInvalidTransition, err)
+		}
+		if err := acc.recordLifecycle(env.RequestSource(), env.RequestID(),
 			audit.AuditEventEscalationPending,
-			nil,
+			map[string]any{
+				"from_state": string(from), "to_state": string(envelope.EnvelopeStateAwaitingReview),
+			},
 		); err != nil {
 			return EvaluationResult{}, err
 		}
+
+		// Queue decision.escalated outbox event. The accumulator flushes this
+		// atomically with the envelope and audit writes inside acc.persistNew.
+		if outboxEv, err := buildDecisionOutboxEvent(outbox.EventDecisionEscalated, env, outcome, reason); err != nil {
+			return EvaluationResult{}, wrapFailure(FailureCategoryEnvelopePersistence,
+				fmt.Errorf("construct outbox event decision.escalated: %w", err))
+		} else if outboxEv != nil {
+			if err := acc.recordOutbox(outboxEv); err != nil {
+				return EvaluationResult{}, wrapFailure(FailureCategoryEnvelopePersistence,
+					fmt.Errorf("queue outbox event decision.escalated: %w", err))
+			}
+		}
+
+		if err := acc.persistNew(ctx, repos); err != nil {
+			return EvaluationResult{}, categorizePersistErr(fmt.Errorf("persist evaluation: %w", err))
+		}
+
 		return EvaluationResult{
 			Outcome:     outcome,
 			ReasonCode:  reason,
@@ -498,20 +591,55 @@ func (o *Orchestrator) finish(
 		}, nil
 	}
 
-	if _, err := o.applyStep(ctx, repos, env, now,
-		envelope.EnvelopeStateOutcomeRecorded,
+	// EVALUATING → OUTCOME_RECORDED
+	from := env.State
+	if err := acc.transition(envelope.EnvelopeStateOutcomeRecorded, now); err != nil {
+		return EvaluationResult{}, wrapFailure(FailureCategoryInvalidTransition, err)
+	}
+	if err := acc.recordLifecycle(env.RequestSource(), env.RequestID(),
 		audit.AuditEventOutcomeRecorded,
-		map[string]any{"outcome": string(outcome), "reason_code": string(reason)},
+		map[string]any{
+			"outcome": string(outcome), "reason_code": string(reason),
+			"from_state": string(from), "to_state": string(envelope.EnvelopeStateOutcomeRecorded),
+		},
 	); err != nil {
 		return EvaluationResult{}, err
 	}
-	if _, err := o.applyStep(ctx, repos, env, now,
-		envelope.EnvelopeStateClosed,
+
+	// OUTCOME_RECORDED → CLOSED
+	from = env.State
+	if err := acc.transition(envelope.EnvelopeStateClosed, now); err != nil {
+		return EvaluationResult{}, wrapFailure(FailureCategoryInvalidTransition, err)
+	}
+	if err := acc.recordLifecycle(env.RequestSource(), env.RequestID(),
 		audit.AuditEventEnvelopeClosed,
-		nil,
+		map[string]any{
+			"from_state": string(from), "to_state": string(envelope.EnvelopeStateClosed),
+		},
 	); err != nil {
 		return EvaluationResult{}, err
 	}
+
+	// Queue decision.completed only for the Execute (accept) outcome. Other
+	// non-escalated outcomes (Reject, RequestClarification) do not produce a
+	// completed event because no downstream action is warranted. The accumulator
+	// flushes this atomically with the envelope and audit writes inside acc.persistNew.
+	if outcome == eval.OutcomeAccept {
+		if outboxEv, err := buildDecisionOutboxEvent(outbox.EventDecisionCompleted, env, outcome, reason); err != nil {
+			return EvaluationResult{}, wrapFailure(FailureCategoryEnvelopePersistence,
+				fmt.Errorf("construct outbox event decision.completed: %w", err))
+		} else if outboxEv != nil {
+			if err := acc.recordOutbox(outboxEv); err != nil {
+				return EvaluationResult{}, wrapFailure(FailureCategoryEnvelopePersistence,
+					fmt.Errorf("queue outbox event decision.completed: %w", err))
+			}
+		}
+	}
+
+	if err := acc.persistNew(ctx, repos); err != nil {
+		return EvaluationResult{}, categorizePersistErr(fmt.Errorf("persist evaluation: %w", err))
+	}
+
 	return EvaluationResult{
 		Outcome:     outcome,
 		ReasonCode:  reason,
@@ -521,70 +649,104 @@ func (o *Orchestrator) finish(
 	}, nil
 }
 
-// ---------------------------------------------------------------------------
-// applyStep — atomic lifecycle primitive
-// ---------------------------------------------------------------------------
-
-// applyStep is the single authoritative way to advance an envelope through a
-// state transition. Every call atomically:
+// buildDecisionOutboxEvent constructs a decision-domain outbox event for the
+// given eventType. The payload is produced by the typed builder in the outbox
+// package, ensuring schema consistency with the versioned event contracts.
 //
-//  1. Validates and applies the state transition (edge + content invariants).
-//  2. Persists the new envelope state.
-//  3. Appends the audit event.
-//  4. Folds the event ID and hash into Integrity and persists again.
+// Returns (nil, nil) — not an error — when called with an empty eventType,
+// which allows callers to skip queuing cleanly using the "else if outboxEv != nil"
+// pattern without a separate nil check. In practice eventType is always set.
 //
-// All four steps run inside the caller's transaction. Any failure causes a
-// full rollback, keeping the store and audit log mutually consistent.
-//
-// The double-write (steps 2 and 4) is a deliberate v1 tradeoff: it ensures
-// the envelope row is self-describing without requiring a join to audit.
-//
-// applyStep clones the caller's payload before adding from_state/to_state
-// so callers can safely reuse map literals.
-func (o *Orchestrator) applyStep(
-	ctx context.Context,
-	repos *store.Repositories,
+// Callers are responsible for queuing the returned event via acc.recordOutbox
+// before calling acc.persistNew or acc.persistExisting. The accumulator flushes
+// the event atomically inside the transaction.
+func buildDecisionOutboxEvent(
+	eventType outbox.EventType,
 	env *envelope.Envelope,
-	now time.Time,
-	next envelope.EnvelopeState,
-	eventType audit.AuditEventType,
-	payload map[string]any,
-) (*audit.AuditEvent, error) {
-	from := env.State
-
-	if err := env.Transition(next, now); err != nil {
-		return nil, fmt.Errorf("transition %s→%s: %w", from, next, err)
+	outcome eval.Outcome,
+	reason eval.ReasonCode,
+) (*outbox.OutboxEvent, error) {
+	if eventType == "" {
+		return nil, nil
 	}
 
-	if err := repos.Envelopes.Update(ctx, env); err != nil {
-		return nil, fmt.Errorf("persist envelope after %s→%s: %w", from, next, err)
+	var (
+		payload json.RawMessage
+		err     error
+	)
+	switch eventType {
+	case outbox.EventDecisionEscalated:
+		payload, err = outbox.BuildDecisionEscalatedEvent(
+			env.ID(),
+			env.RequestSource(),
+			env.RequestID(),
+			env.ResolvedSurfaceID,
+			env.ResolvedAgentID,
+			string(reason),
+		)
+	default:
+		// EventDecisionCompleted and any future decision event types.
+		payload, err = outbox.BuildDecisionCompletedEvent(
+			env.ID(),
+			env.RequestSource(),
+			env.RequestID(),
+			env.ResolvedSurfaceID,
+			env.ResolvedAgentID,
+			string(outcome),
+			string(reason),
+		)
 	}
-
-	// Clone payload before mutating to avoid side effects on the caller's map.
-	eventPayload := make(map[string]any, len(payload)+2)
-	for k, v := range payload {
-		eventPayload[k] = v
-	}
-	eventPayload["from_state"] = string(from)
-	eventPayload["to_state"] = string(next)
-
-	ev, err := o.appendAuditEventWithResult(ctx, repos.Audit, env, eventType, eventPayload)
 	if err != nil {
-		return nil, fmt.Errorf("audit event %s for %s→%s: %w", eventType, from, next, err)
+		return nil, fmt.Errorf("build outbox payload: %w", err)
 	}
 
-	env.Integrity.AuditEventIDs = append(env.Integrity.AuditEventIDs, ev.ID)
-	if env.Integrity.FirstEventHash == "" {
-		// Safety net: FirstEventHash is set at envelope creation; this guard
-		// prevents accidental overwrite if that invariant ever breaks.
-		env.Integrity.FirstEventHash = ev.Hash
+	ev, err := outbox.New(
+		eventType,
+		"envelope",
+		env.ID(),
+		"midas.decisions",
+		env.RequestSource()+":"+env.RequestID(),
+		payload,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("construct outbox event: %w", err)
 	}
-	env.Integrity.FinalEventHash = ev.Hash
+	return ev, nil
+}
 
-	if err := repos.Envelopes.Update(ctx, env); err != nil {
-		return nil, fmt.Errorf("persist integrity after %s→%s: %w", from, next, err)
+// buildDecisionReviewResolvedOutboxEvent constructs the decision.review_resolved
+// outbox event for a completed escalation resolution. The payload is produced
+// by the typed builder in the outbox package, ensuring schema consistency with
+// the versioned event contracts.
+//
+// Callers are responsible for queuing the returned event via acc.recordOutbox
+// before calling acc.persistExisting. The accumulator flushes the event
+// atomically inside the transaction.
+func buildDecisionReviewResolvedOutboxEvent(
+	env *envelope.Envelope,
+	res EscalationResolution,
+) (*outbox.OutboxEvent, error) {
+	payload, err := outbox.BuildDecisionReviewResolvedEvent(
+		env.ID(),
+		env.RequestSource(),
+		env.RequestID(),
+		string(res.Decision),
+		res.ReviewerID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("build outbox payload: %w", err)
 	}
-
+	ev, err := outbox.New(
+		outbox.EventDecisionReviewResolved,
+		"envelope",
+		env.ID(),
+		"midas.decisions",
+		env.RequestSource()+":"+env.RequestID(),
+		payload,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("construct outbox event: %w", err)
+	}
 	return ev, nil
 }
 
@@ -644,10 +806,13 @@ func (o *Orchestrator) ResolveEscalation(ctx context.Context, res EscalationReso
 			ReviewedAt:   now,
 		}
 
-		// Observational event: semantic record of the review decision.
-		// Not a state transition — emitted directly, not via applyStep.
-		// Still inside the transaction; rolls back if the close step fails.
-		reviewEv, err := o.appendAuditEventWithResult(ctx, repos.Audit, env,
+		acc, err := newExistingEnvelopeAccumulator(env)
+		if err != nil {
+			return fmt.Errorf("create accumulator: %w", err)
+		}
+
+		// Queue ESCALATION_REVIEWED: semantic record of the review decision.
+		if err := acc.recordObservation(env.RequestSource(), env.RequestID(),
 			audit.AuditEventEscalationReviewed,
 			map[string]any{
 				"decision":      string(res.Decision),
@@ -655,24 +820,41 @@ func (o *Orchestrator) ResolveEscalation(ctx context.Context, res EscalationReso
 				"reviewer_kind": res.ReviewerKind,
 				"notes":         res.Notes,
 			},
-		)
-		if err != nil {
-			return fmt.Errorf("audit event escalation_reviewed: %w", err)
-		}
-		env.Integrity.AuditEventIDs = append(env.Integrity.AuditEventIDs, reviewEv.ID)
-		env.Integrity.FinalEventHash = reviewEv.Hash
-		if err := repos.Envelopes.Update(ctx, env); err != nil {
-			return fmt.Errorf("persist integrity after escalation_reviewed: %w", err)
+		); err != nil {
+			return fmt.Errorf("record escalation_reviewed: %w", err)
 		}
 
-		// AWAITING_REVIEW → CLOSED using AuditEventEnvelopeClosed to match
-		// the non-escalated close path exactly.
-		if _, err := o.applyStep(ctx, repos, env, now,
-			envelope.EnvelopeStateClosed,
+		// AWAITING_REVIEW → CLOSED
+		from := env.State
+		if err := acc.transition(envelope.EnvelopeStateClosed, now); err != nil {
+			return wrapFailure(FailureCategoryInvalidTransition, err)
+		}
+
+		// Queue ENVELOPE_CLOSED to match the non-escalated close path exactly.
+		if err := acc.recordLifecycle(env.RequestSource(), env.RequestID(),
 			audit.AuditEventEnvelopeClosed,
-			nil,
+			map[string]any{
+				"from_state": string(from),
+				"to_state":   string(envelope.EnvelopeStateClosed),
+			},
 		); err != nil {
-			return err
+			return fmt.Errorf("record envelope_closed: %w", err)
+		}
+
+		// Queue decision.review_resolved outbox event. The accumulator flushes this
+		// atomically with the audit writes and envelope update inside acc.persistExisting.
+		if outboxEv, oerr := buildDecisionReviewResolvedOutboxEvent(env, res); oerr != nil {
+			return wrapFailure(FailureCategoryEnvelopePersistence,
+				fmt.Errorf("construct outbox event decision.review_resolved: %w", oerr))
+		} else if outboxEv != nil {
+			if oerr := acc.recordOutbox(outboxEv); oerr != nil {
+				return wrapFailure(FailureCategoryEnvelopePersistence,
+					fmt.Errorf("queue outbox event decision.review_resolved: %w", oerr))
+			}
+		}
+
+		if err := acc.persistExisting(ctx, repos); err != nil {
+			return categorizePersistErr(fmt.Errorf("persist escalation resolution: %w", err))
 		}
 
 		slog.Info("escalation_resolved",
@@ -720,7 +902,7 @@ func (o *Orchestrator) GetEnvelopeByRequestID(ctx context.Context, requestID str
 }
 
 // GetEnvelopeByRequestScope retrieves an envelope by (request_source, request_id) composite key.
-// This is the preferred lookup method for schema v2.1 scoped idempotency.
+// This is the preferred lookup for scoped idempotency checks.
 func (o *Orchestrator) GetEnvelopeByRequestScope(ctx context.Context, requestSource, requestID string) (*envelope.Envelope, error) {
 	if requestSource == "" || requestID == "" {
 		return nil, ErrEmptyIdentifier
@@ -740,92 +922,32 @@ func (o *Orchestrator) ListEnvelopes(ctx context.Context) ([]*envelope.Envelope,
 	return repos.Envelopes.List(ctx)
 }
 
+// ListEnvelopesByState returns all envelopes in the given lifecycle state.
+// An empty state returns all envelopes.
+func (o *Orchestrator) ListEnvelopesByState(ctx context.Context, state envelope.EnvelopeState) ([]*envelope.Envelope, error) {
+	repos, err := o.store.Repositories()
+	if err != nil {
+		return nil, err
+	}
+	return repos.Envelopes.ListByState(ctx, state)
+}
+
 // ---------------------------------------------------------------------------
 // Audit helpers
 //
-// Two kinds of audit events:
-//   - Lifecycle transition events: emitted via applyStep. Accompany state
-//     changes atomically with persist and integrity update.
-//   - Observational events: emitted via appendObservationEvent and typed
-//     helpers. Record facts (surface resolved, confidence checked) without
-//     changing state. Still transactional — a failure rolls everything back.
+// Two kinds of audit events in the Evaluate and ResolveEscalation paths:
+//   - Lifecycle events: queued via acc.recordLifecycle(). Accompany envelope
+//     state transitions.
+//   - Observational events: queued via acc.recordObservation() and the typed
+//     helpers below. Record facts (surface resolved, confidence checked, etc.)
+//     without changing state.
 //
-// Rule: applyStep for state changes; observation helpers for facts.
+// All events are flushed atomically by acc.persistNew() (new evaluations) or
+// acc.persistExisting() (escalation resolution) at the end of each path.
 // ---------------------------------------------------------------------------
 
-func (o *Orchestrator) appendAuditEvent(
-	ctx context.Context,
-	auditRepo audit.AuditEventRepository,
-	env *envelope.Envelope,
-	eventType audit.AuditEventType,
-	payload map[string]any,
-) error {
-	_, err := o.appendAuditEventWithResult(ctx, auditRepo, env, eventType, payload)
-	return err
-}
-
-func (o *Orchestrator) appendAuditEventWithResult(
-	ctx context.Context,
-	auditRepo audit.AuditEventRepository,
-	env *envelope.Envelope,
-	eventType audit.AuditEventType,
-	payload map[string]any,
-) (*audit.AuditEvent, error) {
-	// Schema v2.1: audit events now include request_source
-	ev := audit.NewEvent(
-		env.ID(),
-		env.RequestSource(),
-		env.RequestID(),
-		eventType,
-		audit.EventPerformerSystem,
-		"midas-orchestrator",
-		payload,
-	)
-	if err := auditRepo.Append(ctx, ev); err != nil {
-		return nil, err
-	}
-	return ev, nil
-}
-
-func (o *Orchestrator) appendObservationEvent(
-	ctx context.Context,
-	auditRepo audit.AuditEventRepository,
-	env *envelope.Envelope,
-	eventType audit.AuditEventType,
-	payload map[string]any,
-) error {
-	ev, err := o.appendAuditEventWithResult(ctx, auditRepo, env, eventType, payload)
-	if err != nil {
-		return err
-	}
-
-	// Update integrity chain: every audit event extends FinalEventHash.
-	// AuditEventIDs accumulates the full event sequence for this envelope.
-	env.Integrity.AuditEventIDs = append(env.Integrity.AuditEventIDs, ev.ID)
-	env.Integrity.FinalEventHash = ev.Hash
-
-	// INVARIANT: Observational events do NOT persist the envelope immediately.
-	// The integrity fields remain in-memory until the next applyStep call.
-	// This avoids excessive DB writes while maintaining transactional atomicity.
-	//
-	// Safety depends on:
-	// 1. All evaluation logic running in a single WithTx transaction.
-	// 2. Every evaluation path ending with applyStep (which persists).
-	// 3. If evaluation fails, the entire transaction rolls back atomically.
-	//
-	// MAINTAINER WARNING: If you add an early-return path that bypasses
-	// applyStep, you MUST either:
-	// (a) call repos.Envelopes.Update(ctx, env) before returning, or
-	// (b) ensure the path is read-only and does not append observation events.
-	//
-	// Violation symptom: Audit log shows events that env.Integrity does not reference.
-
-	return nil
-}
-
 func (o *Orchestrator) appendContextValidatedEvent(
-	ctx context.Context,
-	auditRepo audit.AuditEventRepository,
+	acc *evaluationAccumulator,
 	env *envelope.Envelope,
 	requiredKeys []string,
 	contextMap map[string]any,
@@ -837,7 +959,7 @@ func (o *Orchestrator) appendContextValidatedEvent(
 	sort.Strings(providedKeys)
 	required := append([]string(nil), requiredKeys...)
 	sort.Strings(required)
-	return o.appendAuditEvent(ctx, auditRepo, env, audit.AuditEventContextValidated, map[string]any{
+	return acc.recordObservation(env.RequestSource(), env.RequestID(), audit.AuditEventContextValidated, map[string]any{
 		"required_keys": required,
 		"provided_keys": providedKeys,
 		"passed":        hasRequiredContext(contextMap, requiredKeys),
@@ -845,13 +967,12 @@ func (o *Orchestrator) appendContextValidatedEvent(
 }
 
 func (o *Orchestrator) appendConfidenceCheckedEvent(
-	ctx context.Context,
-	auditRepo audit.AuditEventRepository,
+	acc *evaluationAccumulator,
 	env *envelope.Envelope,
 	provided float64,
 	threshold float64,
 ) error {
-	return o.appendAuditEvent(ctx, auditRepo, env, audit.AuditEventConfidenceChecked, map[string]any{
+	return acc.recordObservation(env.RequestSource(), env.RequestID(), audit.AuditEventConfidenceChecked, map[string]any{
 		"confidence_provided":  provided,
 		"confidence_threshold": threshold,
 		"passed":               provided >= threshold,
@@ -859,8 +980,7 @@ func (o *Orchestrator) appendConfidenceCheckedEvent(
 }
 
 func (o *Orchestrator) appendConsequenceCheckedEvent(
-	ctx context.Context,
-	auditRepo audit.AuditEventRepository,
+	acc *evaluationAccumulator,
 	env *envelope.Envelope,
 	submitted *eval.Consequence,
 	threshold authority.Consequence,
@@ -878,18 +998,17 @@ func (o *Orchestrator) appendConsequenceCheckedEvent(
 		payload["submitted_currency"] = submitted.Currency
 		payload["submitted_risk_rating"] = string(submitted.RiskRating)
 	}
-	return o.appendAuditEvent(ctx, auditRepo, env, audit.AuditEventConsequenceChecked, payload)
+	return acc.recordObservation(env.RequestSource(), env.RequestID(), audit.AuditEventConsequenceChecked, payload)
 }
 
 func (o *Orchestrator) appendPolicyEvaluatedEvent(
-	ctx context.Context,
-	auditRepo audit.AuditEventRepository,
+	acc *evaluationAccumulator,
 	env *envelope.Envelope,
 	policyRef string,
 	outcome eval.Outcome,
 	reason eval.ReasonCode,
 ) error {
-	return o.appendAuditEvent(ctx, auditRepo, env, audit.AuditEventPolicyEvaluated, map[string]any{
+	return acc.recordObservation(env.RequestSource(), env.RequestID(), audit.AuditEventPolicyEvaluated, map[string]any{
 		"policy_reference": policyRef,
 		"outcome":          string(outcome),
 		"reason_code":      string(reason),
@@ -938,21 +1057,18 @@ func (o *Orchestrator) resolveAgent(
 }
 
 // resolveAuthorityChain finds the active grant and profile for an agent
-// on the given surface at the given time.
+// on the given surface at the given time. Checks both effective date
+// (FindActiveAt) and profile.Status == active.
 //
-// Schema v2.1: Also checks profile.Status == active (not just effective dates).
+// Outcome semantics:
+//   - NO_ACTIVE_GRANT: agent has no grants at all
+//   - PROFILE_NOT_FOUND: grants exist, but none have an active profile
+//   - GRANT_PROFILE_SURFACE_MISMATCH: active profile exists, but doesn't match the surface
+//   - Success: returns grant + profile
 //
-// Outcome semantics (tested in orchestrator_test.go):
-//   - NO_ACTIVE_GRANT: agent has no grants at all (line 899)
-//   - PROFILE_NOT_FOUND: grants exist, but none have an active profile (line 924)
-//   - GRANT_PROFILE_SURFACE_MISMATCH: active profile exists, but doesn't match surface (line 922)
-//   - Success: returns grant + profile (line 918)
-//
-// The distinction between PROFILE_NOT_FOUND and GRANT_PROFILE_SURFACE_MISMATCH
-// is subtle but important for diagnostics: the former means the configuration
-// is incomplete (missing profile); the latter means the configuration is wrong
-// (agent authorized for the wrong surface). These semantics should be preserved
-// in tests to prevent accidental simplification.
+// PROFILE_NOT_FOUND indicates incomplete configuration (missing profile);
+// GRANT_PROFILE_SURFACE_MISMATCH indicates wrong configuration (agent authorized
+// for a different surface). Preserve this distinction in tests.
 func (o *Orchestrator) resolveAuthorityChain(
 	ctx context.Context,
 	grants authority.GrantRepository,
@@ -982,7 +1098,6 @@ func (o *Orchestrator) resolveAuthorityChain(
 			continue
 		}
 
-		// Schema v2.1: Check profile status explicitly in addition to FindActiveAt's date check
 		if p.Status != authority.ProfileStatusActive {
 			continue
 		}
@@ -1137,7 +1252,7 @@ func buildExplanationText(env *envelope.Envelope, outcome eval.Outcome, reason e
 
 func buildGovernancePayload(req eval.DecisionRequest, submittedHash string) map[string]any {
 	p := map[string]any{
-		"request_source": req.RequestSource, // Schema v2.1
+		"request_source": req.RequestSource,
 		"surface_id":     req.SurfaceID,
 		"agent_id":       req.AgentID,
 		"submitted_hash": submittedHash,
@@ -1171,6 +1286,23 @@ func buildGovernancePayload(req eval.DecisionRequest, submittedHash string) map[
 	return p
 }
 
+// resultFromEnvelope reconstructs an EvaluationResult from a persisted
+// envelope. Used on the exact-replay idempotency path to return the original
+// decision without creating a second envelope.
+func resultFromEnvelope(env *envelope.Envelope) EvaluationResult {
+	var explanation string
+	if env.Evaluation.Explanation != nil {
+		explanation = env.Evaluation.Explanation.Reason
+	}
+	return EvaluationResult{
+		Outcome:     env.Evaluation.Outcome,
+		ReasonCode:  env.Evaluation.ReasonCode,
+		EnvelopeID:  env.ID(),
+		State:       env.State,
+		Explanation: explanation,
+	}
+}
+
 func hasRequiredContext(ctxMap map[string]any, required []string) bool {
 	if len(required) == 0 {
 		return true
@@ -1187,50 +1319,50 @@ func hasRequiredContext(ctxMap map[string]any, required []string) bool {
 }
 
 // classifyFailure extracts the failure category from an error.
-// It first checks for explicitly categorized errors, then falls back to
-// sentinel error checks, and finally to heuristic string matching as a
-// last resort for errors not yet migrated to typed categories.
+//
+// Priority order:
+//  1. Explicit categorizedError wrapper (set by wrapFailure at orchestrator
+//     boundaries for transition and persist failures).
+//  2. Known sentinel errors (ErrEnvelopeNotFound, etc.).
+//  3. Heuristic string matching — retained only for authority-resolution
+//     repository errors and policy errors that are returned raw without wrapping.
 func classifyFailure(err error) string {
 	if err == nil {
 		return ""
 	}
 
-	// First priority: Explicit category wrapper
+	// First priority: Explicit category wrapper.
 	var catErr *categorizedError
 	if errors.As(err, &catErr) {
 		return string(catErr.Category())
 	}
 
-	// Second priority: Known sentinel errors
+	// Second priority: Known sentinel errors.
 	switch {
 	case errors.Is(err, ErrEnvelopeNotFound),
 		errors.Is(err, ErrEnvelopeNotAwaitingReview),
 		errors.Is(err, ErrEnvelopeAlreadyClosed):
 		return string(FailureCategoryResolveReview)
+	case errors.Is(err, ErrScopedRequestConflict):
+		return string(FailureCategoryIdempotencyConflict)
 	}
 
-	// Third priority: Heuristic fallback for errors not yet categorized.
-	// This should shrink over time as call sites adopt wrapFailure().
+	// Third priority: Heuristic fallback for raw repository errors from
+	// authority resolution (surface, agent, grant, profile lookups) and
+	// policy evaluation. Transition and persist failures are now covered by
+	// explicit wrappers above, so those strings are no longer needed here.
 	msg := err.Error()
 	switch {
-	case strings.Contains(msg, "persist envelope") ||
-		strings.Contains(msg, "persist integrity") ||
-		strings.Contains(msg, "create envelope") ||
-		strings.Contains(msg, "persist resolved"):
-		return string(FailureCategoryEnvelopePersistence)
-	case strings.Contains(msg, "audit event") ||
-		strings.Contains(msg, "escalation_reviewed"):
-		return string(FailureCategoryAuditAppend)
-	case strings.Contains(msg, "transition"):
-		return string(FailureCategoryInvalidTransition)
 	case strings.Contains(msg, "policy"):
 		return string(FailureCategoryPolicyEvaluation)
+
 	case strings.Contains(msg, "authority") ||
 		strings.Contains(msg, "grant") ||
 		strings.Contains(msg, "profile") ||
 		strings.Contains(msg, "surface") ||
 		strings.Contains(msg, "agent"):
 		return string(FailureCategoryAuthorityResolution)
+
 	default:
 		return string(FailureCategoryUnknown)
 	}

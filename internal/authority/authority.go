@@ -84,6 +84,22 @@ type AuthorityProfile struct {
 	ApprovedAt *time.Time
 }
 
+// CanTransitionTo validates whether a profile lifecycle transition is permitted.
+//
+// Valid transitions:
+//   - review → active   (approval)
+//   - active → deprecated (deprecation)
+func (p *AuthorityProfile) CanTransitionTo(next ProfileStatus) bool {
+	switch p.Status {
+	case ProfileStatusReview:
+		return next == ProfileStatusActive
+	case ProfileStatusActive:
+		return next == ProfileStatusDeprecated
+	default:
+		return false
+	}
+}
+
 // GrantStatus represents the lifecycle state of an AuthorityGrant.
 type GrantStatus string
 
@@ -100,20 +116,47 @@ type AuthorityGrant struct {
 	AgentID   string
 	ProfileID string // Logical profile ID (not versioned)
 
-	GrantedBy string
-	Status    GrantStatus
+	GrantedBy   string
+	GrantReason string
+	Status      GrantStatus
 
 	// Temporal scope
 	EffectiveDate time.Time
 	ExpiresAt     *time.Time // nil = no expiration
 
 	// Revocation tracking
-	RevokedAt *time.Time
-	RevokedBy string
+	RevokedAt    *time.Time
+	RevokedBy    string
+	RevokeReason string
+
+	// Suspension tracking
+	SuspendedAt   *time.Time
+	SuspendedBy   string
+	SuspendReason string
 
 	// Metadata
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+// CanTransitionTo returns true if the grant may move from its current status
+// to next. Valid transitions:
+//
+//	active    -> suspended
+//	active    -> revoked
+//	suspended -> active  (reinstate)
+//	suspended -> revoked
+func (g *AuthorityGrant) CanTransitionTo(next GrantStatus) bool {
+	switch g.Status {
+	case GrantStatusActive:
+		return next == GrantStatusSuspended || next == GrantStatusRevoked
+	case GrantStatusSuspended:
+		return next == GrantStatusActive || next == GrantStatusRevoked
+	case GrantStatusRevoked:
+		return false // terminal state
+	default:
+		return false
+	}
 }
 
 // ProfileRepository is the persistence interface for AuthorityProfile.
@@ -153,7 +196,14 @@ type GrantRepository interface {
 
 	ListByAgent(ctx context.Context, agentID string) ([]*AuthorityGrant, error)
 
+	// ListByProfile returns all grants linked to the given profile ID.
+	ListByProfile(ctx context.Context, profileID string) ([]*AuthorityGrant, error)
+
 	Create(ctx context.Context, g *AuthorityGrant) error
+
+	// Update persists all mutable grant fields. Used by lifecycle governance
+	// to atomically update status, actor, reason, and timestamp fields.
+	Update(ctx context.Context, g *AuthorityGrant) error
 
 	// Revoke marks a grant as revoked and records revocation metadata.
 	// Schema v2.1: Sets status='revoked', revoked_at=now, revoked_by=revokerID

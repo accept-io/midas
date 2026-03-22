@@ -24,8 +24,8 @@ func NewService() *Service {
 	}
 }
 
-// NewServiceWithRepository is kept temporarily for backward compatibility.
-// The repository is not used in the current validation-only implementation.
+// NewServiceWithRepository constructs a control-plane service without a
+// backing repository. The parameter is accepted for interface compatibility.
 func NewServiceWithRepository(_ any) *Service {
 	return &Service{
 		applier: apply.NewServiceWithRepo(nil),
@@ -41,10 +41,10 @@ func (s *Service) ApplyYAML(ctx context.Context, data []byte) types.ApplyResult 
 		return result
 	}
 
-	return s.applier.Apply(ctx, docs)
+	return s.applier.Apply(ctx, docs, "")
 }
 
 // ApplyDocuments applies an already-parsed bundle of control-plane documents.
 func (s *Service) ApplyDocuments(ctx context.Context, docs []parser.ParsedDocument) types.ApplyResult {
-	return s.applier.Apply(ctx, docs)
+	return s.applier.Apply(ctx, docs, "")
 }

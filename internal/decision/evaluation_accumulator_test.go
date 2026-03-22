@@ -21,6 +21,8 @@ import (
 	"github.com/accept-io/midas/internal/audit"
 	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/eval"
+	"github.com/accept-io/midas/internal/outbox"
+	"github.com/accept-io/midas/internal/store"
 )
 
 var accTestNow = time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
@@ -147,6 +149,9 @@ func (r *accFakeEnvRepo) GetByRequestScope(_ context.Context, _, _ string) (*env
 	return nil, nil
 }
 func (r *accFakeEnvRepo) List(_ context.Context) ([]*envelope.Envelope, error) { return nil, nil }
+func (r *accFakeEnvRepo) ListByState(_ context.Context, _ envelope.EnvelopeState) ([]*envelope.Envelope, error) {
+	return nil, nil
+}
 
 // accFakeAuditRepo records Append calls, assigns a deterministic hash chain,
 // and injects failures after a configurable number of successful appends.
@@ -196,6 +201,15 @@ func (r *accFakeAuditRepo) ListByEnvelopeID(_ context.Context, id string) ([]*au
 
 func (r *accFakeAuditRepo) ListByRequestID(_ context.Context, _ string) ([]*audit.AuditEvent, error) {
 	return nil, nil
+}
+
+// makeAccTestRepos wires the fake repos into a *store.Repositories so tests
+// can call the narrowed persist(ctx, repos) signature.
+func makeAccTestRepos(envRepo *accFakeEnvRepo, auditRepo *accFakeAuditRepo) *store.Repositories {
+	return &store.Repositories{
+		Envelopes: envRepo,
+		Audit:     auditRepo,
+	}
 }
 
 // =============================================================================
@@ -327,7 +341,7 @@ func TestAccumulatorTransition_ValidatesStateMachine(t *testing.T) {
 		env := accMakeEnv(t)
 		acc := accMakeAcc(t, env)
 		accDriveToAccept(t, acc)
-		if err := acc.persist(context.Background(), newAccFakeEnvRepo(log), newAccFakeAuditRepo(log)); err != nil {
+		if err := acc.persistNew(context.Background(), makeAccTestRepos(newAccFakeEnvRepo(log), newAccFakeAuditRepo(log))); err != nil {
 			t.Fatalf("persist: %v", err)
 		}
 		// Further transition must fail.
@@ -406,7 +420,7 @@ func TestAccumulatorRecordEvent_Validation(t *testing.T) {
 		env := accMakeEnv(t)
 		acc := accMakeAcc(t, env)
 		accDriveToAccept(t, acc)
-		if err := acc.persist(context.Background(), newAccFakeEnvRepo(log), newAccFakeAuditRepo(log)); err != nil {
+		if err := acc.persistNew(context.Background(), makeAccTestRepos(newAccFakeEnvRepo(log), newAccFakeAuditRepo(log))); err != nil {
 			t.Fatalf("persist: %v", err)
 		}
 		ev := audit.NewEvent(env.ID(), "src", "rid",
@@ -529,113 +543,110 @@ func TestAccumulatorAbsorbPersistedEvent_UpdatesIntegrity(t *testing.T) {
 }
 
 // =============================================================================
-// Test group 6: persist() pre-flight checks
+// Test group 6: persistNew() pre-flight checks
 // =============================================================================
 
 func TestAccumulatorPersist_PreflightChecks(t *testing.T) {
-	t.Run("rejects non-terminal state", func(t *testing.T) {
+	t.Run("non-terminal state returns errAccumulatorNonTerminalState", func(t *testing.T) {
+		// persistNew() must reject an envelope not in a terminal state.
+		// EVALUATING is not terminal; the pre-flight must fire before any DB write.
 		log := &accCallLog{}
 		env := accMakeEnv(t)
 		acc := accMakeAcc(t, env)
-		// Drive to EVALUATING — not a terminal state.
 		if err := acc.transition(envelope.EnvelopeStateEvaluating, accTestNow); err != nil {
-			t.Fatalf("transition: %v", err)
+			t.Fatalf("transition EVALUATING: %v", err)
 		}
-		env.Evaluation.Outcome = eval.OutcomeAccept // set to avoid outcome check
-
-		err := acc.persist(context.Background(), newAccFakeEnvRepo(log), newAccFakeAuditRepo(log))
+		repos := makeAccTestRepos(newAccFakeEnvRepo(log), newAccFakeAuditRepo(log))
+		err := acc.persistNew(context.Background(), repos)
 		if !errors.Is(err, errAccumulatorNonTerminalState) {
 			t.Errorf("expected errAccumulatorNonTerminalState, got: %v", err)
 		}
-		// No DB operations must have been attempted.
 		if len(log.ops) != 0 {
-			t.Errorf("DB operations attempted before pre-flight passed: %v", log.ops)
+			t.Errorf("DB operations attempted before pre-flight check: %v", log.ops)
 		}
 	})
 
-	t.Run("rejects missing Outcome in terminal state", func(t *testing.T) {
-		// Drive to AWAITING_REVIEW without setting Outcome — Outcome is not
-		// required by the state machine for ESCALATED/AWAITING_REVIEW, but
-		// persist() requires it as a safety net.
-		log := &accCallLog{}
-		env := accMakeEnv(t)
-		acc := accMakeAcc(t, env)
-
-		_ = acc.transition(envelope.EnvelopeStateEvaluating, accTestNow)
-		env.Evaluation.Explanation = &envelope.DecisionExplanation{Result: "escalate"}
-		_ = acc.transition(envelope.EnvelopeStateEscalated, accTestNow)
-		_ = acc.transition(envelope.EnvelopeStateAwaitingReview, accTestNow)
-		// Outcome intentionally left empty.
-
-		err := acc.persist(context.Background(), newAccFakeEnvRepo(log), newAccFakeAuditRepo(log))
-		if !errors.Is(err, errAccumulatorMissingOutcome) {
-			t.Errorf("expected errAccumulatorMissingOutcome, got: %v", err)
-		}
-		if len(log.ops) != 0 {
-			t.Errorf("DB operations attempted before pre-flight passed: %v", log.ops)
-		}
-	})
-
-	t.Run("accepts AWAITING_REVIEW as valid terminal state", func(t *testing.T) {
-		// AWAITING_REVIEW is valid for escalated envelopes.
-		log := &accCallLog{}
-		env := accMakeEnv(t)
-		acc := accMakeAcc(t, env)
-
-		mustRecord(t, acc.recordLifecycle(env.RequestSource(), env.RequestID(),
-			audit.AuditEventEnvelopeCreated, nil))
-		_ = acc.transition(envelope.EnvelopeStateEvaluating, accTestNow)
-		mustRecord(t, acc.recordLifecycle(env.RequestSource(), env.RequestID(),
-			audit.AuditEventEvaluationStarted, nil))
-		env.Evaluation.Explanation = &envelope.DecisionExplanation{Result: "escalate"}
-		_ = acc.transition(envelope.EnvelopeStateEscalated, accTestNow)
-		mustRecord(t, acc.recordLifecycle(env.RequestSource(), env.RequestID(),
-			audit.AuditEventOutcomeRecorded, nil))
-		_ = acc.transition(envelope.EnvelopeStateAwaitingReview, accTestNow)
-		mustRecord(t, acc.recordLifecycle(env.RequestSource(), env.RequestID(),
-			audit.AuditEventEscalationPending, nil))
-		env.Evaluation.Outcome = eval.OutcomeEscalate
-		env.Evaluation.ReasonCode = eval.ReasonConfidenceBelowThreshold
-
-		if err := acc.persist(context.Background(), newAccFakeEnvRepo(log), newAccFakeAuditRepo(log)); err != nil {
-			t.Errorf("AWAITING_REVIEW persist failed: %v", err)
-		}
-	})
-
-	t.Run("returns errAccumulatorAlreadyPersisted on double persist", func(t *testing.T) {
+	t.Run("missing outcome returns errAccumulatorMissingOutcome", func(t *testing.T) {
+		// persistNew() must reject an envelope that reached CLOSED but has no Outcome.
+		// Drive to CLOSED via accDriveToAccept then clear Outcome to simulate.
 		log := &accCallLog{}
 		env := accMakeEnv(t)
 		acc := accMakeAcc(t, env)
 		accDriveToAccept(t, acc)
+		env.Evaluation.Outcome = "" // clear after transition to simulate missing outcome
 
-		if err := acc.persist(context.Background(), newAccFakeEnvRepo(log), newAccFakeAuditRepo(log)); err != nil {
-			t.Fatalf("first persist: %v", err)
+		repos := makeAccTestRepos(newAccFakeEnvRepo(log), newAccFakeAuditRepo(log))
+		err := acc.persistNew(context.Background(), repos)
+		if !errors.Is(err, errAccumulatorMissingOutcome) {
+			t.Errorf("expected errAccumulatorMissingOutcome, got: %v", err)
 		}
-		err := acc.persist(context.Background(), newAccFakeEnvRepo(log), newAccFakeAuditRepo(log))
+		if len(log.ops) != 0 {
+			t.Errorf("DB operations attempted before pre-flight check: %v", log.ops)
+		}
+	})
+
+	t.Run("empty queue returns error (evaluation incomplete)", func(t *testing.T) {
+		// Even in a terminal state with Outcome set, an empty event queue is
+		// rejected — at minimum envelope_created must be queued.
+		// Bypass acc.transition to advance state without queuing events.
+		log := &accCallLog{}
+		env := accMakeEnv(t)
+		acc := accMakeAcc(t, env)
+
+		env.Evaluation.Explanation = &envelope.DecisionExplanation{Result: "accept"}
+		env.Evaluation.Outcome = eval.OutcomeAccept
+		env.Evaluation.ReasonCode = eval.ReasonWithinAuthority
+		// Advance state directly on the envelope, not through the accumulator.
+		_ = env.Transition(envelope.EnvelopeStateEvaluating, accTestNow)
+		_ = env.Transition(envelope.EnvelopeStateOutcomeRecorded, accTestNow)
+		_ = env.Transition(envelope.EnvelopeStateClosed, accTestNow)
+
+		repos := makeAccTestRepos(newAccFakeEnvRepo(log), newAccFakeAuditRepo(log))
+		err := acc.persistNew(context.Background(), repos)
+		if err == nil {
+			t.Error("expected error for empty event queue, got nil")
+		}
+		if len(log.ops) != 0 {
+			t.Errorf("DB operations attempted before pre-flight check: %v", log.ops)
+		}
+	})
+
+	t.Run("returns errAccumulatorAlreadyPersisted on double persistNew", func(t *testing.T) {
+		log := &accCallLog{}
+		env := accMakeEnv(t)
+		acc := accMakeAcc(t, env)
+		repos := makeAccTestRepos(newAccFakeEnvRepo(log), newAccFakeAuditRepo(log))
+		accDriveToAccept(t, acc)
+
+		if err := acc.persistNew(context.Background(), repos); err != nil {
+			t.Fatalf("first persistNew: %v", err)
+		}
+		err := acc.persistNew(context.Background(), repos)
 		if !errors.Is(err, errAccumulatorAlreadyPersisted) {
-			t.Errorf("expected errAccumulatorAlreadyPersisted on second persist, got: %v", err)
+			t.Errorf("expected errAccumulatorAlreadyPersisted on second persistNew, got: %v", err)
 		}
 	})
 }
 
 // =============================================================================
-// Test group 7: persist() calls repos in the correct order: Create → N×Append → Update
+// Test group 7: persistNew() calls repos in the correct order: Create → N×Append → Update
 // =============================================================================
 
 func TestAccumulatorPersist_CallOrder(t *testing.T) {
 	log := &accCallLog{}
 	envRepo := newAccFakeEnvRepo(log)
 	auditRepo := newAccFakeAuditRepo(log)
+	repos := makeAccTestRepos(envRepo, auditRepo)
 
 	env := accMakeEnv(t)
 	acc := accMakeAcc(t, env)
 	accDriveToAccept(t, acc) // queues 4 events; drives to CLOSED
 
-	if err := acc.persist(context.Background(), envRepo, auditRepo); err != nil {
+	if err := acc.persistNew(context.Background(), repos); err != nil {
 		t.Fatalf("persist: %v", err)
 	}
 
-	// Verify exact call sequence.
+	// Verify exact call sequence: 1 Create → N×Append → 1 Update.
 	want := []string{
 		"create",
 		fmt.Sprintf("append:%s", audit.AuditEventEnvelopeCreated),
@@ -656,10 +667,10 @@ func TestAccumulatorPersist_CallOrder(t *testing.T) {
 	// Exactly 1 Create and 1 Update.
 	creates, updates := 0, 0
 	for _, op := range log.ops {
-		if op == "create" {
+		switch op {
+		case "create":
 			creates++
-		}
-		if op == "update" {
+		case "update":
 			updates++
 		}
 	}
@@ -667,7 +678,7 @@ func TestAccumulatorPersist_CallOrder(t *testing.T) {
 		t.Errorf("Create called %d times, want 1", creates)
 	}
 	if updates != 1 {
-		t.Errorf("Update called %d times, want 1 (the accumulator refactor target)", updates)
+		t.Errorf("Update called %d times, want 1", updates)
 	}
 
 	// Integrity anchors fully populated after persist.
@@ -677,9 +688,9 @@ func TestAccumulatorPersist_CallOrder(t *testing.T) {
 	if env.Integrity.FinalEventHash == "" {
 		t.Error("Integrity.FinalEventHash is empty after persist")
 	}
-	// All 4 events tracked — lifecycle and observational both covered.
+	// All 4 events tracked.
 	if len(env.Integrity.AuditEventIDs) != 4 {
-		t.Errorf("Integrity.AuditEventIDs len: got %d, want 4 (all events tracked)", len(env.Integrity.AuditEventIDs))
+		t.Errorf("Integrity.AuditEventIDs len: got %d, want 4", len(env.Integrity.AuditEventIDs))
 	}
 	// persisted flag set after success.
 	if !acc.persisted {
@@ -692,47 +703,81 @@ func TestAccumulatorPersist_CallOrder(t *testing.T) {
 // =============================================================================
 
 func TestAccumulatorPersist_CreateFailure(t *testing.T) {
-	// Create fails → no Appends, no Update, sentinel error returned.
+	// persistNew: Create fails → no Appends attempted, no Update attempted, persisted stays false.
 	log := &accCallLog{}
 	envRepo := newAccFakeEnvRepo(log)
 	auditRepo := newAccFakeAuditRepo(log)
 
-	sentinelErr := errors.New("db: connection refused")
+	sentinelErr := errors.New("db: duplicate key")
 	envRepo.createErr = sentinelErr
 
 	env := accMakeEnv(t)
 	acc := accMakeAcc(t, env)
 	accDriveToAccept(t, acc)
+	repos := makeAccTestRepos(envRepo, auditRepo)
 
-	err := acc.persist(context.Background(), envRepo, auditRepo)
+	err := acc.persistNew(context.Background(), repos)
 	if !errors.Is(err, sentinelErr) {
 		t.Errorf("expected sentinel error, got: %v", err)
 	}
 
-	// No Append must have been attempted.
+	// No Appends or Updates must have been attempted after Create failure.
 	for _, op := range log.ops {
 		if strings.HasPrefix(op, "append:") {
 			t.Errorf("Append called after Create failure: %q", op)
 		}
-	}
-	// No Update must have been attempted.
-	for _, op := range log.ops {
 		if op == "update" {
 			t.Error("Update called after Create failure")
 		}
 	}
-	// Envelope row not stored (createErr fired before storing).
-	if len(envRepo.rows) != 0 {
-		t.Errorf("envelope rows after Create failure: got %d, want 0", len(envRepo.rows))
-	}
-	// persisted must remain false.
 	if acc.persisted {
 		t.Error("persisted flag set despite Create failure")
 	}
 }
 
+func TestAccumulatorPersist_UpdateFailure(t *testing.T) {
+	// persistNew: Create and all Appends succeed; final Update fails → error returned, persisted stays false.
+	log := &accCallLog{}
+	envRepo := newAccFakeEnvRepo(log)
+	auditRepo := newAccFakeAuditRepo(log)
+
+	sentinelErr := errors.New("db: connection refused")
+	envRepo.updateErr = sentinelErr
+
+	env := accMakeEnv(t)
+	acc := accMakeAcc(t, env)
+	accDriveToAccept(t, acc)
+	repos := makeAccTestRepos(envRepo, auditRepo)
+
+	err := acc.persistNew(context.Background(), repos)
+	if !errors.Is(err, sentinelErr) {
+		t.Errorf("expected sentinel error, got: %v", err)
+	}
+
+	// Create and all 4 Appends must have been attempted before Update was tried.
+	createCount, appendCount := 0, 0
+	for _, op := range log.ops {
+		if op == "create" {
+			createCount++
+		}
+		if strings.HasPrefix(op, "append:") {
+			appendCount++
+		}
+	}
+	if createCount != 1 {
+		t.Errorf("expected 1 Create before Update failure, got %d", createCount)
+	}
+	if appendCount != 4 {
+		t.Errorf("expected 4 Appends before Update failure, got %d", appendCount)
+	}
+	// persisted must remain false.
+	if acc.persisted {
+		t.Error("persisted flag set despite Update failure")
+	}
+}
+
 func TestAccumulatorPersist_AppendFailure(t *testing.T) {
-	// First Append fails → Create succeeded (envelope row exists), Update not attempted.
+	// persistNew: Create succeeds; first Append fails → Update not attempted, Integrity unchanged.
 	log := &accCallLog{}
 	envRepo := newAccFakeEnvRepo(log)
 	auditRepo := newAccFakeAuditRepo(log)
@@ -744,17 +789,24 @@ func TestAccumulatorPersist_AppendFailure(t *testing.T) {
 	env := accMakeEnv(t)
 	acc := accMakeAcc(t, env)
 	accDriveToAccept(t, acc)
+	repos := makeAccTestRepos(envRepo, auditRepo)
 
-	err := acc.persist(context.Background(), envRepo, auditRepo)
+	err := acc.persistNew(context.Background(), repos)
 	if !errors.Is(err, sentinelErr) {
 		t.Errorf("expected sentinel error, got: %v", err)
 	}
 
-	// Create was called — envelope row exists (transaction rollback is the
-	// caller's responsibility, not persist's).
-	if len(envRepo.rows) == 0 {
-		t.Error("Create must have been called before Append")
+	// Create must have been called (it precedes all Appends).
+	createCount := 0
+	for _, op := range log.ops {
+		if op == "create" {
+			createCount++
+		}
 	}
+	if createCount != 1 {
+		t.Errorf("expected Create to be called before first Append, got %d Create calls", createCount)
+	}
+
 	// Update must NOT have been called.
 	for _, op := range log.ops {
 		if op == "update" {
@@ -776,7 +828,7 @@ func TestAccumulatorPersist_AppendFailure(t *testing.T) {
 }
 
 func TestAccumulatorPersist_PartialAppendFailure(t *testing.T) {
-	// First 2 Appends succeed; 3rd fails. Verify partial absorb and no Update.
+	// persistNew: Create succeeds; first 2 Appends succeed; 3rd fails. Verify partial absorb and no Update.
 	log := &accCallLog{}
 	envRepo := newAccFakeEnvRepo(log)
 	auditRepo := newAccFakeAuditRepo(log)
@@ -788,8 +840,9 @@ func TestAccumulatorPersist_PartialAppendFailure(t *testing.T) {
 	env := accMakeEnv(t)
 	acc := accMakeAcc(t, env)
 	accDriveToAccept(t, acc) // queues 4 events; 3rd will fail
+	repos := makeAccTestRepos(envRepo, auditRepo)
 
-	err := acc.persist(context.Background(), envRepo, auditRepo)
+	err := acc.persistNew(context.Background(), repos)
 	if !errors.Is(err, sentinelErr) {
 		t.Errorf("expected sentinel error, got: %v", err)
 	}
@@ -812,4 +865,691 @@ func TestAccumulatorPersist_PartialAppendFailure(t *testing.T) {
 	if acc.persisted {
 		t.Error("persisted flag set despite partial Append failure")
 	}
+	// Create must have been called before any Append.
+	createCount := 0
+	for _, op := range log.ops {
+		if op == "create" {
+			createCount++
+		}
+	}
+	if createCount != 1 {
+		t.Errorf("expected 1 Create, got %d", createCount)
+	}
+}
+
+// =============================================================================
+// Test group 9: newExistingEnvelopeAccumulator constructor validation
+// =============================================================================
+
+func TestExistingEnvelopeAccumulator_Validation(t *testing.T) {
+	t.Run("nil envelope returns errAccumulatorNilEnvelope", func(t *testing.T) {
+		_, err := newExistingEnvelopeAccumulator(nil)
+		if !errors.Is(err, errAccumulatorNilEnvelope) {
+			t.Errorf("expected errAccumulatorNilEnvelope, got: %v", err)
+		}
+	})
+
+	t.Run("non-AWAITING_REVIEW state returns errAccumulatorWrongState", func(t *testing.T) {
+		// Only AWAITING_REVIEW is valid; RECEIVED and EVALUATING are rejected.
+		for _, state := range []envelope.EnvelopeState{
+			envelope.EnvelopeStateReceived,
+			envelope.EnvelopeStateEvaluating,
+			envelope.EnvelopeStateClosed,
+		} {
+			env := accMakeEnv(t)
+			// Manually poke the state to avoid running through the full state machine.
+			// (We just need a non-nil envelope with the wrong state for the constructor test.)
+			switch state {
+			case envelope.EnvelopeStateEvaluating:
+				_ = env.Transition(envelope.EnvelopeStateEvaluating, accTestNow)
+			case envelope.EnvelopeStateClosed:
+				env.Evaluation.Explanation = &envelope.DecisionExplanation{Result: "accept"}
+				env.Evaluation.Outcome = eval.OutcomeAccept
+				env.Evaluation.ReasonCode = eval.ReasonWithinAuthority
+				_ = env.Transition(envelope.EnvelopeStateEvaluating, accTestNow)
+				_ = env.Transition(envelope.EnvelopeStateOutcomeRecorded, accTestNow)
+				_ = env.Transition(envelope.EnvelopeStateClosed, accTestNow)
+			}
+			_, err := newExistingEnvelopeAccumulator(env)
+			if !errors.Is(err, errAccumulatorWrongState) {
+				t.Errorf("state %s: expected errAccumulatorWrongState, got: %v", state, err)
+			}
+			if err != nil && !strings.Contains(err.Error(), "AWAITING_REVIEW") {
+				t.Errorf("state %s: error should mention expected state AWAITING_REVIEW: %s", state, err)
+			}
+		}
+	})
+
+	t.Run("AWAITING_REVIEW envelope succeeds", func(t *testing.T) {
+		env := accMakeAwaitingReviewEnv(t)
+		acc, err := newExistingEnvelopeAccumulator(env)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if acc == nil {
+			t.Fatal("returned nil accumulator")
+		}
+		if acc.persisted {
+			t.Error("new accumulator must not be persisted")
+		}
+		if len(acc.pendingEvents) != 0 {
+			t.Errorf("new accumulator has %d pending events, want 0", len(acc.pendingEvents))
+		}
+	})
+}
+
+// =============================================================================
+// Test group 10: persistExisting() call order and behaviour
+// =============================================================================
+
+// accMakeAwaitingReviewEnv returns an envelope already in AWAITING_REVIEW state,
+// simulating one that was previously persisted during an escalation evaluation.
+func accMakeAwaitingReviewEnv(t *testing.T) *envelope.Envelope {
+	t.Helper()
+	env := accMakeEnv(t)
+	if err := env.Transition(envelope.EnvelopeStateEvaluating, accTestNow); err != nil {
+		t.Fatalf("Transition EVALUATING: %v", err)
+	}
+	env.Evaluation.Outcome = eval.OutcomeEscalate
+	env.Evaluation.ReasonCode = eval.ReasonConfidenceBelowThreshold
+	env.Evaluation.Explanation = &envelope.DecisionExplanation{Result: "escalate"}
+	if err := env.Transition(envelope.EnvelopeStateEscalated, accTestNow); err != nil {
+		t.Fatalf("Transition ESCALATED: %v", err)
+	}
+	if err := env.Transition(envelope.EnvelopeStateAwaitingReview, accTestNow); err != nil {
+		t.Fatalf("Transition AWAITING_REVIEW: %v", err)
+	}
+	return env
+}
+
+func TestAccumulatorPersistUpdate_CallOrder(t *testing.T) {
+	// persistExisting must issue N×Append then 1 Update — no Create.
+	log := &accCallLog{}
+	envRepo := newAccFakeEnvRepo(log)
+	auditRepo := newAccFakeAuditRepo(log)
+	repos := makeAccTestRepos(envRepo, auditRepo)
+
+	env := accMakeAwaitingReviewEnv(t)
+	acc, err := newExistingEnvelopeAccumulator(env)
+	if err != nil {
+		t.Fatalf("newExistingEnvelopeAccumulator: %v", err)
+	}
+
+	mustRecord(t, acc.recordObservation(env.RequestSource(), env.RequestID(),
+		audit.AuditEventEscalationReviewed, map[string]any{"decision": "APPROVED"}))
+
+	env.Review = &envelope.EscalationReview{
+		Decision:   envelope.ReviewDecisionApproved,
+		ReviewerID: "reviewer-jane",
+		ReviewedAt: accTestNow,
+	}
+	if err := acc.transition(envelope.EnvelopeStateClosed, accTestNow); err != nil {
+		t.Fatalf("transition CLOSED: %v", err)
+	}
+	mustRecord(t, acc.recordLifecycle(env.RequestSource(), env.RequestID(),
+		audit.AuditEventEnvelopeClosed, map[string]any{"from_state": "AWAITING_REVIEW", "to_state": "CLOSED"}))
+
+	if err := acc.persistExisting(context.Background(), repos); err != nil {
+		t.Fatalf("persistExisting: %v", err)
+	}
+
+	// Verify exact call sequence: N×Append then 1 Update — no Create.
+	want := []string{
+		"append:" + string(audit.AuditEventEscalationReviewed),
+		"append:" + string(audit.AuditEventEnvelopeClosed),
+		"update",
+	}
+	if len(log.ops) != len(want) {
+		t.Fatalf("call log: got %v, want %v", log.ops, want)
+	}
+	for i, op := range want {
+		if log.ops[i] != op {
+			t.Errorf("call[%d]: got %q, want %q", i, log.ops[i], op)
+		}
+	}
+
+	// persisted flag must be set.
+	if !acc.persisted {
+		t.Error("persisted flag not set after successful persistExisting")
+	}
+
+	// Integrity anchors populated.
+	if env.Integrity.FirstEventHash == "" {
+		t.Error("Integrity.FirstEventHash empty after persistExisting")
+	}
+	if env.Integrity.FinalEventHash == "" {
+		t.Error("Integrity.FinalEventHash empty after persistExisting")
+	}
+	if len(env.Integrity.AuditEventIDs) != 2 {
+		t.Errorf("Integrity.AuditEventIDs len: got %d, want 2", len(env.Integrity.AuditEventIDs))
+	}
+}
+
+func TestAccumulatorPersistUpdate_CreateNotCalled(t *testing.T) {
+	// persistExisting must never call Envelopes.Create.
+	log := &accCallLog{}
+	envRepo := newAccFakeEnvRepo(log)
+	auditRepo := newAccFakeAuditRepo(log)
+	repos := makeAccTestRepos(envRepo, auditRepo)
+
+	env := accMakeAwaitingReviewEnv(t)
+	acc, err := newExistingEnvelopeAccumulator(env)
+	if err != nil {
+		t.Fatalf("newExistingEnvelopeAccumulator: %v", err)
+	}
+	mustRecord(t, acc.recordObservation(env.RequestSource(), env.RequestID(),
+		audit.AuditEventEscalationReviewed, nil))
+
+	env.Review = &envelope.EscalationReview{
+		Decision:   envelope.ReviewDecisionApproved,
+		ReviewerID: "r1",
+		ReviewedAt: accTestNow,
+	}
+	if err := acc.transition(envelope.EnvelopeStateClosed, accTestNow); err != nil {
+		t.Fatalf("transition CLOSED: %v", err)
+	}
+	mustRecord(t, acc.recordLifecycle(env.RequestSource(), env.RequestID(),
+		audit.AuditEventEnvelopeClosed, nil))
+
+	if err := acc.persistExisting(context.Background(), repos); err != nil {
+		t.Fatalf("persistExisting: %v", err)
+	}
+
+	for _, op := range log.ops {
+		if op == "create" {
+			t.Error("Envelopes.Create called by persistExisting — must never happen")
+		}
+	}
+}
+
+func TestAccumulatorPersistUpdate_AppendFailure(t *testing.T) {
+	// When Append fails, Update must not be called.
+	log := &accCallLog{}
+	envRepo := newAccFakeEnvRepo(log)
+	auditRepo := newAccFakeAuditRepo(log)
+
+	sentinelErr := errors.New("audit: disk full")
+	auditRepo.appendErr = sentinelErr
+	auditRepo.failAfter = 0 // fail on first Append
+
+	repos := makeAccTestRepos(envRepo, auditRepo)
+
+	env := accMakeAwaitingReviewEnv(t)
+	acc, err := newExistingEnvelopeAccumulator(env)
+	if err != nil {
+		t.Fatalf("newExistingEnvelopeAccumulator: %v", err)
+	}
+	mustRecord(t, acc.recordObservation(env.RequestSource(), env.RequestID(),
+		audit.AuditEventEscalationReviewed, nil))
+
+	err = acc.persistExisting(context.Background(), repos)
+	if !errors.Is(err, sentinelErr) {
+		t.Errorf("expected sentinel error, got: %v", err)
+	}
+
+	// Update must not have been called.
+	for _, op := range log.ops {
+		if op == "update" {
+			t.Error("Update called after Append failure")
+		}
+	}
+	if acc.persisted {
+		t.Error("persisted flag set despite Append failure")
+	}
+}
+
+func TestAccumulatorPersistUpdate_UpdateFailure(t *testing.T) {
+	// All appends run then Update fails.
+	log := &accCallLog{}
+	envRepo := newAccFakeEnvRepo(log)
+	auditRepo := newAccFakeAuditRepo(log)
+
+	sentinelErr := errors.New("db: connection refused")
+	envRepo.updateErr = sentinelErr
+
+	repos := makeAccTestRepos(envRepo, auditRepo)
+
+	env := accMakeAwaitingReviewEnv(t)
+	acc, err := newExistingEnvelopeAccumulator(env)
+	if err != nil {
+		t.Fatalf("newExistingEnvelopeAccumulator: %v", err)
+	}
+	mustRecord(t, acc.recordObservation(env.RequestSource(), env.RequestID(),
+		audit.AuditEventEscalationReviewed, nil))
+
+	env.Review = &envelope.EscalationReview{
+		Decision:   envelope.ReviewDecisionApproved,
+		ReviewerID: "r1",
+		ReviewedAt: accTestNow,
+	}
+	if err := acc.transition(envelope.EnvelopeStateClosed, accTestNow); err != nil {
+		t.Fatalf("transition CLOSED: %v", err)
+	}
+	mustRecord(t, acc.recordLifecycle(env.RequestSource(), env.RequestID(),
+		audit.AuditEventEnvelopeClosed, nil))
+
+	err = acc.persistExisting(context.Background(), repos)
+	if !errors.Is(err, sentinelErr) {
+		t.Errorf("expected sentinel error, got: %v", err)
+	}
+
+	// Both appends must have run before the Update was attempted.
+	appendCount := 0
+	for _, op := range log.ops {
+		if strings.HasPrefix(op, "append:") {
+			appendCount++
+		}
+	}
+	if appendCount != 2 {
+		t.Errorf("expected 2 Appends before Update failure, got %d", appendCount)
+	}
+	if acc.persisted {
+		t.Error("persisted flag set despite Update failure")
+	}
+}
+
+func TestAccumulatorPersistUpdate_AlreadyPersisted(t *testing.T) {
+	// Double persistExisting returns errAccumulatorAlreadyPersisted.
+	log := &accCallLog{}
+	repos := makeAccTestRepos(newAccFakeEnvRepo(log), newAccFakeAuditRepo(log))
+
+	env := accMakeAwaitingReviewEnv(t)
+	acc, err := newExistingEnvelopeAccumulator(env)
+	if err != nil {
+		t.Fatalf("newExistingEnvelopeAccumulator: %v", err)
+	}
+	mustRecord(t, acc.recordObservation(env.RequestSource(), env.RequestID(),
+		audit.AuditEventEscalationReviewed, nil))
+
+	env.Review = &envelope.EscalationReview{
+		Decision:   envelope.ReviewDecisionApproved,
+		ReviewerID: "r1",
+		ReviewedAt: accTestNow,
+	}
+	if err := acc.transition(envelope.EnvelopeStateClosed, accTestNow); err != nil {
+		t.Fatalf("transition CLOSED: %v", err)
+	}
+	mustRecord(t, acc.recordLifecycle(env.RequestSource(), env.RequestID(),
+		audit.AuditEventEnvelopeClosed, nil))
+
+	if err := acc.persistExisting(context.Background(), repos); err != nil {
+		t.Fatalf("first persistExisting: %v", err)
+	}
+
+	err = acc.persistExisting(context.Background(), repos)
+	if !errors.Is(err, errAccumulatorAlreadyPersisted) {
+		t.Errorf("expected errAccumulatorAlreadyPersisted on second persistExisting, got: %v", err)
+	}
+}
+
+func TestAccumulatorPersistUpdate_EmptyQueue(t *testing.T) {
+	// Empty pending event queue returns an error without any DB writes.
+	log := &accCallLog{}
+	repos := makeAccTestRepos(newAccFakeEnvRepo(log), newAccFakeAuditRepo(log))
+
+	env := accMakeAwaitingReviewEnv(t)
+	acc, err := newExistingEnvelopeAccumulator(env)
+	if err != nil {
+		t.Fatalf("newExistingEnvelopeAccumulator: %v", err)
+	}
+	// Do not queue any events.
+
+	err = acc.persistExisting(context.Background(), repos)
+	if err == nil {
+		t.Error("expected error for empty event queue, got nil")
+	}
+	if len(log.ops) != 0 {
+		t.Errorf("DB operations attempted with empty queue: %v", log.ops)
+	}
+	if acc.persisted {
+		t.Error("persisted flag set despite empty queue error")
+	}
+}
+
+// =============================================================================
+// Fake outbox repository
+// =============================================================================
+
+// accFakeOutboxRepo records Append calls and can inject failures.
+type accFakeOutboxRepo struct {
+	log       *accCallLog
+	events    []*outbox.OutboxEvent
+	appendErr error
+}
+
+func newAccFakeOutboxRepo(log *accCallLog) *accFakeOutboxRepo {
+	return &accFakeOutboxRepo{log: log}
+}
+
+func (r *accFakeOutboxRepo) Append(_ context.Context, ev *outbox.OutboxEvent) error {
+	if r.appendErr != nil {
+		return r.appendErr
+	}
+	r.log.record(fmt.Sprintf("outbox:%s", ev.EventType))
+	r.events = append(r.events, ev)
+	return nil
+}
+
+func (r *accFakeOutboxRepo) ListUnpublished(_ context.Context) ([]*outbox.OutboxEvent, error) {
+	return r.events, nil
+}
+
+func (r *accFakeOutboxRepo) ClaimUnpublished(_ context.Context, limit int) ([]*outbox.OutboxEvent, error) {
+	if limit <= 0 || len(r.events) == 0 {
+		return nil, nil
+	}
+	n := limit
+	if n > len(r.events) {
+		n = len(r.events)
+	}
+	return r.events[:n], nil
+}
+
+func (r *accFakeOutboxRepo) MarkPublished(_ context.Context, _ string) error {
+	return nil
+}
+
+// makeAccTestReposWithOutbox wires the fake repos (including outbox) into a
+// *store.Repositories.
+func makeAccTestReposWithOutbox(envRepo *accFakeEnvRepo, auditRepo *accFakeAuditRepo, outboxRepo *accFakeOutboxRepo) *store.Repositories {
+	return &store.Repositories{
+		Envelopes: envRepo,
+		Audit:     auditRepo,
+		Outbox:    outboxRepo,
+	}
+}
+
+// accMakeOutboxEvent returns a valid outbox event for test use.
+func accMakeOutboxEvent(t *testing.T) *outbox.OutboxEvent {
+	t.Helper()
+	ev, err := outbox.New(
+		outbox.EventDecisionCompleted,
+		"envelope",
+		"env-acc-001",
+		"midas.decisions",
+		"test-src:req-acc-001",
+		json.RawMessage(`{"outcome":"accept"}`),
+	)
+	if err != nil {
+		t.Fatalf("outbox.New: %v", err)
+	}
+	return ev
+}
+
+// =============================================================================
+// Test group 11: recordOutbox() validation
+// =============================================================================
+
+func TestAccumulatorRecordOutbox_Validation(t *testing.T) {
+	t.Run("nil event returns errAccumulatorNilOutboxEvent", func(t *testing.T) {
+		acc := accMakeAcc(t, accMakeEnv(t))
+		if err := acc.recordOutbox(nil); !errors.Is(err, errAccumulatorNilOutboxEvent) {
+			t.Errorf("expected errAccumulatorNilOutboxEvent, got: %v", err)
+		}
+	})
+
+	t.Run("returns errAccumulatorAlreadyPersisted after persist", func(t *testing.T) {
+		log := &accCallLog{}
+		env := accMakeEnv(t)
+		acc := accMakeAcc(t, env)
+		accDriveToAccept(t, acc)
+		if err := acc.persistNew(context.Background(), makeAccTestRepos(newAccFakeEnvRepo(log), newAccFakeAuditRepo(log))); err != nil {
+			t.Fatalf("persist: %v", err)
+		}
+		if err := acc.recordOutbox(accMakeOutboxEvent(t)); !errors.Is(err, errAccumulatorAlreadyPersisted) {
+			t.Errorf("expected errAccumulatorAlreadyPersisted, got: %v", err)
+		}
+	})
+
+	t.Run("queues without persisting", func(t *testing.T) {
+		acc := accMakeAcc(t, accMakeEnv(t))
+		if len(acc.pendingOutbox) != 0 {
+			t.Fatalf("new accumulator has %d pending outbox events, want 0", len(acc.pendingOutbox))
+		}
+		ev := accMakeOutboxEvent(t)
+		if err := acc.recordOutbox(ev); err != nil {
+			t.Fatalf("recordOutbox: %v", err)
+		}
+		if len(acc.pendingOutbox) != 1 {
+			t.Fatalf("after recordOutbox: got %d pending outbox events, want 1", len(acc.pendingOutbox))
+		}
+		if acc.pendingOutbox[0] != ev {
+			t.Error("pendingOutbox[0] is not the queued event pointer")
+		}
+		// No persistence must have occurred.
+		if acc.persisted {
+			t.Error("persisted flag set unexpectedly")
+		}
+	})
+
+	t.Run("multiple events queued in order", func(t *testing.T) {
+		acc := accMakeAcc(t, accMakeEnv(t))
+		ev1 := accMakeOutboxEvent(t)
+		ev2 := accMakeOutboxEvent(t)
+		if err := acc.recordOutbox(ev1); err != nil {
+			t.Fatalf("recordOutbox ev1: %v", err)
+		}
+		if err := acc.recordOutbox(ev2); err != nil {
+			t.Fatalf("recordOutbox ev2: %v", err)
+		}
+		if acc.pendingOutbox[0] != ev1 || acc.pendingOutbox[1] != ev2 {
+			t.Error("outbox events not queued in declaration order")
+		}
+	})
+}
+
+// =============================================================================
+// Test group 12: persistNew() flushes queued outbox events
+// =============================================================================
+
+func TestAccumulatorPersistNew_FlushesOutboxEvents(t *testing.T) {
+	t.Run("outbox event flushed after audit events and before update", func(t *testing.T) {
+		log := &accCallLog{}
+		envRepo := newAccFakeEnvRepo(log)
+		auditRepo := newAccFakeAuditRepo(log)
+		outboxRepo := newAccFakeOutboxRepo(log)
+		repos := makeAccTestReposWithOutbox(envRepo, auditRepo, outboxRepo)
+
+		env := accMakeEnv(t)
+		acc := accMakeAcc(t, env)
+		accDriveToAccept(t, acc) // queues 4 audit events
+		if err := acc.recordOutbox(accMakeOutboxEvent(t)); err != nil {
+			t.Fatalf("recordOutbox: %v", err)
+		}
+
+		if err := acc.persistNew(context.Background(), repos); err != nil {
+			t.Fatalf("persistNew: %v", err)
+		}
+
+		// Expected ordering: create → 4×audit append → outbox append → update
+		want := []string{
+			"create",
+			fmt.Sprintf("append:%s", audit.AuditEventEnvelopeCreated),
+			fmt.Sprintf("append:%s", audit.AuditEventEvaluationStarted),
+			fmt.Sprintf("append:%s", audit.AuditEventOutcomeRecorded),
+			fmt.Sprintf("append:%s", audit.AuditEventEnvelopeClosed),
+			fmt.Sprintf("outbox:%s", outbox.EventDecisionCompleted),
+			"update",
+		}
+		if len(log.ops) != len(want) {
+			t.Fatalf("call log: got %v, want %v", log.ops, want)
+		}
+		for i, op := range want {
+			if log.ops[i] != op {
+				t.Errorf("call[%d]: got %q, want %q", i, log.ops[i], op)
+			}
+		}
+
+		if len(outboxRepo.events) != 1 {
+			t.Errorf("expected 1 outbox row persisted, got %d", len(outboxRepo.events))
+		}
+	})
+
+	t.Run("nil repos.Outbox skips outbox flush without error", func(t *testing.T) {
+		log := &accCallLog{}
+		// repos without Outbox (nil)
+		repos := makeAccTestRepos(newAccFakeEnvRepo(log), newAccFakeAuditRepo(log))
+
+		env := accMakeEnv(t)
+		acc := accMakeAcc(t, env)
+		accDriveToAccept(t, acc)
+		if err := acc.recordOutbox(accMakeOutboxEvent(t)); err != nil {
+			t.Fatalf("recordOutbox: %v", err)
+		}
+
+		if err := acc.persistNew(context.Background(), repos); err != nil {
+			t.Fatalf("persistNew with nil Outbox repo: %v", err)
+		}
+
+		// Verify no "outbox:" entries in the call log — outbox was silently skipped.
+		for _, op := range log.ops {
+			if strings.HasPrefix(op, "outbox:") {
+				t.Errorf("outbox Append called despite nil repos.Outbox: %q", op)
+			}
+		}
+	})
+
+	t.Run("outbox append failure propagates and blocks update", func(t *testing.T) {
+		log := &accCallLog{}
+		envRepo := newAccFakeEnvRepo(log)
+		auditRepo := newAccFakeAuditRepo(log)
+		outboxRepo := newAccFakeOutboxRepo(log)
+		sentinelErr := errors.New("outbox: disk full")
+		outboxRepo.appendErr = sentinelErr
+		repos := makeAccTestReposWithOutbox(envRepo, auditRepo, outboxRepo)
+
+		env := accMakeEnv(t)
+		acc := accMakeAcc(t, env)
+		accDriveToAccept(t, acc)
+		if err := acc.recordOutbox(accMakeOutboxEvent(t)); err != nil {
+			t.Fatalf("recordOutbox: %v", err)
+		}
+
+		err := acc.persistNew(context.Background(), repos)
+		if !errors.Is(err, sentinelErr) {
+			t.Errorf("expected sentinel error, got: %v", err)
+		}
+
+		// Update must NOT have been called after outbox failure.
+		for _, op := range log.ops {
+			if op == "update" {
+				t.Error("Update called after outbox Append failure")
+			}
+		}
+		if acc.persisted {
+			t.Error("persisted flag set despite outbox failure")
+		}
+	})
+}
+
+// =============================================================================
+// Test group 13: persistExisting() flushes queued outbox events
+// =============================================================================
+
+func TestAccumulatorPersistExisting_FlushesOutboxEvents(t *testing.T) {
+	t.Run("outbox event flushed after audit events and before update", func(t *testing.T) {
+		log := &accCallLog{}
+		envRepo := newAccFakeEnvRepo(log)
+		auditRepo := newAccFakeAuditRepo(log)
+		outboxRepo := newAccFakeOutboxRepo(log)
+		repos := makeAccTestReposWithOutbox(envRepo, auditRepo, outboxRepo)
+
+		env := accMakeAwaitingReviewEnv(t)
+		acc, err := newExistingEnvelopeAccumulator(env)
+		if err != nil {
+			t.Fatalf("newExistingEnvelopeAccumulator: %v", err)
+		}
+
+		mustRecord(t, acc.recordObservation(env.RequestSource(), env.RequestID(),
+			audit.AuditEventEscalationReviewed, map[string]any{"decision": "APPROVED"}))
+		env.Review = &envelope.EscalationReview{
+			Decision:   envelope.ReviewDecisionApproved,
+			ReviewerID: "reviewer-1",
+			ReviewedAt: accTestNow,
+		}
+		if err := acc.transition(envelope.EnvelopeStateClosed, accTestNow); err != nil {
+			t.Fatalf("transition CLOSED: %v", err)
+		}
+		mustRecord(t, acc.recordLifecycle(env.RequestSource(), env.RequestID(),
+			audit.AuditEventEnvelopeClosed, nil))
+
+		// Queue a review_resolved outbox event.
+		reviewEv, outboxErr := outbox.New(
+			outbox.EventDecisionReviewResolved,
+			"envelope", env.ID(), "midas.decisions", "test-src:req-acc-001",
+			json.RawMessage(`{"decision":"APPROVED"}`),
+		)
+		if outboxErr != nil {
+			t.Fatalf("outbox.New: %v", outboxErr)
+		}
+		if err := acc.recordOutbox(reviewEv); err != nil {
+			t.Fatalf("recordOutbox: %v", err)
+		}
+
+		if err := acc.persistExisting(context.Background(), repos); err != nil {
+			t.Fatalf("persistExisting: %v", err)
+		}
+
+		// Expected ordering: 2×audit append → outbox append → update (no create)
+		want := []string{
+			fmt.Sprintf("append:%s", audit.AuditEventEscalationReviewed),
+			fmt.Sprintf("append:%s", audit.AuditEventEnvelopeClosed),
+			fmt.Sprintf("outbox:%s", outbox.EventDecisionReviewResolved),
+			"update",
+		}
+		if len(log.ops) != len(want) {
+			t.Fatalf("call log: got %v, want %v", log.ops, want)
+		}
+		for i, op := range want {
+			if log.ops[i] != op {
+				t.Errorf("call[%d]: got %q, want %q", i, log.ops[i], op)
+			}
+		}
+	})
+
+	t.Run("nil repos.Outbox skips outbox flush without error", func(t *testing.T) {
+		log := &accCallLog{}
+		// repos without Outbox (nil)
+		repos := makeAccTestRepos(newAccFakeEnvRepo(log), newAccFakeAuditRepo(log))
+
+		env := accMakeAwaitingReviewEnv(t)
+		acc, err := newExistingEnvelopeAccumulator(env)
+		if err != nil {
+			t.Fatalf("newExistingEnvelopeAccumulator: %v", err)
+		}
+		mustRecord(t, acc.recordObservation(env.RequestSource(), env.RequestID(),
+			audit.AuditEventEscalationReviewed, nil))
+		env.Review = &envelope.EscalationReview{
+			Decision:   envelope.ReviewDecisionApproved,
+			ReviewerID: "r1",
+			ReviewedAt: accTestNow,
+		}
+		if err := acc.transition(envelope.EnvelopeStateClosed, accTestNow); err != nil {
+			t.Fatalf("transition CLOSED: %v", err)
+		}
+		mustRecord(t, acc.recordLifecycle(env.RequestSource(), env.RequestID(),
+			audit.AuditEventEnvelopeClosed, nil))
+
+		reviewEv, outboxErr := outbox.New(
+			outbox.EventDecisionReviewResolved,
+			"envelope", env.ID(), "midas.decisions", "test-src:req-acc-001",
+			json.RawMessage(`{"decision":"APPROVED"}`),
+		)
+		if outboxErr != nil {
+			t.Fatalf("outbox.New: %v", outboxErr)
+		}
+		if err := acc.recordOutbox(reviewEv); err != nil {
+			t.Fatalf("recordOutbox: %v", err)
+		}
+
+		if err := acc.persistExisting(context.Background(), repos); err != nil {
+			t.Fatalf("persistExisting with nil Outbox repo: %v", err)
+		}
+
+		for _, op := range log.ops {
+			if strings.HasPrefix(op, "outbox:") {
+				t.Errorf("outbox Append called despite nil repos.Outbox: %q", op)
+			}
+		}
+	})
 }
