@@ -16,6 +16,15 @@ type contextKey int
 
 const principalContextKey contextKey = iota
 
+// WithPolicyMeta attaches policy mode metadata to the server for use in health
+// and evaluate responses. Call this at boot after detecting the active evaluator.
+// mode is a short string like "noop"; evaluatorName is a human-readable label.
+func (s *Server) WithPolicyMeta(mode, evaluatorName string) *Server {
+	s.policyMode = mode
+	s.policyEvaluatorName = evaluatorName
+	return s
+}
+
 // WithAuthenticator configures the server to authenticate governance requests.
 // It is safe to call after NewServerFull because requireAuth reads s.authenticator
 // at request time rather than at route-registration time.
@@ -42,6 +51,48 @@ func actorFromContext(ctx context.Context, fallback string) string {
 		return p.ID
 	}
 	return fallback
+}
+
+// requireRole returns middleware that enforces role-based access control.
+// It must be composed inside requireAuth so that the principal is already in context.
+//
+// When s.authenticator is nil the check is a no-op, preserving backward
+// compatibility with unauthenticated deployments (matching requireAuth behaviour).
+// When a principal is present but holds none of the required roles, 403 is returned.
+// When no principal is present on a protected route, 401 is returned.
+func (s *Server) requireRole(roles ...string) func(http.HandlerFunc) http.HandlerFunc {
+	return func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if s.authenticator == nil {
+				next(w, r)
+				return
+			}
+
+			p := PrincipalFromContext(r.Context())
+			if p == nil {
+				slog.Warn("authz_no_principal",
+					"method", r.Method,
+					"path", r.URL.Path,
+					"required_roles", roles,
+				)
+				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+				return
+			}
+
+			if !p.HasAnyRole(roles...) {
+				slog.Warn("authz_forbidden",
+					"method", r.Method,
+					"path", r.URL.Path,
+					"principal_id", p.ID,
+					"required_roles", roles,
+				)
+				writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+				return
+			}
+
+			next(w, r)
+		}
+	}
 }
 
 // requireAuth returns a handler that enforces authentication before forwarding
