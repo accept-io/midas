@@ -104,6 +104,7 @@ type Server struct {
 	authenticator       auth.Authenticator
 	policyMode          string // e.g. "noop" — set via WithPolicyMeta at boot
 	policyEvaluatorName string // human-readable evaluator name for health responses
+	readyFn             func(context.Context) error // nil means always ready (memory mode)
 }
 
 type approveSurfaceRequest struct {
@@ -965,6 +966,16 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		methodNotAllowed(w, http.MethodGet)
 		return
+	}
+
+	if s.readyFn != nil {
+		if err := s.readyFn(r.Context()); err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+				"status": "unavailable",
+				"reason": "database unreachable",
+			})
+			return
+		}
 	}
 
 	resp := map[string]string{

@@ -1,4 +1,4 @@
-.PHONY: build test test-unit test-integration test-db lint docker migrate seed dev run tidy
+.PHONY: build test test-unit test-integration test-db lint docker seed dev run tidy
 
 build:
 	mkdir -p bin
@@ -41,9 +41,6 @@ lint:
 
 docker:
 	docker build -f deploy/docker/Dockerfile -t accept-midas:latest .
-
-migrate:
-	./scripts/migrate.sh
 
 seed:
 	./scripts/seed.sh

@@ -1,25 +1,25 @@
 -- MIDAS Database Schema v2.1
 -- Hardened schema for MIDAS authority governance engine
 --
--- Key improvements from v2.0:
--- - Explicit lifecycle status for authority_profiles
--- - Stronger referential integrity
--- - Safer money representation (NUMERIC instead of DOUBLE PRECISION)
--- - Tagged-union consistency checks for consequence thresholds
--- - Denormalized authority chain columns on operational_envelopes
--- - Better envelope state consistency checks
--- - Scoped request idempotency
--- - Clearer treatment of logical IDs in versioned artifacts
+-- This file is the single source of truth for the database structure.
+-- It is applied by EnsureSchema (internal/store/postgres/schema.go) at startup
+-- and by setup-db.sh for local developer setup.
+--
+-- All DDL is written to be idempotent:
+--   - CREATE TABLE IF NOT EXISTS
+--   - CREATE [UNIQUE] INDEX IF NOT EXISTS
+--   - CREATE OR REPLACE VIEW
+-- FK constraints are declared inline in CREATE TABLE rather than as separate
+-- ALTER TABLE statements (which have no IF NOT EXISTS in Postgres).
 
 -- =============================================================================
 -- DECISION SURFACES
 -- =============================================================================
--- IMPORTANT:
--- In this schema, id is the LOGICAL surface identifier across versions.
+-- id is the LOGICAL surface identifier across versions.
 -- A concrete version is identified by (id, version).
 -- Runtime resolution chooses the correct version by status + effective dates.
 
-CREATE TABLE decision_surfaces (
+CREATE TABLE IF NOT EXISTS decision_surfaces (
     -- Composite logical-version key
     id TEXT NOT NULL,
     version INTEGER NOT NULL,
@@ -74,6 +74,12 @@ CREATE TABLE decision_surfaces (
 
     PRIMARY KEY (id, version),
 
+    -- Optional self-reference for successor version
+    CONSTRAINT fk_surfaces_successor
+        FOREIGN KEY (successor_surface_id, successor_version)
+        REFERENCES decision_surfaces (id, version)
+        DEFERRABLE INITIALLY DEFERRED,
+
     CONSTRAINT chk_surfaces_status
         CHECK (status IN ('draft', 'review', 'active', 'deprecated', 'retired')),
 
@@ -109,45 +115,42 @@ CREATE TABLE decision_surfaces (
         )
 );
 
--- Optional self-reference for successor version
-ALTER TABLE decision_surfaces
-ADD CONSTRAINT fk_surfaces_successor
-FOREIGN KEY (successor_surface_id, successor_version)
-REFERENCES decision_surfaces (id, version)
-DEFERRABLE INITIALLY DEFERRED;
-
-CREATE INDEX idx_decision_surfaces_id_version_desc
+CREATE INDEX IF NOT EXISTS idx_decision_surfaces_id_version_desc
     ON decision_surfaces (id, version DESC);
 
-CREATE INDEX idx_decision_surfaces_status
+CREATE INDEX IF NOT EXISTS idx_decision_surfaces_status
     ON decision_surfaces (status);
 
-CREATE INDEX idx_decision_surfaces_domain
+CREATE INDEX IF NOT EXISTS idx_decision_surfaces_domain
     ON decision_surfaces (domain);
 
-CREATE INDEX idx_decision_surfaces_effective_date
+CREATE INDEX IF NOT EXISTS idx_decision_surfaces_effective_date
     ON decision_surfaces (effective_date);
 
-CREATE INDEX idx_decision_surfaces_active
+CREATE INDEX IF NOT EXISTS idx_decision_surfaces_active
     ON decision_surfaces (id, effective_date, effective_until)
     WHERE status = 'active';
 
-CREATE INDEX idx_decision_surfaces_taxonomy_gin
+CREATE INDEX IF NOT EXISTS idx_decision_surfaces_taxonomy_gin
     ON decision_surfaces USING GIN (taxonomy jsonb_path_ops);
 
-CREATE INDEX idx_decision_surfaces_tags_gin
+CREATE INDEX IF NOT EXISTS idx_decision_surfaces_tags_gin
     ON decision_surfaces USING GIN (tags jsonb_path_ops);
 
 -- =============================================================================
 -- AUTHORITY PROFILES
 -- =============================================================================
--- IMPORTANT:
--- In this schema, id is the LOGICAL profile identifier across versions.
+-- id is the LOGICAL profile identifier across versions.
 -- A concrete version is identified by (id, version).
 -- Grants reference the logical profile id; runtime resolution selects the
 -- correct profile version using status + effective dates.
+--
+-- NOTE: surface_id references the LOGICAL ID of decision_surfaces, not a
+-- concrete version. This cannot be enforced with a normal FK because
+-- decision_surfaces is keyed by (id, version). Runtime logic resolves the
+-- correct active surface version for evaluation.
 
-CREATE TABLE authority_profiles (
+CREATE TABLE IF NOT EXISTS authority_profiles (
     -- Composite logical-version key
     id TEXT NOT NULL,
     version INTEGER NOT NULL,
@@ -257,24 +260,19 @@ CREATE TABLE authority_profiles (
         )
 );
 
--- NOTE:
--- surface_id references the LOGICAL ID of decision_surfaces, not a concrete version.
--- This cannot be enforced with a normal FK because decision_surfaces is keyed by (id, version).
--- Runtime/application logic must resolve the correct active surface version for evaluation.
-
-CREATE INDEX idx_authority_profiles_id_version_desc
+CREATE INDEX IF NOT EXISTS idx_authority_profiles_id_version_desc
     ON authority_profiles (id, version DESC);
 
-CREATE INDEX idx_authority_profiles_surface_id
+CREATE INDEX IF NOT EXISTS idx_authority_profiles_surface_id
     ON authority_profiles (surface_id);
 
-CREATE INDEX idx_authority_profiles_status
+CREATE INDEX IF NOT EXISTS idx_authority_profiles_status
     ON authority_profiles (status);
 
-CREATE INDEX idx_authority_profiles_effective_date
+CREATE INDEX IF NOT EXISTS idx_authority_profiles_effective_date
     ON authority_profiles (effective_date);
 
-CREATE INDEX idx_authority_profiles_active
+CREATE INDEX IF NOT EXISTS idx_authority_profiles_active
     ON authority_profiles (id, effective_date, effective_until)
     WHERE status = 'active';
 
@@ -282,7 +280,7 @@ CREATE INDEX idx_authority_profiles_active
 -- AGENTS
 -- =============================================================================
 
-CREATE TABLE agents (
+CREATE TABLE IF NOT EXISTS agents (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     type TEXT NOT NULL,
@@ -308,16 +306,16 @@ CREATE TABLE agents (
         CHECK (operational_state IN ('active', 'suspended', 'retired'))
 );
 
-CREATE INDEX idx_agents_operational_state
+CREATE INDEX IF NOT EXISTS idx_agents_operational_state
     ON agents (operational_state);
 
-CREATE INDEX idx_agents_type
+CREATE INDEX IF NOT EXISTS idx_agents_type
     ON agents (type);
 
-CREATE INDEX idx_agents_owner
+CREATE INDEX IF NOT EXISTS idx_agents_owner
     ON agents (owner);
 
-CREATE INDEX idx_agents_capabilities_gin
+CREATE INDEX IF NOT EXISTS idx_agents_capabilities_gin
     ON agents USING GIN (capabilities jsonb_path_ops);
 
 -- =============================================================================
@@ -328,7 +326,7 @@ CREATE INDEX idx_agents_capabilities_gin
 -- Grants themselves should be treated as non-deletable operational history;
 -- revocation/suspension should be modeled by status and revocation fields.
 
-CREATE TABLE authority_grants (
+CREATE TABLE IF NOT EXISTS authority_grants (
     id TEXT PRIMARY KEY,
     agent_id TEXT NOT NULL,
     profile_id TEXT NOT NULL,
@@ -366,19 +364,19 @@ CREATE TABLE authority_grants (
         )
 );
 
-CREATE INDEX idx_authority_grants_agent_id
+CREATE INDEX IF NOT EXISTS idx_authority_grants_agent_id
     ON authority_grants (agent_id);
 
-CREATE INDEX idx_authority_grants_profile_id
+CREATE INDEX IF NOT EXISTS idx_authority_grants_profile_id
     ON authority_grants (profile_id);
 
-CREATE INDEX idx_authority_grants_status
+CREATE INDEX IF NOT EXISTS idx_authority_grants_status
     ON authority_grants (status);
 
-CREATE INDEX idx_authority_grants_agent_status
+CREATE INDEX IF NOT EXISTS idx_authority_grants_agent_status
     ON authority_grants (agent_id, status);
 
-CREATE INDEX idx_authority_grants_effective
+CREATE INDEX IF NOT EXISTS idx_authority_grants_effective
     ON authority_grants (effective_date, expires_at)
     WHERE status = 'active';
 
@@ -393,7 +391,7 @@ CREATE INDEX idx_authority_grants_effective
 --
 -- JSON sections still carry the richer detail.
 
-CREATE TABLE operational_envelopes (
+CREATE TABLE IF NOT EXISTS operational_envelopes (
     id TEXT PRIMARY KEY,
 
     -- Idempotency scoping
@@ -436,6 +434,22 @@ CREATE TABLE operational_envelopes (
     updated_at TIMESTAMPTZ NOT NULL,
     closed_at TIMESTAMPTZ,
 
+    CONSTRAINT fk_envelopes_resolved_agent
+        FOREIGN KEY (resolved_agent_id)
+        REFERENCES agents(id),
+
+    CONSTRAINT fk_envelopes_resolved_grant
+        FOREIGN KEY (resolved_grant_id)
+        REFERENCES authority_grants(id),
+
+    CONSTRAINT fk_envelopes_resolved_surface
+        FOREIGN KEY (resolved_surface_id, resolved_surface_version)
+        REFERENCES decision_surfaces(id, version),
+
+    CONSTRAINT fk_envelopes_resolved_profile
+        FOREIGN KEY (resolved_profile_id, resolved_profile_version)
+        REFERENCES authority_profiles(id, version),
+
     CONSTRAINT chk_envelopes_state
         CHECK (state IN ('received', 'evaluating', 'escalated', 'outcome_recorded', 'awaiting_review', 'closed')),
 
@@ -466,67 +480,47 @@ CREATE TABLE operational_envelopes (
         )
 );
 
-ALTER TABLE operational_envelopes
-ADD CONSTRAINT fk_envelopes_resolved_agent
-FOREIGN KEY (resolved_agent_id)
-REFERENCES agents(id);
-
-ALTER TABLE operational_envelopes
-ADD CONSTRAINT fk_envelopes_resolved_grant
-FOREIGN KEY (resolved_grant_id)
-REFERENCES authority_grants(id);
-
-ALTER TABLE operational_envelopes
-ADD CONSTRAINT fk_envelopes_resolved_surface
-FOREIGN KEY (resolved_surface_id, resolved_surface_version)
-REFERENCES decision_surfaces(id, version);
-
-ALTER TABLE operational_envelopes
-ADD CONSTRAINT fk_envelopes_resolved_profile
-FOREIGN KEY (resolved_profile_id, resolved_profile_version)
-REFERENCES authority_profiles(id, version);
-
-CREATE UNIQUE INDEX idx_operational_envelopes_request_scope
+CREATE UNIQUE INDEX IF NOT EXISTS idx_operational_envelopes_request_scope
     ON operational_envelopes (request_source, request_id);
 
-CREATE INDEX idx_envelopes_state
+CREATE INDEX IF NOT EXISTS idx_envelopes_state
     ON operational_envelopes (state);
 
-CREATE INDEX idx_envelopes_outcome
+CREATE INDEX IF NOT EXISTS idx_envelopes_outcome
     ON operational_envelopes (outcome)
     WHERE outcome IS NOT NULL;
 
-CREATE INDEX idx_envelopes_closed_at
+CREATE INDEX IF NOT EXISTS idx_envelopes_closed_at
     ON operational_envelopes (closed_at)
     WHERE closed_at IS NOT NULL;
 
-CREATE INDEX idx_envelopes_created_at
+CREATE INDEX IF NOT EXISTS idx_envelopes_created_at
     ON operational_envelopes (created_at);
 
-CREATE INDEX idx_envelopes_resolved_surface
+CREATE INDEX IF NOT EXISTS idx_envelopes_resolved_surface
     ON operational_envelopes (resolved_surface_id, resolved_surface_version);
 
-CREATE INDEX idx_envelopes_resolved_profile
+CREATE INDEX IF NOT EXISTS idx_envelopes_resolved_profile
     ON operational_envelopes (resolved_profile_id, resolved_profile_version);
 
-CREATE INDEX idx_envelopes_resolved_agent
+CREATE INDEX IF NOT EXISTS idx_envelopes_resolved_agent
     ON operational_envelopes (resolved_agent_id);
 
-CREATE INDEX idx_envelopes_resolved_grant
+CREATE INDEX IF NOT EXISTS idx_envelopes_resolved_grant
     ON operational_envelopes (resolved_grant_id);
 
-CREATE INDEX idx_envelopes_resolved_subject
+CREATE INDEX IF NOT EXISTS idx_envelopes_resolved_subject
     ON operational_envelopes (resolved_subject_id)
     WHERE resolved_subject_id IS NOT NULL;
 
-CREATE INDEX idx_envelopes_submitted_hash
+CREATE INDEX IF NOT EXISTS idx_envelopes_submitted_hash
     ON operational_envelopes (submitted_hash)
     WHERE submitted_hash IS NOT NULL;
 
-CREATE INDEX idx_envelopes_resolved_gin
+CREATE INDEX IF NOT EXISTS idx_envelopes_resolved_gin
     ON operational_envelopes USING GIN (resolved_json jsonb_path_ops);
 
-CREATE INDEX idx_envelopes_explanation_gin
+CREATE INDEX IF NOT EXISTS idx_envelopes_explanation_gin
     ON operational_envelopes USING GIN (explanation_json jsonb_path_ops);
 
 -- =============================================================================
@@ -536,7 +530,7 @@ CREATE INDEX idx_envelopes_explanation_gin
 -- Application role should receive SELECT + INSERT only.
 -- For stronger immutability, add a trigger rejecting UPDATE/DELETE.
 
-CREATE TABLE audit_events (
+CREATE TABLE IF NOT EXISTS audit_events (
     id TEXT PRIMARY KEY,
     envelope_id TEXT NOT NULL,
     request_source TEXT NOT NULL,
@@ -563,25 +557,25 @@ CREATE TABLE audit_events (
         CHECK (performed_by_type IN ('system', 'agent', 'human', 'api'))
 );
 
-CREATE INDEX idx_audit_events_envelope_id_seq
+CREATE INDEX IF NOT EXISTS idx_audit_events_envelope_id_seq
     ON audit_events (envelope_id, sequence_no);
 
-CREATE INDEX idx_audit_events_request_scope
+CREATE INDEX IF NOT EXISTS idx_audit_events_request_scope
     ON audit_events (request_source, request_id);
 
-CREATE INDEX idx_audit_events_occurred_at
+CREATE INDEX IF NOT EXISTS idx_audit_events_occurred_at
     ON audit_events (occurred_at);
 
-CREATE INDEX idx_audit_events_event_type
+CREATE INDEX IF NOT EXISTS idx_audit_events_event_type
     ON audit_events (event_type);
 
-CREATE INDEX idx_audit_events_performer
+CREATE INDEX IF NOT EXISTS idx_audit_events_performer
     ON audit_events (performed_by_type, performed_by_id);
 
-CREATE INDEX idx_audit_events_hash_chain
+CREATE INDEX IF NOT EXISTS idx_audit_events_hash_chain
     ON audit_events (envelope_id, sequence_no, prev_hash, event_hash);
 
-CREATE INDEX idx_audit_events_payload_gin
+CREATE INDEX IF NOT EXISTS idx_audit_events_payload_gin
     ON audit_events USING GIN (payload_json jsonb_path_ops);
 
 -- =============================================================================
@@ -598,7 +592,7 @@ CREATE INDEX idx_audit_events_payload_gin
 --   - audit_events: hash-chained, append-only governance records.
 --   - outbox_events: routing envelopes for downstream integration.
 
-CREATE TABLE outbox_events (
+CREATE TABLE IF NOT EXISTS outbox_events (
     id             TEXT PRIMARY KEY,
     event_type     TEXT NOT NULL,
     aggregate_type TEXT NOT NULL,
@@ -610,18 +604,56 @@ CREATE TABLE outbox_events (
     published_at   TIMESTAMPTZ
 );
 
-CREATE INDEX idx_outbox_events_unpublished
+CREATE INDEX IF NOT EXISTS idx_outbox_events_unpublished
     ON outbox_events (created_at ASC)
     WHERE published_at IS NULL;
 
-CREATE INDEX idx_outbox_events_aggregate
+CREATE INDEX IF NOT EXISTS idx_outbox_events_aggregate
     ON outbox_events (aggregate_type, aggregate_id);
 
-CREATE INDEX idx_outbox_events_event_type
+CREATE INDEX IF NOT EXISTS idx_outbox_events_event_type
     ON outbox_events (event_type);
 
 COMMENT ON TABLE outbox_events IS
 'Transactional outbox: domain integration events written atomically with domain state. Dispatcher marks rows published after delivery.';
+
+-- =============================================================================
+-- CONTROL-PLANE CONFIGURATION AUDIT TRAIL
+-- =============================================================================
+-- controlplane_audit_events is a separate, append-only table for control-plane
+-- governance history. It is distinct from audit_events (runtime decision audit).
+-- Records capture who changed what, when, and which version of which resource.
+
+CREATE TABLE IF NOT EXISTS controlplane_audit_events (
+    id               TEXT        NOT NULL PRIMARY KEY,
+    occurred_at      TIMESTAMPTZ NOT NULL,
+    actor            TEXT        NOT NULL,
+    action           TEXT        NOT NULL CHECK (action IN (
+                         'surface.created',
+                         'profile.created',
+                         'profile.versioned',
+                         'agent.created',
+                         'grant.created',
+                         'surface.approved',
+                         'surface.deprecated',
+                         'profile.approved',
+                         'profile.deprecated',
+                         'grant.suspended',
+                         'grant.revoked',
+                         'grant.reinstated'
+                     )),
+    resource_kind    TEXT        NOT NULL CHECK (resource_kind IN ('surface', 'profile', 'agent', 'grant')),
+    resource_id      TEXT        NOT NULL,
+    resource_version INTEGER,
+    summary          TEXT        NOT NULL,
+    metadata         JSONB
+);
+
+CREATE INDEX IF NOT EXISTS idx_cp_audit_occurred_at    ON controlplane_audit_events (occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_cp_audit_resource_kind  ON controlplane_audit_events (resource_kind);
+CREATE INDEX IF NOT EXISTS idx_cp_audit_resource_id    ON controlplane_audit_events (resource_id);
+CREATE INDEX IF NOT EXISTS idx_cp_audit_actor          ON controlplane_audit_events (actor);
+CREATE INDEX IF NOT EXISTS idx_cp_audit_action         ON controlplane_audit_events (action);
 
 -- =============================================================================
 -- VIEWS
@@ -701,44 +733,6 @@ COMMENT ON COLUMN operational_envelopes.resolved_profile_version IS
 
 COMMENT ON COLUMN audit_events.event_hash IS
 'SHA-256 hash over event material including prev_hash to form a tamper-evident per-envelope chain.';
-
--- =============================================================================
--- CONTROL-PLANE CONFIGURATION AUDIT TRAIL
--- =============================================================================
--- controlplane_audit_events is a separate, append-only table for control-plane
--- governance history. It is distinct from audit_events (runtime decision audit).
--- Records capture who changed what, when, and which version of which resource.
-
-CREATE TABLE IF NOT EXISTS controlplane_audit_events (
-    id               TEXT        NOT NULL PRIMARY KEY,
-    occurred_at      TIMESTAMPTZ NOT NULL,
-    actor            TEXT        NOT NULL,
-    action           TEXT        NOT NULL CHECK (action IN (
-                         'surface.created',
-                         'profile.created',
-                         'profile.versioned',
-                         'agent.created',
-                         'grant.created',
-                         'surface.approved',
-                         'surface.deprecated',
-                         'profile.approved',
-                         'profile.deprecated',
-                         'grant.suspended',
-                         'grant.revoked',
-                         'grant.reinstated'
-                     )),
-    resource_kind    TEXT        NOT NULL CHECK (resource_kind IN ('surface', 'profile', 'agent', 'grant')),
-    resource_id      TEXT        NOT NULL,
-    resource_version INTEGER,
-    summary          TEXT        NOT NULL,
-    metadata         JSONB
-);
-
-CREATE INDEX IF NOT EXISTS idx_cp_audit_occurred_at    ON controlplane_audit_events (occurred_at DESC);
-CREATE INDEX IF NOT EXISTS idx_cp_audit_resource_kind  ON controlplane_audit_events (resource_kind);
-CREATE INDEX IF NOT EXISTS idx_cp_audit_resource_id    ON controlplane_audit_events (resource_id);
-CREATE INDEX IF NOT EXISTS idx_cp_audit_actor          ON controlplane_audit_events (actor);
-CREATE INDEX IF NOT EXISTS idx_cp_audit_action         ON controlplane_audit_events (action);
 
 COMMENT ON TABLE controlplane_audit_events IS
 'Append-only control-plane governance audit trail. Records who changed what, when, and which version.';
