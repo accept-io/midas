@@ -14,6 +14,7 @@ import (
 
 	_ "github.com/lib/pq"
 
+	"github.com/accept-io/midas/internal/auth"
 	"github.com/accept-io/midas/internal/bootstrap"
 	"github.com/accept-io/midas/internal/controlplane/apply"
 	"github.com/accept-io/midas/internal/decision"
@@ -94,7 +95,20 @@ func main() {
 		controlAuditSvc = httpapi.NewControlAuditReadService(repos.ControlAudit)
 	}
 
+	authenticator, err := auth.LoadStaticTokensFromEnv()
+	if err != nil {
+		log.Fatal(err)
+	}
+	if authenticator != nil {
+		slog.Info("midas_auth_enabled", "provider", "static")
+	} else {
+		slog.Warn("midas_auth_disabled", "reason", "MIDAS_AUTH_TOKENS not set; governance endpoints are unauthenticated")
+	}
+
 	srv := httpapi.NewServerFull(orchestrator, applyService, nil, introspectionSvc, controlAuditSvc, nil)
+	if authenticator != nil {
+		srv.WithAuthenticator(authenticator)
+	}
 
 	// --- Dispatcher: build ---
 	// BuildDispatcher returns a wiring with nil Dispatcher only when

@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/accept-io/midas/internal/agent"
+	"github.com/accept-io/midas/internal/auth"
 	"github.com/accept-io/midas/internal/authority"
 	"github.com/accept-io/midas/internal/controlaudit"
 	"github.com/accept-io/midas/internal/controlplane/apply"
@@ -100,6 +101,7 @@ type Server struct {
 	introspection  introspectionService
 	controlAudit   controlAuditService
 	grantLifecycle grantLifecycleService
+	authenticator  auth.Authenticator
 }
 
 type approveSurfaceRequest struct {
@@ -366,7 +368,10 @@ func (s *Server) handleApproveSurface(w http.ResponseWriter, r *http.Request, su
 	req.ApproverID = strings.TrimSpace(req.ApproverID)
 	req.ApproverName = strings.TrimSpace(req.ApproverName)
 
-	if !isValidIdentifier(req.ApproverID) {
+	// Resolve the approver identity: use authenticated principal when available,
+	// fall back to the body-supplied approver_id for unauthenticated deployments.
+	approverID := actorFromContext(r.Context(), req.ApproverID)
+	if !isValidIdentifier(approverID) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "approver_id must be a valid identifier",
 		})
@@ -384,7 +389,7 @@ func (s *Server) handleApproveSurface(w http.ResponseWriter, r *http.Request, su
 		ID: req.SubmittedBy,
 	}
 	approver := identity.Principal{
-		ID:    req.ApproverID,
+		ID:    approverID,
 		Name:  req.ApproverName,
 		Roles: []string{identity.RoleApprover},
 	}
@@ -435,7 +440,8 @@ func (s *Server) handleDeprecateSurface(w http.ResponseWriter, r *http.Request, 
 	req.Reason = strings.TrimSpace(req.Reason)
 	req.SuccessorID = strings.TrimSpace(req.SuccessorID)
 
-	if !isValidIdentifier(req.DeprecatedBy) {
+	deprecatedBy := actorFromContext(r.Context(), req.DeprecatedBy)
+	if !isValidIdentifier(deprecatedBy) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "deprecated_by must be a valid identifier",
 		})
@@ -456,7 +462,7 @@ func (s *Server) handleDeprecateSurface(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	updated, err := s.approval.DeprecateSurface(r.Context(), surfaceID, req.DeprecatedBy, req.Reason, req.SuccessorID)
+	updated, err := s.approval.DeprecateSurface(r.Context(), surfaceID, deprecatedBy, req.Reason, req.SuccessorID)
 	if err != nil {
 		statusCode, errResp := mapApprovalError(err)
 		writeJSON(w, statusCode, errResp)
@@ -533,7 +539,8 @@ func (s *Server) handleApproveProfile(w http.ResponseWriter, r *http.Request, pr
 	}
 
 	req.ApprovedBy = strings.TrimSpace(req.ApprovedBy)
-	if !isValidIdentifier(req.ApprovedBy) {
+	approvedBy := actorFromContext(r.Context(), req.ApprovedBy)
+	if !isValidIdentifier(approvedBy) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "approved_by must be a valid identifier"})
 		return
 	}
@@ -542,7 +549,7 @@ func (s *Server) handleApproveProfile(w http.ResponseWriter, r *http.Request, pr
 		return
 	}
 
-	updated, err := s.approval.ApproveProfile(r.Context(), profileID, req.Version, req.ApprovedBy)
+	updated, err := s.approval.ApproveProfile(r.Context(), profileID, req.Version, approvedBy)
 	if err != nil {
 		statusCode, errResp := mapApprovalError(err)
 		writeJSON(w, statusCode, errResp)
@@ -582,7 +589,8 @@ func (s *Server) handleDeprecateProfile(w http.ResponseWriter, r *http.Request, 
 	}
 
 	req.DeprecatedBy = strings.TrimSpace(req.DeprecatedBy)
-	if !isValidIdentifier(req.DeprecatedBy) {
+	deprecatedBy := actorFromContext(r.Context(), req.DeprecatedBy)
+	if !isValidIdentifier(deprecatedBy) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "deprecated_by must be a valid identifier"})
 		return
 	}
@@ -591,7 +599,7 @@ func (s *Server) handleDeprecateProfile(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	updated, err := s.approval.DeprecateProfile(r.Context(), profileID, req.Version, req.DeprecatedBy)
+	updated, err := s.approval.DeprecateProfile(r.Context(), profileID, req.Version, deprecatedBy)
 	if err != nil {
 		statusCode, errResp := mapApprovalError(err)
 		writeJSON(w, statusCode, errResp)
@@ -694,12 +702,13 @@ func (s *Server) handleSuspendGrant(w http.ResponseWriter, r *http.Request, gran
 	}
 
 	req.SuspendedBy = strings.TrimSpace(req.SuspendedBy)
-	if !isValidIdentifier(req.SuspendedBy) {
+	suspendedBy := actorFromContext(r.Context(), req.SuspendedBy)
+	if !isValidIdentifier(suspendedBy) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "suspended_by must be a valid identifier"})
 		return
 	}
 
-	updated, err := s.grantLifecycle.SuspendGrant(r.Context(), grantID, req.SuspendedBy, req.Reason)
+	updated, err := s.grantLifecycle.SuspendGrant(r.Context(), grantID, suspendedBy, req.Reason)
 	if err != nil {
 		code, resp := mapGrantError(err)
 		writeJSON(w, code, resp)
@@ -731,12 +740,13 @@ func (s *Server) handleRevokeGrant(w http.ResponseWriter, r *http.Request, grant
 	}
 
 	req.RevokedBy = strings.TrimSpace(req.RevokedBy)
-	if !isValidIdentifier(req.RevokedBy) {
+	revokedBy := actorFromContext(r.Context(), req.RevokedBy)
+	if !isValidIdentifier(revokedBy) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "revoked_by must be a valid identifier"})
 		return
 	}
 
-	updated, err := s.grantLifecycle.RevokeGrant(r.Context(), grantID, req.RevokedBy, req.Reason)
+	updated, err := s.grantLifecycle.RevokeGrant(r.Context(), grantID, revokedBy, req.Reason)
 	if err != nil {
 		code, resp := mapGrantError(err)
 		writeJSON(w, code, resp)
@@ -768,12 +778,13 @@ func (s *Server) handleReinstateGrant(w http.ResponseWriter, r *http.Request, gr
 	}
 
 	req.ReinstatedBy = strings.TrimSpace(req.ReinstatedBy)
-	if !isValidIdentifier(req.ReinstatedBy) {
+	reinstatedBy := actorFromContext(r.Context(), req.ReinstatedBy)
+	if !isValidIdentifier(reinstatedBy) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "reinstated_by must be a valid identifier"})
 		return
 	}
 
-	updated, err := s.grantLifecycle.ReinstateGrant(r.Context(), grantID, req.ReinstatedBy)
+	updated, err := s.grantLifecycle.ReinstateGrant(r.Context(), grantID, reinstatedBy)
 	if err != nil {
 		code, resp := mapGrantError(err)
 		writeJSON(w, code, resp)
@@ -863,17 +874,20 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/healthz", s.handleHealth)
 	s.mux.HandleFunc("/readyz", s.handleReady)
 	s.mux.HandleFunc("/v1/evaluate", s.handleEvaluate)
-	s.mux.HandleFunc("/v1/reviews", s.handleCreateReview)
+	s.mux.HandleFunc("/v1/reviews", s.requireAuth(s.handleCreateReview))
 	s.mux.HandleFunc("/v1/envelopes/", s.handleGetEnvelope)
 	s.mux.HandleFunc("/v1/envelopes", s.handleListEnvelopes)
 	s.mux.HandleFunc("/v1/escalations", s.handleListEscalations)
 	s.mux.HandleFunc("/v1/decisions/request/", s.handleGetDecisionByRequestID)
-	s.mux.HandleFunc("/v1/controlplane/apply", s.handleApplyBundle)
-	s.mux.HandleFunc("/v1/controlplane/plan", s.handlePlanBundle)
-	s.mux.HandleFunc("/v1/controlplane/audit", s.handleListControlAudit)
-	s.mux.HandleFunc("/v1/controlplane/surfaces/", s.handleSurfaceActions)
-	s.mux.HandleFunc("/v1/controlplane/profiles/", s.handleProfileActions)
-	s.mux.HandleFunc("/v1/controlplane/grants/", s.handleGrantActions)
+	// Control plane — governed endpoints; protected by requireAuth when an
+	// authenticator is configured. requireAuth is a no-op when s.authenticator
+	// is nil, preserving backward compatibility for unauthenticated deployments.
+	s.mux.HandleFunc("/v1/controlplane/apply", s.requireAuth(s.handleApplyBundle))
+	s.mux.HandleFunc("/v1/controlplane/plan", s.requireAuth(s.handlePlanBundle))
+	s.mux.HandleFunc("/v1/controlplane/audit", s.requireAuth(s.handleListControlAudit))
+	s.mux.HandleFunc("/v1/controlplane/surfaces/", s.requireAuth(s.handleSurfaceActions))
+	s.mux.HandleFunc("/v1/controlplane/profiles/", s.requireAuth(s.handleProfileActions))
+	s.mux.HandleFunc("/v1/controlplane/grants/", s.requireAuth(s.handleGrantActions))
 	// Operator introspection
 	s.mux.HandleFunc("/v1/surfaces/", s.handleGetSurfaceOrVersions)
 	s.mux.HandleFunc("/v1/profiles/", s.handleGetProfileOrVersions)
@@ -1098,7 +1112,10 @@ func (s *Server) handleCreateReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !isValidIdentifier(req.Reviewer) {
+	// Resolve reviewer: authenticated principal overrides the body field when
+	// auth is configured; falls back to the body value for unauthenticated deployments.
+	reviewer := actorFromContext(r.Context(), req.Reviewer)
+	if !isValidIdentifier(reviewer) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "reviewer must be a valid identifier (1-255 characters, no control characters)",
 		})
@@ -1121,7 +1138,7 @@ func (s *Server) handleCreateReview(w http.ResponseWriter, r *http.Request) {
 	resolvedEnvelope, err := s.orchestrator.ResolveEscalation(r.Context(), decision.EscalationResolution{
 		EnvelopeID:   req.EnvelopeID,
 		Decision:     reviewDecision,
-		ReviewerID:   req.Reviewer,
+		ReviewerID:   reviewer,
 		ReviewerKind: "human",
 		Notes:        req.Notes,
 	})
@@ -1357,7 +1374,7 @@ func (s *Server) handleApplyBundle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	actor := strings.TrimSpace(r.Header.Get("X-MIDAS-ACTOR"))
+	actor := actorFromContext(r.Context(), strings.TrimSpace(r.Header.Get("X-MIDAS-ACTOR")))
 	result, err := s.controlPlane.ApplyBundle(r.Context(), rawBody, actor)
 	if err != nil {
 		statusCode, errResp := mapApplyError(err)
