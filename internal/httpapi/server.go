@@ -874,7 +874,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/healthz", s.handleHealth)
 	s.mux.HandleFunc("/readyz", s.handleReady)
 	s.mux.HandleFunc("/v1/evaluate", s.handleEvaluate)
-	s.mux.HandleFunc("/v1/reviews", s.handleCreateReview)
+	s.mux.HandleFunc("/v1/reviews", s.requireAuth(s.handleCreateReview))
 	s.mux.HandleFunc("/v1/envelopes/", s.handleGetEnvelope)
 	s.mux.HandleFunc("/v1/envelopes", s.handleListEnvelopes)
 	s.mux.HandleFunc("/v1/escalations", s.handleListEscalations)
@@ -1112,7 +1112,10 @@ func (s *Server) handleCreateReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !isValidIdentifier(req.Reviewer) {
+	// Resolve reviewer: authenticated principal overrides the body field when
+	// auth is configured; falls back to the body value for unauthenticated deployments.
+	reviewer := actorFromContext(r.Context(), req.Reviewer)
+	if !isValidIdentifier(reviewer) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "reviewer must be a valid identifier (1-255 characters, no control characters)",
 		})
@@ -1135,7 +1138,7 @@ func (s *Server) handleCreateReview(w http.ResponseWriter, r *http.Request) {
 	resolvedEnvelope, err := s.orchestrator.ResolveEscalation(r.Context(), decision.EscalationResolution{
 		EnvelopeID:   req.EnvelopeID,
 		Decision:     reviewDecision,
-		ReviewerID:   req.Reviewer,
+		ReviewerID:   reviewer,
 		ReviewerKind: "human",
 		Notes:        req.Notes,
 	})

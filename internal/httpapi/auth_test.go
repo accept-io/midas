@@ -1,11 +1,15 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/accept-io/midas/internal/auth"
+	"github.com/accept-io/midas/internal/authority"
+	"github.com/accept-io/midas/internal/decision"
+	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/identity"
 )
 
@@ -180,5 +184,96 @@ func TestActorFromContext_WithPrincipal_ReturnsID(t *testing.T) {
 
 	if capturedActor != "user:alice" {
 		t.Errorf("want user:alice, got %q", capturedActor)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Handler-level integration tests: auth enforcement and principal propagation
+// ---------------------------------------------------------------------------
+
+// TestHandlerAuth_Reviews_NoToken_Returns401 verifies that POST /v1/reviews
+// rejects unauthenticated requests when an authenticator is configured.
+func TestHandlerAuth_Reviews_NoToken_Returns401(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithAuthenticator(aliceAuthenticator())
+
+	body := marshalJSON(t, map[string]any{
+		"envelope_id": "env-abc",
+		"decision":    "approve",
+		"reviewer":    "imposter",
+	})
+	rec := performRequest(t, srv, http.MethodPost, "/v1/reviews", body)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("want 401, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandlerAuth_Reviews_TokenOverridesBodyReviewer verifies that when a
+// valid bearer token is present, the authenticated principal's ID is used as
+// ReviewerID — the body-supplied "reviewer" field is ignored.
+func TestHandlerAuth_Reviews_TokenOverridesBodyReviewer(t *testing.T) {
+	var capturedReviewerID string
+
+	mock := &mockOrchestrator{
+		resolveEscalationFn: func(_ context.Context, res decision.EscalationResolution) (*envelope.Envelope, error) {
+			capturedReviewerID = res.ReviewerID
+			return nil, nil // nil envelope handled gracefully by the handler
+		},
+	}
+
+	srv := NewServerFull(mock, nil, nil, nil, nil, nil).
+		WithAuthenticator(aliceAuthenticator())
+
+	body := marshalJSON(t, map[string]any{
+		"envelope_id": "env-abc",
+		"decision":    "approve",
+		"reviewer":    "imposter", // should be overridden by the token principal
+	})
+	rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/reviews", body,
+		map[string]string{"Authorization": "Bearer tok-alice"})
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if capturedReviewerID != "user:alice" {
+		t.Errorf("want ReviewerID=user:alice (from token), got %q", capturedReviewerID)
+	}
+}
+
+// TestHandlerAuth_ApproveProfile_TokenOverridesBodyActor verifies that when a
+// valid bearer token is present on a governance handler that already uses
+// actorFromContext, the authenticated principal's ID is used as the actor —
+// the body-supplied actor field is ignored.
+func TestHandlerAuth_ApproveProfile_TokenOverridesBodyActor(t *testing.T) {
+	var capturedApprovedBy string
+
+	mockApproval := &mockApprovalService{
+		approveProfileFn: func(_ context.Context, _ string, _ int, approvedBy string) (*authority.AuthorityProfile, error) {
+			capturedApprovedBy = approvedBy
+			return &authority.AuthorityProfile{
+				ID:         "prof-1",
+				Version:    1,
+				Status:     authority.ProfileStatusActive,
+				ApprovedBy: approvedBy,
+			}, nil
+		},
+	}
+
+	srv := NewServerFull(&mockOrchestrator{}, nil, mockApproval, nil, nil, nil).
+		WithAuthenticator(aliceAuthenticator())
+
+	body := marshalJSON(t, map[string]any{
+		"version":     1,
+		"approved_by": "imposter", // should be overridden by the token principal
+	})
+	rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/controlplane/profiles/prof-1/approve", body,
+		map[string]string{"Authorization": "Bearer tok-alice"})
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if capturedApprovedBy != "user:alice" {
+		t.Errorf("want approvedBy=user:alice (from token), got %q", capturedApprovedBy)
 	}
 }
