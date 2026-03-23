@@ -35,6 +35,11 @@ func openTestDB(t *testing.T) *sql.DB {
 		t.Fatalf("db.PingContext: %v", err)
 	}
 
+	if err := EnsureSchema(db); err != nil {
+		_ = db.Close()
+		t.Fatalf("EnsureSchema: %v", err)
+	}
+
 	return db
 }
 

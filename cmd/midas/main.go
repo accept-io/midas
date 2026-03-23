@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -49,7 +50,7 @@ func main() {
 
 	// --- Store: build repositories ---
 
-	repos, repoStore, outboxRepo, backend, cleanup, err := buildRepositories(context.Background())
+	repos, repoStore, outboxRepo, backend, cleanup, readyFn, err := buildRepositories(context.Background())
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -122,14 +123,22 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	if err := validateAuthConfig(backend, authenticator); err != nil {
+		log.Fatal(err)
+	}
 	if authenticator != nil {
 		slog.Info("midas_auth_enabled", "provider", "static")
 	} else {
-		slog.Warn("midas_auth_disabled", "reason", "MIDAS_AUTH_TOKENS not set; governance endpoints are unauthenticated")
+		slog.Warn("midas_auth_unsafe",
+			"message", "MIDAS is running without authentication",
+			"safety", "UNSAFE FOR PRODUCTION",
+			"action", "Set MIDAS_AUTH_TOKENS to enable authentication",
+		)
 	}
 
 	srv := httpapi.NewServerFull(orchestrator, applyService, nil, introspectionSvc, controlAuditSvc, nil)
 	srv.WithPolicyMeta(policyMode, policyEvaluatorName)
+	srv.WithHealthCheck(readyFn)
 	if authenticator != nil {
 		srv.WithAuthenticator(authenticator)
 	}
@@ -230,6 +239,7 @@ func main() {
 //   - outboxRepo: outbox.Repository for the dispatcher (nil for memory backend)
 //   - backend: human-readable label ("postgres" | "memory")
 //   - cleanup: optional func to release resources (e.g. close DB connection)
+//   - readyFn: DB ping function for /readyz (nil for memory backend = always ready)
 //   - err: construction error, if any
 func buildRepositories(ctx context.Context) (
 	*store.Repositories,
@@ -237,6 +247,7 @@ func buildRepositories(ctx context.Context) (
 	outbox.Repository,
 	string,
 	func(),
+	func(context.Context) error,
 	error,
 ) {
 	backend := os.Getenv("MIDAS_STORE")
@@ -248,29 +259,34 @@ func buildRepositories(ctx context.Context) (
 	case "postgres":
 		databaseURL := os.Getenv("DATABASE_URL")
 		if databaseURL == "" {
-			return nil, nil, nil, "", nil, logError("MIDAS_STORE=postgres but DATABASE_URL is not set")
+			return nil, nil, nil, "", nil, nil, logError("MIDAS_STORE=postgres but DATABASE_URL is not set")
 		}
 
 		db, err := sql.Open("postgres", databaseURL)
 		if err != nil {
-			return nil, nil, nil, "", nil, err
+			return nil, nil, nil, "", nil, nil, err
 		}
 
 		if err := db.PingContext(ctx); err != nil {
 			_ = db.Close()
-			return nil, nil, nil, "", nil, err
+			return nil, nil, nil, "", nil, nil, err
+		}
+
+		if err := postgres.EnsureSchema(db); err != nil {
+			_ = db.Close()
+			return nil, nil, nil, "", nil, nil, err
 		}
 
 		pgStore, err := postgres.NewStore(db, nil)
 		if err != nil {
 			_ = db.Close()
-			return nil, nil, nil, "", nil, err
+			return nil, nil, nil, "", nil, nil, err
 		}
 
 		repos, err := pgStore.Repositories()
 		if err != nil {
 			_ = db.Close()
-			return nil, nil, nil, "", nil, err
+			return nil, nil, nil, "", nil, nil, err
 		}
 
 		cleanup := func() {
@@ -279,23 +295,51 @@ func buildRepositories(ctx context.Context) (
 			}
 		}
 
-		return repos, pgStore, repos.Outbox, backend, cleanup, nil
+		readyFn := func(ctx context.Context) error {
+			ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			defer cancel()
+			return db.PingContext(ctx)
+		}
+
+		return repos, pgStore, repos.Outbox, backend, cleanup, readyFn, nil
 
 	case "memory":
 		memStore := memory.NewStore()
 		repos, err := memStore.Repositories()
 		if err != nil {
-			return nil, nil, nil, "", nil, err
+			return nil, nil, nil, "", nil, nil, err
 		}
 		// The in-memory store does not provide a durable outbox. outboxRepo is
 		// nil. If DISPATCHER_ENABLED=true, BuildDispatcher will return an error
 		// at startup, which is the correct behaviour: the dispatcher requires a
 		// durable outbox repository and cannot run against an in-memory store.
-		return repos, memStore, nil, backend, nil, nil
+		return repos, memStore, nil, backend, nil, nil, nil
 
 	default:
-		return nil, nil, nil, "", nil, logError("unsupported MIDAS_STORE: " + backend)
+		return nil, nil, nil, "", nil, nil, logError("unsupported MIDAS_STORE: " + backend)
 	}
+}
+
+// validateAuthConfig enforces that Postgres mode cannot run unauthenticated
+// unless the operator has explicitly opted out via MIDAS_AUTH_DISABLED=true.
+// Memory mode has no enforcement — it is always considered a local/dev context.
+func validateAuthConfig(backend string, authenticator auth.Authenticator) error {
+	if backend != "postgres" {
+		return nil
+	}
+	if authenticator != nil {
+		return nil
+	}
+	if v := os.Getenv("MIDAS_AUTH_DISABLED"); v != "" {
+		disabled, err := strconv.ParseBool(v)
+		if err == nil && disabled {
+			return nil
+		}
+	}
+	return simpleError(
+		"Postgres mode requires authentication. " +
+			"Set MIDAS_AUTH_TOKENS, or explicitly disable auth with MIDAS_AUTH_DISABLED=true for local/dev use only.",
+	)
 }
 
 type simpleError string

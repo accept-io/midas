@@ -25,6 +25,14 @@ func (s *Server) WithPolicyMeta(mode, evaluatorName string) *Server {
 	return s
 }
 
+// WithHealthCheck sets a function that handleReady calls to verify the
+// backing store is reachable. Return nil means ready; any error causes /readyz
+// to respond 503. Pass nil to treat the server as always ready (memory mode).
+func (s *Server) WithHealthCheck(fn func(context.Context) error) *Server {
+	s.readyFn = fn
+	return s
+}
+
 // WithAuthenticator configures the server to authenticate governance requests.
 // It is safe to call after NewServerFull because requireAuth reads s.authenticator
 // at request time rather than at route-registration time.
