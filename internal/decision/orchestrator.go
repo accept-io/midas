@@ -115,6 +115,16 @@ type EvaluationResult struct {
 	EnvelopeID  string
 	State       envelope.EnvelopeState
 	Explanation string
+
+	// Policy transparency fields — always populated, never affect evaluation decisions.
+	//
+	// PolicyMode reflects the active policy evaluator's mode (e.g. "noop").
+	// PolicyReference echoes the resolved profile's policy_ref when set.
+	// PolicySkipped is true when the profile declares a policy_ref but the active
+	// evaluator is noop — meaning the policy step ran but had no real effect.
+	PolicyMode      string
+	PolicyReference string
+	PolicySkipped   bool
 }
 
 // RepositoryStore abstracts transactional repository access.
@@ -141,10 +151,11 @@ type EscalationResolution struct {
 
 // Orchestrator coordinates the MIDAS evaluation flow.
 type Orchestrator struct {
-	store    RepositoryStore
-	policies policy.PolicyEvaluator
-	metrics  EvaluationRecorder
-	clock    Clock
+	store      RepositoryStore
+	policies   policy.PolicyEvaluator
+	metrics    EvaluationRecorder
+	clock      Clock
+	policyMode string // detected once at construction via PolicyModer interface
 }
 
 // NewOrchestrator constructs an Orchestrator with a real clock.
@@ -172,7 +183,22 @@ func NewOrchestratorWithClock(
 	if clock == nil {
 		clock = time.Now
 	}
-	return &Orchestrator{store: store, policies: policies, metrics: metrics, clock: clock}, nil
+
+	// Detect the policy mode once at construction via the optional PolicyModer
+	// interface. Using a local interface avoids depending on policy package constants
+	// directly, though decision already imports policy for PolicyEvaluator.
+	policyMode := policy.PolicyModeUnknown
+	if pm, ok := policies.(policy.PolicyModer); ok {
+		policyMode = pm.PolicyMode()
+	}
+
+	return &Orchestrator{
+		store:      store,
+		policies:   policies,
+		metrics:    metrics,
+		clock:      clock,
+		policyMode: policyMode,
+	}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -198,6 +224,10 @@ func (o *Orchestrator) Evaluate(ctx context.Context, req eval.DecisionRequest, r
 		result, err = o.evaluate(ctx, repos, req, raw)
 		return err
 	})
+
+	// Always populate PolicyMode so callers can inspect the active evaluator mode
+	// regardless of whether the evaluation succeeded or failed.
+	result.PolicyMode = o.policyMode
 
 	endedAt := o.clock()
 	duration := endedAt.Sub(startedAt)
@@ -295,7 +325,7 @@ func (o *Orchestrator) evaluate(
 				"outcome", existing.Evaluation.Outcome,
 				"reason_code", existing.Evaluation.ReasonCode,
 			)
-			return resultFromEnvelope(existing), nil
+			return o.resultFromEnvelope(existing), nil
 		}
 		// Same scope, different payload — deterministic conflict error.
 		slog.Warn("idempotency_conflict",
@@ -386,6 +416,23 @@ func (o *Orchestrator) evaluate(
 		return EvaluationResult{}, err
 	}
 
+	// Profile is now resolved. Compute policy transparency fields once so that
+	// all subsequent finish() calls carry them without repetition.
+	// PolicySkipped is true when a profile declares a policy_ref but the active
+	// evaluator is noop — the step ran but had no real enforcement effect.
+	profilePolicyRef := p.PolicyReference
+	policySkipped := o.policyMode == policy.PolicyModeNoop && profilePolicyRef != ""
+
+	// withPolicyMeta attaches policy transparency fields to any EvaluationResult
+	// produced after the profile has been resolved. It is a no-op on error paths.
+	withPolicyMeta := func(res EvaluationResult, finishErr error) (EvaluationResult, error) {
+		if finishErr == nil {
+			res.PolicyReference = profilePolicyRef
+			res.PolicySkipped = policySkipped
+		}
+		return res, finishErr
+	}
+
 	// Populate Resolved section
 	env.Resolved = envelope.Resolved{
 		Authority: envelope.ResolvedAuthority{
@@ -467,7 +514,7 @@ func (o *Orchestrator) evaluate(
 		return EvaluationResult{}, err
 	}
 	if !hasRequiredContext(req.Context, p.RequiredContextKeys) {
-		return o.finish(ctx, repos, acc, env, eval.OutcomeRequestClarification, eval.ReasonInsufficientContext)
+		return withPolicyMeta(o.finish(ctx, repos, acc, env, eval.OutcomeRequestClarification, eval.ReasonInsufficientContext))
 	}
 
 	// Step 5: Confidence
@@ -475,7 +522,7 @@ func (o *Orchestrator) evaluate(
 		return EvaluationResult{}, err
 	}
 	if req.Confidence < p.ConfidenceThreshold {
-		return o.finish(ctx, repos, acc, env, eval.OutcomeEscalate, eval.ReasonConfidenceBelowThreshold)
+		return withPolicyMeta(o.finish(ctx, repos, acc, env, eval.OutcomeEscalate, eval.ReasonConfidenceBelowThreshold))
 	}
 
 	// Step 6: Consequence
@@ -483,7 +530,7 @@ func (o *Orchestrator) evaluate(
 		return EvaluationResult{}, err
 	}
 	if authority.ExceedsConsequenceThreshold(req.Consequence, p.ConsequenceThreshold) {
-		return o.finish(ctx, repos, acc, env, eval.OutcomeEscalate, eval.ReasonConsequenceExceedsLimit)
+		return withPolicyMeta(o.finish(ctx, repos, acc, env, eval.OutcomeEscalate, eval.ReasonConsequenceExceedsLimit))
 	}
 
 	// Step 7: Policy
@@ -497,10 +544,10 @@ func (o *Orchestrator) evaluate(
 		}
 	}
 	if policyOutcome != "" {
-		return o.finish(ctx, repos, acc, env, policyOutcome, policyReason)
+		return withPolicyMeta(o.finish(ctx, repos, acc, env, policyOutcome, policyReason))
 	}
 
-	return o.finish(ctx, repos, acc, env, eval.OutcomeAccept, eval.ReasonWithinAuthority)
+	return withPolicyMeta(o.finish(ctx, repos, acc, env, eval.OutcomeAccept, eval.ReasonWithinAuthority))
 }
 
 // ---------------------------------------------------------------------------
@@ -1289,17 +1336,25 @@ func buildGovernancePayload(req eval.DecisionRequest, submittedHash string) map[
 // resultFromEnvelope reconstructs an EvaluationResult from a persisted
 // envelope. Used on the exact-replay idempotency path to return the original
 // decision without creating a second envelope.
-func resultFromEnvelope(env *envelope.Envelope) EvaluationResult {
-	var explanation string
+// resultFromEnvelope builds an EvaluationResult from an existing envelope.
+// Used for idempotency replays — the original decision is returned without
+// re-evaluating, but policy transparency fields still reflect the current
+// evaluator mode so callers always see a consistent policy_mode.
+func (o *Orchestrator) resultFromEnvelope(env *envelope.Envelope) EvaluationResult {
+	var explanation, policyRef string
 	if env.Evaluation.Explanation != nil {
 		explanation = env.Evaluation.Explanation.Reason
+		policyRef = env.Evaluation.Explanation.PolicyReference
 	}
 	return EvaluationResult{
-		Outcome:     env.Evaluation.Outcome,
-		ReasonCode:  env.Evaluation.ReasonCode,
-		EnvelopeID:  env.ID(),
-		State:       env.State,
-		Explanation: explanation,
+		Outcome:         env.Evaluation.Outcome,
+		ReasonCode:      env.Evaluation.ReasonCode,
+		EnvelopeID:      env.ID(),
+		State:           env.State,
+		Explanation:     explanation,
+		PolicyMode:      o.policyMode,
+		PolicyReference: policyRef,
+		PolicySkipped:   o.policyMode == policy.PolicyModeNoop && policyRef != "",
 	}
 }
 

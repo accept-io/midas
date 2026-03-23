@@ -30,9 +30,21 @@ const (
 )
 
 // HasRole returns true if the principal has the given role.
+// Comparison is case-insensitive and trims surrounding whitespace.
 func (p Principal) HasRole(role string) bool {
 	for _, r := range p.Roles {
 		if strings.EqualFold(strings.TrimSpace(r), role) {
+			return true
+		}
+	}
+	return false
+}
+
+// HasAnyRole returns true if the principal holds at least one of the given roles.
+// Comparison is case-insensitive, matching the semantics of HasRole.
+func (p *Principal) HasAnyRole(roles ...string) bool {
+	for _, role := range roles {
+		if p.HasRole(role) {
 			return true
 		}
 	}

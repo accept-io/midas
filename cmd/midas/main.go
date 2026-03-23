@@ -71,9 +71,32 @@ func main() {
 
 	// --- Domain: orchestrator and services ---
 
+	// Policy evaluator — assign to a variable so we can inspect its mode before
+	// passing it to the orchestrator. Future: swap NoOpPolicyEvaluator for a real
+	// OPA evaluator by changing this single assignment.
+	var policyEval policy.PolicyEvaluator = policy.NoOpPolicyEvaluator{}
+
+	// Detect policy mode via the optional PolicyModer interface and warn operators
+	// when running in noop mode (all policy checks pass without real enforcement).
+	policyMode := "unknown"
+	policyEvaluatorName := "unknown"
+	if pm, ok := policyEval.(interface{ PolicyMode() string }); ok {
+		policyMode = pm.PolicyMode()
+	}
+	switch policyMode {
+	case policy.PolicyModeNoop:
+		policyEvaluatorName = "NoOpPolicyEvaluator"
+		slog.Warn("policy_mode_noop",
+			"reason", "no policy evaluator configured; all policy checks will pass",
+			"action", "configure a real policy evaluator to enforce policy",
+			"policy_mode", policyMode,
+			"policy_evaluator", policyEvaluatorName,
+		)
+	}
+
 	orchestrator, err := decision.NewOrchestrator(
 		repoStore,
-		policy.NoOpPolicyEvaluator{},
+		policyEval,
 		nil,
 	)
 	if err != nil {
@@ -106,6 +129,7 @@ func main() {
 	}
 
 	srv := httpapi.NewServerFull(orchestrator, applyService, nil, introspectionSvc, controlAuditSvc, nil)
+	srv.WithPolicyMeta(policyMode, policyEvaluatorName)
 	if authenticator != nil {
 		srv.WithAuthenticator(authenticator)
 	}

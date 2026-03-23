@@ -94,14 +94,16 @@ type grantLifecycleService interface {
 }
 
 type Server struct {
-	mux            *http.ServeMux
-	orchestrator   orchestrator
-	controlPlane   controlPlaneService
-	approval       approvalService
-	introspection  introspectionService
-	controlAudit   controlAuditService
-	grantLifecycle grantLifecycleService
-	authenticator  auth.Authenticator
+	mux                 *http.ServeMux
+	orchestrator        orchestrator
+	controlPlane        controlPlaneService
+	approval            approvalService
+	introspection       introspectionService
+	controlAudit        controlAuditService
+	grantLifecycle      grantLifecycleService
+	authenticator       auth.Authenticator
+	policyMode          string // e.g. "noop" — set via WithPolicyMeta at boot
+	policyEvaluatorName string // human-readable evaluator name for health responses
 }
 
 type approveSurfaceRequest struct {
@@ -329,9 +331,15 @@ func (s *Server) handleSurfaceActions(w http.ResponseWriter, r *http.Request) {
 	action := parts[1]
 	switch action {
 	case "approve":
-		s.handleApproveSurface(w, r, surfaceID)
+		// ADMIN or APPROVER may approve surfaces.
+		s.requireRole(identity.RoleAdmin, identity.RoleApprover)(func(w http.ResponseWriter, r *http.Request) {
+			s.handleApproveSurface(w, r, surfaceID)
+		})(w, r)
 	case "deprecate":
-		s.handleDeprecateSurface(w, r, surfaceID)
+		// ADMIN only may deprecate surfaces (destructive lifecycle change).
+		s.requireRole(identity.RoleAdmin)(func(w http.ResponseWriter, r *http.Request) {
+			s.handleDeprecateSurface(w, r, surfaceID)
+		})(w, r)
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 	}
@@ -506,9 +514,15 @@ func (s *Server) handleProfileActions(w http.ResponseWriter, r *http.Request) {
 	action := parts[1]
 	switch action {
 	case "approve":
-		s.handleApproveProfile(w, r, profileID)
+		// ADMIN or APPROVER may approve profiles.
+		s.requireRole(identity.RoleAdmin, identity.RoleApprover)(func(w http.ResponseWriter, r *http.Request) {
+			s.handleApproveProfile(w, r, profileID)
+		})(w, r)
 	case "deprecate":
-		s.handleDeprecateProfile(w, r, profileID)
+		// ADMIN only may deprecate profiles (destructive lifecycle change).
+		s.requireRole(identity.RoleAdmin)(func(w http.ResponseWriter, r *http.Request) {
+			s.handleDeprecateProfile(w, r, profileID)
+		})(w, r)
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 	}
@@ -672,13 +686,21 @@ func (s *Server) handleGrantActions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// All grant lifecycle actions (suspend, revoke, reinstate) are ADMIN only —
+	// these are destructive/irreversible operational changes.
 	switch action {
 	case "suspend":
-		s.handleSuspendGrant(w, r, grantID)
+		s.requireRole(identity.RoleAdmin)(func(w http.ResponseWriter, r *http.Request) {
+			s.handleSuspendGrant(w, r, grantID)
+		})(w, r)
 	case "revoke":
-		s.handleRevokeGrant(w, r, grantID)
+		s.requireRole(identity.RoleAdmin)(func(w http.ResponseWriter, r *http.Request) {
+			s.handleRevokeGrant(w, r, grantID)
+		})(w, r)
 	case "reinstate":
-		s.handleReinstateGrant(w, r, grantID)
+		s.requireRole(identity.RoleAdmin)(func(w http.ResponseWriter, r *http.Request) {
+			s.handleReinstateGrant(w, r, grantID)
+		})(w, r)
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 	}
@@ -873,28 +895,39 @@ func NewServerWithControlPlane(orchestrator orchestrator, controlPlane controlPl
 func (s *Server) routes() {
 	s.mux.HandleFunc("/healthz", s.handleHealth)
 	s.mux.HandleFunc("/readyz", s.handleReady)
+	// Evaluation — unauthenticated; agents call this on behalf of the governed flow.
 	s.mux.HandleFunc("/v1/evaluate", s.handleEvaluate)
-	s.mux.HandleFunc("/v1/reviews", s.requireAuth(s.handleCreateReview))
-	s.mux.HandleFunc("/v1/envelopes/", s.handleGetEnvelope)
-	s.mux.HandleFunc("/v1/envelopes", s.handleListEnvelopes)
-	s.mux.HandleFunc("/v1/escalations", s.handleListEscalations)
-	s.mux.HandleFunc("/v1/decisions/request/", s.handleGetDecisionByRequestID)
-	// Control plane — governed endpoints; protected by requireAuth when an
-	// authenticator is configured. requireAuth is a no-op when s.authenticator
-	// is nil, preserving backward compatibility for unauthenticated deployments.
-	s.mux.HandleFunc("/v1/controlplane/apply", s.requireAuth(s.handleApplyBundle))
-	s.mux.HandleFunc("/v1/controlplane/plan", s.requireAuth(s.handlePlanBundle))
+
+	// Escalation review — ADMIN or REVIEWER.
+	s.mux.HandleFunc("/v1/reviews", s.requireAuth(s.requireRole(identity.RoleAdmin, identity.RoleReviewer)(s.handleCreateReview)))
+
+	// Runtime read — authenticated only (no role restriction).
+	s.mux.HandleFunc("/v1/envelopes/", s.requireAuth(s.handleGetEnvelope))
+	s.mux.HandleFunc("/v1/envelopes", s.requireAuth(s.handleListEnvelopes))
+	s.mux.HandleFunc("/v1/escalations", s.requireAuth(s.handleListEscalations))
+	s.mux.HandleFunc("/v1/decisions/request/", s.requireAuth(s.handleGetDecisionByRequestID))
+
+	// Control plane — governed endpoints.
+	// requireAuth and requireRole are no-ops when s.authenticator is nil,
+	// preserving backward compatibility for unauthenticated deployments.
+	//
+	// apply/plan: ADMIN only (mutates or previews configuration).
+	s.mux.HandleFunc("/v1/controlplane/apply", s.requireAuth(s.requireRole(identity.RoleAdmin)(s.handleApplyBundle)))
+	s.mux.HandleFunc("/v1/controlplane/plan", s.requireAuth(s.requireRole(identity.RoleAdmin)(s.handlePlanBundle)))
+	// audit read: authenticated only.
 	s.mux.HandleFunc("/v1/controlplane/audit", s.requireAuth(s.handleListControlAudit))
+	// Resource lifecycle — role enforcement applied per-action inside each dispatcher.
 	s.mux.HandleFunc("/v1/controlplane/surfaces/", s.requireAuth(s.handleSurfaceActions))
 	s.mux.HandleFunc("/v1/controlplane/profiles/", s.requireAuth(s.handleProfileActions))
 	s.mux.HandleFunc("/v1/controlplane/grants/", s.requireAuth(s.handleGrantActions))
-	// Operator introspection
-	s.mux.HandleFunc("/v1/surfaces/", s.handleGetSurfaceOrVersions)
-	s.mux.HandleFunc("/v1/profiles/", s.handleGetProfileOrVersions)
-	s.mux.HandleFunc("/v1/profiles", s.handleListProfiles)
-	s.mux.HandleFunc("/v1/agents/", s.handleGetAgent)
-	s.mux.HandleFunc("/v1/grants/", s.handleGetGrant)
-	s.mux.HandleFunc("/v1/grants", s.handleListGrants)
+
+	// Operator introspection — authenticated only (no role restriction).
+	s.mux.HandleFunc("/v1/surfaces/", s.requireAuth(s.handleGetSurfaceOrVersions))
+	s.mux.HandleFunc("/v1/profiles/", s.requireAuth(s.handleGetProfileOrVersions))
+	s.mux.HandleFunc("/v1/profiles", s.requireAuth(s.handleListProfiles))
+	s.mux.HandleFunc("/v1/agents/", s.requireAuth(s.handleGetAgent))
+	s.mux.HandleFunc("/v1/grants/", s.requireAuth(s.handleGetGrant))
+	s.mux.HandleFunc("/v1/grants", s.requireAuth(s.handleListGrants))
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -915,10 +948,17 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{
+	resp := map[string]string{
 		"status":  "ok",
 		"service": "midas",
-	})
+	}
+	if s.policyMode != "" {
+		resp["policy_mode"] = s.policyMode
+	}
+	if s.policyEvaluatorName != "" {
+		resp["policy_evaluator"] = s.policyEvaluatorName
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
@@ -927,10 +967,17 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{
+	resp := map[string]string{
 		"status":  "ready",
 		"service": "midas",
-	})
+	}
+	if s.policyMode != "" {
+		resp["policy_mode"] = s.policyMode
+	}
+	if s.policyEvaluatorName != "" {
+		resp["policy_evaluator"] = s.policyEvaluatorName
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // ---------------------------------------------------------------------------
@@ -959,6 +1006,11 @@ type evaluateResponse struct {
 	Reason      string `json:"reason"`
 	EnvelopeID  string `json:"envelope_id,omitempty"`
 	Explanation string `json:"explanation,omitempty"`
+
+	// Policy transparency fields — informational only, never affect the outcome.
+	PolicyMode      string `json:"policy_mode,omitempty"`
+	PolicyReference string `json:"policy_reference,omitempty"`
+	PolicySkipped   bool   `json:"policy_skipped,omitempty"`
 }
 
 func (s *Server) handleEvaluate(w http.ResponseWriter, r *http.Request) {
@@ -1037,10 +1089,13 @@ func (s *Server) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, evaluateResponse{
-		Outcome:     string(result.Outcome),
-		Reason:      string(result.ReasonCode),
-		EnvelopeID:  result.EnvelopeID,
-		Explanation: result.Explanation,
+		Outcome:         string(result.Outcome),
+		Reason:          string(result.ReasonCode),
+		EnvelopeID:      result.EnvelopeID,
+		Explanation:     result.Explanation,
+		PolicyMode:      result.PolicyMode,
+		PolicyReference: result.PolicyReference,
+		PolicySkipped:   result.PolicySkipped,
 	})
 }
 

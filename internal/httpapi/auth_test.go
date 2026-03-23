@@ -8,9 +8,11 @@ import (
 
 	"github.com/accept-io/midas/internal/auth"
 	"github.com/accept-io/midas/internal/authority"
+	cpTypes "github.com/accept-io/midas/internal/controlplane/types"
 	"github.com/accept-io/midas/internal/decision"
 	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/identity"
+	"github.com/accept-io/midas/internal/surface"
 )
 
 // ---------------------------------------------------------------------------
@@ -275,5 +277,216 @@ func TestHandlerAuth_ApproveProfile_TokenOverridesBodyActor(t *testing.T) {
 	}
 	if capturedApprovedBy != "user:alice" {
 		t.Errorf("want approvedBy=user:alice (from token), got %q", capturedApprovedBy)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// RBAC test helpers
+// ---------------------------------------------------------------------------
+
+// rbacAuthenticator returns an authenticator with one token per role scenario.
+func rbacAuthenticator() auth.Authenticator {
+	return auth.NewStaticTokenAuthenticator(map[string]*identity.Principal{
+		"tok-admin":        {ID: "user:admin", Provider: identity.ProviderStatic, Roles: []string{identity.RoleAdmin}},
+		"tok-approver":     {ID: "user:approver", Provider: identity.ProviderStatic, Roles: []string{identity.RoleApprover}},
+		"tok-reviewer":     {ID: "user:reviewer", Provider: identity.ProviderStatic, Roles: []string{identity.RoleReviewer}},
+		"tok-operator":     {ID: "user:operator", Provider: identity.ProviderStatic, Roles: []string{identity.RoleOperator}},
+		"tok-multi":        {ID: "user:multi", Provider: identity.ProviderStatic, Roles: []string{identity.RoleOperator, identity.RoleApprover}},
+		"tok-unknown-role": {ID: "user:unknown", Provider: identity.ProviderStatic, Roles: []string{"some_unknown_role"}},
+		"tok-empty-roles":  {ID: "user:empty", Provider: identity.ProviderStatic, Roles: []string{}},
+		"tok-upper-admin":  {ID: "user:upperadmin", Provider: identity.ProviderStatic, Roles: []string{"ADMIN"}},
+	})
+}
+
+// approvalSrvRBAC returns a server wired with the RBAC authenticator and a
+// minimal approval service mock. Used by surface-approve RBAC tests.
+func approvalSrvRBAC(t *testing.T) *Server {
+	t.Helper()
+	mockApproval := &mockApprovalService{
+		approveSurfaceFn: func(_ context.Context, surfaceID string, _ identity.Principal, approver identity.Principal) (*surface.DecisionSurface, error) {
+			return &surface.DecisionSurface{
+				ID:     surfaceID,
+				Status: surface.SurfaceStatusActive,
+			}, nil
+		},
+	}
+	return NewServerFull(&mockOrchestrator{}, nil, mockApproval, nil, nil, nil).
+		WithAuthenticator(rbacAuthenticator())
+}
+
+// reviewSrvRBAC returns a server wired with the RBAC authenticator and a mock
+// orchestrator that resolves escalations successfully. Used by /v1/reviews RBAC tests.
+func reviewSrvRBAC(t *testing.T) *Server {
+	t.Helper()
+	mock := &mockOrchestrator{
+		resolveEscalationFn: func(_ context.Context, _ decision.EscalationResolution) (*envelope.Envelope, error) {
+			return nil, nil
+		},
+	}
+	return NewServerFull(mock, nil, nil, nil, nil, nil).
+		WithAuthenticator(rbacAuthenticator())
+}
+
+// applySrvRBAC returns a server wired with the RBAC authenticator and a mock
+// control plane. Used by /v1/controlplane/apply RBAC tests.
+func applySrvRBAC(t *testing.T) *Server {
+	t.Helper()
+	mockCP := &mockControlPlane{
+		applyBundleFn: func(_ context.Context, _ []byte, _ string) (*cpTypes.ApplyResult, error) {
+			return &cpTypes.ApplyResult{}, nil
+		},
+	}
+	return NewServerWithControlPlane(&mockOrchestrator{}, mockCP).
+		WithAuthenticator(rbacAuthenticator())
+}
+
+// ---------------------------------------------------------------------------
+// RBAC tests: surface approve endpoint
+// ---------------------------------------------------------------------------
+
+// 1. approval route: no token => 401
+func TestRBAC_ApproveSurface_NoToken_Returns401(t *testing.T) {
+	srv := approvalSrvRBAC(t)
+	body := marshalJSON(t, map[string]any{"submitted_by": "user:sub"})
+	rec := performRequest(t, srv, http.MethodPost, "/v1/controlplane/surfaces/surf-1/approve", body)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("want 401, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// 2. approval route: operator token => 403
+func TestRBAC_ApproveSurface_OperatorToken_Returns403(t *testing.T) {
+	srv := approvalSrvRBAC(t)
+	body := marshalJSON(t, map[string]any{"submitted_by": "user:sub"})
+	rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/controlplane/surfaces/surf-1/approve", body,
+		map[string]string{"Authorization": "Bearer tok-operator"})
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("want 403, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// 3. approval route: approver token => success
+func TestRBAC_ApproveSurface_ApproverToken_Succeeds(t *testing.T) {
+	srv := approvalSrvRBAC(t)
+	body := marshalJSON(t, map[string]any{"submitted_by": "user:sub"})
+	rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/controlplane/surfaces/surf-1/approve", body,
+		map[string]string{"Authorization": "Bearer tok-approver"})
+	if rec.Code != http.StatusOK {
+		t.Errorf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// 4. approval route: admin token => success
+func TestRBAC_ApproveSurface_AdminToken_Succeeds(t *testing.T) {
+	srv := approvalSrvRBAC(t)
+	body := marshalJSON(t, map[string]any{"submitted_by": "user:sub"})
+	rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/controlplane/surfaces/surf-1/approve", body,
+		map[string]string{"Authorization": "Bearer tok-admin"})
+	if rec.Code != http.StatusOK {
+		t.Errorf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// RBAC tests: POST /v1/reviews
+// ---------------------------------------------------------------------------
+
+// 5. POST /v1/reviews: operator token => 403
+func TestRBAC_Reviews_OperatorToken_Returns403(t *testing.T) {
+	srv := reviewSrvRBAC(t)
+	body := marshalJSON(t, map[string]any{"envelope_id": "env-1", "decision": "approve"})
+	rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/reviews", body,
+		map[string]string{"Authorization": "Bearer tok-operator"})
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("want 403, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// 6. POST /v1/reviews: reviewer token => success
+func TestRBAC_Reviews_ReviewerToken_Succeeds(t *testing.T) {
+	srv := reviewSrvRBAC(t)
+	body := marshalJSON(t, map[string]any{"envelope_id": "env-1", "decision": "approve"})
+	rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/reviews", body,
+		map[string]string{"Authorization": "Bearer tok-reviewer"})
+	if rec.Code != http.StatusOK {
+		t.Errorf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// RBAC tests: POST /v1/controlplane/apply
+// ---------------------------------------------------------------------------
+
+// 7. POST /v1/controlplane/apply: operator token => 403
+func TestRBAC_Apply_OperatorToken_Returns403(t *testing.T) {
+	srv := applySrvRBAC(t)
+	rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/controlplane/apply",
+		[]byte(`kind: Surface`),
+		map[string]string{"Authorization": "Bearer tok-operator", "Content-Type": "application/yaml"})
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("want 403, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// 8. POST /v1/controlplane/apply: admin token => allowed path reached (non-403)
+func TestRBAC_Apply_AdminToken_ReachesHandler(t *testing.T) {
+	srv := applySrvRBAC(t)
+	rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/controlplane/apply",
+		[]byte(`kind: Surface`),
+		map[string]string{"Authorization": "Bearer tok-admin", "Content-Type": "application/yaml"})
+	if rec.Code == http.StatusUnauthorized || rec.Code == http.StatusForbidden {
+		t.Errorf("admin should reach handler, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// 9. principal override: authorized reviewer's identity overrides body reviewer field.
+// (Covered by TestHandlerAuth_Reviews_TokenOverridesBodyReviewer using aliceAuthenticator.)
+
+// ---------------------------------------------------------------------------
+// RBAC tests: edge cases
+// ---------------------------------------------------------------------------
+
+// 10. unknown role => 403
+func TestRBAC_UnknownRole_Returns403(t *testing.T) {
+	srv := approvalSrvRBAC(t)
+	body := marshalJSON(t, map[string]any{"submitted_by": "user:sub"})
+	rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/controlplane/surfaces/surf-1/approve", body,
+		map[string]string{"Authorization": "Bearer tok-unknown-role"})
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("want 403, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// 11. multi-role principal including allowed role => success
+// tok-multi has [operator, approver]; approver is sufficient for surface approve.
+func TestRBAC_MultiRole_AllowedRolePresent_Succeeds(t *testing.T) {
+	srv := approvalSrvRBAC(t)
+	body := marshalJSON(t, map[string]any{"submitted_by": "user:sub"})
+	rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/controlplane/surfaces/surf-1/approve", body,
+		map[string]string{"Authorization": "Bearer tok-multi"})
+	if rec.Code != http.StatusOK {
+		t.Errorf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// 12. empty roles => 403
+func TestRBAC_EmptyRoles_Returns403(t *testing.T) {
+	srv := approvalSrvRBAC(t)
+	body := marshalJSON(t, map[string]any{"submitted_by": "user:sub"})
+	rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/controlplane/surfaces/surf-1/approve", body,
+		map[string]string{"Authorization": "Bearer tok-empty-roles"})
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("want 403, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// 13. role normalization: "ADMIN" (uppercase) matches RoleAdmin check.
+func TestRBAC_RoleNormalization_UppercaseRoleMatches(t *testing.T) {
+	srv := approvalSrvRBAC(t)
+	body := marshalJSON(t, map[string]any{"submitted_by": "user:sub"})
+	rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/controlplane/surfaces/surf-1/approve", body,
+		map[string]string{"Authorization": "Bearer tok-upper-admin"})
+	if rec.Code != http.StatusOK {
+		t.Errorf("want 200 (uppercase ADMIN normalized), got %d: %s", rec.Code, rec.Body.String())
 	}
 }
