@@ -3,12 +3,13 @@ package main
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -17,6 +18,8 @@ import (
 
 	"github.com/accept-io/midas/internal/auth"
 	"github.com/accept-io/midas/internal/bootstrap"
+	"github.com/accept-io/midas/internal/config"
+	"github.com/accept-io/midas/internal/identity"
 	"github.com/accept-io/midas/internal/controlplane/apply"
 	"github.com/accept-io/midas/internal/decision"
 	"github.com/accept-io/midas/internal/httpapi"
@@ -28,29 +31,50 @@ import (
 )
 
 func main() {
-	logLevel := slog.LevelInfo
-	if os.Getenv("MIDAS_LOG_LEVEL") == "debug" {
-		logLevel = slog.LevelDebug
+	// Handle `midas config <subcommand>` before any other initialisation.
+	if len(os.Args) >= 3 && os.Args[1] == "config" {
+		var err error
+		switch os.Args[2] {
+		case "init":
+			err = runConfigInit(os.Args[3:])
+		case "validate":
+			err = runConfigValidate(os.Args[3:])
+		default:
+			fmt.Fprintf(os.Stderr, "unknown config subcommand %q\n", os.Args[2])
+			fmt.Fprintln(os.Stderr, "Usage: midas config init | midas config validate")
+			os.Exit(1)
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
 	}
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: logLevel,
-	}))
-	slog.SetDefault(logger)
+	// --- Config: load, validate, and log summary ---
 
-	// --- Config: load and validate before any connections ---
-
-	appCfg, err := bootstrap.LoadAppConfig()
+	cfgResult, err := config.Load(config.LoadOptions{})
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := appCfg.Validate(); err != nil {
+	cfg := cfgResult.Config
+
+	// Bootstrap the logger early so all subsequent messages are structured.
+	logger := buildLogger(cfg.Observability)
+	slog.SetDefault(logger)
+
+	if err := config.ValidateStructural(cfg); err != nil {
+		log.Fatal(err)
+	}
+	if err := config.ValidateSemantic(cfg); err != nil {
 		log.Fatal(err)
 	}
 
+	config.LogStartupSummary(cfgResult)
+
 	// --- Store: build repositories ---
 
-	repos, repoStore, outboxRepo, backend, cleanup, readyFn, err := buildRepositories(context.Background())
+	repos, repoStore, outboxRepo, cleanup, readyFn, err := buildRepositories(context.Background(), cfg.Store)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -59,12 +83,12 @@ func main() {
 	}
 
 	slog.Info("midas_starting",
-		"store_backend", backend,
-		"dispatcher_enabled", appCfg.Dispatcher.Enabled,
-		"dispatcher_publisher", string(appCfg.Dispatcher.Publisher),
+		"store_backend", cfg.Store.Backend,
+		"dispatcher_enabled", cfg.Dispatcher.Enabled,
+		"dispatcher_publisher", cfg.Dispatcher.Publisher,
 	)
 
-	if backend == "memory" {
+	if cfg.Store.Backend == "memory" {
 		if err := bootstrap.SeedDemo(context.Background(), repos); err != nil {
 			log.Fatal(err)
 		}
@@ -72,13 +96,8 @@ func main() {
 
 	// --- Domain: orchestrator and services ---
 
-	// Policy evaluator — assign to a variable so we can inspect its mode before
-	// passing it to the orchestrator. Future: swap NoOpPolicyEvaluator for a real
-	// OPA evaluator by changing this single assignment.
 	var policyEval policy.PolicyEvaluator = policy.NoOpPolicyEvaluator{}
 
-	// Detect policy mode via the optional PolicyModer interface and warn operators
-	// when running in noop mode (all policy checks pass without real enforcement).
 	policyMode := "unknown"
 	policyEvaluatorName := "unknown"
 	if pm, ok := policyEval.(interface{ PolicyMode() string }); ok {
@@ -95,11 +114,7 @@ func main() {
 		)
 	}
 
-	orchestrator, err := decision.NewOrchestrator(
-		repoStore,
-		policyEval,
-		nil,
-	)
+	orchestrator, err := decision.NewOrchestrator(repoStore, policyEval, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -119,50 +134,52 @@ func main() {
 		controlAuditSvc = httpapi.NewControlAuditReadService(repos.ControlAudit)
 	}
 
-	authenticator, err := auth.LoadStaticTokensFromEnv()
+	// --- Auth: build authenticator from config ---
+
+	authenticator, err := buildAuthenticator(cfg.Auth)
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := validateAuthConfig(backend, authenticator); err != nil {
-		log.Fatal(err)
-	}
-	if authenticator != nil {
-		slog.Info("midas_auth_enabled", "provider", "static")
+
+	if cfg.Auth.Mode == config.AuthModeRequired {
+		slog.Info("midas_auth_enabled",
+			"mode", string(cfg.Auth.Mode),
+			"provider", "static",
+			"token_count", len(cfg.Auth.Tokens),
+		)
 	} else {
 		slog.Warn("midas_auth_unsafe",
+			"mode", string(cfg.Auth.Mode),
 			"message", "MIDAS is running without authentication",
 			"safety", "UNSAFE FOR PRODUCTION",
-			"action", "Set MIDAS_AUTH_TOKENS to enable authentication",
+			"action", "Set auth.mode=required in midas.yaml and configure auth.tokens",
 		)
 	}
+
+	// --- HTTP server ---
 
 	srv := httpapi.NewServerFull(orchestrator, applyService, nil, introspectionSvc, controlAuditSvc, nil)
 	srv.WithPolicyMeta(policyMode, policyEvaluatorName)
 	srv.WithHealthCheck(readyFn)
+	srv.WithAuthMode(cfg.Auth.Mode)
 	if authenticator != nil {
 		srv.WithAuthenticator(authenticator)
 	}
 
-	// --- Dispatcher: build ---
-	// BuildDispatcher returns a wiring with nil Dispatcher only when
-	// cfg.Dispatcher.Enabled is false. When Enabled is true and any required
-	// dependency is missing (no publisher, no durable outbox repo), it returns
-	// an error and startup is aborted.
+	// --- Dispatcher ---
 
-	wiring, err := bootstrap.BuildDispatcher(appCfg, outboxRepo)
+	wiring, err := bootstrap.BuildDispatcher(toBootstrapAppConfig(cfg), outboxRepo)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	// --- Lifecycle: context + signal handling ---
+	// --- Lifecycle ---
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
-	// --- Start dispatcher (if configured) ---
 
 	var dispatcherWg sync.WaitGroup
 	if wiring.Dispatcher != nil {
@@ -172,31 +189,27 @@ func main() {
 			wiring.Dispatcher.Run(ctx)
 		}()
 		slog.Info("outbox_dispatcher_running",
-			"publisher", string(appCfg.Dispatcher.Publisher),
-			"batch_size", appCfg.Dispatcher.BatchSize,
-			"poll_interval", appCfg.Dispatcher.PollInterval.String(),
+			"publisher", cfg.Dispatcher.Publisher,
+			"batch_size", cfg.Dispatcher.BatchSize,
+			"poll_interval", cfg.Dispatcher.PollInterval.D().String(),
 		)
 	}
 
-	// --- Start HTTP server ---
-
 	httpSrv := &http.Server{
-		Addr:    ":8080",
+		Addr:    fmt.Sprintf(":%d", cfg.Server.Port),
 		Handler: srv,
 	}
 
 	serverErr := make(chan error, 1)
 	go func() {
 		slog.Info("midas_listening",
-			"addr", ":8080",
-			"store_backend", backend,
+			"addr", httpSrv.Addr,
+			"store_backend", cfg.Store.Backend,
 		)
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			serverErr <- err
 		}
 	}()
-
-	// --- Wait for shutdown signal or server error ---
 
 	select {
 	case sig := <-sigCh:
@@ -205,88 +218,110 @@ func main() {
 		slog.Error("midas_server_error", "error", err)
 	}
 
-	// --- Graceful shutdown (deterministic order) ---
-
-	// 1. Stop accepting new HTTP requests; drain in-flight requests.
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout.D())
 	defer shutdownCancel()
 	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("http_shutdown_error", "error", err)
 	}
 	slog.Info("http_server_stopped")
 
-	// 2. Cancel the dispatcher context so its Run loop exits after the
-	//    current batch completes. Safe to call when dispatcher is nil.
 	cancel()
-
-	// 3. Wait for the dispatcher goroutine to exit cleanly. No-op when
-	//    the dispatcher was not started (wiring.Dispatcher == nil).
 	dispatcherWg.Wait()
 	if wiring.Dispatcher != nil {
 		slog.Info("outbox_dispatcher_drained")
 	}
-
-	// 4. Close the Kafka writer: flush any pending writes, release connections.
-	//    wiring.Close() is safe when KafkaPublisher is nil.
 	wiring.Close()
 	slog.Info("midas_stopped")
 }
 
-// buildRepositories constructs the store backend selected by MIDAS_STORE.
-// Returns:
-//   - repos: Repositories for direct use (seeding, etc.)
-//   - repoStore: RepositoryStore for the orchestrator (transactional)
-//   - outboxRepo: outbox.Repository for the dispatcher (nil for memory backend)
-//   - backend: human-readable label ("postgres" | "memory")
-//   - cleanup: optional func to release resources (e.g. close DB connection)
-//   - readyFn: DB ping function for /readyz (nil for memory backend = always ready)
-//   - err: construction error, if any
-func buildRepositories(ctx context.Context) (
+// buildLogger constructs a slog.Logger from observability config.
+func buildLogger(obs config.ObservabilityConfig) *slog.Logger {
+	var level slog.Level
+	switch strings.ToLower(obs.LogLevel) {
+	case "debug":
+		level = slog.LevelDebug
+	case "warn":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	default:
+		level = slog.LevelInfo
+	}
+
+	opts := &slog.HandlerOptions{Level: level}
+	if strings.ToLower(obs.LogFormat) == "text" {
+		return slog.New(slog.NewTextHandler(os.Stdout, opts))
+	}
+	return slog.New(slog.NewJSONHandler(os.Stdout, opts))
+}
+
+// buildAuthenticator constructs a StaticTokenAuthenticator from config.
+// Returns nil when no tokens are configured (open/dev mode).
+func buildAuthenticator(authCfg config.AuthConfig) (auth.Authenticator, error) {
+	if len(authCfg.Tokens) == 0 {
+		return nil, nil
+	}
+
+	tokenMap := make(map[string]*identity.Principal, len(authCfg.Tokens))
+	for _, t := range authCfg.Tokens {
+		var roles []string
+		for _, r := range strings.Split(t.Roles, ",") {
+			r = strings.TrimSpace(r)
+			if r != "" {
+				roles = append(roles, r)
+			}
+		}
+		tokenMap[t.Token] = &identity.Principal{
+			ID:       t.Principal,
+			Subject:  t.Principal,
+			Roles:    roles,
+			Provider: identity.ProviderStatic,
+		}
+	}
+
+	return auth.NewStaticTokenAuthenticator(tokenMap), nil
+}
+
+// buildRepositories constructs the store backend from StoreConfig.
+func buildRepositories(ctx context.Context, storeCfg config.StoreConfig) (
 	*store.Repositories,
 	decision.RepositoryStore,
 	outbox.Repository,
-	string,
 	func(),
 	func(context.Context) error,
 	error,
 ) {
-	backend := os.Getenv("MIDAS_STORE")
-	if backend == "" {
-		backend = "memory"
-	}
-
-	switch backend {
+	switch storeCfg.Backend {
 	case "postgres":
-		databaseURL := os.Getenv("DATABASE_URL")
-		if databaseURL == "" {
-			return nil, nil, nil, "", nil, nil, logError("MIDAS_STORE=postgres but DATABASE_URL is not set")
+		if storeCfg.DSN == "" {
+			return nil, nil, nil, nil, nil, fmt.Errorf("store.backend=postgres but store.dsn is empty")
 		}
 
-		db, err := sql.Open("postgres", databaseURL)
+		db, err := sql.Open("postgres", storeCfg.DSN)
 		if err != nil {
-			return nil, nil, nil, "", nil, nil, err
+			return nil, nil, nil, nil, nil, err
 		}
 
 		if err := db.PingContext(ctx); err != nil {
 			_ = db.Close()
-			return nil, nil, nil, "", nil, nil, err
+			return nil, nil, nil, nil, nil, err
 		}
 
 		if err := postgres.EnsureSchema(db); err != nil {
 			_ = db.Close()
-			return nil, nil, nil, "", nil, nil, err
+			return nil, nil, nil, nil, nil, err
 		}
 
 		pgStore, err := postgres.NewStore(db, nil)
 		if err != nil {
 			_ = db.Close()
-			return nil, nil, nil, "", nil, nil, err
+			return nil, nil, nil, nil, nil, err
 		}
 
 		repos, err := pgStore.Repositories()
 		if err != nil {
 			_ = db.Close()
-			return nil, nil, nil, "", nil, nil, err
+			return nil, nil, nil, nil, nil, err
 		}
 
 		cleanup := func() {
@@ -294,58 +329,43 @@ func buildRepositories(ctx context.Context) (
 				slog.Error("database_close_failed", "error", err)
 			}
 		}
-
 		readyFn := func(ctx context.Context) error {
 			ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 			defer cancel()
 			return db.PingContext(ctx)
 		}
 
-		return repos, pgStore, repos.Outbox, backend, cleanup, readyFn, nil
+		return repos, pgStore, repos.Outbox, cleanup, readyFn, nil
 
 	case "memory":
 		memStore := memory.NewStore()
 		repos, err := memStore.Repositories()
 		if err != nil {
-			return nil, nil, nil, "", nil, nil, err
+			return nil, nil, nil, nil, nil, err
 		}
-		// The in-memory store does not provide a durable outbox. outboxRepo is
-		// nil. If DISPATCHER_ENABLED=true, BuildDispatcher will return an error
-		// at startup, which is the correct behaviour: the dispatcher requires a
-		// durable outbox repository and cannot run against an in-memory store.
-		return repos, memStore, nil, backend, nil, nil, nil
+		return repos, memStore, nil, nil, nil, nil
 
 	default:
-		return nil, nil, nil, "", nil, nil, logError("unsupported MIDAS_STORE: " + backend)
+		return nil, nil, nil, nil, nil, fmt.Errorf("unsupported store.backend: %q", storeCfg.Backend)
 	}
 }
 
-// validateAuthConfig enforces that Postgres mode cannot run unauthenticated
-// unless the operator has explicitly opted out via MIDAS_AUTH_DISABLED=true.
-// Memory mode has no enforcement — it is always considered a local/dev context.
-func validateAuthConfig(backend string, authenticator auth.Authenticator) error {
-	if backend != "postgres" {
-		return nil
+// toBootstrapAppConfig converts a config.Config to the bootstrap.AppConfig
+// type that BuildDispatcher expects, bridging the two type systems.
+func toBootstrapAppConfig(cfg config.Config) bootstrap.AppConfig {
+	return bootstrap.AppConfig{
+		Dispatcher: bootstrap.DispatcherConfig{
+			Enabled:      cfg.Dispatcher.Enabled,
+			Publisher:    bootstrap.PublisherType(cfg.Dispatcher.Publisher),
+			BatchSize:    cfg.Dispatcher.BatchSize,
+			PollInterval: cfg.Dispatcher.PollInterval.D(),
+			MaxBackoff:   cfg.Dispatcher.MaxBackoff.D(),
+		},
+		Kafka: bootstrap.KafkaConfig{
+			Brokers:      cfg.Kafka.Brokers,
+			ClientID:     cfg.Kafka.ClientID,
+			RequiredAcks: cfg.Kafka.RequiredAcks,
+			WriteTimeout: cfg.Kafka.WriteTimeout.D(),
+		},
 	}
-	if authenticator != nil {
-		return nil
-	}
-	if v := os.Getenv("MIDAS_AUTH_DISABLED"); v != "" {
-		disabled, err := strconv.ParseBool(v)
-		if err == nil && disabled {
-			return nil
-		}
-	}
-	return simpleError(
-		"Postgres mode requires authentication. " +
-			"Set MIDAS_AUTH_TOKENS, or explicitly disable auth with MIDAS_AUTH_DISABLED=true for local/dev use only.",
-	)
-}
-
-type simpleError string
-
-func (e simpleError) Error() string { return string(e) }
-
-func logError(msg string) error {
-	return simpleError(msg)
 }

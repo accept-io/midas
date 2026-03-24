@@ -8,13 +8,28 @@ services:
       POSTGRES_PASSWORD: midas
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "midas"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
 
   midas:
     build: .
     container_name: midas-app
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     environment:
+      MIDAS_STORE: postgres
       DATABASE_URL: postgres://midas:midas@postgres:5432/midas?sslmode=disable
+      # MIDAS_AUTH_DISABLED=true bypasses auth enforcement for local development only.
+      # Remove this and set MIDAS_AUTH_TOKENS in production deployments.
+      MIDAS_AUTH_DISABLED: "true"
     ports:
       - "8080:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/readyz"]
+      interval: 10s
+      timeout: 2s
+      retries: 3

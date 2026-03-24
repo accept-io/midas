@@ -8,6 +8,7 @@ import (
 
 	"github.com/accept-io/midas/internal/auth"
 	"github.com/accept-io/midas/internal/authority"
+	"github.com/accept-io/midas/internal/config"
 	cpTypes "github.com/accept-io/midas/internal/controlplane/types"
 	"github.com/accept-io/midas/internal/decision"
 	"github.com/accept-io/midas/internal/envelope"
@@ -57,27 +58,30 @@ func TestActorFromContext_NoPrincipal_ReturnsFallback(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// requireAuth — no authenticator configured (no-op)
+// requireAuth — no authenticator configured (fail closed)
 // ---------------------------------------------------------------------------
 
-func TestRequireAuth_NoAuthenticator_PassesThrough(t *testing.T) {
-	srv := newTestServer()
+// TestRequireAuth_NoAuthenticator_FailsClosed verifies that requireAuth returns
+// 401 when no authenticator is configured and the auth mode is not open.
+// A server that has not been given an authenticator must not silently allow
+// access — callers must explicitly use AuthModeOpen for unauthenticated access.
+func TestRequireAuth_NoAuthenticator_FailsClosed(t *testing.T) {
+	srv := newTestServer() // no WithAuthMode, no WithAuthenticator
 
 	called := false
 	handler := srv.requireAuth(func(w http.ResponseWriter, r *http.Request) {
 		called = true
-		w.WriteHeader(http.StatusOK)
 	})
 
 	r := httptest.NewRequest(http.MethodGet, "/test", nil)
 	w := httptest.NewRecorder()
 	handler(w, r)
 
-	if !called {
-		t.Error("inner handler should be called when no authenticator is set")
+	if called {
+		t.Error("inner handler must not be called when no authenticator is configured")
 	}
-	if w.Code != http.StatusOK {
-		t.Errorf("want 200, got %d", w.Code)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("want 401 (fail closed), got %d", w.Code)
 	}
 }
 
@@ -488,5 +492,279 @@ func TestRBAC_RoleNormalization_UppercaseRoleMatches(t *testing.T) {
 		map[string]string{"Authorization": "Bearer tok-upper-admin"})
 	if rec.Code != http.StatusOK {
 		t.Errorf("want 200 (uppercase ADMIN normalized), got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// /v1/evaluate — auth enforcement regression tests
+//
+// These tests guard against the class of bug where requireAuth is accidentally
+// omitted from the evaluate route, allowing unauthenticated access to the data
+// plane when an authenticator is configured.
+// ---------------------------------------------------------------------------
+
+// TestHandlerAuth_Evaluate_NoToken_Returns401 verifies that POST /v1/evaluate
+// rejects requests with no Authorization header when auth is configured.
+func TestHandlerAuth_Evaluate_NoToken_Returns401(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithAuthenticator(rbacAuthenticator())
+
+	body := marshalJSON(t, map[string]any{
+		"surface_id": "surf-1",
+		"agent_id":   "agent-1",
+		"confidence": 0.9,
+	})
+	rec := performRequest(t, srv, http.MethodPost, "/v1/evaluate", body)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("want 401 (no token), got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandlerAuth_Evaluate_InvalidToken_Returns401 verifies that POST /v1/evaluate
+// rejects requests carrying an unrecognised bearer token.
+func TestHandlerAuth_Evaluate_InvalidToken_Returns401(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithAuthenticator(rbacAuthenticator())
+
+	body := marshalJSON(t, map[string]any{
+		"surface_id": "surf-1",
+		"agent_id":   "agent-1",
+		"confidence": 0.9,
+	})
+	rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/evaluate", body,
+		map[string]string{"Authorization": "Bearer not-a-real-token"})
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("want 401 (bad token), got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandlerAuth_Evaluate_OperatorToken_ReachesHandler verifies that a valid
+// operator-role token is accepted and the request reaches the evaluate handler.
+func TestHandlerAuth_Evaluate_OperatorToken_ReachesHandler(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithAuthenticator(rbacAuthenticator())
+
+	body := marshalJSON(t, map[string]any{
+		"surface_id": "surf-1",
+		"agent_id":   "agent-1",
+		"confidence": 0.9,
+	})
+	rec := performRequestWithHeaders(t, srv, http.MethodPost, "/v1/evaluate", body,
+		map[string]string{
+			"Authorization": "Bearer tok-operator",
+			"Content-Type":  "application/json",
+		})
+
+	// The mock orchestrator returns a zero-value result; any non-401/403 response
+	// means the request passed auth and reached the handler.
+	if rec.Code == http.StatusUnauthorized || rec.Code == http.StatusForbidden {
+		t.Errorf("want request to reach handler (operator role), got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandlerAuth_Evaluate_OpenMode_PassesThrough verifies that when auth mode
+// is explicitly set to open (the default for memory/dev deployments), the
+// evaluate endpoint is accessible without a token.
+func TestHandlerAuth_Evaluate_OpenMode_PassesThrough(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithAuthMode(config.AuthModeOpen) // explicit open mode — simulates memory/dev config
+
+	body := marshalJSON(t, map[string]any{
+		"surface_id": "surf-1",
+		"agent_id":   "agent-1",
+		"confidence": 0.9,
+	})
+	rec := performRequest(t, srv, http.MethodPost, "/v1/evaluate", body)
+
+	if rec.Code == http.StatusUnauthorized || rec.Code == http.StatusForbidden {
+		t.Errorf("want request to pass through without auth (no authenticator), got %d", rec.Code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Fix 3: requireRole must fail closed — open mode does not grant role access
+// ---------------------------------------------------------------------------
+
+// withPrincipal returns a copy of r with the given principal injected into the
+// request context, simulating what requireAuth does on a successful auth check.
+func withPrincipal(r *http.Request, p *identity.Principal) *http.Request {
+	ctx := context.WithValue(r.Context(), principalContextKey, p)
+	return r.WithContext(ctx)
+}
+
+// TestRequireAuth_OpenMode_AllowsUnauthenticated verifies that requireAuth in
+// explicit open mode passes through without requiring a token.
+func TestRequireAuth_OpenMode_AllowsUnauthenticated(t *testing.T) {
+	srv := newTestServer().WithAuthMode(config.AuthModeOpen)
+
+	called := false
+	handler := srv.requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	r := httptest.NewRequest(http.MethodGet, "/test", nil)
+	// No Authorization header.
+	w := httptest.NewRecorder()
+	handler(w, r)
+
+	if !called {
+		t.Error("inner handler should be called in open mode without a token")
+	}
+	if w.Code != http.StatusOK {
+		t.Errorf("want 200, got %d", w.Code)
+	}
+}
+
+// TestRequireRole_OpenMode_RejectsWithoutPrincipal is the core Fix 3 test:
+// even in explicit open mode, requireRole must return 401 when no principal
+// is in the context. Open mode must not grant role-based access.
+func TestRequireRole_OpenMode_RejectsWithoutPrincipal(t *testing.T) {
+	srv := newTestServer().WithAuthMode(config.AuthModeOpen)
+
+	called := false
+	handler := srv.requireRole(identity.RoleAdmin)(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	r := httptest.NewRequest(http.MethodPost, "/test", nil)
+	// No principal in context — open mode, requireAuth never ran.
+	w := httptest.NewRecorder()
+	handler(w, r)
+
+	if called {
+		t.Error("inner handler must not be called: open mode must fail closed when no principal")
+	}
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("want 401 (no principal in open mode), got %d", w.Code)
+	}
+}
+
+// TestRequireRole_OpenMode_AllowsWithPrincipalAndRole verifies that requireRole
+// succeeds in open mode when a principal with the required role is already in
+// context (e.g. from a test helper or a future auth plugin).
+func TestRequireRole_OpenMode_AllowsWithPrincipalAndRole(t *testing.T) {
+	srv := newTestServer().WithAuthMode(config.AuthModeOpen)
+
+	called := false
+	handler := srv.requireRole(identity.RoleAdmin)(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	r := httptest.NewRequest(http.MethodPost, "/test", nil)
+	r = withPrincipal(r, &identity.Principal{
+		ID:    "user:admin",
+		Roles: []string{identity.RoleAdmin},
+	})
+	w := httptest.NewRecorder()
+	handler(w, r)
+
+	if !called {
+		t.Error("inner handler should be called when principal has required role")
+	}
+	if w.Code != http.StatusOK {
+		t.Errorf("want 200, got %d", w.Code)
+	}
+}
+
+// TestRequireAuth_RequiredMode_NoAuthenticator_FailsClosed verifies that a
+// server configured with AuthModeRequired but no authenticator returns 401
+// rather than silently allowing access.
+func TestRequireAuth_RequiredMode_NoAuthenticator_FailsClosed(t *testing.T) {
+	srv := newTestServer().WithAuthMode(config.AuthModeRequired) // no WithAuthenticator
+
+	called := false
+	handler := srv.requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+	})
+
+	r := httptest.NewRequest(http.MethodGet, "/test", nil)
+	w := httptest.NewRecorder()
+	handler(w, r)
+
+	if called {
+		t.Error("inner handler must not be called: required mode with no authenticator must fail closed")
+	}
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("want 401, got %d", w.Code)
+	}
+}
+
+// TestRequireAuth_RequiredMode_RejectsUnauthenticated verifies that requireAuth
+// in AuthModeRequired rejects requests with no Authorization header.
+func TestRequireAuth_RequiredMode_RejectsUnauthenticated(t *testing.T) {
+	srv := newTestServer().
+		WithAuthMode(config.AuthModeRequired).
+		WithAuthenticator(aliceAuthenticator())
+
+	called := false
+	handler := srv.requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+	})
+
+	r := httptest.NewRequest(http.MethodGet, "/test", nil)
+	w := httptest.NewRecorder()
+	handler(w, r)
+
+	if called {
+		t.Error("inner handler must not be called without a token in required mode")
+	}
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("want 401, got %d", w.Code)
+	}
+}
+
+// TestRequireRole_RequiredMode_RejectsNoPrincipal verifies that requireRole
+// in AuthModeRequired returns 401 when no principal is in context.
+func TestRequireRole_RequiredMode_RejectsNoPrincipal(t *testing.T) {
+	srv := newTestServer().
+		WithAuthMode(config.AuthModeRequired).
+		WithAuthenticator(aliceAuthenticator())
+
+	called := false
+	handler := srv.requireRole(identity.RoleAdmin)(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+	})
+
+	r := httptest.NewRequest(http.MethodPost, "/test", nil)
+	// No principal in context.
+	w := httptest.NewRecorder()
+	handler(w, r)
+
+	if called {
+		t.Error("inner handler must not be called when no principal in required mode")
+	}
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("want 401, got %d", w.Code)
+	}
+}
+
+// TestRequireRole_WrongRole_Returns403 verifies that a principal present in
+// context but lacking the required role receives 403, not 401.
+func TestRequireRole_WrongRole_Returns403(t *testing.T) {
+	srv := newTestServer().WithAuthMode(config.AuthModeRequired).WithAuthenticator(aliceAuthenticator())
+
+	called := false
+	handler := srv.requireRole(identity.RoleAdmin)(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+	})
+
+	r := httptest.NewRequest(http.MethodPost, "/test", nil)
+	r = withPrincipal(r, &identity.Principal{
+		ID:    "user:operator",
+		Roles: []string{identity.RoleOperator},
+	})
+	w := httptest.NewRecorder()
+	handler(w, r)
+
+	if called {
+		t.Error("inner handler must not be called with wrong role")
+	}
+	if w.Code != http.StatusForbidden {
+		t.Errorf("want 403, got %d", w.Code)
 	}
 }
