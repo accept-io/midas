@@ -896,8 +896,10 @@ func NewServerWithControlPlane(orchestrator orchestrator, controlPlane controlPl
 func (s *Server) routes() {
 	s.mux.HandleFunc("/healthz", s.handleHealth)
 	s.mux.HandleFunc("/readyz", s.handleReady)
-	// Evaluation — unauthenticated; agents call this on behalf of the governed flow.
-	s.mux.HandleFunc("/v1/evaluate", s.handleEvaluate)
+	// Evaluation — operator role required when auth is configured.
+	// requireAuth and requireRole are no-ops when s.authenticator is nil,
+	// preserving backward compatibility for memory-mode / unauthenticated deployments.
+	s.mux.HandleFunc("/v1/evaluate", s.requireAuth(s.requireRole(identity.RoleOperator, identity.RoleAdmin)(s.handleEvaluate)))
 
 	// Escalation review — ADMIN or REVIEWER.
 	s.mux.HandleFunc("/v1/reviews", s.requireAuth(s.requireRole(identity.RoleAdmin, identity.RoleReviewer)(s.handleCreateReview)))
