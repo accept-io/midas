@@ -1,87 +1,74 @@
 package main
 
 import (
-	"net/http"
-	"strings"
 	"testing"
 
-	"github.com/accept-io/midas/internal/auth"
-	"github.com/accept-io/midas/internal/identity"
+	"github.com/accept-io/midas/internal/config"
 )
 
-// stubAuthenticator is a minimal auth.Authenticator for testing.
-type stubAuthenticator struct{}
-
-func (s *stubAuthenticator) Authenticate(_ *http.Request) (*identity.Principal, error) {
-	return nil, nil
+// TestBuildAuthenticator_NilWhenNoTokens verifies that buildAuthenticator
+// returns nil (no-op auth) when the token list is empty, regardless of mode.
+func TestBuildAuthenticator_NilWhenNoTokens(t *testing.T) {
+	a, err := buildAuthenticator(config.AuthConfig{
+		Mode:   config.AuthModeOpen,
+		Tokens: nil,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if a != nil {
+		t.Error("want nil authenticator for empty token list")
+	}
 }
 
-func TestValidateAuthConfig(t *testing.T) {
-	tests := []struct {
-		name        string
-		backend     string
-		auth        auth.Authenticator
-		envDisabled string
-		wantErr     bool
-	}{
-		{
-			name:    "postgres with auth configured — OK",
-			backend: "postgres",
-			auth:    &stubAuthenticator{},
-			wantErr: false,
+// TestBuildAuthenticator_BuildsFromTokenEntries verifies that a non-empty token
+// list produces a working StaticTokenAuthenticator.
+func TestBuildAuthenticator_BuildsFromTokenEntries(t *testing.T) {
+	a, err := buildAuthenticator(config.AuthConfig{
+		Mode: config.AuthModeRequired,
+		Tokens: []config.TokenEntry{
+			{Token: "tok-admin", Principal: "user:admin", Roles: "admin"},
+			{Token: "tok-op", Principal: "svc:worker", Roles: "operator"},
 		},
-		{
-			name:        "postgres without auth, MIDAS_AUTH_DISABLED=true — OK",
-			backend:     "postgres",
-			auth:        nil,
-			envDisabled: "true",
-			wantErr:     false,
-		},
-		{
-			name:    "postgres without auth, no opt-out — error",
-			backend: "postgres",
-			auth:    nil,
-			wantErr: true,
-		},
-		{
-			name:        "postgres without auth, MIDAS_AUTH_DISABLED=false — error",
-			backend:     "postgres",
-			auth:        nil,
-			envDisabled: "false",
-			wantErr:     true,
-		},
-		{
-			name:    "memory without auth — OK (no enforcement)",
-			backend: "memory",
-			auth:    nil,
-			wantErr: false,
-		},
-		{
-			name:    "memory with auth — OK",
-			backend: "memory",
-			auth:    &stubAuthenticator{},
-			wantErr: false,
-		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
+	if a == nil {
+		t.Fatal("want non-nil authenticator for non-empty token list")
+	}
+}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("MIDAS_AUTH_DISABLED", tc.envDisabled)
+// TestBuildAuthenticator_MultipleRoles verifies that comma-separated roles are
+// split correctly.
+func TestBuildAuthenticator_MultipleRoles(t *testing.T) {
+	a, err := buildAuthenticator(config.AuthConfig{
+		Mode: config.AuthModeRequired,
+		Tokens: []config.TokenEntry{
+			{Token: "tok", Principal: "user:alice", Roles: "admin,operator,reviewer"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if a == nil {
+		t.Fatal("want non-nil authenticator")
+	}
+}
 
-			err := validateAuthConfig(tc.backend, tc.auth)
-			if (err != nil) != tc.wantErr {
-				t.Errorf("validateAuthConfig(%q, auth=%v): got err=%v, wantErr=%v",
-					tc.backend, tc.auth != nil, err, tc.wantErr)
-			}
-			if tc.wantErr && err != nil {
-				msg := err.Error()
-				if !strings.Contains(msg, "Postgres mode requires authentication.") {
-					t.Errorf("error missing expected guidance: %s", msg)
-				}
-				if !strings.Contains(msg, "MIDAS_AUTH_DISABLED=true") {
-					t.Errorf("error missing MIDAS_AUTH_DISABLED hint: %s", msg)
-				}
-			}
-		})
+// TestBuildAuthenticator_NoRoles verifies that an entry with an empty Roles
+// field is accepted (the principal just has no roles).
+func TestBuildAuthenticator_NoRoles(t *testing.T) {
+	a, err := buildAuthenticator(config.AuthConfig{
+		Mode: config.AuthModeRequired,
+		Tokens: []config.TokenEntry{
+			{Token: "tok", Principal: "svc:monitor"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if a == nil {
+		t.Fatal("want non-nil authenticator")
 	}
 }

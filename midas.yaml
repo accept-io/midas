@@ -1,0 +1,98 @@
+# MIDAS Runtime Configuration
+# Schema version: 1
+#
+# This file is the canonical runtime contract for MIDAS.
+# See docs/configuration.md for full field reference.
+#
+# Precedence (highest to lowest):
+#   1. Environment variable overrides  (MIDAS_*)
+#   2. This file
+#   3. Built-in defaults
+#
+# Placeholder expansion:
+#   Any string value may contain ${ENV_VAR} references.
+#   MIDAS will expand them at startup. An unresolved reference is a fatal error.
+#
+# Profiles:
+#   dev        — permissive; any store backend; any auth mode; suitable for local use
+#   production — enforces: store.backend=postgres + auth.mode=required
+
+version: 1
+profile: dev
+
+# ---------------------------------------------------------------------------
+# HTTP server
+# ---------------------------------------------------------------------------
+server:
+  port: 8080
+  shutdown_timeout: 15s
+
+# ---------------------------------------------------------------------------
+# Persistence backend
+# ---------------------------------------------------------------------------
+store:
+  # backend: "memory" (no dependencies) or "postgres" (production)
+  backend: memory
+
+  # dsn: Postgres connection string. Required when backend=postgres.
+  # Use placeholder expansion to avoid embedding secrets:
+  #   dsn: "${DATABASE_URL}"
+  dsn: ""
+
+# ---------------------------------------------------------------------------
+# Authentication
+# ---------------------------------------------------------------------------
+auth:
+  # mode: "open" (no auth, dev only) or "required" (bearer token enforced)
+  mode: open
+
+  # tokens: static bearer token entries.
+  # Required when mode=required. Token values support ${VAR} expansion.
+  #
+  # Example:
+  #   tokens:
+  #     - token: "${MIDAS_ADMIN_TOKEN}"
+  #       principal: "user:admin"
+  #       roles: "admin"
+  #     - token: "${MIDAS_OPERATOR_TOKEN}"
+  #       principal: "svc:payments-engine"
+  #       roles: "operator"
+  tokens: []
+
+# ---------------------------------------------------------------------------
+# Observability
+# ---------------------------------------------------------------------------
+observability:
+  # log_level: debug | info | warn | error
+  log_level: info
+  # log_format: json | text
+  log_format: json
+
+# ---------------------------------------------------------------------------
+# Control plane
+# ---------------------------------------------------------------------------
+control_plane:
+  enabled: true
+
+# ---------------------------------------------------------------------------
+# Outbox dispatcher (optional)
+# ---------------------------------------------------------------------------
+dispatcher:
+  # enabled: set to true to start the outbox dispatcher goroutine.
+  # Requires a durable store (postgres) and a configured publisher.
+  enabled: false
+  # publisher: "none" | "kafka"
+  publisher: none
+  batch_size: 100
+  poll_interval: 2s
+  max_backoff: 30s
+
+# ---------------------------------------------------------------------------
+# Kafka publisher (only used when dispatcher.publisher=kafka)
+# ---------------------------------------------------------------------------
+kafka:
+  # brokers: list of seed broker addresses in "host:port" form.
+  brokers: []
+  client_id: midas
+  required_acks: -1
+  write_timeout: 0s

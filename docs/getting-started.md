@@ -30,7 +30,9 @@ MIDAS starts on port `8080`. Demo surfaces, profiles, agents, and grants are pre
 docker compose up
 ```
 
-This starts a Postgres 16 container and MIDAS together. The schema is applied from `internal/store/postgres/schema.sql` on first start. No demo data is seeded in Postgres mode; you must apply resources via the control plane.
+This starts a Postgres 16 container and MIDAS together. The schema is applied automatically on startup. No demo data is seeded in Postgres mode; you must apply resources via the control plane.
+
+The compose file sets `MIDAS_AUTH_DISABLED=true` for local convenience. Remove this and set `MIDAS_AUTH_TOKENS` before exposing the service.
 
 Connection string used: `postgres://midas:midas@postgres:5432/midas?sslmode=disable`
 
@@ -38,17 +40,22 @@ Connection string used: `postgres://midas:midas@postgres:5432/midas?sslmode=disa
 
 ## Option 3: External PostgreSQL
 
+MIDAS requires authentication in Postgres mode. Set `MIDAS_AUTH_TOKENS` or explicitly opt out for local development with `MIDAS_AUTH_DISABLED=true`.
+
 ```bash
 export MIDAS_STORE=postgres
 export DATABASE_URL="postgresql://user:pass@host:5432/midas?sslmode=disable"
+
+# For production: set real tokens (format: token|principal-id|role1,role2)
+export MIDAS_AUTH_TOKENS="my-secret-token|user:admin|admin"
+
+# For local development only:
+# export MIDAS_AUTH_DISABLED=true
+
 go run ./cmd/midas
 ```
 
-Apply the schema before starting:
-
-```bash
-psql "$DATABASE_URL" -f internal/store/postgres/schema.sql
-```
+The schema is applied automatically on startup. There is no separate migration step.
 
 ---
 

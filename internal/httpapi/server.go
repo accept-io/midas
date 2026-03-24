@@ -15,6 +15,7 @@ import (
 	"github.com/accept-io/midas/internal/agent"
 	"github.com/accept-io/midas/internal/auth"
 	"github.com/accept-io/midas/internal/authority"
+	"github.com/accept-io/midas/internal/config"
 	"github.com/accept-io/midas/internal/controlaudit"
 	"github.com/accept-io/midas/internal/controlplane/apply"
 	"github.com/accept-io/midas/internal/controlplane/approval"
@@ -102,9 +103,10 @@ type Server struct {
 	controlAudit        controlAuditService
 	grantLifecycle      grantLifecycleService
 	authenticator       auth.Authenticator
-	policyMode          string // e.g. "noop" — set via WithPolicyMeta at boot
-	policyEvaluatorName string // human-readable evaluator name for health responses
-	readyFn             func(context.Context) error // nil means always ready (memory mode)
+	authMode            config.AuthMode              // set via WithAuthMode; "" means legacy authenticator-nil check
+	policyMode          string                       // e.g. "noop" — set via WithPolicyMeta at boot
+	policyEvaluatorName string                       // human-readable evaluator name for health responses
+	readyFn             func(context.Context) error  // nil means always ready (memory mode)
 }
 
 type approveSurfaceRequest struct {
