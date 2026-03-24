@@ -103,7 +103,7 @@ type Server struct {
 	controlAudit        controlAuditService
 	grantLifecycle      grantLifecycleService
 	authenticator       auth.Authenticator
-	authMode            config.AuthMode              // set via WithAuthMode; "" means legacy authenticator-nil check
+	authMode            config.AuthMode              // set via WithAuthMode; must be called at startup with cfg.Auth.Mode
 	policyMode          string                       // e.g. "noop" — set via WithPolicyMeta at boot
 	policyEvaluatorName string                       // human-readable evaluator name for health responses
 	readyFn             func(context.Context) error  // nil means always ready (memory mode)
@@ -898,9 +898,8 @@ func NewServerWithControlPlane(orchestrator orchestrator, controlPlane controlPl
 func (s *Server) routes() {
 	s.mux.HandleFunc("/healthz", s.handleHealth)
 	s.mux.HandleFunc("/readyz", s.handleReady)
-	// Evaluation — operator role required when auth is configured.
-	// requireAuth and requireRole are no-ops when s.authenticator is nil,
-	// preserving backward compatibility for memory-mode / unauthenticated deployments.
+	// Evaluation — operator or admin role required. Open mode (AuthModeOpen) bypasses
+	// authentication; all other modes require a valid bearer token and matching role.
 	s.mux.HandleFunc("/v1/evaluate", s.requireAuth(s.requireRole(identity.RoleOperator, identity.RoleAdmin)(s.handleEvaluate)))
 
 	// Escalation review — ADMIN or REVIEWER.
@@ -913,9 +912,6 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/v1/decisions/request/", s.requireAuth(s.handleGetDecisionByRequestID))
 
 	// Control plane — governed endpoints.
-	// requireAuth and requireRole are no-ops when s.authenticator is nil,
-	// preserving backward compatibility for unauthenticated deployments.
-	//
 	// apply/plan: ADMIN only (mutates or previews configuration).
 	s.mux.HandleFunc("/v1/controlplane/apply", s.requireAuth(s.requireRole(identity.RoleAdmin)(s.handleApplyBundle)))
 	s.mux.HandleFunc("/v1/controlplane/plan", s.requireAuth(s.requireRole(identity.RoleAdmin)(s.handlePlanBundle)))
