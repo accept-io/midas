@@ -559,7 +559,7 @@
     // token was accepted by the auth layer, regardless of the authority outcome.
     const VALIDATE_BODY = { surface_id: 'unknown-surface-xyz', agent_id: 'agent-unknown', confidence: 0.9 };
     try {
-      const res = await fetch(`${window.location.origin}/v1/evaluate`, {
+      const res = await fetch(`${window.location.origin}/explorer`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -622,23 +622,20 @@
         authModeHint.textContent = 'Auth mode is required — bearer token must be set.';
       }
 
-      // Demo banner + scenario badges
-      const seeded = cfg.demoSeeded;
-      if (seeded === true) {
-        demoBanner.textContent = 'Demo mode — sample scenarios ready. Run any scenario to explore MIDAS authority evaluation.';
+      // Sandbox banner — Explorer always uses an isolated in-memory store with
+      // demo data, independent of the main backend configuration.
+      if (cfg.explorerStore === 'memory') {
+        demoBanner.textContent = '\u24d8 Sandbox mode \u2014 Explorer uses isolated in-memory demo data. Production endpoint (/v1/evaluate) uses configured store.';
         demoBanner.className = 'demo-banner ready';
+        // Demo scenarios are always ready in the sandbox store
         demoTagIDs.forEach(id => {
           const el = document.getElementById(id);
           if (el) { el.textContent = 'ready'; el.className = 'scenario-tag tag-ready'; }
         });
-        // Threshold hints
+        // Threshold hints are always valid for the sandbox store
         document.getElementById('confidence-hint').textContent = 'threshold \u2265 0.85';
         document.getElementById('consequence-hint').textContent = 'threshold \u2264 1000 GBP';
-      } else if (seeded === false) {
-        demoBanner.textContent = 'Demo data not loaded — demo scenarios require seed data. Start with Unknown Surface.';
-        demoBanner.className = 'demo-banner not-ready';
       }
-      // seeded === "unknown": leave banner hidden
 
       // Auto-run: only when auth is open, or when a session token is already present.
       // In auth-required mode with no token, show a prompt instead of a silent 401.
@@ -783,7 +780,7 @@
 
     const token = getToken();
     try {
-      const res = await fetch(`${window.location.origin}/v1/evaluate`, {
+      const res = await fetch(`${window.location.origin}/explorer`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -815,10 +812,14 @@
 
   function generateCurl(body, token) {
     const baseUrl = window.location.origin;
-    let curl = `curl -X POST ${baseUrl}/v1/evaluate \\\n`;
-    curl += `  -H "Content-Type: application/json"`;
-    if (token) curl += ` \\\n  -H "Authorization: Bearer ${token}"`;
-    curl += ` \\\n  -d '${JSON.stringify(body, null, 2)}'`;
+    const authFlag = token ? ` \\\n  -H "Authorization: Bearer ${token}"` : '';
+    const dataFlag = ` \\\n  -d '${JSON.stringify(body, null, 2)}'`;
+    let curl = `# Explorer sandbox (isolated in-memory store)\n`;
+    curl += `curl -X POST ${baseUrl}/explorer \\\n`;
+    curl += `  -H "Content-Type: application/json"${authFlag}${dataFlag}\n\n`;
+    curl += `# Production endpoint (uses configured store)\n`;
+    curl += `curl -X POST ${baseUrl}/v1/evaluate \\\n`;
+    curl += `  -H "Content-Type: application/json"${authFlag}${dataFlag}`;
     return curl;
   }
 

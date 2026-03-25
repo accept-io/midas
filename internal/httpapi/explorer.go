@@ -1,13 +1,43 @@
 package httpapi
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
+	"log/slog"
 	"net/http"
+
+	"github.com/accept-io/midas/internal/bootstrap"
+	"github.com/accept-io/midas/internal/decision"
+	"github.com/accept-io/midas/internal/policy"
+	"github.com/accept-io/midas/internal/store/memory"
 )
 
 //go:embed explorer
 var explorerFS embed.FS
+
+// initExplorerRuntime creates the isolated in-memory evaluation runtime used by
+// POST /explorer. It always seeds demo data unconditionally, independent
+// of cfg.Dev.SeedDemoData. Seeding failures are logged as warnings — Explorer
+// continues to work as a request builder even without seeded data.
+func (s *Server) initExplorerRuntime() {
+	explorerStore := memory.NewStore()
+	repos, err := explorerStore.Repositories()
+	if err != nil {
+		slog.Warn("explorer_store_init_failed", "error", err)
+		return
+	}
+	if err := bootstrap.SeedDemo(context.Background(), repos); err != nil {
+		slog.Warn("explorer_seed_failed", "error", err)
+		// continue — Explorer still works as a request builder without seed data
+	}
+	orch, err := decision.NewOrchestrator(explorerStore, policy.NoOpPolicyEvaluator{}, nil)
+	if err != nil {
+		slog.Warn("explorer_orchestrator_failed", "error", err)
+		return
+	}
+	s.explorerOrchestrator = orch
+}
 
 // handleExplorerIndex serves the Explorer single-page UI at GET /explorer.
 func (s *Server) handleExplorerIndex(w http.ResponseWriter, r *http.Request) {
@@ -51,7 +81,26 @@ func (s *Server) handleExplorerConfig(w http.ResponseWriter, r *http.Request) {
 	} else {
 		resp["demoSeeded"] = "unknown"
 	}
+	// Explorer always uses an isolated in-memory store regardless of main backend.
+	resp["explorerStore"] = "memory"
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp) //nolint:errcheck
+}
+
+// handleExplorerEvaluate handles POST /explorer using the Explorer's isolated
+// in-memory orchestrator. It reuses handleEvaluateWith so evaluation logic
+// stays in one place; only the orchestrator instance differs.
+func (s *Server) handleExplorerEvaluate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+	if s.explorerOrchestrator == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "explorer runtime not available",
+		})
+		return
+	}
+	s.handleEvaluateWith(w, r, s.explorerOrchestrator)
 }

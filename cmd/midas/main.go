@@ -169,6 +169,8 @@ func main() {
 	}
 	srv.WithStoreBackend(cfg.Store.Backend)
 	srv.WithDemoSeeded(demoSeeded)
+	// Explorer maintains its own isolated in-memory store, seeded unconditionally
+	// inside WithExplorerEnabled. The seeding above applies only to the main backend.
 	srv.WithExplorerEnabled(cfg.Server.ExplorerEnabled)
 	if cfg.Server.ExplorerEnabled {
 		slog.Info("explorer_ready", "path", "/explorer")

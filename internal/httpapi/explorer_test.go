@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/accept-io/midas/internal/config"
+	"github.com/accept-io/midas/internal/eval"
 )
 
 func TestExplorer_Disabled_Returns404(t *testing.T) {
@@ -168,5 +169,108 @@ func TestExplorer_Assets_Served(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "MIDAS Explorer") {
 		t.Errorf("want body to contain 'MIDAS Explorer'")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Sandbox mode — /explorer isolation tests
+// ---------------------------------------------------------------------------
+
+// TestExplorerEvaluate_UsesIsolatedMemoryStore verifies that POST
+// /explorer routes to the Explorer's own in-memory orchestrator,
+// not the main one. The main orchestrator is a blank mockOrchestrator that
+// returns an error for every Evaluate call. If the Explorer accidentally
+// delegates to it the test fails because the response will not contain
+// outcome="accept".
+func TestExplorerEvaluate_UsesIsolatedMemoryStore(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithAuthMode(config.AuthModeOpen).
+		WithExplorerEnabled(true)
+
+	body := []byte(`{
+		"surface_id": "surf-payments-approval",
+		"agent_id":   "agent-payments-bot",
+		"confidence": 0.95,
+		"consequence": {"type": "monetary", "amount": 500, "currency": "GBP"}
+	}`)
+	rec := performRequest(t, srv, http.MethodPost, "/explorer", body)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if resp["outcome"] != string(eval.OutcomeAccept) {
+		t.Errorf("want outcome=%q, got %v", eval.OutcomeAccept, resp["outcome"])
+	}
+}
+
+// TestExplorerEvaluate_UnknownSurfaceRejects verifies that submitting an
+// unrecognised surface ID to /explorer returns outcome=reject with
+// reason SURFACE_NOT_FOUND.
+func TestExplorerEvaluate_UnknownSurfaceRejects(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithAuthMode(config.AuthModeOpen).
+		WithExplorerEnabled(true)
+
+	body := []byte(`{
+		"surface_id": "unknown-surface-xyz",
+		"agent_id":   "agent-payments-bot",
+		"confidence": 0.95
+	}`)
+	rec := performRequest(t, srv, http.MethodPost, "/explorer", body)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200 (outcome in body), got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if resp["outcome"] != string(eval.OutcomeReject) {
+		t.Errorf("want outcome=%q (got %v)", eval.OutcomeReject, resp["outcome"])
+	}
+	if resp["reason"] != string(eval.ReasonSurfaceNotFound) {
+		t.Errorf("want reason=%q, got %v", eval.ReasonSurfaceNotFound, resp["reason"])
+	}
+}
+
+// TestExplorerConfig_IncludesExplorerStore verifies that GET /explorer/config
+// always includes explorerStore="memory" regardless of the main store backend.
+func TestExplorerConfig_IncludesExplorerStore(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithStoreBackend("postgres").
+		WithExplorerEnabled(true)
+
+	rec := performRequest(t, srv, http.MethodGet, "/explorer/config", nil)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	var resp map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if resp["explorerStore"] != "memory" {
+		t.Errorf("want explorerStore=%q, got %v", "memory", resp["explorerStore"])
+	}
+	// Main store backend is still surfaced separately.
+	if resp["store"] != "postgres" {
+		t.Errorf("want store=%q, got %v", "postgres", resp["store"])
+	}
+}
+
+// TestExplorerEvaluate_Disabled_Returns404 verifies that POST
+// /explorer returns 404 when the Explorer is not enabled.
+func TestExplorerEvaluate_Disabled_Returns404(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil)
+
+	body := []byte(`{"surface_id":"surf-payments-approval","agent_id":"agent-payments-bot","confidence":0.9}`)
+	rec := performRequest(t, srv, http.MethodPost, "/explorer", body)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("want 404 when explorer disabled, got %d", rec.Code)
 	}
 }
