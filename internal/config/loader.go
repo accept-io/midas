@@ -65,7 +65,7 @@ var candidatePaths = []string{
 // topLevelSections is the set of top-level YAML field names tracked in Sources.
 var topLevelSections = []string{
 	"version", "profile", "server", "store", "auth",
-	"observability", "control_plane", "dispatcher", "kafka",
+	"observability", "control_plane", "dev", "dispatcher", "kafka",
 }
 
 // Load discovers, reads, and returns the merged Config.
@@ -216,6 +216,24 @@ func applyEnvOverrides(cfg *Config, sources map[string]Source, getenv func(strin
 		}
 		cfg.Server.Port = n
 		markEnv("server")
+	}
+	if v := getenv("MIDAS_EXPLORER_ENABLED"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("config: MIDAS_EXPLORER_ENABLED must be a boolean (true/false): %q", v)
+		}
+		cfg.Server.ExplorerEnabled = b
+		markEnv("server")
+	}
+
+	// Dev
+	if v := getenv("MIDAS_DEV_SEED_DEMO_DATA"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("config: MIDAS_DEV_SEED_DEMO_DATA must be a boolean (true/false): %q", v)
+		}
+		cfg.Dev.SeedDemoData = b
+		markEnv("dev")
 	}
 
 	// Dispatcher

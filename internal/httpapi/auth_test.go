@@ -618,10 +618,10 @@ func TestRequireAuth_OpenMode_AllowsUnauthenticated(t *testing.T) {
 	}
 }
 
-// TestRequireRole_OpenMode_RejectsWithoutPrincipal is the core Fix 3 test:
-// even in explicit open mode, requireRole must return 401 when no principal
-// is in the context. Open mode must not grant role-based access.
-func TestRequireRole_OpenMode_RejectsWithoutPrincipal(t *testing.T) {
+// TestRequireRole_OpenMode_PassesThrough verifies that in open mode requireRole
+// is a no-op: requests without a principal reach the handler. This makes
+// dev/memory deployments fully functional without bearer tokens.
+func TestRequireRole_OpenMode_PassesThrough(t *testing.T) {
 	srv := newTestServer().WithAuthMode(config.AuthModeOpen)
 
 	called := false
@@ -631,15 +631,15 @@ func TestRequireRole_OpenMode_RejectsWithoutPrincipal(t *testing.T) {
 	})
 
 	r := httptest.NewRequest(http.MethodPost, "/test", nil)
-	// No principal in context — open mode, requireAuth never ran.
+	// No principal in context — open mode, requireAuth did not set one.
 	w := httptest.NewRecorder()
 	handler(w, r)
 
-	if called {
-		t.Error("inner handler must not be called: open mode must fail closed when no principal")
+	if !called {
+		t.Error("inner handler should be called in open mode without a principal")
 	}
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("want 401 (no principal in open mode), got %d", w.Code)
+	if w.Code != http.StatusOK {
+		t.Errorf("want 200 in open mode, got %d", w.Code)
 	}
 }
 

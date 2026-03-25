@@ -88,7 +88,7 @@ func main() {
 		"dispatcher_publisher", cfg.Dispatcher.Publisher,
 	)
 
-	if cfg.Store.Backend == "memory" {
+	if cfg.Dev.SeedDemoData {
 		if err := bootstrap.SeedDemo(context.Background(), repos); err != nil {
 			log.Fatal(err)
 		}
@@ -165,6 +165,7 @@ func main() {
 	if authenticator != nil {
 		srv.WithAuthenticator(authenticator)
 	}
+	srv.WithExplorerEnabled(cfg.Server.ExplorerEnabled)
 
 	// --- Dispatcher ---
 

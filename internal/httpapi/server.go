@@ -107,6 +107,7 @@ type Server struct {
 	policyMode          string                       // e.g. "noop" — set via WithPolicyMeta at boot
 	policyEvaluatorName string                       // human-readable evaluator name for health responses
 	readyFn             func(context.Context) error  // nil means always ready (memory mode)
+	explorerEnabled     bool                         // set via WithExplorerEnabled; registers /explorer routes when true
 }
 
 type approveSurfaceRequest struct {
@@ -876,6 +877,7 @@ func NewServerFull(
 		introspection:  introspectionSvc,
 		controlAudit:   controlAuditSvc,
 		grantLifecycle: grantSvc,
+		authMode:       config.AuthModeOpen, // default matches config default; override with WithAuthMode
 	}
 	s.routes()
 
