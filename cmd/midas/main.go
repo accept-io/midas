@@ -30,6 +30,17 @@ import (
 	"github.com/accept-io/midas/internal/store/postgres"
 )
 
+const midasBanner = `
+__       __  ______  _______    ______    ______
+|  \     /  \|      \|       \  /      \  /      \
+| $$\   /  $$ \$$$$$$| $$$$$$$\|  $$$$$$\|  $$$$$$\
+| $$$\ /  $$$  | $$  | $$  | $$| $$__| $$| $$___\$$
+| $$$$\  $$$$  | $$  | $$  | $$| $$    $$ \$$    \
+| $$\$$ $$ $$  | $$  | $$  | $$| $$$$$$$$ _\$$$$$$\
+| $$ \$$$| $$ _| $$_ | $$__/ $$| $$  | $$|  \__| $$
+| $$  \$ | $$|   $$ \| $$    $$| $$  | $$ \$$    $$
+ \$$      \$$ \$$$$$$ \$$$$$$$  \$$   \$$  \$$$$$$  `
+
 func main() {
 	// Handle `midas config <subcommand>` before any other initialisation.
 	if len(os.Args) >= 3 && os.Args[1] == "config" {
@@ -209,6 +220,27 @@ func main() {
 		Addr:    fmt.Sprintf(":%d", cfg.Server.Port),
 		Handler: srv,
 	}
+
+	// --- Startup banner ---
+
+	fmt.Println(midasBanner)
+	fmt.Println()
+	fmt.Println("MIDAS — Authority Orchestration Engine")
+	fmt.Println()
+	fmt.Printf("✓ Server started on :%d\n", cfg.Server.Port)
+	if cfg.Server.ExplorerEnabled {
+		fmt.Printf("✓ Explorer available at http://localhost:%d/explorer\n", cfg.Server.Port)
+	}
+	fmt.Printf("✓ Store: %s", cfg.Store.Backend)
+	if cfg.Store.Backend == "memory" {
+		fmt.Printf(" (demo ready)")
+	}
+	fmt.Println()
+	fmt.Printf("✓ Auth: %s\n", cfg.Auth.Mode)
+	if cfg.Store.Backend == "postgres" && cfg.Server.ExplorerEnabled {
+		fmt.Println("⚠ Explorer scenarios run in sandbox mode (isolated demo data)")
+	}
+	fmt.Println()
 
 	serverErr := make(chan error, 1)
 	go func() {

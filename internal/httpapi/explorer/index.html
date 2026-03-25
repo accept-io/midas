@@ -315,6 +315,28 @@
   .copy-btn:hover { background: #f3f4f6; }
   .copy-btn.copied { color: #10b981; border-color: #10b981; }
 
+  .envelope-section { margin-bottom: 16px; }
+  .envelope-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+  }
+  .envelope-summary {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 12px;
+    margin-bottom: 8px;
+    display: grid;
+    grid-template-columns: 90px 1fr;
+    gap: 4px 8px;
+  }
+  .envelope-summary-key { color: #6b7280; }
+  .envelope-summary-val { color: #1a1a1a; font-family: "SF Mono", "Fira Code", monospace; }
+  .envelope-status-msg { font-size: 12px; color: #6b7280; padding: 4px 0; }
+
   @media (max-width: 900px) {
     .layout { grid-template-columns: 1fr; }
     .panel-left { border-right: none; border-bottom: 1px solid #e5e7eb; }
@@ -484,6 +506,23 @@
         <button class="copy-btn" id="curl-pre-copy-btn">Copy</button>
       </div>
       <pre id="curl-pre"></pre>
+    </div>
+
+    <div class="envelope-section" id="envelope-section" style="display:none">
+      <div class="envelope-bar">
+        <span class="raw-label">Decision Record</span>
+        <button class="copy-btn" id="envelope-inspect-btn">Inspect envelope</button>
+      </div>
+      <div id="envelope-detail" style="display:none">
+        <div class="envelope-summary" id="envelope-summary"></div>
+        <div class="raw-header">
+          <span class="raw-label">Envelope JSON</span>
+          <button class="copy-btn" id="envelope-copy-btn">Copy</button>
+        </div>
+        <pre id="envelope-json"></pre>
+      </div>
+      <div class="envelope-status-msg" id="envelope-loading" style="display:none">Loading envelope…</div>
+      <div class="envelope-status-msg" id="envelope-error" style="display:none"></div>
     </div>
 
     <div class="section">
@@ -912,6 +951,19 @@
     const curlSection = document.getElementById('curl-section');
     curlSection.style.display = 'block';
     document.getElementById('curl-pre').textContent = generateCurl(requestBody, getToken());
+
+    // Envelope inspector: show when we have an envelope_id, reset detail panel
+    const envelopeSection = document.getElementById('envelope-section');
+    if (envelopeId) {
+      envelopeSection.style.display = 'block';
+      document.getElementById('envelope-detail').style.display  = 'none';
+      document.getElementById('envelope-loading').style.display = 'none';
+      document.getElementById('envelope-error').style.display   = 'none';
+      document.getElementById('envelope-inspect-btn').textContent = 'Inspect envelope';
+      document.getElementById('envelope-inspect-btn').onclick = () => inspectEnvelope(envelopeId);
+    } else {
+      envelopeSection.style.display = 'none';
+    }
   }
 
   // ── Auth / token result-panel helpers ──────────────────────────────────────
@@ -984,8 +1036,65 @@
     outcomeLabel.textContent = '\u2014';
     metaRow.innerHTML = '<span class="placeholder-text">Submit a request to see the governed outcome here</span>';
     explanationBox.classList.remove('visible');
-    document.getElementById('raw-section').style.display  = 'none';
-    document.getElementById('curl-section').style.display = 'none';
+    document.getElementById('raw-section').style.display      = 'none';
+    document.getElementById('curl-section').style.display     = 'none';
+    document.getElementById('envelope-section').style.display = 'none';
+  }
+
+  // ── Envelope inspector ─────────────────────────────────────────────────────
+  async function inspectEnvelope(envelopeId) {
+    const btn     = document.getElementById('envelope-inspect-btn');
+    const detail  = document.getElementById('envelope-detail');
+    const loading = document.getElementById('envelope-loading');
+    const errEl   = document.getElementById('envelope-error');
+
+    detail.style.display  = 'none';
+    errEl.style.display   = 'none';
+    loading.style.display = 'block';
+    btn.textContent = 'Loading…';
+    btn.disabled    = true;
+
+    try {
+      const headers = { 'Content-Type': 'application/json' };
+      const token = getToken();
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const res  = await fetch(`${window.location.origin}/v1/envelopes/${encodeURIComponent(envelopeId)}`, { headers });
+      const data = await res.json();
+
+      if (!res.ok) {
+        const msg = data.error || `HTTP ${res.status}`;
+        errEl.textContent   = `Unable to load envelope details: ${msg}`;
+        errEl.style.display = 'block';
+        return;
+      }
+
+      // Summary: pull stable, always-present fields
+      const summaryEl = document.getElementById('envelope-summary');
+      const summaryRows = [];
+      const state = data.lifecycle?.state;
+      const outcome    = data.evaluation?.outcome;
+      const reasonCode = data.evaluation?.reason_code;
+      const evaluatedAt = data.evaluation?.evaluated_at;
+      if (state)       summaryRows.push(['state',      state]);
+      if (outcome)     summaryRows.push(['outcome',    outcome]);
+      if (reasonCode)  summaryRows.push(['reason',     reasonCode]);
+      if (evaluatedAt) summaryRows.push(['evaluated',  evaluatedAt]);
+      summaryEl.innerHTML = summaryRows.map(([k, v]) =>
+        `<div class="envelope-summary-key">${escHtml(k)}</div><div class="envelope-summary-val">${escHtml(String(v))}</div>`
+      ).join('');
+      summaryEl.style.display = summaryRows.length ? 'grid' : 'none';
+
+      document.getElementById('envelope-json').textContent = JSON.stringify(data, null, 2);
+      detail.style.display = 'block';
+    } catch (e) {
+      errEl.textContent   = `Unable to load envelope details: ${e.message}`;
+      errEl.style.display = 'block';
+    } finally {
+      loading.style.display = 'none';
+      btn.textContent = 'Inspect envelope';
+      btn.disabled    = false;
+    }
   }
 
   // ── Copy helpers ───────────────────────────────────────────────────────────
@@ -994,6 +1103,9 @@
   });
   document.getElementById('curl-pre-copy-btn').addEventListener('click', () => {
     copyToClipboard(document.getElementById('curl-pre').textContent, document.getElementById('curl-pre-copy-btn'));
+  });
+  document.getElementById('envelope-copy-btn').addEventListener('click', () => {
+    copyToClipboard(document.getElementById('envelope-json').textContent, document.getElementById('envelope-copy-btn'));
   });
 
   function copyToClipboard(text, btn) {
