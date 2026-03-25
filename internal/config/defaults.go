@@ -12,6 +12,7 @@ func DefaultConfig() Config {
 		Server: ServerConfig{
 			Port:            8080,
 			ShutdownTimeout: Duration(15 * time.Second),
+			ExplorerEnabled: true,
 		},
 		Store: StoreConfig{
 			Backend: "memory",
@@ -27,6 +28,9 @@ func DefaultConfig() Config {
 		},
 		ControlPlane: ControlPlaneConfig{
 			Enabled: true,
+		},
+		Dev: DevConfig{
+			SeedDemoData: true,
 		},
 		Dispatcher: DispatcherConfig{
 			Enabled:      false,

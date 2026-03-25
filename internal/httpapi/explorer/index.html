@@ -1,0 +1,829 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MIDAS Explorer</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 14px;
+    background: #f5f5f5;
+    color: #1a1a1a;
+    line-height: 1.5;
+  }
+
+  header {
+    background: #1a1a2e;
+    color: #fff;
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  header h1 { font-size: 18px; font-weight: 600; letter-spacing: -0.3px; }
+  header .badge {
+    font-size: 11px;
+    background: #3b82f6;
+    color: #fff;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-weight: 500;
+  }
+  header .spacer { flex: 1; }
+  #runtime-badge {
+    font-size: 12px;
+    color: #94a3b8;
+  }
+
+  .warning-bar {
+    background: #fef3c7;
+    border-bottom: 1px solid #fcd34d;
+    padding: 8px 24px;
+    font-size: 12px;
+    color: #78350f;
+  }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 420px 1fr;
+    gap: 0;
+    min-height: calc(100vh - 80px);
+  }
+
+  .panel {
+    padding: 20px;
+    overflow-y: auto;
+  }
+  .panel-left {
+    background: #fff;
+    border-right: 1px solid #e5e7eb;
+  }
+  .panel-right {
+    background: #f9fafb;
+  }
+
+  .section { margin-bottom: 20px; }
+  .section-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: #6b7280;
+    margin-bottom: 10px;
+  }
+
+  label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 4px; color: #374151; }
+  input[type=text], input[type=password], textarea, select {
+    width: 100%;
+    padding: 7px 10px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 13px;
+    font-family: inherit;
+    background: #fff;
+    color: #1a1a1a;
+    transition: border-color 0.15s;
+  }
+  input[type=text]:focus, input[type=password]:focus, textarea:focus, select:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59,130,246,0.1);
+  }
+  textarea { resize: vertical; font-family: "SF Mono", "Fira Code", monospace; font-size: 12px; }
+
+  .field { margin-bottom: 12px; }
+
+  .token-row { display: flex; gap: 6px; }
+  .token-row input { flex: 1; }
+
+  .scenarios { display: flex; flex-direction: column; gap: 6px; }
+  .scenario-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    background: #fff;
+    cursor: pointer;
+    text-align: left;
+    font-size: 12px;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .scenario-btn:hover { border-color: #3b82f6; background: #eff6ff; }
+  .scenario-btn .scenario-name { font-weight: 600; color: #1a1a1a; }
+  .scenario-btn .scenario-desc { color: #6b7280; }
+  .scenario-btn .scenario-tag {
+    margin-left: auto;
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 8px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .tag-always { background: #d1fae5; color: #065f46; }
+  .tag-demo   { background: #fef3c7; color: #92400e; }
+
+  .mode-tabs { display: flex; gap: 0; margin-bottom: 12px; border: 1px solid #d1d5db; border-radius: 6px; overflow: hidden; }
+  .mode-tab {
+    flex: 1;
+    padding: 6px;
+    text-align: center;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 500;
+    background: #fff;
+    color: #6b7280;
+    border: none;
+    transition: background 0.15s, color 0.15s;
+  }
+  .mode-tab.active { background: #3b82f6; color: #fff; }
+
+  .form-fields { display: none; }
+  .form-fields.visible { display: block; }
+  .json-editor { display: none; }
+  .json-editor.visible { display: block; }
+
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+  .btn-row { display: flex; gap: 8px; margin-top: 14px; }
+  .btn {
+    padding: 8px 16px;
+    border-radius: 6px;
+    border: none;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+  .btn:hover { opacity: 0.85; }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-primary { background: #3b82f6; color: #fff; }
+  .btn-secondary { background: #e5e7eb; color: #374151; }
+  .btn-ghost { background: transparent; color: #6b7280; border: 1px solid #d1d5db; }
+
+  /* Right panel */
+  .outcome-card {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+  .outcome-card.execute   { border-left: 4px solid #10b981; }
+  .outcome-card.escalate  { border-left: 4px solid #f59e0b; }
+  .outcome-card.reject    { border-left: 4px solid #ef4444; }
+  .outcome-card.clarify   { border-left: 4px solid #8b5cf6; }
+  .outcome-card.empty     { border-left: 4px solid #d1d5db; }
+  .outcome-card.error     { border-left: 4px solid #ef4444; }
+
+  .outcome-label {
+    font-size: 20px;
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+  .outcome-label.execute  { color: #065f46; }
+  .outcome-label.escalate { color: #92400e; }
+  .outcome-label.reject   { color: #991b1b; }
+  .outcome-label.clarify  { color: #4c1d95; }
+  .outcome-label.empty    { color: #9ca3af; }
+  .outcome-label.error    { color: #991b1b; }
+
+  .meta-row { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 10px; }
+  .meta-item { }
+  .meta-key { font-size: 11px; color: #6b7280; font-weight: 500; }
+  .meta-val { font-size: 13px; color: #1a1a1a; font-family: "SF Mono", "Fira Code", monospace; }
+
+  .explanation-box {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-bottom: 16px;
+    font-size: 13px;
+    color: #374151;
+    line-height: 1.6;
+    display: none;
+  }
+  .explanation-box.visible { display: block; }
+
+  .raw-section { margin-bottom: 16px; }
+  .raw-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+  }
+  .raw-label { font-size: 12px; font-weight: 600; color: #6b7280; }
+  pre {
+    background: #1e293b;
+    color: #e2e8f0;
+    padding: 14px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-family: "SF Mono", "Fira Code", monospace;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 400px;
+    overflow-y: auto;
+  }
+
+  .curl-section { margin-bottom: 16px; }
+  .curl-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+  }
+
+  .runtime-card {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: 12px;
+  }
+  .runtime-row { display: flex; gap: 8px; margin-bottom: 4px; }
+  .runtime-row:last-child { margin-bottom: 0; }
+  .runtime-key { color: #6b7280; width: 90px; flex-shrink: 0; }
+  .runtime-val { color: #1a1a1a; font-family: "SF Mono", "Fira Code", monospace; }
+
+  .status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #10b981;
+    margin-right: 4px;
+  }
+
+  .placeholder-text { color: #9ca3af; font-style: italic; font-size: 13px; padding: 20px 0; text-align: center; }
+
+  .http-status {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-family: monospace;
+    font-weight: 600;
+  }
+  .http-2xx { background: #d1fae5; color: #065f46; }
+  .http-4xx { background: #fee2e2; color: #991b1b; }
+  .http-5xx { background: #fee2e2; color: #991b1b; }
+
+  .copy-btn {
+    font-size: 11px;
+    padding: 3px 10px;
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+    background: #fff;
+    cursor: pointer;
+    color: #6b7280;
+  }
+  .copy-btn:hover { background: #f3f4f6; }
+  .copy-btn.copied { color: #10b981; border-color: #10b981; }
+
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: 1fr; }
+    .panel-left { border-right: none; border-bottom: 1px solid #e5e7eb; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>MIDAS Explorer</h1>
+  <span class="badge">v1</span>
+  <span class="spacer"></span>
+  <span id="runtime-badge">loading...</span>
+</header>
+
+<div class="warning-bar">
+  &#9888;&#65039; Developer sandbox only. Use test tokens only — do not paste production credentials.
+</div>
+
+<div class="layout">
+  <!-- LEFT: Request builder -->
+  <div class="panel panel-left">
+
+    <div class="section">
+      <div class="section-title">Quick Start</div>
+      <p style="font-size:12px;color:#6b7280;line-height:1.6">
+        Submit a <code style="background:#f3f4f6;padding:1px 4px;border-radius:3px">POST /v1/evaluate</code> request and inspect the full authority decision.
+        Pick a scenario below or build your own request.
+      </p>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Authentication</div>
+      <div class="field">
+        <label for="token-input">Bearer Token</label>
+        <div class="token-row">
+          <input type="password" id="token-input" placeholder="Paste token here (stored in sessionStorage)" autocomplete="off">
+          <button class="btn btn-ghost" id="token-clear-btn" title="Clear token">&#10005;</button>
+        </div>
+        <div style="font-size:11px;color:#9ca3af;margin-top:4px" id="auth-mode-hint"></div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Sample Scenarios</div>
+      <div class="scenarios">
+        <button class="scenario-btn" data-scenario="unknown-surface">
+          <div>
+            <div class="scenario-name">Unknown Surface</div>
+            <div class="scenario-desc">Surface not found &rarr; Reject / SURFACE_NOT_FOUND</div>
+          </div>
+          <span class="scenario-tag tag-always">always works</span>
+        </button>
+        <button class="scenario-btn" data-scenario="demo-execute">
+          <div>
+            <div class="scenario-name">Execute (within authority)</div>
+            <div class="scenario-desc">High confidence, low consequence &rarr; Execute</div>
+          </div>
+          <span class="scenario-tag tag-demo">requires demo data</span>
+        </button>
+        <button class="scenario-btn" data-scenario="demo-escalate-confidence">
+          <div>
+            <div class="scenario-name">Escalate (low confidence)</div>
+            <div class="scenario-desc">Confidence below threshold &rarr; Escalate</div>
+          </div>
+          <span class="scenario-tag tag-demo">requires demo data</span>
+        </button>
+        <button class="scenario-btn" data-scenario="demo-escalate-consequence">
+          <div>
+            <div class="scenario-name">Escalate (high consequence)</div>
+            <div class="scenario-desc">Consequence exceeds limit &rarr; Escalate</div>
+          </div>
+          <span class="scenario-tag tag-demo">requires demo data</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Request Builder</div>
+      <div class="mode-tabs">
+        <button class="mode-tab active" data-mode="form">Form</button>
+        <button class="mode-tab" data-mode="json">JSON</button>
+      </div>
+
+      <div class="form-fields visible" id="form-fields">
+        <div class="field">
+          <label for="f-surface">Surface ID <span style="color:#ef4444">*</span></label>
+          <input type="text" id="f-surface" placeholder="e.g. surf-payments-approval">
+        </div>
+        <div class="field">
+          <label for="f-agent">Agent ID <span style="color:#ef4444">*</span></label>
+          <input type="text" id="f-agent" placeholder="e.g. agent-payments-bot">
+        </div>
+        <div class="form-row">
+          <div class="field">
+            <label for="f-confidence">Confidence (0–1) <span style="color:#ef4444">*</span></label>
+            <input type="text" id="f-confidence" placeholder="0.95">
+          </div>
+          <div class="field">
+            <label for="f-request-id">Request ID</label>
+            <input type="text" id="f-request-id" placeholder="auto-generated">
+          </div>
+        </div>
+        <div class="field">
+          <label for="f-consequence">Consequence (optional JSON)</label>
+          <input type="text" id="f-consequence" placeholder='{"type":"monetary","amount":500}'>
+        </div>
+        <div class="field">
+          <label for="f-context">Context (optional JSON object)</label>
+          <input type="text" id="f-context" placeholder='{"action":"approve","amount":500}'>
+        </div>
+      </div>
+
+      <div class="json-editor" id="json-editor">
+        <div class="field">
+          <label for="json-body">Request JSON</label>
+          <textarea id="json-body" rows="10" spellcheck="false">{
+  "surface_id": "",
+  "agent_id": "",
+  "confidence": 0.95
+}</textarea>
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-primary" id="submit-btn">Submit</button>
+        <button class="btn btn-secondary" id="reset-btn">Reset</button>
+        <button class="btn btn-ghost" id="curl-copy-btn">Copy as curl</button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- RIGHT: Response -->
+  <div class="panel panel-right">
+
+    <div class="section">
+      <div class="section-title">Result</div>
+      <div class="outcome-card empty" id="outcome-card">
+        <div class="outcome-label empty" id="outcome-label">—</div>
+        <div class="meta-row" id="meta-row"></div>
+      </div>
+
+      <div class="explanation-box" id="explanation-box"></div>
+    </div>
+
+    <div class="raw-section" id="raw-section" style="display:none">
+      <div class="raw-header">
+        <span class="raw-label">Response JSON</span>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span id="http-status-badge"></span>
+          <button class="copy-btn" id="raw-copy-btn">Copy</button>
+        </div>
+      </div>
+      <pre id="raw-json"></pre>
+    </div>
+
+    <div class="curl-section" id="curl-section" style="display:none">
+      <div class="curl-header">
+        <span class="raw-label">Equivalent curl</span>
+        <button class="copy-btn" id="curl-pre-copy-btn">Copy</button>
+      </div>
+      <pre id="curl-pre"></pre>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Runtime</div>
+      <div class="runtime-card" id="runtime-card">
+        <div class="runtime-row">
+          <span class="runtime-key">status</span>
+          <span class="runtime-val"><span class="status-dot"></span>loading...</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ── Token ──────────────────────────────────────────────────────────────────
+  const tokenInput = document.getElementById('token-input');
+
+  function getToken() {
+    return sessionStorage.getItem('midas_token') || '';
+  }
+  function setToken(v) {
+    if (v) sessionStorage.setItem('midas_token', v);
+    else    sessionStorage.removeItem('midas_token');
+  }
+
+  tokenInput.value = getToken();
+  tokenInput.addEventListener('input', () => setToken(tokenInput.value.trim()));
+  document.getElementById('token-clear-btn').addEventListener('click', () => {
+    tokenInput.value = '';
+    setToken('');
+  });
+
+  // ── Runtime config ─────────────────────────────────────────────────────────
+  const runtimeCard = document.getElementById('runtime-card');
+  const runtimeBadge = document.getElementById('runtime-badge');
+  const authModeHint = document.getElementById('auth-mode-hint');
+
+  fetch('/explorer/config')
+    .then(r => r.json())
+    .then(cfg => {
+      const rows = [
+        ['status', '<span class="status-dot"></span>running'],
+      ];
+      if (cfg.authMode)   rows.push(['auth mode',   cfg.authMode]);
+      if (cfg.policyMode) rows.push(['policy mode', cfg.policyMode]);
+
+      runtimeCard.innerHTML = rows.map(([k, v]) =>
+        `<div class="runtime-row"><span class="runtime-key">${k}</span><span class="runtime-val">${v}</span></div>`
+      ).join('');
+
+      runtimeBadge.textContent = cfg.authMode ? `auth: ${cfg.authMode}` : 'running';
+
+      if (cfg.authMode === 'open') {
+        authModeHint.textContent = 'Auth mode is open — token not required.';
+      } else if (cfg.authMode === 'required') {
+        authModeHint.textContent = 'Auth mode is required — bearer token must be set.';
+      }
+    })
+    .catch(() => {
+      runtimeCard.innerHTML = '<div class="runtime-row"><span class="runtime-key">status</span><span class="runtime-val" style="color:#ef4444">unreachable</span></div>';
+      runtimeBadge.textContent = 'offline';
+    });
+
+  // ── Mode tabs ──────────────────────────────────────────────────────────────
+  let currentMode = 'form';
+  document.querySelectorAll('.mode-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      currentMode = tab.dataset.mode;
+      document.querySelectorAll('.mode-tab').forEach(t => t.classList.toggle('active', t === tab));
+      document.getElementById('form-fields').classList.toggle('visible', currentMode === 'form');
+      document.getElementById('json-editor').classList.toggle('visible', currentMode === 'json');
+      if (currentMode === 'json') syncFormToJSON();
+    });
+  });
+
+  // ── Scenarios ──────────────────────────────────────────────────────────────
+  const SCENARIOS = {
+    'unknown-surface': {
+      surface_id: 'unknown-surface-xyz',
+      agent_id: 'agent-unknown',
+      confidence: 0.9,
+    },
+    'demo-execute': {
+      surface_id: 'surf-payments-approval',
+      agent_id: 'agent-payments-bot',
+      confidence: 0.95,
+      consequence: { type: 'monetary', amount: 100, currency: 'GBP' },
+    },
+    'demo-escalate-confidence': {
+      surface_id: 'surf-payments-approval',
+      agent_id: 'agent-payments-bot',
+      confidence: 0.3,
+      consequence: { type: 'monetary', amount: 100, currency: 'GBP' },
+    },
+    'demo-escalate-consequence': {
+      surface_id: 'surf-payments-approval',
+      agent_id: 'agent-payments-bot',
+      confidence: 0.95,
+      consequence: { type: 'monetary', amount: 1000000, currency: 'GBP' },
+    },
+  };
+
+  document.querySelectorAll('.scenario-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const sc = SCENARIOS[btn.dataset.scenario];
+      if (!sc) return;
+      loadScenario(sc);
+    });
+  });
+
+  function loadScenario(sc) {
+    document.getElementById('f-surface').value     = sc.surface_id || '';
+    document.getElementById('f-agent').value       = sc.agent_id   || '';
+    document.getElementById('f-confidence').value  = sc.confidence != null ? String(sc.confidence) : '';
+    document.getElementById('f-request-id').value  = sc.request_id || '';
+    document.getElementById('f-consequence').value = sc.consequence ? JSON.stringify(sc.consequence) : '';
+    document.getElementById('f-context').value     = sc.context    ? JSON.stringify(sc.context)     : '';
+    if (currentMode === 'json') syncFormToJSON();
+  }
+
+  // ── Build body ─────────────────────────────────────────────────────────────
+  function buildBodyFromForm() {
+    const surface    = document.getElementById('f-surface').value.trim();
+    const agent      = document.getElementById('f-agent').value.trim();
+    const confidence = parseFloat(document.getElementById('f-confidence').value.trim());
+    const requestId  = document.getElementById('f-request-id').value.trim();
+    const consRaw    = document.getElementById('f-consequence').value.trim();
+    const ctxRaw     = document.getElementById('f-context').value.trim();
+
+    if (!surface) throw new Error('Surface ID is required');
+    if (!agent)   throw new Error('Agent ID is required');
+    if (isNaN(confidence) || confidence < 0 || confidence > 1) throw new Error('Confidence must be a number between 0 and 1');
+
+    const body = { surface_id: surface, agent_id: agent, confidence };
+    if (requestId)  body.request_id = requestId;
+    if (consRaw) {
+      try { body.consequence = JSON.parse(consRaw); } catch { throw new Error('Consequence is not valid JSON'); }
+    }
+    if (ctxRaw) {
+      try { body.context = JSON.parse(ctxRaw); } catch { throw new Error('Context is not valid JSON'); }
+    }
+    return body;
+  }
+
+  function buildBodyFromJSON() {
+    const raw = document.getElementById('json-body').value.trim();
+    try { return JSON.parse(raw); } catch { throw new Error('Request JSON is not valid'); }
+  }
+
+  function buildBody() {
+    return currentMode === 'form' ? buildBodyFromForm() : buildBodyFromJSON();
+  }
+
+  function syncFormToJSON() {
+    try {
+      const body = buildBodyFromForm();
+      document.getElementById('json-body').value = JSON.stringify(body, null, 2);
+    } catch { /* leave as-is if form isn't complete yet */ }
+  }
+
+  // ── Reset ──────────────────────────────────────────────────────────────────
+  document.getElementById('reset-btn').addEventListener('click', () => {
+    document.getElementById('f-surface').value    = '';
+    document.getElementById('f-agent').value      = '';
+    document.getElementById('f-confidence').value = '';
+    document.getElementById('f-request-id').value = '';
+    document.getElementById('f-consequence').value = '';
+    document.getElementById('f-context').value    = '';
+    document.getElementById('json-body').value    = '{\n  "surface_id": "",\n  "agent_id": "",\n  "confidence": 0.95\n}';
+    clearResult();
+  });
+
+  // ── Submit ─────────────────────────────────────────────────────────────────
+  const submitBtn = document.getElementById('submit-btn');
+
+  submitBtn.addEventListener('click', async () => {
+    let body;
+    try { body = buildBody(); } catch (e) {
+      showError(e.message, null);
+      return;
+    }
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Submitting…';
+
+    const token = getToken();
+    try {
+      const res = await fetch(`${window.location.origin}/v1/evaluate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token && { 'Authorization': `Bearer ${token}` }),
+        },
+        body: JSON.stringify(body),
+      });
+
+      const text = await res.text();
+      let data;
+      try { data = JSON.parse(text); } catch { data = { raw: text }; }
+
+      showResult(res.status, data, body);
+    } catch (e) {
+      showError('Network error: ' + e.message, null);
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Submit';
+    }
+  });
+
+  // ── Copy as curl ───────────────────────────────────────────────────────────
+  document.getElementById('curl-copy-btn').addEventListener('click', () => {
+    let body;
+    try { body = buildBody(); } catch (e) { showError(e.message, null); return; }
+    const curl = generateCurl(body, getToken());
+    copyToClipboard(curl, document.getElementById('curl-copy-btn'));
+  });
+
+  function generateCurl(body, token) {
+    const baseUrl = window.location.origin;
+    let curl = `curl -X POST ${baseUrl}/v1/evaluate \\\n`;
+    curl += `  -H "Content-Type: application/json"`;
+    if (token) curl += ` \\\n  -H "Authorization: Bearer ${token}"`;
+    curl += ` \\\n  -d '${JSON.stringify(body, null, 2)}'`;
+    return curl;
+  }
+
+  // ── Display result ─────────────────────────────────────────────────────────
+  // Keys match the actual API outcome strings returned by /v1/evaluate.
+  const OUTCOME_CLASS = {
+    'accept':                 'execute',
+    'escalate':               'escalate',
+    'reject':                 'reject',
+    'request_clarification':  'clarify',
+  };
+
+  // Human-readable labels for each outcome value.
+  const OUTCOME_LABEL = {
+    'accept':                'Accept',
+    'escalate':              'Escalate',
+    'reject':                'Reject',
+    'request_clarification': 'Request Clarification',
+  };
+
+  const EXPLANATION = {
+    'WITHIN_AUTHORITY':           'The request is within the agent\'s granted authority. Confidence and consequence are both within profile thresholds.',
+    'CONFIDENCE_BELOW_THRESHOLD': 'The submitted confidence score is below the minimum required by the authority profile. Human review is required.',
+    'CONSEQUENCE_EXCEEDS_LIMIT':  'The consequence of this action exceeds the limit configured in the authority profile. Human review is required.',
+    'POLICY_DENY':                'A policy rule explicitly denied this request.',
+    'POLICY_ERROR':               'An error occurred while evaluating the policy. Defaulting to escalation.',
+    'AGENT_NOT_FOUND':            'No agent with the given ID was found. Check the agent_id in your request.',
+    'SURFACE_NOT_FOUND':          'No decision surface with the given ID was found. Check the surface_id in your request.',
+    'SURFACE_INACTIVE':           'The decision surface exists but is not in an active state.',
+    'NO_ACTIVE_GRANT':            'The agent has no active authority grant for this surface.',
+    'PROFILE_NOT_FOUND':          'The authority profile referenced by the grant could not be found.',
+    'GRANT_PROFILE_SURFACE_MISMATCH': 'The grant\'s profile is not linked to the requested surface. Authority chain is invalid.',
+    'INSUFFICIENT_CONTEXT':       'The authority profile requires additional context keys that were not provided in the request.',
+  };
+
+  function showResult(httpStatus, data, requestBody) {
+    const outcomeCard  = document.getElementById('outcome-card');
+    const outcomeLabel = document.getElementById('outcome-label');
+    const metaRow      = document.getElementById('meta-row');
+    const explanationBox = document.getElementById('explanation-box');
+
+    const outcome    = data.outcome || '';
+    const reasonCode = data.reason  || '';
+    const envelopeId = data.envelope_id || '';
+
+    const cls = OUTCOME_CLASS[outcome] ||
+      (httpStatus === 401 ? 'error' :
+       httpStatus === 403 ? 'error' :
+       httpStatus >= 500  ? 'error' : 'empty');
+
+    outcomeCard.className  = `outcome-card ${cls}`;
+    outcomeLabel.className = `outcome-label ${cls}`;
+    outcomeLabel.textContent = OUTCOME_LABEL[outcome] || data.error || outcome || '—';
+
+    const metas = [];
+    if (reasonCode)  metas.push(['Reason Code',  reasonCode]);
+    if (envelopeId)  metas.push(['Envelope ID',  envelopeId]);
+    if (httpStatus)  metas.push(['HTTP Status',  httpStatus]);
+
+    metaRow.innerHTML = metas.map(([k, v]) =>
+      `<div class="meta-item"><div class="meta-key">${k}</div><div class="meta-val">${escHtml(String(v))}</div></div>`
+    ).join('');
+
+    const explanation = EXPLANATION[reasonCode];
+    if (explanation) {
+      explanationBox.textContent = explanation;
+      explanationBox.classList.add('visible');
+    } else if (httpStatus === 401) {
+      explanationBox.textContent = 'Request was rejected with 401 Unauthorized. Check that your bearer token is set and valid.';
+      explanationBox.classList.add('visible');
+    } else if (httpStatus === 403) {
+      explanationBox.textContent = 'Request was rejected with 403 Forbidden. Your token is valid but does not have the required role (operator or admin).';
+      explanationBox.classList.add('visible');
+    } else {
+      explanationBox.classList.remove('visible');
+    }
+
+    // Raw JSON
+    const rawSection = document.getElementById('raw-section');
+    rawSection.style.display = 'block';
+    document.getElementById('raw-json').textContent = JSON.stringify(data, null, 2);
+
+    const badge = document.getElementById('http-status-badge');
+    const badgeCls = httpStatus < 300 ? 'http-2xx' : httpStatus < 500 ? 'http-4xx' : 'http-5xx';
+    badge.innerHTML = `<span class="http-status ${badgeCls}">${httpStatus}</span>`;
+
+    // Curl
+    const curlSection = document.getElementById('curl-section');
+    curlSection.style.display = 'block';
+    document.getElementById('curl-pre').textContent = generateCurl(requestBody, getToken());
+  }
+
+  function showError(msg, httpStatus) {
+    const outcomeCard  = document.getElementById('outcome-card');
+    const outcomeLabel = document.getElementById('outcome-label');
+    const metaRow      = document.getElementById('meta-row');
+    const explanationBox = document.getElementById('explanation-box');
+
+    outcomeCard.className  = 'outcome-card error';
+    outcomeLabel.className = 'outcome-label error';
+    outcomeLabel.textContent = 'Error';
+    metaRow.innerHTML = '';
+    explanationBox.textContent = msg;
+    explanationBox.classList.add('visible');
+  }
+
+  function clearResult() {
+    const outcomeCard  = document.getElementById('outcome-card');
+    const outcomeLabel = document.getElementById('outcome-label');
+    const metaRow      = document.getElementById('meta-row');
+    const explanationBox = document.getElementById('explanation-box');
+
+    outcomeCard.className  = 'outcome-card empty';
+    outcomeLabel.className = 'outcome-label empty';
+    outcomeLabel.textContent = '—';
+    metaRow.innerHTML = '';
+    explanationBox.classList.remove('visible');
+    document.getElementById('raw-section').style.display  = 'none';
+    document.getElementById('curl-section').style.display = 'none';
+  }
+
+  // ── Copy helpers ───────────────────────────────────────────────────────────
+  document.getElementById('raw-copy-btn').addEventListener('click', () => {
+    copyToClipboard(document.getElementById('raw-json').textContent, document.getElementById('raw-copy-btn'));
+  });
+  document.getElementById('curl-pre-copy-btn').addEventListener('click', () => {
+    copyToClipboard(document.getElementById('curl-pre').textContent, document.getElementById('curl-pre-copy-btn'));
+  });
+
+  function copyToClipboard(text, btn) {
+    navigator.clipboard.writeText(text).then(() => {
+      const orig = btn.textContent;
+      btn.textContent = 'Copied!';
+      btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = orig; btn.classList.remove('copied'); }, 1500);
+    }).catch(() => {
+      btn.textContent = 'Failed';
+      setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+    });
+  }
+
+  function escHtml(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+})();
+</script>
+</body>
+</html>

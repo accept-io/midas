@@ -26,6 +26,7 @@ profile: dev
 server:
   port: 8080
   shutdown_timeout: 15s
+  explorer_enabled: true
 
 # ---------------------------------------------------------------------------
 # Persistence backend
@@ -73,6 +74,16 @@ observability:
 # ---------------------------------------------------------------------------
 control_plane:
   enabled: true
+
+# ---------------------------------------------------------------------------
+# Dev (local / development only)
+# ---------------------------------------------------------------------------
+dev:
+  # seed_demo_data: when true MIDAS seeds a minimal demonstration dataset at
+  # startup. The seed is idempotent — re-running on an already-seeded store is
+  # a no-op. Enabled by default so `make dev` works out of the box. Set false
+  # in production or when supplying real governance data.
+  seed_demo_data: true
 
 # ---------------------------------------------------------------------------
 # Outbox dispatcher (optional)

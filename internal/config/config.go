@@ -61,8 +61,20 @@ type Config struct {
 	Auth          AuthConfig          `yaml:"auth"`
 	Observability ObservabilityConfig `yaml:"observability"`
 	ControlPlane  ControlPlaneConfig  `yaml:"control_plane"`
+	Dev           DevConfig           `yaml:"dev"`
 	Dispatcher    DispatcherConfig    `yaml:"dispatcher"`
 	Kafka         KafkaConfig         `yaml:"kafka"`
+}
+
+// DevConfig holds settings that only apply in developer / local mode.
+// These settings are intentionally non-operational: they only affect
+// startup behaviour (e.g. seeding) and are safe to leave disabled in production.
+type DevConfig struct {
+	// SeedDemoData seeds a minimal demonstration dataset at startup when true.
+	// The seed is idempotent — running it on a store that already contains the
+	// demo surface is a no-op. Defaults to true so that `make dev` / memory mode
+	// works out of the box; set false in production or when supplying real data.
+	SeedDemoData bool `yaml:"seed_demo_data"`
 }
 
 // ServerConfig controls the HTTP listener.
@@ -71,6 +83,9 @@ type ServerConfig struct {
 	Port int `yaml:"port"`
 	// ShutdownTimeout is the graceful shutdown deadline. Default: "15s".
 	ShutdownTimeout Duration `yaml:"shutdown_timeout"`
+	// ExplorerEnabled serves the interactive evaluation sandbox at /explorer.
+	// Enabled by default; set false in production if the UI is not needed.
+	ExplorerEnabled bool `yaml:"explorer_enabled"`
 }
 
 // StoreConfig selects and configures the persistence backend.

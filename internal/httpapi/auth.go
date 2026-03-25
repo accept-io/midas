@@ -52,6 +52,20 @@ func (s *Server) WithAuthMode(mode config.AuthMode) *Server {
 	return s
 }
 
+// WithExplorerEnabled registers the /explorer routes when enabled is true.
+// Call this at startup with cfg.Server.ExplorerEnabled after NewServerFull.
+// When false (or never called) the explorer routes are not registered and
+// requests to /explorer return 404.
+func (s *Server) WithExplorerEnabled(enabled bool) *Server {
+	s.explorerEnabled = enabled
+	if enabled {
+		s.mux.HandleFunc("GET /explorer", s.handleExplorerIndex)
+		s.mux.HandleFunc("GET /explorer/config", s.handleExplorerConfig)
+		s.mux.HandleFunc("GET /explorer/", s.handleExplorerAssets)
+	}
+	return s
+}
+
 // PrincipalFromContext retrieves the verified Principal that requireAuth stored
 // in the request context. Returns nil when no principal is present (i.e. the
 // authenticator was not configured or the middleware was not applied).
@@ -74,14 +88,18 @@ func actorFromContext(ctx context.Context, fallback string) string {
 // requireRole returns middleware that enforces role-based access control.
 // It must be composed inside requireAuth so that the principal is already in context.
 //
-// A principal must be present (placed there by requireAuth) and must hold at
-// least one of the required roles. If no principal is present the request is
-// rejected with 401; a principal without the required role receives 403.
-// Open mode does NOT grant role-based access — callers in open mode have no
-// principal and therefore always receive 401 from role-protected routes.
+// In AuthModeOpen the middleware is a no-op: requests are forwarded without a
+// principal so that dev/memory deployments can call all routes without tokens.
+// In all other modes a principal must be present and hold at least one of the
+// required roles; missing principal → 401, wrong role → 403.
 func (s *Server) requireRole(roles ...string) func(http.HandlerFunc) http.HandlerFunc {
 	return func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
+			if s.authMode == config.AuthModeOpen {
+				next(w, r)
+				return
+			}
+
 			p := PrincipalFromContext(r.Context())
 			if p == nil {
 				slog.Warn("authz_no_principal",

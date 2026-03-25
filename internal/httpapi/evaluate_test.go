@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/accept-io/midas/internal/auth"
+	"github.com/accept-io/midas/internal/config"
 	"github.com/accept-io/midas/internal/identity"
 )
 
@@ -23,8 +24,10 @@ func evaluateAuthenticator() auth.Authenticator {
 var validEvaluateBody = []byte(`{"surface_id":"surf-test","agent_id":"agent-test","confidence":0.9}`)
 
 // evalSrv returns a server wired with evaluateAuthenticator for auth tests.
+// AuthModeRequired is set explicitly so that role and token enforcement are active.
 func evalSrv() *Server {
 	return NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithAuthMode(config.AuthModeRequired).
 		WithAuthenticator(evaluateAuthenticator())
 }
 
@@ -112,18 +115,15 @@ func TestEvaluate_AllowsAdminRole(t *testing.T) {
 	}
 }
 
-// TestEvaluate_AllowsUnauthenticatedInMemoryMode verifies that when no
-// authenticator is configured (memory / dev mode), requireAuth is a no-op and
-// /v1/evaluate is accessible without any Authorization header.
-// This is the critical backward-compatibility guarantee.
-func TestEvaluate_AllowsUnauthenticatedInMemoryMode(t *testing.T) {
-	// No WithAuthenticator — simulates memory mode / unauthenticated deployment.
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil)
+// TestEvaluate_OpenMode_AllowsUnauthenticated verifies that when auth mode is
+// open (dev/memory mode), /v1/evaluate is accessible without a bearer token.
+func TestEvaluate_OpenMode_AllowsUnauthenticated(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithAuthMode(config.AuthModeOpen)
 
 	rec := performRequest(t, srv, http.MethodPost, "/v1/evaluate", validEvaluateBody)
 
 	if rec.Code == http.StatusUnauthorized || rec.Code == http.StatusForbidden {
-		t.Errorf("want request to pass through without auth (no authenticator configured), got %d: %s",
-			rec.Code, rec.Body.String())
+		t.Errorf("open mode: want request to pass through, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
