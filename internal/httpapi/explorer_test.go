@@ -274,3 +274,75 @@ func TestExplorerEvaluate_Disabled_Returns404(t *testing.T) {
 		t.Errorf("want 404 when explorer disabled, got %d", rec.Code)
 	}
 }
+
+// TestExplorerGetEnvelope_ReadsFromSandboxStore verifies that
+// GET /explorer/envelopes/{id} retrieves an envelope from the Explorer's
+// isolated in-memory store — not from the main orchestrator. The test
+// evaluates a request via POST /explorer (which creates an envelope in the
+// sandbox), then fetches that envelope via GET /explorer/envelopes/{id}.
+func TestExplorerGetEnvelope_ReadsFromSandboxStore(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithAuthMode(config.AuthModeOpen).
+		WithExplorerEnabled(true)
+
+	// Run an evaluation in the sandbox to create an envelope.
+	evalBody := []byte(`{
+		"surface_id": "surf-payments-approval",
+		"agent_id":   "agent-payments-bot",
+		"confidence": 0.95
+	}`)
+	evalRec := performRequest(t, srv, http.MethodPost, "/explorer", evalBody)
+	if evalRec.Code != http.StatusOK {
+		t.Fatalf("evaluate: want 200, got %d: %s", evalRec.Code, evalRec.Body.String())
+	}
+	var evalResp map[string]interface{}
+	if err := json.NewDecoder(evalRec.Body).Decode(&evalResp); err != nil {
+		t.Fatalf("evaluate response not valid JSON: %v", err)
+	}
+	envelopeID, _ := evalResp["envelope_id"].(string)
+	if envelopeID == "" {
+		t.Fatalf("evaluate response missing envelope_id: %v", evalResp)
+	}
+
+	// Fetch the envelope from the Explorer sandbox endpoint.
+	envRec := performRequest(t, srv, http.MethodGet, "/explorer/envelopes/"+envelopeID, nil)
+	if envRec.Code != http.StatusOK {
+		t.Fatalf("envelope fetch: want 200, got %d: %s", envRec.Code, envRec.Body.String())
+	}
+	var envResp map[string]interface{}
+	if err := json.NewDecoder(envRec.Body).Decode(&envResp); err != nil {
+		t.Fatalf("envelope response not valid JSON: %v", err)
+	}
+	// The identity section should echo back the same envelope id.
+	identity, _ := envResp["identity"].(map[string]interface{})
+	if identity == nil {
+		t.Fatalf("envelope response missing identity section: %v", envResp)
+	}
+	if identity["id"] != envelopeID {
+		t.Errorf("want identity.id=%q, got %v", envelopeID, identity["id"])
+	}
+}
+
+// TestExplorerGetEnvelope_UnknownIDReturns404 verifies that requesting a
+// non-existent envelope from the sandbox store returns 404.
+func TestExplorerGetEnvelope_UnknownIDReturns404(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithAuthMode(config.AuthModeOpen).
+		WithExplorerEnabled(true)
+
+	rec := performRequest(t, srv, http.MethodGet, "/explorer/envelopes/00000000-0000-0000-0000-000000000000", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("want 404 for unknown envelope, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestExplorerGetEnvelope_Disabled_Returns404 verifies that the endpoint
+// returns 404 when Explorer is not enabled.
+func TestExplorerGetEnvelope_Disabled_Returns404(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil)
+
+	rec := performRequest(t, srv, http.MethodGet, "/explorer/envelopes/some-id", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("want 404 when explorer disabled, got %d", rec.Code)
+	}
+}
