@@ -107,9 +107,10 @@ type Server struct {
 	policyMode          string                       // e.g. "noop" — set via WithPolicyMeta at boot
 	policyEvaluatorName string                       // human-readable evaluator name for health responses
 	readyFn             func(context.Context) error  // nil means always ready (memory mode)
-	explorerEnabled     bool                         // set via WithExplorerEnabled; registers /explorer routes when true
-	storeBackend        string                       // e.g. "memory" or "postgres" — set via WithStoreBackend at boot
-	explorerDemoSeeded  *bool                        // nil = unknown, &true = seeded, &false = not seeded
+	explorerEnabled      bool                         // set via WithExplorerEnabled; registers /explorer routes when true
+	storeBackend         string                       // e.g. "memory" or "postgres" — set via WithStoreBackend at boot
+	explorerDemoSeeded   *bool                        // nil = unknown, &true = seeded, &false = not seeded
+	explorerOrchestrator orchestrator                 // isolated in-memory orchestrator for POST /explorer
 }
 
 type approveSurfaceRequest struct {
@@ -1033,14 +1034,19 @@ func (s *Server) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w, http.MethodPost)
 		return
 	}
-
 	if s.orchestrator == nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
 			"error": "orchestrator not configured",
 		})
 		return
 	}
+	s.handleEvaluateWith(w, r, s.orchestrator)
+}
 
+// handleEvaluateWith contains the shared evaluation logic used by both
+// /v1/evaluate (main orchestrator) and POST /explorer (Explorer orchestrator).
+// Callers are responsible for method and nil checks before calling.
+func (s *Server) handleEvaluateWith(w http.ResponseWriter, r *http.Request, orch orchestrator) {
 	rawBody, err := readRequestBody(w, r, maxRequestBodyBytes)
 	if err != nil {
 		status := http.StatusBadRequest
@@ -1096,7 +1102,7 @@ func (s *Server) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := s.orchestrator.Evaluate(r.Context(), toEvalRequest(req), json.RawMessage(rawBody))
+	result, err := orch.Evaluate(r.Context(), toEvalRequest(req), json.RawMessage(rawBody))
 	if err != nil {
 		statusCode, errResp := mapDomainError(err, entityEvaluation)
 		writeJSON(w, statusCode, errResp)

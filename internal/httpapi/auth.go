@@ -59,7 +59,10 @@ func (s *Server) WithAuthMode(mode config.AuthMode) *Server {
 func (s *Server) WithExplorerEnabled(enabled bool) *Server {
 	s.explorerEnabled = enabled
 	if enabled {
+		// Build the Explorer's isolated in-memory runtime (seeded unconditionally).
+		s.initExplorerRuntime()
 		s.mux.HandleFunc("GET /explorer", s.handleExplorerIndex)
+		s.mux.HandleFunc("POST /explorer", s.requireAuth(s.requireRole(identity.RoleOperator, identity.RoleAdmin)(s.handleExplorerEvaluate)))
 		s.mux.HandleFunc("GET /explorer/config", s.handleExplorerConfig)
 		s.mux.HandleFunc("GET /explorer/", s.handleExplorerAssets)
 	}
