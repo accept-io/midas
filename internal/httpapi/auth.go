@@ -66,6 +66,20 @@ func (s *Server) WithExplorerEnabled(enabled bool) *Server {
 	return s
 }
 
+// WithStoreBackend records the active store backend (e.g. "memory", "postgres")
+// so the Explorer config endpoint can surface it to the UI.
+func (s *Server) WithStoreBackend(backend string) *Server {
+	s.storeBackend = backend
+	return s
+}
+
+// WithDemoSeeded records whether demo data was successfully seeded at startup,
+// so the Explorer config endpoint can tell the UI which scenarios are ready.
+func (s *Server) WithDemoSeeded(seeded bool) *Server {
+	s.explorerDemoSeeded = &seeded
+	return s
+}
+
 // PrincipalFromContext retrieves the verified Principal that requireAuth stored
 // in the request context. Returns nil when no principal is present (i.e. the
 // authenticator was not configured or the middleware was not applied).

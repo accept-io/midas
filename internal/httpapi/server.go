@@ -108,6 +108,8 @@ type Server struct {
 	policyEvaluatorName string                       // human-readable evaluator name for health responses
 	readyFn             func(context.Context) error  // nil means always ready (memory mode)
 	explorerEnabled     bool                         // set via WithExplorerEnabled; registers /explorer routes when true
+	storeBackend        string                       // e.g. "memory" or "postgres" — set via WithStoreBackend at boot
+	explorerDemoSeeded  *bool                        // nil = unknown, &true = seeded, &false = not seeded
 }
 
 type approveSurfaceRequest struct {

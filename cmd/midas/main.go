@@ -88,10 +88,12 @@ func main() {
 		"dispatcher_publisher", cfg.Dispatcher.Publisher,
 	)
 
+	demoSeeded := false
 	if cfg.Dev.SeedDemoData {
 		if err := bootstrap.SeedDemo(context.Background(), repos); err != nil {
 			log.Fatal(err)
 		}
+		demoSeeded = true
 	}
 
 	// --- Domain: orchestrator and services ---
@@ -165,7 +167,12 @@ func main() {
 	if authenticator != nil {
 		srv.WithAuthenticator(authenticator)
 	}
+	srv.WithStoreBackend(cfg.Store.Backend)
+	srv.WithDemoSeeded(demoSeeded)
 	srv.WithExplorerEnabled(cfg.Server.ExplorerEnabled)
+	if cfg.Server.ExplorerEnabled {
+		slog.Info("explorer_ready", "path", "/explorer")
+	}
 
 	// --- Dispatcher ---
 
