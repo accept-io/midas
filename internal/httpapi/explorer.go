@@ -43,6 +43,14 @@ func (s *Server) handleExplorerConfig(w http.ResponseWriter, r *http.Request) {
 	if s.policyMode != "" {
 		resp["policyMode"] = s.policyMode
 	}
+	if s.storeBackend != "" {
+		resp["store"] = s.storeBackend
+	}
+	if s.explorerDemoSeeded != nil {
+		resp["demoSeeded"] = *s.explorerDemoSeeded
+	} else {
+		resp["demoSeeded"] = "unknown"
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp) //nolint:errcheck

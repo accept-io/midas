@@ -109,6 +109,18 @@ Retrieve the full governance record:
 curl http://localhost:8080/v1/decisions/request/req-demo-001?source=lending-service | jq .
 ```
 
+### Explorer (developer sandbox)
+
+When MIDAS starts in in-memory mode, a lightweight interactive UI is available at:
+
+```
+http://localhost:8080/explorer
+```
+
+Open it in a browser to submit evaluation requests and inspect governed outcomes without writing curl commands. Sample scenarios are pre-loaded and ready to run immediately.
+
+Explorer is a **developer sandbox only** — do not expose it in production environments.
+
 ---
 
 ## Core Concepts

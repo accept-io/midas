@@ -46,6 +46,25 @@
     color: #78350f;
   }
 
+  .demo-banner {
+    padding: 8px 24px;
+    font-size: 12px;
+    font-weight: 500;
+    display: none;
+  }
+  .demo-banner.ready {
+    display: block;
+    background: #d1fae5;
+    border-bottom: 1px solid #6ee7b7;
+    color: #065f46;
+  }
+  .demo-banner.not-ready {
+    display: block;
+    background: #fffbeb;
+    border-bottom: 1px solid #fcd34d;
+    color: #92400e;
+  }
+
   .layout {
     display: grid;
     grid-template-columns: 420px 1fr;
@@ -76,6 +95,7 @@
   }
 
   label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 4px; color: #374151; }
+  .label-hint { font-size: 11px; font-weight: 400; color: #9ca3af; margin-left: 6px; }
   input[type=text], input[type=password], textarea, select {
     width: 100%;
     padding: 7px 10px;
@@ -112,6 +132,7 @@
     text-align: left;
     font-size: 12px;
     transition: border-color 0.15s, background 0.15s;
+    width: 100%;
   }
   .scenario-btn:hover { border-color: #3b82f6; background: #eff6ff; }
   .scenario-btn .scenario-name { font-weight: 600; color: #1a1a1a; }
@@ -126,6 +147,7 @@
   }
   .tag-always { background: #d1fae5; color: #065f46; }
   .tag-demo   { background: #fef3c7; color: #92400e; }
+  .tag-ready  { background: #d1fae5; color: #065f46; }
 
   .mode-tabs { display: flex; gap: 0; margin-bottom: 12px; border: 1px solid #d1d5db; border-radius: 6px; overflow: hidden; }
   .mode-tab {
@@ -306,6 +328,8 @@
   &#9888;&#65039; Developer sandbox only. Use test tokens only — do not paste production credentials.
 </div>
 
+<div class="demo-banner" id="demo-banner"></div>
+
 <div class="layout">
   <!-- LEFT: Request builder -->
   <div class="panel panel-left">
@@ -343,23 +367,23 @@
         <button class="scenario-btn" data-scenario="demo-execute">
           <div>
             <div class="scenario-name">Execute (within authority)</div>
-            <div class="scenario-desc">High confidence, low consequence &rarr; Execute</div>
+            <div class="scenario-desc">High confidence, low consequence &rarr; Accept</div>
           </div>
-          <span class="scenario-tag tag-demo">requires demo data</span>
+          <span class="scenario-tag tag-demo" id="tag-demo-execute">requires demo data</span>
         </button>
         <button class="scenario-btn" data-scenario="demo-escalate-confidence">
           <div>
             <div class="scenario-name">Escalate (low confidence)</div>
             <div class="scenario-desc">Confidence below threshold &rarr; Escalate</div>
           </div>
-          <span class="scenario-tag tag-demo">requires demo data</span>
+          <span class="scenario-tag tag-demo" id="tag-demo-escalate-confidence">requires demo data</span>
         </button>
         <button class="scenario-btn" data-scenario="demo-escalate-consequence">
           <div>
             <div class="scenario-name">Escalate (high consequence)</div>
             <div class="scenario-desc">Consequence exceeds limit &rarr; Escalate</div>
           </div>
-          <span class="scenario-tag tag-demo">requires demo data</span>
+          <span class="scenario-tag tag-demo" id="tag-demo-escalate-consequence">requires demo data</span>
         </button>
       </div>
     </div>
@@ -380,19 +404,19 @@
           <label for="f-agent">Agent ID <span style="color:#ef4444">*</span></label>
           <input type="text" id="f-agent" placeholder="e.g. agent-payments-bot">
         </div>
-        <div class="form-row">
-          <div class="field">
-            <label for="f-confidence">Confidence (0–1) <span style="color:#ef4444">*</span></label>
-            <input type="text" id="f-confidence" placeholder="0.95">
-          </div>
-          <div class="field">
-            <label for="f-request-id">Request ID</label>
-            <input type="text" id="f-request-id" placeholder="auto-generated">
-          </div>
+        <div class="field">
+          <label for="f-confidence">
+            Confidence (0–1) <span style="color:#ef4444">*</span>
+            <span class="label-hint" id="confidence-hint"></span>
+          </label>
+          <input type="text" id="f-confidence" placeholder="0.95">
         </div>
         <div class="field">
-          <label for="f-consequence">Consequence (optional JSON)</label>
-          <input type="text" id="f-consequence" placeholder='{"type":"monetary","amount":500}'>
+          <label for="f-consequence">
+            Consequence (optional JSON)
+            <span class="label-hint" id="consequence-hint"></span>
+          </label>
+          <input type="text" id="f-consequence" placeholder='{"type":"monetary","amount":500,"currency":"GBP"}'>
         </div>
         <div class="field">
           <label for="f-context">Context (optional JSON object)</label>
@@ -427,7 +451,9 @@
       <div class="section-title">Result</div>
       <div class="outcome-card empty" id="outcome-card">
         <div class="outcome-label empty" id="outcome-label">—</div>
-        <div class="meta-row" id="meta-row"></div>
+        <div class="meta-row" id="meta-row">
+          <span class="placeholder-text">Submit a request to see the governed outcome here</span>
+        </div>
       </div>
 
       <div class="explanation-box" id="explanation-box"></div>
@@ -488,18 +514,27 @@
   });
 
   // ── Runtime config ─────────────────────────────────────────────────────────
-  const runtimeCard = document.getElementById('runtime-card');
-  const runtimeBadge = document.getElementById('runtime-badge');
-  const authModeHint = document.getElementById('auth-mode-hint');
+  const runtimeCard   = document.getElementById('runtime-card');
+  const runtimeBadge  = document.getElementById('runtime-badge');
+  const authModeHint  = document.getElementById('auth-mode-hint');
+  const demoBanner    = document.getElementById('demo-banner');
+
+  const demoTagIDs = [
+    'tag-demo-execute',
+    'tag-demo-escalate-confidence',
+    'tag-demo-escalate-consequence',
+  ];
 
   fetch('/explorer/config')
     .then(r => r.json())
     .then(cfg => {
+      // Runtime card
       const rows = [
         ['status', '<span class="status-dot"></span>running'],
       ];
       if (cfg.authMode)   rows.push(['auth mode',   cfg.authMode]);
       if (cfg.policyMode) rows.push(['policy mode', cfg.policyMode]);
+      if (cfg.store)      rows.push(['store',        cfg.store]);
 
       runtimeCard.innerHTML = rows.map(([k, v]) =>
         `<div class="runtime-row"><span class="runtime-key">${k}</span><span class="runtime-val">${v}</span></div>`
@@ -512,6 +547,27 @@
       } else if (cfg.authMode === 'required') {
         authModeHint.textContent = 'Auth mode is required — bearer token must be set.';
       }
+
+      // Demo banner + scenario badges
+      const seeded = cfg.demoSeeded;
+      if (seeded === true) {
+        demoBanner.textContent = 'Demo mode — sample scenarios ready. Run any scenario to explore MIDAS authority evaluation.';
+        demoBanner.className = 'demo-banner ready';
+        demoTagIDs.forEach(id => {
+          const el = document.getElementById(id);
+          if (el) { el.textContent = 'ready'; el.className = 'scenario-tag tag-ready'; }
+        });
+        // Threshold hints
+        document.getElementById('confidence-hint').textContent = 'threshold \u2265 0.85';
+        document.getElementById('consequence-hint').textContent = 'threshold \u2264 1000 GBP';
+      } else if (seeded === false) {
+        demoBanner.textContent = 'Demo data not loaded — demo scenarios require seed data. Start with Unknown Surface.';
+        demoBanner.className = 'demo-banner not-ready';
+      }
+      // seeded === "unknown": leave banner hidden
+
+      // Auto-run unknown-surface scenario so the right panel is never empty
+      autoRun('unknown-surface');
     })
     .catch(() => {
       runtimeCard.innerHTML = '<div class="runtime-row"><span class="runtime-key">status</span><span class="runtime-val" style="color:#ef4444">unreachable</span></div>';
@@ -569,10 +625,17 @@
     document.getElementById('f-surface').value     = sc.surface_id || '';
     document.getElementById('f-agent').value       = sc.agent_id   || '';
     document.getElementById('f-confidence').value  = sc.confidence != null ? String(sc.confidence) : '';
-    document.getElementById('f-request-id').value  = sc.request_id || '';
     document.getElementById('f-consequence').value = sc.consequence ? JSON.stringify(sc.consequence) : '';
     document.getElementById('f-context').value     = sc.context    ? JSON.stringify(sc.context)     : '';
     if (currentMode === 'json') syncFormToJSON();
+  }
+
+  // Auto-run: load scenario and submit silently
+  function autoRun(scenarioKey) {
+    const sc = SCENARIOS[scenarioKey];
+    if (!sc) return;
+    loadScenario(sc);
+    submitRequest();
   }
 
   // ── Build body ─────────────────────────────────────────────────────────────
@@ -580,7 +643,6 @@
     const surface    = document.getElementById('f-surface').value.trim();
     const agent      = document.getElementById('f-agent').value.trim();
     const confidence = parseFloat(document.getElementById('f-confidence').value.trim());
-    const requestId  = document.getElementById('f-request-id').value.trim();
     const consRaw    = document.getElementById('f-consequence').value.trim();
     const ctxRaw     = document.getElementById('f-context').value.trim();
 
@@ -589,7 +651,6 @@
     if (isNaN(confidence) || confidence < 0 || confidence > 1) throw new Error('Confidence must be a number between 0 and 1');
 
     const body = { surface_id: surface, agent_id: agent, confidence };
-    if (requestId)  body.request_id = requestId;
     if (consRaw) {
       try { body.consequence = JSON.parse(consRaw); } catch { throw new Error('Consequence is not valid JSON'); }
     }
@@ -617,20 +678,21 @@
 
   // ── Reset ──────────────────────────────────────────────────────────────────
   document.getElementById('reset-btn').addEventListener('click', () => {
-    document.getElementById('f-surface').value    = '';
-    document.getElementById('f-agent').value      = '';
-    document.getElementById('f-confidence').value = '';
-    document.getElementById('f-request-id').value = '';
+    document.getElementById('f-surface').value     = '';
+    document.getElementById('f-agent').value       = '';
+    document.getElementById('f-confidence').value  = '';
     document.getElementById('f-consequence').value = '';
-    document.getElementById('f-context').value    = '';
-    document.getElementById('json-body').value    = '{\n  "surface_id": "",\n  "agent_id": "",\n  "confidence": 0.95\n}';
+    document.getElementById('f-context').value     = '';
+    document.getElementById('json-body').value     = '{\n  "surface_id": "",\n  "agent_id": "",\n  "confidence": 0.95\n}';
     clearResult();
   });
 
   // ── Submit ─────────────────────────────────────────────────────────────────
   const submitBtn = document.getElementById('submit-btn');
 
-  submitBtn.addEventListener('click', async () => {
+  submitBtn.addEventListener('click', submitRequest);
+
+  async function submitRequest() {
     let body;
     try { body = buildBody(); } catch (e) {
       showError(e.message, null);
@@ -638,7 +700,7 @@
     }
 
     submitBtn.disabled = true;
-    submitBtn.textContent = 'Submitting…';
+    submitBtn.textContent = 'Submitting\u2026';
 
     const token = getToken();
     try {
@@ -662,7 +724,7 @@
       submitBtn.disabled = false;
       submitBtn.textContent = 'Submit';
     }
-  });
+  }
 
   // ── Copy as curl ───────────────────────────────────────────────────────────
   document.getElementById('curl-copy-btn').addEventListener('click', () => {
@@ -714,9 +776,9 @@
   };
 
   function showResult(httpStatus, data, requestBody) {
-    const outcomeCard  = document.getElementById('outcome-card');
-    const outcomeLabel = document.getElementById('outcome-label');
-    const metaRow      = document.getElementById('meta-row');
+    const outcomeCard    = document.getElementById('outcome-card');
+    const outcomeLabel   = document.getElementById('outcome-label');
+    const metaRow        = document.getElementById('meta-row');
     const explanationBox = document.getElementById('explanation-box');
 
     const outcome    = data.outcome || '';
@@ -730,7 +792,7 @@
 
     outcomeCard.className  = `outcome-card ${cls}`;
     outcomeLabel.className = `outcome-label ${cls}`;
-    outcomeLabel.textContent = OUTCOME_LABEL[outcome] || data.error || outcome || '—';
+    outcomeLabel.textContent = OUTCOME_LABEL[outcome] || data.error || outcome || '\u2014';
 
     const metas = [];
     if (reasonCode)  metas.push(['Reason Code',  reasonCode]);
@@ -741,15 +803,17 @@
       `<div class="meta-item"><div class="meta-key">${k}</div><div class="meta-val">${escHtml(String(v))}</div></div>`
     ).join('');
 
-    const explanation = EXPLANATION[reasonCode];
+    // Explanation: prefer data.explanation, then EXPLANATION map, then auth errors
+    let explanation = data.explanation || EXPLANATION[reasonCode] || '';
+    if (!explanation) {
+      if (httpStatus === 401) {
+        explanation = 'Request was rejected with 401 Unauthorized. Check that your bearer token is set and valid.';
+      } else if (httpStatus === 403) {
+        explanation = 'Request was rejected with 403 Forbidden. Your token is valid but does not have the required role (operator or admin).';
+      }
+    }
     if (explanation) {
       explanationBox.textContent = explanation;
-      explanationBox.classList.add('visible');
-    } else if (httpStatus === 401) {
-      explanationBox.textContent = 'Request was rejected with 401 Unauthorized. Check that your bearer token is set and valid.';
-      explanationBox.classList.add('visible');
-    } else if (httpStatus === 403) {
-      explanationBox.textContent = 'Request was rejected with 403 Forbidden. Your token is valid but does not have the required role (operator or admin).';
       explanationBox.classList.add('visible');
     } else {
       explanationBox.classList.remove('visible');
@@ -771,9 +835,9 @@
   }
 
   function showError(msg, httpStatus) {
-    const outcomeCard  = document.getElementById('outcome-card');
-    const outcomeLabel = document.getElementById('outcome-label');
-    const metaRow      = document.getElementById('meta-row');
+    const outcomeCard    = document.getElementById('outcome-card');
+    const outcomeLabel   = document.getElementById('outcome-label');
+    const metaRow        = document.getElementById('meta-row');
     const explanationBox = document.getElementById('explanation-box');
 
     outcomeCard.className  = 'outcome-card error';
@@ -785,15 +849,15 @@
   }
 
   function clearResult() {
-    const outcomeCard  = document.getElementById('outcome-card');
-    const outcomeLabel = document.getElementById('outcome-label');
-    const metaRow      = document.getElementById('meta-row');
+    const outcomeCard    = document.getElementById('outcome-card');
+    const outcomeLabel   = document.getElementById('outcome-label');
+    const metaRow        = document.getElementById('meta-row');
     const explanationBox = document.getElementById('explanation-box');
 
     outcomeCard.className  = 'outcome-card empty';
     outcomeLabel.className = 'outcome-label empty';
-    outcomeLabel.textContent = '—';
-    metaRow.innerHTML = '';
+    outcomeLabel.textContent = '\u2014';
+    metaRow.innerHTML = '<span class="placeholder-text">Submit a request to see the governed outcome here</span>';
     explanationBox.classList.remove('visible');
     document.getElementById('raw-section').style.display  = 'none';
     document.getElementById('curl-section').style.display = 'none';
