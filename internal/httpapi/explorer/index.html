@@ -119,6 +119,12 @@
   .token-row { display: flex; gap: 6px; }
   .token-row input { flex: 1; }
 
+  .token-status { font-size: 11px; margin-top: 4px; }
+  .token-status.neutral { color: #9ca3af; }
+  .token-status.info    { color: #3b82f6; }
+  .token-status.success { color: #10b981; }
+  .token-status.error   { color: #ef4444; }
+
   .scenarios { display: flex; flex-direction: column; gap: 6px; }
   .scenario-btn {
     display: flex;
@@ -347,9 +353,11 @@
       <div class="field">
         <label for="token-input">Bearer Token</label>
         <div class="token-row">
-          <input type="password" id="token-input" placeholder="Paste token here (stored in sessionStorage)" autocomplete="off">
-          <button class="btn btn-ghost" id="token-clear-btn" title="Clear token">&#10005;</button>
+          <input type="password" id="token-input" placeholder="Paste token (Enter or Apply to validate)" autocomplete="off">
+          <button class="btn btn-ghost" id="token-toggle-btn" type="button">Show</button>
+          <button class="btn btn-primary" id="token-apply-btn" type="button">Apply Token</button>
         </div>
+        <div class="token-status neutral" id="token-status">Not set</div>
         <div style="font-size:11px;color:#9ca3af;margin-top:4px" id="auth-mode-hint"></div>
       </div>
     </div>
@@ -496,7 +504,10 @@
   'use strict';
 
   // ── Token ──────────────────────────────────────────────────────────────────
-  const tokenInput = document.getElementById('token-input');
+  const tokenInput     = document.getElementById('token-input');
+  const tokenStatusEl  = document.getElementById('token-status');
+  const tokenToggleBtn = document.getElementById('token-toggle-btn');
+  const tokenApplyBtn  = document.getElementById('token-apply-btn');
 
   function getToken() {
     return sessionStorage.getItem('midas_token') || '';
@@ -506,12 +517,75 @@
     else    sessionStorage.removeItem('midas_token');
   }
 
+  // Initialize from session — populate field but don't assert validity.
   tokenInput.value = getToken();
-  tokenInput.addEventListener('input', () => setToken(tokenInput.value.trim()));
-  document.getElementById('token-clear-btn').addEventListener('click', () => {
-    tokenInput.value = '';
-    setToken('');
+
+  // Show / Hide toggle
+  tokenToggleBtn.addEventListener('click', () => {
+    const reveal = tokenInput.type === 'password';
+    tokenInput.type = reveal ? 'text' : 'password';
+    tokenToggleBtn.textContent = reveal ? 'Hide' : 'Show';
   });
+
+  // Enter key in token field triggers Apply Token
+  tokenInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); applyToken(); }
+  });
+
+  // Apply Token button
+  tokenApplyBtn.addEventListener('click', applyToken);
+
+  function setTokenStatus(state, text) {
+    tokenStatusEl.textContent = text;
+    tokenStatusEl.className = 'token-status ' + state;
+  }
+
+  async function applyToken() {
+    const raw = tokenInput.value.trim();
+
+    // Empty → clear stored token and reset UI
+    if (!raw) {
+      setToken('');
+      setTokenStatus('neutral', 'Not set');
+      showAuthRequiredPrompt();
+      return;
+    }
+
+    // Step B: transient validating state while request is in flight
+    setTokenStatus('info', 'Validating token\u2026');
+    showValidating();
+
+    // Step C: validate using the unknown-surface scenario — any non-401 response means the
+    // token was accepted by the auth layer, regardless of the authority outcome.
+    const VALIDATE_BODY = { surface_id: 'unknown-surface-xyz', agent_id: 'agent-unknown', confidence: 0.9 };
+    try {
+      const res = await fetch(`${window.location.origin}/v1/evaluate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${raw}`,
+        },
+        body: JSON.stringify(VALIDATE_BODY),
+      });
+
+      if (res.status === 401) {
+        // Token rejected — do NOT save; leave any previously valid token intact
+        setTokenStatus('error', 'Invalid token');
+        showTokenRejected();
+      } else {
+        // Token accepted — save and show the real result
+        setToken(raw);
+        setTokenStatus('success', 'Token accepted');
+        const text = await res.text();
+        let data;
+        try { data = JSON.parse(text); } catch { data = { raw: text }; }
+        showResult(res.status, data, VALIDATE_BODY);
+      }
+    } catch (e) {
+      setTokenStatus('error', 'Connection error');
+      showError('Network error: ' + e.message, null);
+    }
+  }
 
   // ── Runtime config ─────────────────────────────────────────────────────────
   const runtimeCard   = document.getElementById('runtime-card');
@@ -566,8 +640,13 @@
       }
       // seeded === "unknown": leave banner hidden
 
-      // Auto-run unknown-surface scenario so the right panel is never empty
-      autoRun('unknown-surface');
+      // Auto-run: only when auth is open, or when a session token is already present.
+      // In auth-required mode with no token, show a prompt instead of a silent 401.
+      if (cfg.authMode !== 'required' || getToken()) {
+        autoRun('unknown-surface');
+      } else {
+        showAuthRequiredPrompt();
+      }
     })
     .catch(() => {
       runtimeCard.innerHTML = '<div class="runtime-row"><span class="runtime-key">status</span><span class="runtime-val" style="color:#ef4444">unreachable</span></div>';
@@ -832,6 +911,51 @@
     const curlSection = document.getElementById('curl-section');
     curlSection.style.display = 'block';
     document.getElementById('curl-pre').textContent = generateCurl(requestBody, getToken());
+  }
+
+  // ── Auth / token result-panel helpers ──────────────────────────────────────
+  function showValidating() {
+    const outcomeCard    = document.getElementById('outcome-card');
+    const outcomeLabel   = document.getElementById('outcome-label');
+    const metaRow        = document.getElementById('meta-row');
+    const explanationBox = document.getElementById('explanation-box');
+    outcomeCard.className  = 'outcome-card empty';
+    outcomeLabel.className = 'outcome-label empty';
+    outcomeLabel.textContent = 'Validating\u2026';
+    metaRow.innerHTML = '';
+    explanationBox.classList.remove('visible');
+    document.getElementById('raw-section').style.display  = 'none';
+    document.getElementById('curl-section').style.display = 'none';
+  }
+
+  function showTokenRejected() {
+    const outcomeCard    = document.getElementById('outcome-card');
+    const outcomeLabel   = document.getElementById('outcome-label');
+    const metaRow        = document.getElementById('meta-row');
+    const explanationBox = document.getElementById('explanation-box');
+    outcomeCard.className  = 'outcome-card error';
+    outcomeLabel.className = 'outcome-label error';
+    outcomeLabel.textContent = 'Unauthorized';
+    metaRow.innerHTML = '';
+    explanationBox.textContent = 'The token was rejected with 401 Unauthorized. Check that your bearer token is correct and has not expired.';
+    explanationBox.classList.add('visible');
+    document.getElementById('raw-section').style.display  = 'none';
+    document.getElementById('curl-section').style.display = 'none';
+  }
+
+  function showAuthRequiredPrompt() {
+    const outcomeCard    = document.getElementById('outcome-card');
+    const outcomeLabel   = document.getElementById('outcome-label');
+    const metaRow        = document.getElementById('meta-row');
+    const explanationBox = document.getElementById('explanation-box');
+    outcomeCard.className  = 'outcome-card empty';
+    outcomeLabel.className = 'outcome-label empty';
+    outcomeLabel.textContent = '\u2014';
+    metaRow.innerHTML = '';
+    explanationBox.textContent = 'Enter a bearer token to start exploring MIDAS.';
+    explanationBox.classList.add('visible');
+    document.getElementById('raw-section').style.display  = 'none';
+    document.getElementById('curl-section').style.display = 'none';
   }
 
   function showError(msg, httpStatus) {
