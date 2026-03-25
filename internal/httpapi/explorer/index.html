@@ -1059,7 +1059,7 @@
       const token = getToken();
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
-      const res  = await fetch(`${window.location.origin}/v1/envelopes/${encodeURIComponent(envelopeId)}`, { headers });
+      const res  = await fetch(`${window.location.origin}/explorer/envelopes/${encodeURIComponent(envelopeId)}`, { headers });
       const data = await res.json();
 
       if (!res.ok) {

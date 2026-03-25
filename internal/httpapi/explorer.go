@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/accept-io/midas/internal/bootstrap"
 	"github.com/accept-io/midas/internal/decision"
@@ -86,6 +87,45 @@ func (s *Server) handleExplorerConfig(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp) //nolint:errcheck
+}
+
+// handleExplorerGetEnvelope handles GET /explorer/envelopes/{id} using the
+// Explorer's isolated in-memory orchestrator so that envelope lookups are
+// consistent with evaluations run via POST /explorer.
+func (s *Server) handleExplorerGetEnvelope(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	if s.explorerOrchestrator == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "explorer runtime not available",
+		})
+		return
+	}
+
+	const prefix = "/explorer/envelopes/"
+	id := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, prefix))
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing envelope id"})
+		return
+	}
+	if !isValidIdentifier(id) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid envelope id"})
+		return
+	}
+
+	env, err := s.explorerOrchestrator.GetEnvelopeByID(r.Context(), id)
+	if err != nil {
+		statusCode, errResp := mapDomainError(err, entityEnvelope)
+		writeJSON(w, statusCode, errResp)
+		return
+	}
+	if env == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "envelope not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, env)
 }
 
 // handleExplorerEvaluate handles POST /explorer using the Explorer's isolated
