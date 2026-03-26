@@ -125,35 +125,84 @@
   .token-status.success { color: #10b981; }
   .token-status.error   { color: #ef4444; }
 
-  .scenarios { display: flex; flex-direction: column; gap: 6px; }
-  .scenario-btn {
+  /* Authority Scenarios picker */
+  .scenario-search {
+    width: 100%;
+    padding: 6px 10px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 12px;
+    font-family: inherit;
+    background: #fff;
+    color: #1a1a1a;
+    margin-bottom: 6px;
+  }
+  .scenario-search:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
+
+  .scenario-category-header {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+    color: #9ca3af;
+    padding: 8px 2px 3px;
+    border-top: 1px solid #f3f4f6;
+    margin-top: 4px;
+  }
+  .scenario-category-header:first-child { border-top: none; margin-top: 0; padding-top: 0; }
+
+  .scenario-item {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 8px 10px;
-    border: 1px solid #e5e7eb;
-    border-radius: 6px;
-    background: #fff;
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    background: transparent;
     cursor: pointer;
     text-align: left;
-    font-size: 12px;
-    transition: border-color 0.15s, background 0.15s;
-    width: 100%;
+    transition: background 0.12s, border-color 0.12s;
+    margin-bottom: 1px;
   }
-  .scenario-btn:hover { border-color: #3b82f6; background: #eff6ff; }
-  .scenario-btn .scenario-name { font-weight: 600; color: #1a1a1a; }
-  .scenario-btn .scenario-desc { color: #6b7280; }
-  .scenario-btn .scenario-tag {
-    margin-left: auto;
-    font-size: 10px;
-    padding: 1px 6px;
-    border-radius: 8px;
-    white-space: nowrap;
+  .scenario-item:hover { background: #f3f4f6; border-color: #e5e7eb; }
+  .scenario-item.active { background: #eff6ff; border-color: #bfdbfe; }
+
+  .scenario-item-text { flex: 1; min-width: 0; }
+  .scenario-item-title { display: block; font-size: 12px; font-weight: 600; color: #1a1a1a; }
+  .scenario-item-desc  { display: block; font-size: 11px; color: #6b7280; }
+
+  .scenario-item-badge {
     flex-shrink: 0;
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 8px;
+    font-weight: 600;
+    white-space: nowrap;
   }
-  .tag-always { background: #d1fae5; color: #065f46; }
-  .tag-demo   { background: #fef3c7; color: #92400e; }
-  .tag-ready  { background: #d1fae5; color: #065f46; }
+  .badge-accept  { background: #d1fae5; color: #065f46; }
+  .badge-escalate { background: #fef3c7; color: #92400e; }
+  .badge-reject  { background: #fee2e2; color: #991b1b; }
+
+  .scenario-no-results { font-size: 12px; color: #9ca3af; padding: 8px 2px; }
+
+  /* Scenario microcopy info block */
+  .scenario-info-box {
+    background: #f0f7ff;
+    border: 1px solid #bfdbfe;
+    border-radius: 6px;
+    padding: 10px 12px;
+    margin-top: 8px;
+    font-size: 12px;
+  }
+  .scenario-info-title { font-weight: 700; color: #1e3a8a; margin-bottom: 3px; }
+  .scenario-info-expected {
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 11px;
+    color: #374151;
+    margin-bottom: 6px;
+  }
+  .scenario-info-explanation { color: #374151; line-height: 1.55; }
 
   .mode-tabs { display: flex; gap: 0; margin-bottom: 12px; border: 1px solid #d1d5db; border-radius: 6px; overflow: hidden; }
   .mode-tab {
@@ -448,36 +497,13 @@
     </div>
 
     <div class="section">
-      <div class="section-title">Sample Scenarios</div>
-      <div class="scenarios">
-        <button class="scenario-btn" data-scenario="unknown-surface">
-          <div>
-            <div class="scenario-name">Unknown Surface</div>
-            <div class="scenario-desc">Surface not found &rarr; Reject / SURFACE_NOT_FOUND</div>
-          </div>
-          <span class="scenario-tag tag-always">always works</span>
-        </button>
-        <button class="scenario-btn" data-scenario="demo-execute">
-          <div>
-            <div class="scenario-name">Execute (within authority)</div>
-            <div class="scenario-desc">High confidence, low consequence &rarr; Accept</div>
-          </div>
-          <span class="scenario-tag tag-demo" id="tag-demo-execute">requires demo data</span>
-        </button>
-        <button class="scenario-btn" data-scenario="demo-escalate-confidence">
-          <div>
-            <div class="scenario-name">Escalate (low confidence)</div>
-            <div class="scenario-desc">Confidence below threshold &rarr; Escalate</div>
-          </div>
-          <span class="scenario-tag tag-demo" id="tag-demo-escalate-confidence">requires demo data</span>
-        </button>
-        <button class="scenario-btn" data-scenario="demo-escalate-consequence">
-          <div>
-            <div class="scenario-name">Escalate (high consequence)</div>
-            <div class="scenario-desc">Consequence exceeds limit &rarr; Escalate</div>
-          </div>
-          <span class="scenario-tag tag-demo" id="tag-demo-escalate-consequence">requires demo data</span>
-        </button>
+      <div class="section-title">Authority Scenarios</div>
+      <input type="text" class="scenario-search" id="scenario-search" placeholder="Filter scenarios&#x2026;" autocomplete="off">
+      <div id="scenario-list"></div>
+      <div class="scenario-info-box" id="scenario-info-box" style="display:none">
+        <div class="scenario-info-title" id="scenario-info-title"></div>
+        <div class="scenario-info-expected" id="scenario-info-expected"></div>
+        <div class="scenario-info-explanation" id="scenario-info-explanation"></div>
       </div>
     </div>
 
@@ -745,11 +771,7 @@
   const authModeHint  = document.getElementById('auth-mode-hint');
   const demoBanner    = document.getElementById('demo-banner');
 
-  const demoTagIDs = [
-    'tag-demo-execute',
-    'tag-demo-escalate-confidence',
-    'tag-demo-escalate-consequence',
-  ];
+  // demoTagIDs removed — scenario badges are now rendered dynamically by renderScenarioList().
 
   fetch('/explorer/config')
     .then(r => r.json())
@@ -779,11 +801,7 @@
       if (cfg.explorerStore === 'memory') {
         demoBanner.textContent = '\u24d8 Sandbox mode \u2014 Explorer uses isolated in-memory demo data. Production endpoint (/v1/evaluate) uses configured store.';
         demoBanner.className = 'demo-banner ready';
-        // Demo scenarios are always ready in the sandbox store
-        demoTagIDs.forEach(id => {
-          const el = document.getElementById(id);
-          if (el) { el.textContent = 'ready'; el.className = 'scenario-tag tag-ready'; }
-        });
+        // All sandbox scenarios are immediately available — no badge update needed.
         // Threshold hints are always valid for the sandbox store
         document.getElementById('confidence-hint').textContent = 'threshold \u2265 0.85';
         document.getElementById('consequence-hint').textContent = 'threshold \u2264 1000 GBP';
@@ -792,7 +810,7 @@
       // Auto-run: only when auth is open, or when a session token is already present.
       // In auth-required mode with no token, show a prompt instead of a silent 401.
       if (cfg.authMode !== 'required' || getToken()) {
-        autoRun('unknown-surface');
+        autoRun('chain-unknown-surface');
       } else {
         showAuthRequiredPrompt();
       }
@@ -814,39 +832,231 @@
     });
   });
 
-  // ── Scenarios ──────────────────────────────────────────────────────────────
-  const SCENARIOS = {
-    'unknown-surface': {
-      surface_id: 'unknown-surface-xyz',
-      agent_id: 'agent-unknown',
-      confidence: 0.9,
+  // ── Authority Scenarios ────────────────────────────────────────────────────
+  // Structured scenario definitions. Each scenario maps to a real evaluation path
+  // against the demo (Explorer sandbox) data. Payloads are verified against the
+  // seeded demo data (SeedDemo): surface surf-payments-approval,
+  // agent agent-payments-bot, confidence threshold ≥ 0.85, consequence ≤ 1000 GBP.
+  //
+  // NOTES:
+  //   - INSUFFICIENT_CONTEXT: demo profile has no RequiredContextKeys, so this
+  //     outcome cannot be triggered without custom configuration. Omitted.
+  //   - POLICY_DENY: Explorer uses NoOpPolicyEvaluator (always allows). Omitted.
+  //   - NO_ACTIVE_GRANT: only one agent is seeded with a grant. Using AGENT_NOT_FOUND
+  //     as the representative authority-chain failure instead.
+  const AUTHORITY_SCENARIOS = [
+    // ── Thresholds ──────────────────────────────────────────────────────────
+    {
+      id: 'threshold-within-authority',
+      category: 'Thresholds',
+      title: 'Within authority',
+      description: 'High confidence, low consequence',
+      expected_outcome: 'Accept',
+      expected_reason: 'WITHIN_AUTHORITY',
+      explanation: 'Demonstrates autonomous execution when confidence is above the threshold (0.95 \u2265 0.85) and consequence remains within the configured limit (\u00a3100 \u2264 \u00a31,000).',
+      request: {
+        surface_id: 'surf-payments-approval',
+        agent_id: 'agent-payments-bot',
+        confidence: 0.95,
+        consequence: { type: 'monetary', amount: 100, currency: 'GBP' },
+      },
     },
-    'demo-execute': {
-      surface_id: 'surf-payments-approval',
-      agent_id: 'agent-payments-bot',
-      confidence: 0.95,
-      consequence: { type: 'monetary', amount: 100, currency: 'GBP' },
+    {
+      id: 'threshold-below-confidence',
+      category: 'Thresholds',
+      title: 'Below confidence threshold',
+      description: 'Confidence falls below the required threshold',
+      expected_outcome: 'Escalate',
+      expected_reason: 'CONFIDENCE_BELOW_THRESHOLD',
+      explanation: 'Demonstrates escalation when the agent\'s certainty score (0.30) falls below the minimum required by the authority profile (0.85). Human review is required before execution.',
+      request: {
+        surface_id: 'surf-payments-approval',
+        agent_id: 'agent-payments-bot',
+        confidence: 0.3,
+        consequence: { type: 'monetary', amount: 100, currency: 'GBP' },
+      },
     },
-    'demo-escalate-confidence': {
-      surface_id: 'surf-payments-approval',
-      agent_id: 'agent-payments-bot',
-      confidence: 0.3,
-      consequence: { type: 'monetary', amount: 100, currency: 'GBP' },
+    {
+      id: 'threshold-boundary',
+      category: 'Thresholds',
+      title: 'At threshold boundary',
+      description: 'Confidence exactly at the configured threshold (0.85)',
+      expected_outcome: 'Accept',
+      expected_reason: 'WITHIN_AUTHORITY',
+      explanation: 'Demonstrates that MIDAS uses \u2265 comparison for confidence: a score exactly equal to the threshold is permitted. Boundary-passing requests execute normally.',
+      request: {
+        surface_id: 'surf-payments-approval',
+        agent_id: 'agent-payments-bot',
+        confidence: 0.85,
+        consequence: { type: 'monetary', amount: 100, currency: 'GBP' },
+      },
     },
-    'demo-escalate-consequence': {
-      surface_id: 'surf-payments-approval',
-      agent_id: 'agent-payments-bot',
-      confidence: 0.95,
-      consequence: { type: 'monetary', amount: 1000000, currency: 'GBP' },
-    },
-  };
 
-  document.querySelectorAll('.scenario-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const sc = SCENARIOS[btn.dataset.scenario];
-      if (!sc) return;
-      loadScenario(sc);
+    // ── Consequence ──────────────────────────────────────────────────────────
+    {
+      id: 'consequence-low-value',
+      category: 'Consequence',
+      title: 'Low value approval',
+      description: 'Monetary consequence well within the allowed limit',
+      expected_outcome: 'Accept',
+      expected_reason: 'WITHIN_AUTHORITY',
+      explanation: 'Demonstrates execution when the monetary impact (\u00a350) is well below the consequence threshold (\u00a31,000). Both confidence and consequence are within the authority envelope.',
+      request: {
+        surface_id: 'surf-payments-approval',
+        agent_id: 'agent-payments-bot',
+        confidence: 0.95,
+        consequence: { type: 'monetary', amount: 50, currency: 'GBP' },
+      },
+    },
+    {
+      id: 'consequence-near-limit',
+      category: 'Consequence',
+      title: 'Near consequence limit',
+      description: 'Monetary consequence just below the allowed maximum (\u00a3999)',
+      expected_outcome: 'Accept',
+      expected_reason: 'WITHIN_AUTHORITY',
+      explanation: 'Demonstrates that MIDAS uses \u2264 comparison: a consequence of \u00a3999 is still within the configured limit of \u00a31,000. One pound more would trigger escalation.',
+      request: {
+        surface_id: 'surf-payments-approval',
+        agent_id: 'agent-payments-bot',
+        confidence: 0.95,
+        consequence: { type: 'monetary', amount: 999, currency: 'GBP' },
+      },
+    },
+    {
+      id: 'consequence-exceeds-limit',
+      category: 'Consequence',
+      title: 'Above consequence limit',
+      description: 'Monetary consequence exceeds the allowed limit',
+      expected_outcome: 'Escalate',
+      expected_reason: 'CONSEQUENCE_EXCEEDS_LIMIT',
+      explanation: 'Demonstrates escalation when the consequence of the action (\u00a32,500) exceeds the authority envelope (\u00a31,000). MIDAS requires human review before this decision can execute.',
+      request: {
+        surface_id: 'surf-payments-approval',
+        agent_id: 'agent-payments-bot',
+        confidence: 0.95,
+        consequence: { type: 'monetary', amount: 2500, currency: 'GBP' },
+      },
+    },
+
+    // ── Context ──────────────────────────────────────────────────────────────
+    {
+      id: 'context-with-fields',
+      category: 'Context',
+      title: 'Request with context',
+      description: 'Additional context fields provided alongside the core request',
+      expected_outcome: 'Accept',
+      expected_reason: 'WITHIN_AUTHORITY',
+      explanation: 'Demonstrates that MIDAS passes context through evaluation and records it in the envelope for audit. The demo profile has no required context keys, so this request executes normally. To trigger INSUFFICIENT_CONTEXT, configure a profile with required_context_keys.',
+      request: {
+        surface_id: 'surf-payments-approval',
+        agent_id: 'agent-payments-bot',
+        confidence: 0.95,
+        consequence: { type: 'monetary', amount: 100, currency: 'GBP' },
+        context: { customer_id: 'cust-12345', channel: 'api', reason: 'recurring-payment' },
+      },
+    },
+
+    // ── Authority Chain ──────────────────────────────────────────────────────
+    {
+      id: 'chain-unknown-surface',
+      category: 'Authority Chain',
+      title: 'Unknown surface',
+      description: 'Surface ID does not exist in the system',
+      expected_outcome: 'Reject',
+      expected_reason: 'SURFACE_NOT_FOUND',
+      explanation: 'Demonstrates authority failure when the requested decision surface is not configured. MIDAS rejects the request immediately — no agent or profile lookup is attempted.',
+      request: {
+        surface_id: 'surf-unknown-xyz',
+        agent_id: 'agent-payments-bot',
+        confidence: 0.95,
+      },
+    },
+    {
+      id: 'chain-unknown-agent',
+      category: 'Authority Chain',
+      title: 'Unknown agent',
+      description: 'Agent ID is not registered in the system',
+      expected_outcome: 'Reject',
+      expected_reason: 'AGENT_NOT_FOUND',
+      explanation: 'Demonstrates authority failure when the acting agent is not registered. MIDAS cannot establish an authority chain without a known agent identity.',
+      request: {
+        surface_id: 'surf-payments-approval',
+        agent_id: 'agent-unknown-xyz',
+        confidence: 0.95,
+      },
+    },
+  ];
+
+  // ── Scenario list rendering ────────────────────────────────────────────────
+  const BADGE_CLASS = { Accept: 'badge-accept', Escalate: 'badge-escalate', Reject: 'badge-reject' };
+
+  function renderScenarioList(filter) {
+    const list = document.getElementById('scenario-list');
+    const q = (filter || '').toLowerCase().trim();
+
+    // Group scenarios by category, preserving insertion order
+    const order = [];
+    const groups = {};
+    for (const sc of AUTHORITY_SCENARIOS) {
+      if (!groups[sc.category]) { groups[sc.category] = []; order.push(sc.category); }
+      groups[sc.category].push(sc);
+    }
+
+    let html = '';
+    let anyVisible = false;
+    for (const cat of order) {
+      const items = q ? groups[cat].filter(sc =>
+        sc.title.toLowerCase().includes(q) ||
+        sc.category.toLowerCase().includes(q) ||
+        sc.description.toLowerCase().includes(q) ||
+        sc.expected_reason.toLowerCase().includes(q)
+      ) : groups[cat];
+      if (items.length === 0) continue;
+      anyVisible = true;
+      html += `<div class="scenario-category-header">${escHtml(cat)}</div>`;
+      for (const sc of items) {
+        const bc = BADGE_CLASS[sc.expected_outcome] || 'badge-reject';
+        html +=
+          `<button class="scenario-item" data-scenario-id="${escHtml(sc.id)}">` +
+          `<span class="scenario-item-text">` +
+          `<span class="scenario-item-title">${escHtml(sc.title)}</span>` +
+          `<span class="scenario-item-desc">${escHtml(sc.description)}</span>` +
+          `</span>` +
+          `<span class="scenario-item-badge ${bc}">${escHtml(sc.expected_outcome)}</span>` +
+          `</button>`;
+      }
+    }
+    if (!anyVisible) {
+      html = `<div class="scenario-no-results">No scenarios match \u201c${escHtml(q)}\u201d</div>`;
+    }
+    list.innerHTML = html;
+
+    // Attach click handlers after innerHTML update
+    list.querySelectorAll('.scenario-item').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const sc = AUTHORITY_SCENARIOS.find(s => s.id === btn.dataset.scenarioId);
+        if (!sc) return;
+        list.querySelectorAll('.scenario-item').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        loadScenario(sc.request);
+        showScenarioInfo(sc);
+      });
     });
+  }
+
+  function showScenarioInfo(sc) {
+    document.getElementById('scenario-info-title').textContent = sc.title;
+    document.getElementById('scenario-info-expected').textContent =
+      `Expected: ${sc.expected_outcome.toUpperCase()} \u2014 ${sc.expected_reason}`;
+    document.getElementById('scenario-info-explanation').textContent = sc.explanation;
+    document.getElementById('scenario-info-box').style.display = 'block';
+  }
+
+  // Initial render and search filter
+  renderScenarioList('');
+  document.getElementById('scenario-search').addEventListener('input', function () {
+    renderScenarioList(this.value);
   });
 
   function loadScenario(sc) {
@@ -858,11 +1068,11 @@
     if (currentMode === 'json') syncFormToJSON();
   }
 
-  // Auto-run: load scenario and submit silently
-  function autoRun(scenarioKey) {
-    const sc = SCENARIOS[scenarioKey];
+  // Auto-run: load scenario request and submit silently
+  function autoRun(scenarioId) {
+    const sc = AUTHORITY_SCENARIOS.find(s => s.id === scenarioId);
     if (!sc) return;
-    loadScenario(sc);
+    loadScenario(sc.request);
     submitRequest();
   }
 
