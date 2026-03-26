@@ -39,6 +39,7 @@ const (
 // It is intentionally owned by the consumer (httpapi) rather than the producer (decision).
 type orchestrator interface {
 	Evaluate(ctx context.Context, req eval.DecisionRequest, raw json.RawMessage) (decision.EvaluationResult, error)
+	Simulate(ctx context.Context, req eval.DecisionRequest, raw json.RawMessage) (decision.EvaluationResult, error)
 	ResolveEscalation(ctx context.Context, resolution decision.EscalationResolution) (*envelope.Envelope, error)
 	GetEnvelopeByID(ctx context.Context, id string) (*envelope.Envelope, error)
 	GetEnvelopeByRequestScope(ctx context.Context, requestSource, requestID string) (*envelope.Envelope, error)
@@ -1023,6 +1024,10 @@ type evaluateResponse struct {
 	EnvelopeID  string `json:"envelope_id,omitempty"`
 	Explanation string `json:"explanation,omitempty"`
 
+	// Simulated is true when this result was produced by the non-persistent
+	// simulate path. Omitted (false) on normal evaluate responses.
+	Simulated bool `json:"simulated,omitempty"`
+
 	// Policy transparency fields — informational only, never affect the outcome.
 	PolicyMode      string `json:"policy_mode,omitempty"`
 	PolicyReference string `json:"policy_reference,omitempty"`
@@ -1114,6 +1119,71 @@ func (s *Server) handleEvaluateWith(w http.ResponseWriter, r *http.Request, orch
 		Reason:          string(result.ReasonCode),
 		EnvelopeID:      result.EnvelopeID,
 		Explanation:     result.Explanation,
+		PolicyMode:      result.PolicyMode,
+		PolicyReference: result.PolicyReference,
+		PolicySkipped:   result.PolicySkipped,
+	})
+}
+
+// handleSimulateWith runs the same request parsing as handleEvaluateWith but
+// calls orch.Simulate() instead of orch.Evaluate(). The response omits
+// envelope_id and includes simulated:true. No envelope, audit events, or
+// outbox messages are written. Callers must verify method and nil before calling.
+func (s *Server) handleSimulateWith(w http.ResponseWriter, r *http.Request, orch orchestrator) {
+	rawBody, err := readRequestBody(w, r, maxRequestBodyBytes)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, errRequestBodyTooLarge) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		writeJSON(w, status, map[string]string{"error": err.Error()})
+		return
+	}
+
+	var req evaluateRequest
+	if err := decodeStrictJSON(rawBody, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	req.SurfaceID = strings.TrimSpace(req.SurfaceID)
+	req.AgentID = strings.TrimSpace(req.AgentID)
+	req.RequestSource = strings.TrimSpace(req.RequestSource)
+	if req.Consequence != nil {
+		req.Consequence.Currency = strings.TrimSpace(req.Consequence.Currency)
+	}
+
+	if req.SurfaceID == "" || req.AgentID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "surface_id and agent_id are required",
+		})
+		return
+	}
+
+	if req.Confidence < 0 || req.Confidence > 1 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "confidence must be between 0 and 1",
+		})
+		return
+	}
+
+	// request_source is used for logging only in simulation; default to "explorer".
+	if req.RequestSource == "" {
+		req.RequestSource = "explorer"
+	}
+
+	result, err := orch.Simulate(r.Context(), toEvalRequest(req), json.RawMessage(rawBody))
+	if err != nil {
+		statusCode, errResp := mapDomainError(err, entityEvaluation)
+		writeJSON(w, statusCode, errResp)
+		return
+	}
+
+	// envelope_id is intentionally omitted — simulation produces no persistent record.
+	writeJSON(w, http.StatusOK, evaluateResponse{
+		Outcome:         string(result.Outcome),
+		Reason:          string(result.ReasonCode),
+		Simulated:       true,
 		PolicyMode:      result.PolicyMode,
 		PolicyReference: result.PolicyReference,
 		PolicySkipped:   result.PolicySkipped,
