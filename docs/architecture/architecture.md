@@ -30,7 +30,7 @@ MIDAS sits between the systems that make decisions and the systems that execute 
 │                                                          │
 │              ┌──────────────────┐                        │
 │              │   Policy Engine  │                        │
-│              │   (embedded OPA) │                        │
+│              │  (NoOp default)  │                        │
 │              └──────────────────┘                        │
 └──────────────┬───────────────────────────┬───────────────┘
                │    Authority Outcome      │
@@ -53,16 +53,16 @@ MIDAS sits between the systems that make decisions and the systems that execute 
 
 Any system that makes a governed decision calls `POST /v1/evaluate` before acting. The request carries the decision surface, the agent's identity, a confidence score, and optionally a consequence value and business context. MIDAS returns an authority outcome with a reason code. The caller then acts on the outcome:
 
-- **Execute** — proceed with the action
-- **Escalate** — route to a human reviewer or a workflow engine
-- **Reject** — do not proceed; the evaluation is structurally invalid
-- **RequestClarification** — resubmit with the missing context fields
+- **accept** — proceed with the action
+- **escalate** — route to a human reviewer or a workflow engine
+- **reject** — do not proceed; the evaluation is structurally invalid
+- **request_clarification** — resubmit with the missing context fields
 
 MIDAS does not execute the business action itself. It governs whether the action is permitted.
 
 ### What consumes the result
 
-The authority outcome drives downstream behaviour. An Execute outcome lets the caller proceed. An Escalate outcome routes the decision to a workflow system (Camunda, Temporal), a case management queue, or a human review interface. The operational envelope and audit record are available for compliance reporting, analytics dashboards, and monitoring systems. Events published by MIDAS (to Kafka or structured logs) feed operational analytics and alerting.
+The authority outcome drives downstream behaviour. An accept outcome lets the caller proceed. An escalate outcome routes the decision to a workflow system (Camunda, Temporal), a case management queue, or a human review interface. The operational envelope and audit record are available for compliance reporting, analytics dashboards, and monitoring systems. Events published by MIDAS (to Kafka or structured logs) feed operational analytics and alerting.
 
 ## Core concepts
 
@@ -129,14 +129,14 @@ Request Inputs                MIDAS Orchestrator                     Outputs
  Decision Surface ──┐
  Agent            ──┤    ┌──────────────────────────────┐
  Confidence       ──┼───▶│ Surface & Profile Resolution  │──┐    Authority Outcome
- Consequence      ──┤    ├──────────────────────────────┤  │      • Execute
+ Consequence      ──┤    ├──────────────────────────────┤  │      • accept
  Context          ──┤    │ Authority Chain Validation    │  ├───▶  • Escalate
  Request ID       ──┘    ├──────────────────────────────┤  │      • Reject
                          │ Context Validation            │  │
                          ├──────────────────────────────┤  │    Reason Code &
  Authority Model ──┐    │ Threshold Evaluation          │  ├───▶ Explanation
   • Auth Profile ──┤    ├──────────────────────────────┤  │
-  • Auth Grant   ──┼───▶│ Policy Check ◄── OPA (plugin) │  │    Operational Envelope
+  • Auth Grant   ──┼───▶│ Policy Check ◄── NoOp default │  │    Operational Envelope
   • Agent Model  ──┘    ├──────────────────────────────┤  ├───▶  • Audit Record
                          │ Outcome Recording             │──┘      • Evidence Log
                          └──────────────────────────────┘
@@ -177,7 +177,7 @@ The orchestrator compares the request's confidence score and consequence value a
 
 ### Step 5: Policy Check
 
-If the authority profile has a policy reference, the orchestrator calls the `PolicyEvaluator` interface. In the community edition, this is implemented by `EmbeddedOPAEvaluator` which compiles and evaluates Rego policies in-process — no sidecar, no network hop.
+If the authority profile has a policy reference, the orchestrator calls the `PolicyEvaluator` interface. In v1, this is implemented by `NoOpPolicyEvaluator`, which always returns allowed. Policy enforcement is not active in v1 — the interface exists for future integration. OPA/Rego is planned for v1.1+.
 
 If no policy is attached to the profile, this step is skipped.
 
@@ -189,7 +189,7 @@ If no policy is attached to the profile, this step is skipped.
 
 The orchestrator records the authority outcome, reason code, and decision explanation onto the operational envelope, writes the audit record, and returns the response. The envelope transitions to `OUTCOME_RECORDED` (or `ESCALATED` if the outcome triggers escalation).
 
-If all checks pass → **Execute / WITHIN_AUTHORITY**
+If all checks pass → **accept / WITHIN_AUTHORITY**
 
 ## Authority outcomes
 
@@ -197,10 +197,10 @@ Every evaluation returns exactly one of four outcomes, each with a typed reason 
 
 | Outcome | When | Reason codes |
 |---------|------|-------------|
-| **Execute** | Agent is authorised, all thresholds pass, policy allows | WITHIN_AUTHORITY |
-| **Escalate** | Agent is authorised but a threshold or policy check fails | CONFIDENCE_BELOW_THRESHOLD, CONSEQUENCE_EXCEEDS_LIMIT, POLICY_DENY, POLICY_ERROR |
-| **Reject** | Evaluation cannot proceed due to structural/identity problems | AGENT_NOT_FOUND, SURFACE_NOT_FOUND, SURFACE_INACTIVE, NO_ACTIVE_GRANT, PROFILE_NOT_FOUND, GRANT_PROFILE_SURFACE_MISMATCH |
-| **RequestClarification** | Profile requires context the request did not provide | INSUFFICIENT_CONTEXT |
+| **accept** | Agent is authorised, all thresholds pass, policy allows | WITHIN_AUTHORITY |
+| **escalate** | Agent is authorised but a threshold or policy check fails | CONFIDENCE_BELOW_THRESHOLD, CONSEQUENCE_EXCEEDS_LIMIT, POLICY_DENY, POLICY_ERROR |
+| **reject** | Evaluation cannot proceed due to structural/identity problems | AGENT_NOT_FOUND, SURFACE_NOT_FOUND, SURFACE_INACTIVE, NO_ACTIVE_GRANT, PROFILE_NOT_FOUND, GRANT_PROFILE_SURFACE_MISMATCH |
+| **request_clarification** | Profile requires context the request did not provide | INSUFFICIENT_CONTEXT |
 
 ## Decision explanation
 
@@ -227,11 +227,11 @@ type PolicyEvaluator interface {
 }
 ```
 
-The community edition ships with `EmbeddedOPAEvaluator`, which compiles Rego policies in-process using the OPA Go library. There is no OPA sidecar and no network hop. Policy bundles are loaded from the `policies/` directory.
+v1 ships with `NoOpPolicyEvaluator`, which always returns allowed. This is intentional, not an oversight — the `PolicyEvaluator` interface is in place but enforcement is inactive. A startup warning is emitted and every evaluate response includes `policy_mode: "noop"` so the state is always visible.
 
-OPA imports are not permitted outside the `internal/policy/` package. The orchestrator, the envelope, the API contract, and the audit record never reference OPA or Rego directly. API responses describe authority outcomes and reason codes, not policy engine internals.
+OPA/Rego policy enforcement is planned for v1.1+. When implemented, it will be isolated behind the `PolicyEvaluator` interface — the orchestrator, envelope, API contract, and audit record will not reference OPA or Rego directly.
 
-The enterprise tier adds external OPA integration, alternative policy engines, and policy version pinning behind the same interface.
+The enterprise tier adds external policy engine support, policy version pinning, and alternative evaluator backends behind the same interface.
 
 ## Package structure
 
@@ -244,7 +244,7 @@ Go packages use short names following standard library convention. The mapping t
 | `internal/agent/` | Agent Registry |
 | `internal/envelope/` | Operational Envelope & Decision Runtime |
 | `internal/decision/` | Decision Orchestrator |
-| `internal/policy/` | Policy Evaluation (OPA integration) |
+| `internal/policy/` | Policy Evaluation (NoOp default; OPA planned v1.1+) |
 | `internal/escalation/` | Escalation Management |
 | `internal/review/` | Human Review |
 | `internal/audit/` | Audit & Explanation |
@@ -312,7 +312,6 @@ The diagram below shows both the synchronous evaluation path (left side, through
 | Dependency | Role | Required |
 |-----------|------|----------|
 | PostgreSQL 15+ | Primary data store | Yes |
-| OPA (embedded) | Policy evaluation via Go library | Bundled |
 | Kafka | Event publishing | Optional |
 
 ## Observability and events
@@ -324,7 +323,7 @@ MIDAS publishes structured evaluation data through two mechanisms: metrics and e
 The community edition exposes basic operational metrics through a built-in endpoint:
 
 - Decision evaluation latency (per request)
-- Authority outcome counts (Execute, Escalate, Reject, RequestClarification)
+- Authority outcome counts (accept, escalate, reject, request_clarification)
 - Escalation rate per decision surface
 - Policy evaluation time
 - Failure counters (database errors, policy errors)
@@ -346,7 +345,7 @@ Downstream systems consume these events for operational analytics, alerting, com
 
 ## Community vs Enterprise
 
-The community edition includes the full evaluation path, basic escalation recording, human override capture, emergency agent revocation, embedded OPA, audit logging, and CRUD APIs for all governed entities.
+The community edition includes the full evaluation path, basic escalation recording, human override capture, emergency agent revocation, hash-chained audit logging, and CRUD APIs for all governed entities.
 
 The enterprise tier (in the separate `midas-enterprise` repository) adds: time-bounded authority, threshold change audit, dual approval for autonomy widening, escalation routing and SLA management, reviewer authority boundaries, drift detection, RBAC, OpenTelemetry integration, batch evaluation, composite envelopes, policy version pinning, and external policy engine support. Enterprise extensions implement the same interfaces defined in the community packages.
 
