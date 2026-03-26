@@ -281,7 +281,7 @@ The surface is now `active` and its grants are eligible for evaluation.
 
 ## Next steps
 
-- [docs/operator-journey.md](operator-journey.md) — complete walkthrough from surface creation to deprecation
+- [docs/operations/deployment.md](operations/deployment.md) — complete walkthrough from surface creation to deprecation
 - [docs/control-plane.md](control-plane.md) — full control plane reference
-- [docs/runtime-evaluation.md](runtime-evaluation.md) — evaluation semantics, idempotency, and audit
-- [docs/http-api.md](http-api.md) — complete API reference
+- [docs/core/runtime-evaluation.md](core/runtime-evaluation.md) — evaluation semantics, idempotency, and audit
+- [docs/api/http-api.md](api/http-api.md) — complete API reference

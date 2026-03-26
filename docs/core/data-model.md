@@ -4,14 +4,13 @@
 This document describes the PostgreSQL schema used by the MIDAS community edition.  
 It complements the architectural rationale described in:
 
-`docs/architecture/why-the-schema-looks-like-this.md`
+[`docs/architecture/why-the-schema-looks-like-this.md`](../architecture/why-the-schema-looks-like-this.md)
 
-The migrations located in:
+The schema is defined in:
 
-`internal/store/migrations/`
+`internal/store/postgres/schema.sql`
 
-are the authoritative source of truth for the database structure.  
-This document provides a human‑readable reference for contributors.
+This file is the single source of truth for the database structure. There is no migration system in v1 — `EnsureSchema` applies the full schema at startup using `CREATE TABLE IF NOT EXISTS` throughout and is safe to run against an already-initialised database. This document provides a human-readable reference for contributors.
 
 ---
 
@@ -45,7 +44,7 @@ Surfaces are **versioned**, allowing governance configuration to evolve while pr
 | domain | text | Business domain |
 | business_owner | text | Business owner |
 | technical_owner | text | Technical owner |
-| status | text | active, inactive, draft |
+| status | text | draft, review, active, deprecated, retired |
 | effective_date | timestamp | When this version became active |
 | created_at | timestamp | Record creation time |
 | updated_at | timestamp | Last update time |
@@ -221,19 +220,13 @@ This allows deterministic audit reconstruction of any decision evaluation.
 
 ---
 
-# Migration Files
+# Schema Source of Truth
 
-The schema is defined by the following migrations:
+The full schema is defined in a single file:
 
-```
-001_decision_surfaces.sql
-002_authority_profiles.sql
-003_agents.sql
-004_agent_authorizations.sql
-005_operational_envelopes.sql
-```
+`internal/store/postgres/schema.sql`
 
-These migrations should run successfully when initializing a fresh database.
+There are no migration files. The schema is applied at startup by `EnsureSchema`, which uses `CREATE TABLE IF NOT EXISTS` throughout and is safe to run against an already-initialised database.
 
 ---
 

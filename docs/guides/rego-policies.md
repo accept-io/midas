@@ -51,7 +51,7 @@ When a profile has a `policy_ref` configured but the noop evaluator is active,
 
 ```json
 {
-  "outcome": "Execute",
+  "outcome": "accept",
   "reason": "WITHIN_AUTHORITY",
   "envelope_id": "env-abc123",
   "policy_mode": "noop",
