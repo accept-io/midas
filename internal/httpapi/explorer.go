@@ -144,3 +144,24 @@ func (s *Server) handleExplorerEvaluate(w http.ResponseWriter, r *http.Request) 
 	}
 	s.handleEvaluateWith(w, r, s.explorerOrchestrator)
 }
+
+// handleExplorerSimulate handles POST /explorer/simulate using the Explorer's
+// isolated in-memory orchestrator. It reuses handleSimulateWith so that the
+// simulate path shares the same request parsing and validation logic as the
+// evaluate path; only the orchestrator method called differs.
+//
+// No envelope is created, no audit events are written, and no outbox messages
+// are queued. The response includes simulated:true and omits envelope_id.
+func (s *Server) handleExplorerSimulate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+	if s.explorerOrchestrator == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "explorer runtime not available",
+		})
+		return
+	}
+	s.handleSimulateWith(w, r, s.explorerOrchestrator)
+}

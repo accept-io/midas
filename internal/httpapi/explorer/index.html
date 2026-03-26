@@ -337,6 +337,69 @@
   .envelope-summary-val { color: #1a1a1a; font-family: "SF Mono", "Fira Code", monospace; }
   .envelope-status-msg { font-size: 12px; color: #6b7280; padding: 4px 0; }
 
+  /* Execution mode toggle (Evaluate | Simulate) */
+  .exec-mode-tabs { display: flex; gap: 0; margin-bottom: 8px; border: 1px solid #d1d5db; border-radius: 6px; overflow: hidden; }
+  .exec-mode-tab {
+    flex: 1;
+    padding: 6px;
+    text-align: center;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 500;
+    background: #fff;
+    color: #6b7280;
+    border: none;
+    transition: background 0.15s, color 0.15s;
+  }
+  .exec-mode-tab.active { background: #1a1a2e; color: #fff; }
+
+  /* Simulated result banner */
+  .simulated-banner {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #6b7280;
+    background: #f3f4f6;
+    border: 1px solid #e5e7eb;
+    border-radius: 4px;
+    padding: 4px 10px;
+    margin-bottom: 8px;
+    display: none;
+  }
+  .simulated-banner.visible { display: block; }
+
+  /* Baseline comparison section */
+  .comparison-section { margin-bottom: 16px; }
+  .comparison-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+  }
+  .comparison-card {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: 12px;
+  }
+  .cmp-row {
+    display: grid;
+    grid-template-columns: 90px 1fr;
+    gap: 4px 10px;
+    margin-bottom: 8px;
+    align-items: baseline;
+  }
+  .cmp-row:last-child { margin-bottom: 0; }
+  .cmp-key { color: #6b7280; font-weight: 500; }
+  .cmp-val { font-family: "SF Mono", "Fira Code", monospace; }
+  .cmp-same { color: #9ca3af; font-style: italic; font-family: inherit; }
+  .cmp-change { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+  .cmp-from { color: #ef4444; }
+  .cmp-arrow { color: #9ca3af; }
+  .cmp-to { color: #10b981; }
+
   @media (max-width: 900px) {
     .layout { grid-template-columns: 1fr; }
     .panel-left { border-right: none; border-bottom: 1px solid #e5e7eb; }
@@ -365,8 +428,8 @@
     <div class="section">
       <div class="section-title">Quick Start</div>
       <p style="font-size:12px;color:#6b7280;line-height:1.6">
-        Submit a <code style="background:#f3f4f6;padding:1px 4px;border-radius:3px">POST /v1/evaluate</code> request and inspect the full authority decision.
-        Pick a scenario below or build your own request.
+        Submit an evaluation request and inspect the full authority decision.
+        Use <strong>Evaluate</strong> to run a real (persisted) decision, or <strong>Simulate</strong> to test hypothetical inputs without creating any record.
       </p>
     </div>
 
@@ -420,6 +483,10 @@
 
     <div class="section">
       <div class="section-title">Request Builder</div>
+      <div class="exec-mode-tabs">
+        <button class="exec-mode-tab active" data-exec-mode="evaluate">Evaluate</button>
+        <button class="exec-mode-tab" data-exec-mode="simulate">Simulate</button>
+      </div>
       <div class="mode-tabs">
         <button class="mode-tab active" data-mode="form">Form</button>
         <button class="mode-tab" data-mode="json">JSON</button>
@@ -478,12 +545,27 @@
   <div class="panel panel-right">
 
     <div class="section">
-      <div class="section-title">Result</div>
+      <div class="section-title" id="result-section-title">Result</div>
+
+      <div class="comparison-section" id="comparison-section" style="display:none">
+        <div class="comparison-header">
+          <span class="raw-label">Comparison vs Baseline</span>
+          <button class="copy-btn" id="clear-baseline-btn">Clear baseline</button>
+        </div>
+        <div class="comparison-card" id="comparison-card"></div>
+      </div>
+
+      <div class="simulated-banner" id="simulated-banner">Simulated — not persisted, no audit record</div>
+
       <div class="outcome-card empty" id="outcome-card">
         <div class="outcome-label empty" id="outcome-label">—</div>
         <div class="meta-row" id="meta-row">
           <span class="placeholder-text">Submit a request to see the governed outcome here</span>
         </div>
+      </div>
+
+      <div id="simulate-from-bar" style="display:none;margin-bottom:12px">
+        <button class="btn btn-ghost" id="simulate-from-this-btn" style="font-size:12px;width:100%">Simulate from this</button>
       </div>
 
       <div class="explanation-box" id="explanation-box"></div>
@@ -541,6 +623,37 @@
 <script>
 (function () {
   'use strict';
+
+  // ── Execution mode (Evaluate | Simulate) ───────────────────────────────────
+  // currentExecMode drives which endpoint is called and how results are displayed.
+  // It is independent of the format toggle (form | json).
+  let currentExecMode = 'evaluate'; // 'evaluate' | 'simulate'
+
+  // baseline: the last evaluated request+response stored via "Simulate from this".
+  // Persisted in sessionStorage so it survives page refresh but clears on tab close.
+  let baseline = null;
+  try {
+    const stored = sessionStorage.getItem('midas_simulator_baseline');
+    if (stored) baseline = JSON.parse(stored);
+  } catch { baseline = null; }
+
+  // lastEvalResult: captures the most recent evaluate-mode result for "Simulate from this".
+  let lastEvalResult = null; // { httpStatus, data, body }
+
+  function setExecMode(mode) {
+    currentExecMode = mode;
+    document.querySelectorAll('.exec-mode-tab').forEach(t =>
+      t.classList.toggle('active', t.dataset.execMode === mode)
+    );
+    submitBtn.textContent = mode === 'simulate' ? 'Simulate' : 'Submit';
+    document.getElementById('result-section-title').textContent =
+      mode === 'simulate' ? 'Simulate' : 'Result';
+    clearResult();
+  }
+
+  document.querySelectorAll('.exec-mode-tab').forEach(tab => {
+    tab.addEventListener('click', () => setExecMode(tab.dataset.execMode));
+  });
 
   // ── Token ──────────────────────────────────────────────────────────────────
   const tokenInput     = document.getElementById('token-input');
@@ -814,12 +927,14 @@
       return;
     }
 
+    const isSimulate = currentExecMode === 'simulate';
     submitBtn.disabled = true;
-    submitBtn.textContent = 'Submitting\u2026';
+    submitBtn.textContent = isSimulate ? 'Simulating\u2026' : 'Submitting\u2026';
 
-    const token = getToken();
+    const token   = getToken();
+    const endpoint = isSimulate ? '/explorer/simulate' : '/explorer';
     try {
-      const res = await fetch(`${window.location.origin}/explorer`, {
+      const res = await fetch(`${window.location.origin}${endpoint}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -833,11 +948,16 @@
       try { data = JSON.parse(text); } catch { data = { raw: text }; }
 
       showResult(res.status, data, body);
+
+      // Capture for "Simulate from this" only after a successful evaluate call.
+      if (!isSimulate) {
+        lastEvalResult = { httpStatus: res.status, data, body };
+      }
     } catch (e) {
       showError('Network error: ' + e.message, null);
     } finally {
       submitBtn.disabled = false;
-      submitBtn.textContent = 'Submit';
+      submitBtn.textContent = isSimulate ? 'Simulate' : 'Submit';
     }
   }
 
@@ -850,9 +970,12 @@
   });
 
   function generateCurl(body, token) {
-    const baseUrl = window.location.origin;
+    const baseUrl  = window.location.origin;
     const authFlag = token ? ` \\\n  -H "Authorization: Bearer ${token}"` : '';
     const dataFlag = ` \\\n  -d '${JSON.stringify(body, null, 2)}'`;
+    if (currentExecMode === 'simulate') {
+      return `# Explorer simulate (non-persistent, no audit record)\ncurl -X POST ${baseUrl}/explorer/simulate \\\n  -H "Content-Type: application/json"${authFlag}${dataFlag}`;
+    }
     let curl = `# Explorer sandbox (isolated in-memory store)\n`;
     curl += `curl -X POST ${baseUrl}/explorer \\\n`;
     curl += `  -H "Content-Type: application/json"${authFlag}${dataFlag}\n\n`;
@@ -899,10 +1022,12 @@
     const outcomeLabel   = document.getElementById('outcome-label');
     const metaRow        = document.getElementById('meta-row');
     const explanationBox = document.getElementById('explanation-box');
+    const isSimulate     = currentExecMode === 'simulate';
 
     const outcome    = data.outcome || '';
     const reasonCode = data.reason  || '';
-    const envelopeId = data.envelope_id || '';
+    // Never show envelope_id in simulate mode — there is none.
+    const envelopeId = (!isSimulate && data.envelope_id) ? data.envelope_id : '';
 
     const cls = OUTCOME_CLASS[outcome] ||
       (httpStatus === 401 ? 'error' :
@@ -914,9 +1039,10 @@
     outcomeLabel.textContent = OUTCOME_LABEL[outcome] || data.error || outcome || '\u2014';
 
     const metas = [];
-    if (reasonCode)  metas.push(['Reason Code',  reasonCode]);
-    if (envelopeId)  metas.push(['Envelope ID',  envelopeId]);
-    if (httpStatus)  metas.push(['HTTP Status',  httpStatus]);
+    if (reasonCode)         metas.push(['Reason Code', reasonCode]);
+    if (envelopeId)         metas.push(['Envelope ID', envelopeId]);
+    if (data.policy_mode)   metas.push(['Policy Mode', data.policy_mode]);
+    if (httpStatus)         metas.push(['HTTP Status', httpStatus]);
 
     metaRow.innerHTML = metas.map(([k, v]) =>
       `<div class="meta-item"><div class="meta-key">${k}</div><div class="meta-val">${escHtml(String(v))}</div></div>`
@@ -938,6 +1064,9 @@
       explanationBox.classList.remove('visible');
     }
 
+    // Simulated banner
+    document.getElementById('simulated-banner').classList.toggle('visible', isSimulate);
+
     // Raw JSON
     const rawSection = document.getElementById('raw-section');
     rawSection.style.display = 'block';
@@ -952,9 +1081,9 @@
     curlSection.style.display = 'block';
     document.getElementById('curl-pre').textContent = generateCurl(requestBody, getToken());
 
-    // Envelope inspector: show when we have an envelope_id, reset detail panel
+    // Envelope inspector: evaluate mode only, and only when an envelope_id is present
     const envelopeSection = document.getElementById('envelope-section');
-    if (envelopeId) {
+    if (!isSimulate && envelopeId) {
       envelopeSection.style.display = 'block';
       document.getElementById('envelope-detail').style.display  = 'none';
       document.getElementById('envelope-loading').style.display = 'none';
@@ -963,6 +1092,17 @@
       document.getElementById('envelope-inspect-btn').onclick = () => inspectEnvelope(envelopeId);
     } else {
       envelopeSection.style.display = 'none';
+    }
+
+    // "Simulate from this": show in evaluate mode when the result has an outcome
+    const simulateFromBar = document.getElementById('simulate-from-bar');
+    simulateFromBar.style.display = (!isSimulate && outcome) ? 'block' : 'none';
+
+    // Comparison: show in simulate mode when baseline exists and there is an outcome
+    if (isSimulate && baseline && outcome) {
+      showComparison(baseline, data, requestBody);
+    } else {
+      document.getElementById('comparison-section').style.display = 'none';
     }
   }
 
@@ -1036,9 +1176,12 @@
     outcomeLabel.textContent = '\u2014';
     metaRow.innerHTML = '<span class="placeholder-text">Submit a request to see the governed outcome here</span>';
     explanationBox.classList.remove('visible');
-    document.getElementById('raw-section').style.display      = 'none';
-    document.getElementById('curl-section').style.display     = 'none';
-    document.getElementById('envelope-section').style.display = 'none';
+    document.getElementById('raw-section').style.display        = 'none';
+    document.getElementById('curl-section').style.display       = 'none';
+    document.getElementById('envelope-section').style.display   = 'none';
+    document.getElementById('comparison-section').style.display = 'none';
+    document.getElementById('simulate-from-bar').style.display  = 'none';
+    document.getElementById('simulated-banner').classList.remove('visible');
   }
 
   // ── Envelope inspector ─────────────────────────────────────────────────────
@@ -1122,6 +1265,103 @@
 
   function escHtml(s) {
     return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  // ── Simulate from this ─────────────────────────────────────────────────────
+  document.getElementById('simulate-from-this-btn').addEventListener('click', () => {
+    if (!lastEvalResult) return;
+    baseline = { data: lastEvalResult.data, body: lastEvalResult.body };
+    try { sessionStorage.setItem('midas_simulator_baseline', JSON.stringify(baseline)); } catch { /* quota */ }
+    setExecMode('simulate');
+  });
+
+  // ── Clear baseline ─────────────────────────────────────────────────────────
+  document.getElementById('clear-baseline-btn').addEventListener('click', () => {
+    baseline = null;
+    try { sessionStorage.removeItem('midas_simulator_baseline'); } catch { /* ignore */ }
+    document.getElementById('comparison-section').style.display = 'none';
+  });
+
+  // ── Comparison helpers ─────────────────────────────────────────────────────
+  function deepEqual(a, b) {
+    if (a === b) return true;
+    if (a === null || b === null || a === undefined || b === undefined) return a === b;
+    if (typeof a !== typeof b) return false;
+    if (typeof a !== 'object') return a === b;
+    if (Array.isArray(a) !== Array.isArray(b)) return false;
+    const ka = Object.keys(a).sort();
+    const kb = Object.keys(b).sort();
+    if (ka.length !== kb.length || ka.join('\0') !== kb.join('\0')) return false;
+    return ka.every(k => deepEqual(a[k], b[k]));
+  }
+
+  function formatVal(v) {
+    if (v === null || v === undefined) return '\u2014';
+    if (typeof v === 'object') return JSON.stringify(v);
+    return String(v);
+  }
+
+  function cmpSameRow(key, val) {
+    return `<div class="cmp-row">` +
+      `<span class="cmp-key">${escHtml(key)}</span>` +
+      `<span class="cmp-val cmp-same">${escHtml(formatVal(val))}</span>` +
+      `</div>`;
+  }
+
+  function cmpChangeRow(key, from, to) {
+    return `<div class="cmp-row">` +
+      `<span class="cmp-key">${escHtml(key)}</span>` +
+      `<span class="cmp-val"><span class="cmp-change">` +
+      `<span class="cmp-from">${escHtml(formatVal(from))}</span>` +
+      `<span class="cmp-arrow">\u2192</span>` +
+      `<span class="cmp-to">${escHtml(formatVal(to))}</span>` +
+      `</span></span>` +
+      `</div>`;
+  }
+
+  function showComparison(baseline, simData, simRequest) {
+    const section = document.getElementById('comparison-section');
+    const card    = document.getElementById('comparison-card');
+
+    const rows = [];
+
+    // Outcome
+    const baseOutcome = baseline.data.outcome || '';
+    const simOutcome  = simData.outcome || '';
+    if (baseOutcome === simOutcome) {
+      rows.push(cmpSameRow('outcome', OUTCOME_LABEL[simOutcome] || simOutcome));
+    } else {
+      rows.push(cmpChangeRow('outcome',
+        OUTCOME_LABEL[baseOutcome] || baseOutcome,
+        OUTCOME_LABEL[simOutcome]  || simOutcome));
+    }
+
+    // Reason code
+    const baseReason = baseline.data.reason || '';
+    const simReason  = simData.reason || '';
+    if (baseReason === simReason) {
+      rows.push(cmpSameRow('reason', simReason));
+    } else {
+      rows.push(cmpChangeRow('reason', baseReason, simReason));
+    }
+
+    // Input fields
+    const inputKeys = ['surface_id', 'agent_id', 'confidence', 'consequence', 'context'];
+    for (const key of inputKeys) {
+      const baseVal = baseline.body[key];
+      const simVal  = simRequest[key];
+      const bPresent = baseVal !== undefined && baseVal !== null && baseVal !== '';
+      const sPresent = simVal  !== undefined && simVal  !== null && simVal  !== '';
+      if (!bPresent && !sPresent) continue; // both absent — omit
+      if (deepEqual(baseVal, simVal)) {
+        rows.push(cmpSameRow(key, simVal));
+      } else {
+        rows.push(cmpChangeRow(key, baseVal, simVal));
+      }
+    }
+
+    card.innerHTML = rows.join('');
+    section.style.display = 'block';
   }
 
 })();

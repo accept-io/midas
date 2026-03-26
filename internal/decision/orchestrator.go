@@ -265,6 +265,142 @@ func (o *Orchestrator) Evaluate(ctx context.Context, req eval.DecisionRequest, r
 	return result, nil
 }
 
+// ---------------------------------------------------------------------------
+// Simulate
+// ---------------------------------------------------------------------------
+
+// Simulate runs the full authority evaluation flow without persisting any state.
+// It performs the same resolution and threshold checks as Evaluate but does not
+// create an envelope, write audit events, or queue outbox messages.
+//
+// Use this for hypothetical "what-if" evaluation in the Explorer sandbox. The
+// returned EvaluationResult has an empty EnvelopeID; all other fields are
+// populated identically to a live evaluation.
+func (o *Orchestrator) Simulate(ctx context.Context, req eval.DecisionRequest, _ json.RawMessage) (EvaluationResult, error) {
+	startedAt := o.clock()
+
+	slog.Info("simulation_started",
+		"surface_id", req.SurfaceID,
+		"agent_id", req.AgentID,
+	)
+
+	repos, err := o.store.Repositories()
+	if err != nil {
+		return EvaluationResult{}, fmt.Errorf("simulation: get repositories: %w", err)
+	}
+
+	if req.RequestSource == "" {
+		req.RequestSource = "explorer"
+	}
+
+	result, err := o.simulateEvaluate(ctx, repos, req)
+	result.PolicyMode = o.policyMode
+
+	duration := o.clock().Sub(startedAt)
+	if duration < 0 {
+		duration = 0
+	}
+
+	if err != nil {
+		slog.Error("simulation_failed",
+			"surface_id", req.SurfaceID,
+			"agent_id", req.AgentID,
+			"error", err,
+			"duration_ms", duration.Milliseconds(),
+		)
+		return result, err
+	}
+
+	slog.Info("simulation_completed",
+		"surface_id", req.SurfaceID,
+		"agent_id", req.AgentID,
+		"outcome", result.Outcome,
+		"reason_code", result.ReasonCode,
+		"duration_ms", duration.Milliseconds(),
+	)
+
+	return result, nil
+}
+
+// simulateEvaluate runs the authority resolution and threshold evaluation steps
+// without creating any persistent state. No envelope row is written, no audit
+// events are appended, and no outbox messages are queued. The read-only
+// repository access does not require a database transaction.
+//
+// The evaluation sequence mirrors evaluate() steps 1–7 exactly.
+func (o *Orchestrator) simulateEvaluate(
+	ctx context.Context,
+	repos *store.Repositories,
+	req eval.DecisionRequest,
+) (EvaluationResult, error) {
+	now := o.clock().UTC()
+
+	// Step 1: Surface
+	s, outcome, reason, err := o.resolveSurface(ctx, repos.Surfaces, req.SurfaceID, now)
+	if err != nil {
+		return EvaluationResult{}, err
+	}
+	if outcome != "" {
+		return EvaluationResult{Outcome: outcome, ReasonCode: reason}, nil
+	}
+	_ = s // resolved; surface_id validated implicitly via profile below
+
+	// Step 2: Agent
+	a, outcome, reason, err := o.resolveAgent(ctx, repos.Agents, req.AgentID)
+	if err != nil {
+		return EvaluationResult{}, err
+	}
+	if outcome != "" {
+		return EvaluationResult{Outcome: outcome, ReasonCode: reason}, nil
+	}
+	_ = a
+
+	// Step 3: Authority chain (grant → profile)
+	_, p, outcome, reason, err := o.resolveAuthorityChain(ctx, repos.Grants, repos.Profiles, req.AgentID, req.SurfaceID, now)
+	if err != nil {
+		return EvaluationResult{}, err
+	}
+	if outcome != "" {
+		return EvaluationResult{Outcome: outcome, ReasonCode: reason}, nil
+	}
+
+	// Policy transparency — mirrors the same logic in evaluate().
+	profilePolicyRef := p.PolicyReference
+	policySkipped := o.policyMode == policy.PolicyModeNoop && profilePolicyRef != ""
+
+	withPolicyMeta := func(res EvaluationResult) EvaluationResult {
+		res.PolicyReference = profilePolicyRef
+		res.PolicySkipped = policySkipped
+		return res
+	}
+
+	// Step 4: Context validation
+	if !hasRequiredContext(req.Context, p.RequiredContextKeys) {
+		return withPolicyMeta(EvaluationResult{Outcome: eval.OutcomeRequestClarification, ReasonCode: eval.ReasonInsufficientContext}), nil
+	}
+
+	// Step 5: Confidence threshold
+	if req.Confidence < p.ConfidenceThreshold {
+		return withPolicyMeta(EvaluationResult{Outcome: eval.OutcomeEscalate, ReasonCode: eval.ReasonConfidenceBelowThreshold}), nil
+	}
+
+	// Step 6: Consequence threshold
+	if authority.ExceedsConsequenceThreshold(req.Consequence, p.ConsequenceThreshold) {
+		return withPolicyMeta(EvaluationResult{Outcome: eval.OutcomeEscalate, ReasonCode: eval.ReasonConsequenceExceedsLimit}), nil
+	}
+
+	// Step 7: Policy
+	policyOutcome, policyReason, err := o.evaluatePolicy(ctx, req, p)
+	if err != nil {
+		return EvaluationResult{}, err
+	}
+	if policyOutcome != "" {
+		return withPolicyMeta(EvaluationResult{Outcome: policyOutcome, ReasonCode: policyReason}), nil
+	}
+
+	return withPolicyMeta(EvaluationResult{Outcome: eval.OutcomeAccept, ReasonCode: eval.ReasonWithinAuthority}), nil
+}
+
 // evaluate runs inside the transaction opened by Evaluate.
 // All state transitions and audit events are accumulated in-memory via
 // evaluationAccumulator; acc.persistNew() at the end of finish() issues the
