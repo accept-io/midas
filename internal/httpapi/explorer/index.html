@@ -386,21 +386,97 @@
   .envelope-summary-val { color: #1a1a1a; font-family: "SF Mono", "Fira Code", monospace; }
   .envelope-status-msg { font-size: 12px; color: #6b7280; padding: 4px 0; }
 
-  /* Execution mode toggle (Evaluate | Simulate) */
-  .exec-mode-tabs { display: flex; gap: 0; margin-bottom: 8px; border: 1px solid #d1d5db; border-radius: 6px; overflow: hidden; }
+  /* ── Mode selector bar (sits above layout, always visible on load) ────── */
+  .mode-selector-bar {
+    background: #fff;
+    border-bottom: 2px solid #e5e7eb;
+    padding: 10px 24px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  .mode-selector-bar .exec-mode-tabs {
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    overflow: hidden;
+    display: flex;
+  }
   .exec-mode-tab {
-    flex: 1;
-    padding: 6px;
+    padding: 7px 22px;
     text-align: center;
     cursor: pointer;
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 500;
     background: #fff;
     color: #6b7280;
     border: none;
     transition: background 0.15s, color 0.15s;
   }
-  .exec-mode-tab.active { background: #1a1a2e; color: #fff; }
+  .exec-mode-tab:not(:last-child) { border-right: 1px solid #d1d5db; }
+  .exec-mode-tab.active { background: #3b82f6; color: #fff; }
+  .mode-bar-hint {
+    font-size: 12px;
+    color: #6b7280;
+  }
+
+  /* ── Contextual mode banner (green = evaluate, amber = simulate) ─────── */
+  .mode-banner { font-size: 12px; line-height: 1.5; }
+  .mode-banner-evaluate {
+    padding: 7px 24px;
+    background: #d1fae5;
+    border-bottom: 1px solid #6ee7b7;
+    color: #065f46;
+  }
+  .mode-banner-simulate {
+    padding: 7px 24px;
+    background: #fef3c7;
+    border-bottom: 1px solid #fcd34d;
+    color: #92400e;
+  }
+
+  /* ── Simulate CTA card ───────────────────────────────────────────────── */
+  .simulate-cta {
+    background: #eff6ff;
+    border: 2px solid #3b82f6;
+    border-radius: 8px;
+    padding: 12px 14px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .simulate-cta-text { flex: 1; min-width: 0; }
+  .simulate-cta-text strong { display: block; font-size: 13px; color: #1e40af; margin-bottom: 2px; }
+  .simulate-cta-text span { font-size: 11px; color: #1e3a8a; }
+  .simulate-cta-btn { white-space: nowrap; flex-shrink: 0; }
+
+  /* ── Tabbed curl output ──────────────────────────────────────────────── */
+  .curl-tabs {
+    display: flex;
+    gap: 0;
+    border-bottom: 2px solid #334155;
+    margin-bottom: 0;
+  }
+  .curl-tab {
+    padding: 5px 14px;
+    font-size: 11px;
+    font-weight: 600;
+    background: transparent;
+    color: #94a3b8;
+    border: none;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+    transition: color 0.15s;
+  }
+  .curl-tab:hover { color: #e2e8f0; }
+  .curl-tab.active { color: #e2e8f0; border-bottom-color: #3b82f6; }
+  .curl-panel { display: none; border-radius: 0 0 8px 8px; margin-top: 0; }
+  .curl-panel.active { display: block; }
+
+  /* ── Quick-start list ────────────────────────────────────────────────── */
+  .quick-start-list { list-style: none; padding: 0; margin: 6px 0 0; }
+  .quick-start-list li { font-size: 12px; color: #6b7280; padding: 2px 0; }
+  .quick-start-list strong { color: #374151; }
 
   /* Simulated result banner */
   .simulated-banner {
@@ -453,6 +529,13 @@
     .layout { grid-template-columns: 1fr; }
     .panel-left { border-right: none; border-bottom: 1px solid #e5e7eb; }
   }
+  @media (max-width: 640px) {
+    .mode-selector-bar { padding: 8px 16px; flex-wrap: wrap; gap: 8px; }
+    .mode-bar-hint { font-size: 11px; }
+    .simulate-cta { flex-direction: column; align-items: flex-start; gap: 8px; }
+    .simulate-cta-btn { width: 100%; }
+    .curl-tabs { overflow-x: auto; }
+  }
 </style>
 </head>
 <body>
@@ -470,16 +553,27 @@
 
 <div class="demo-banner" id="demo-banner"></div>
 
+<!-- Mode selector bar — always visible above the fold -->
+<div class="mode-selector-bar">
+  <div class="exec-mode-tabs">
+    <button class="exec-mode-tab active" data-exec-mode="evaluate">Evaluate</button>
+    <button class="exec-mode-tab" data-exec-mode="simulate">Simulate</button>
+  </div>
+  <span class="mode-bar-hint" id="mode-bar-hint">Decisions are persisted and audited</span>
+</div>
+<div class="mode-banner mode-banner-evaluate" id="mode-banner">Result persisted &mdash; envelope created, audit logged, sandbox store</div>
+
 <div class="layout">
   <!-- LEFT: Request builder -->
   <div class="panel panel-left">
 
     <div class="section">
       <div class="section-title">Quick Start</div>
-      <p style="font-size:12px;color:#6b7280;line-height:1.6">
-        Submit an evaluation request and inspect the full authority decision.
-        Use <strong>Evaluate</strong> to run a real (persisted) decision, or <strong>Simulate</strong> to test hypothetical inputs without creating any record.
-      </p>
+      <p style="font-size:12px;color:#6b7280">Pick a scenario or fill the form, then submit.</p>
+      <ul class="quick-start-list">
+        <li><strong>Evaluate</strong> &mdash; persists the decision, creates an audit record</li>
+        <li><strong>Simulate</strong> &mdash; tests inputs safely, nothing written</li>
+      </ul>
     </div>
 
     <div class="section">
@@ -509,10 +603,6 @@
 
     <div class="section">
       <div class="section-title">Request Builder</div>
-      <div class="exec-mode-tabs">
-        <button class="exec-mode-tab active" data-exec-mode="evaluate">Evaluate</button>
-        <button class="exec-mode-tab" data-exec-mode="simulate">Simulate</button>
-      </div>
       <div class="mode-tabs">
         <button class="mode-tab active" data-mode="form">Form</button>
         <button class="mode-tab" data-mode="json">JSON</button>
@@ -591,7 +681,13 @@
       </div>
 
       <div id="simulate-from-bar" style="display:none;margin-bottom:12px">
-        <button class="btn btn-ghost" id="simulate-from-this-btn" style="font-size:12px;width:100%">Simulate from this</button>
+        <div class="simulate-cta">
+          <div class="simulate-cta-text">
+            <strong>Try different inputs?</strong>
+            <span>Switch to Simulate mode with this result as baseline &mdash; nothing written.</span>
+          </div>
+          <button class="btn btn-primary simulate-cta-btn" id="simulate-from-this-btn">Simulate from this</button>
+        </div>
       </div>
 
       <div class="explanation-box" id="explanation-box"></div>
@@ -613,13 +709,18 @@
         <span class="raw-label">Equivalent curl</span>
         <button class="copy-btn" id="curl-pre-copy-btn">Copy</button>
       </div>
-      <pre id="curl-pre"></pre>
+      <div class="curl-tabs" id="curl-tab-bar">
+        <button class="curl-tab active" data-curl-tab="sandbox">Sandbox</button>
+        <button class="curl-tab" data-curl-tab="production" id="curl-tab-production">Production</button>
+      </div>
+      <pre id="curl-sandbox" class="curl-panel active"></pre>
+      <pre id="curl-production" class="curl-panel"></pre>
     </div>
 
     <div class="envelope-section" id="envelope-section" style="display:none">
       <div class="envelope-bar">
         <span class="raw-label">Decision Record</span>
-        <button class="copy-btn" id="envelope-inspect-btn">Inspect envelope</button>
+        <button class="copy-btn" id="envelope-inspect-btn">View decision record</button>
       </div>
       <div id="envelope-detail" style="display:none">
         <div class="envelope-summary" id="envelope-summary"></div>
@@ -674,7 +775,22 @@
     submitBtn.textContent = mode === 'simulate' ? 'Simulate' : 'Submit';
     document.getElementById('result-section-title').textContent =
       mode === 'simulate' ? 'Simulate' : 'Result';
+    updateModeBanner(mode);
     clearResult();
+  }
+
+  function updateModeBanner(mode) {
+    const banner = document.getElementById('mode-banner');
+    const hint   = document.getElementById('mode-bar-hint');
+    if (mode === 'simulate') {
+      banner.textContent = 'Simulation mode \u2014 no data written, no audit record, no result persisted';
+      banner.className = 'mode-banner mode-banner-simulate';
+      hint.textContent = 'Safe to experiment \u2014 nothing written';
+    } else {
+      banner.textContent = 'Result persisted \u2014 envelope created, audit logged, sandbox store';
+      banner.className = 'mode-banner mode-banner-evaluate';
+      hint.textContent = 'Decisions are persisted and audited';
+    }
   }
 
   document.querySelectorAll('.exec-mode-tab').forEach(tab => {
@@ -1175,24 +1291,52 @@
   document.getElementById('curl-copy-btn').addEventListener('click', () => {
     let body;
     try { body = buildBody(); } catch (e) { showError(e.message, null); return; }
-    const curl = generateCurl(body, getToken());
-    copyToClipboard(curl, document.getElementById('curl-copy-btn'));
+    copyToClipboard(generateCurlSandbox(body, getToken()), document.getElementById('curl-copy-btn'));
   });
 
-  function generateCurl(body, token) {
+  // Curl tab switching
+  document.querySelectorAll('.curl-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      const target = tab.dataset.curlTab;
+      document.querySelectorAll('.curl-tab').forEach(t => t.classList.toggle('active', t === tab));
+      document.getElementById('curl-sandbox').classList.toggle('active', target === 'sandbox');
+      document.getElementById('curl-production').classList.toggle('active', target === 'production');
+    });
+  });
+
+  function generateCurlSandbox(body, token) {
     const baseUrl  = window.location.origin;
     const authFlag = token ? ` \\\n  -H "Authorization: Bearer ${token}"` : '';
     const dataFlag = ` \\\n  -d '${JSON.stringify(body, null, 2)}'`;
     if (currentExecMode === 'simulate') {
       return `# Explorer simulate (non-persistent, no audit record)\ncurl -X POST ${baseUrl}/explorer/simulate \\\n  -H "Content-Type: application/json"${authFlag}${dataFlag}`;
     }
-    let curl = `# Explorer sandbox (isolated in-memory store)\n`;
-    curl += `curl -X POST ${baseUrl}/explorer \\\n`;
-    curl += `  -H "Content-Type: application/json"${authFlag}${dataFlag}\n\n`;
-    curl += `# Production endpoint (uses configured store)\n`;
-    curl += `curl -X POST ${baseUrl}/v1/evaluate \\\n`;
-    curl += `  -H "Content-Type: application/json"${authFlag}${dataFlag}`;
-    return curl;
+    return `# Explorer sandbox (isolated in-memory store)\ncurl -X POST ${baseUrl}/explorer \\\n  -H "Content-Type: application/json"${authFlag}${dataFlag}`;
+  }
+
+  function generateCurlProduction(body, token) {
+    if (currentExecMode === 'simulate') return null; // no production equivalent for simulate
+    const baseUrl  = window.location.origin;
+    const authFlag = token ? ` \\\n  -H "Authorization: Bearer ${token}"` : '';
+    const dataFlag = ` \\\n  -d '${JSON.stringify(body, null, 2)}'`;
+    return `# Production endpoint (uses configured store)\ncurl -X POST ${baseUrl}/v1/evaluate \\\n  -H "Content-Type: application/json"${authFlag}${dataFlag}`;
+  }
+
+  function updateCurlPanels(body, token) {
+    const sandbox    = generateCurlSandbox(body, token);
+    const production = generateCurlProduction(body, token);
+
+    document.getElementById('curl-sandbox').textContent    = sandbox;
+    document.getElementById('curl-production').textContent = production || '';
+
+    // In simulate mode hide the Production tab; show only Sandbox
+    const prodTab = document.getElementById('curl-tab-production');
+    prodTab.style.display = production ? '' : 'none';
+
+    // Always reset to Sandbox tab on new result
+    document.querySelectorAll('.curl-tab').forEach(t => t.classList.toggle('active', t.dataset.curlTab === 'sandbox'));
+    document.getElementById('curl-sandbox').classList.add('active');
+    document.getElementById('curl-production').classList.remove('active');
   }
 
   // ── Display result ─────────────────────────────────────────────────────────
@@ -1289,7 +1433,7 @@
     // Curl
     const curlSection = document.getElementById('curl-section');
     curlSection.style.display = 'block';
-    document.getElementById('curl-pre').textContent = generateCurl(requestBody, getToken());
+    updateCurlPanels(requestBody, getToken());
 
     // Envelope inspector: evaluate mode only, and only when an envelope_id is present
     const envelopeSection = document.getElementById('envelope-section');
@@ -1298,7 +1442,7 @@
       document.getElementById('envelope-detail').style.display  = 'none';
       document.getElementById('envelope-loading').style.display = 'none';
       document.getElementById('envelope-error').style.display   = 'none';
-      document.getElementById('envelope-inspect-btn').textContent = 'Inspect envelope';
+      document.getElementById('envelope-inspect-btn').textContent = 'View decision record';
       document.getElementById('envelope-inspect-btn').onclick = () => inspectEnvelope(envelopeId);
     } else {
       envelopeSection.style.display = 'none';
@@ -1445,7 +1589,7 @@
       errEl.style.display = 'block';
     } finally {
       loading.style.display = 'none';
-      btn.textContent = 'Inspect envelope';
+      btn.textContent = 'View decision record';
       btn.disabled    = false;
     }
   }
@@ -1455,7 +1599,8 @@
     copyToClipboard(document.getElementById('raw-json').textContent, document.getElementById('raw-copy-btn'));
   });
   document.getElementById('curl-pre-copy-btn').addEventListener('click', () => {
-    copyToClipboard(document.getElementById('curl-pre').textContent, document.getElementById('curl-pre-copy-btn'));
+    const active = document.querySelector('.curl-panel.active');
+    copyToClipboard(active ? active.textContent : '', document.getElementById('curl-pre-copy-btn'));
   });
   document.getElementById('envelope-copy-btn').addEventListener('click', () => {
     copyToClipboard(document.getElementById('envelope-json').textContent, document.getElementById('envelope-copy-btn'));
