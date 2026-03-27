@@ -325,6 +325,12 @@ CREATE INDEX IF NOT EXISTS idx_agents_capabilities_gin
 -- Runtime resolution then chooses the correct active profile version.
 -- Grants themselves should be treated as non-deletable operational history;
 -- revocation/suspension should be modeled by status and revocation fields.
+--
+-- Grants may participate in delegation chains for authority-graph lineage
+-- tracking and audit/reporting. parent_grant_id is a self-reference to the
+-- grant from which this one was delegated. authority_chain_id groups all
+-- grants in a lineage chain under a single stable identifier. delegation_depth
+-- records the number of hops from the root grant (0 = root).
 
 CREATE TABLE IF NOT EXISTS authority_grants (
     id TEXT PRIMARY KEY,
@@ -347,8 +353,18 @@ CREATE TABLE IF NOT EXISTS authority_grants (
     suspended_by TEXT,
     suspend_reason TEXT,
 
+    -- Delegation and authority-graph lineage
+    parent_grant_id           TEXT,
+    authority_chain_id        TEXT,
+    delegation_depth          INTEGER NOT NULL DEFAULT 0,
+    delegated_from_agent_id   TEXT,
+    delegated_from_profile_id TEXT,
+
     CONSTRAINT fk_grants_agent
         FOREIGN KEY (agent_id) REFERENCES agents(id),
+
+    CONSTRAINT fk_grants_parent_grant
+        FOREIGN KEY (parent_grant_id) REFERENCES authority_grants(id),
 
     CONSTRAINT chk_grants_status
         CHECK (status IN ('active', 'suspended', 'revoked')),
@@ -379,6 +395,15 @@ CREATE INDEX IF NOT EXISTS idx_authority_grants_agent_status
 CREATE INDEX IF NOT EXISTS idx_authority_grants_effective
     ON authority_grants (effective_date, expires_at)
     WHERE status = 'active';
+
+CREATE INDEX IF NOT EXISTS idx_authority_grants_parent_grant
+    ON authority_grants (parent_grant_id);
+
+CREATE INDEX IF NOT EXISTS idx_authority_grants_chain_id
+    ON authority_grants (authority_chain_id);
+
+CREATE INDEX IF NOT EXISTS idx_authority_grants_delegation_depth
+    ON authority_grants (delegation_depth);
 
 -- =============================================================================
 -- OPERATIONAL ENVELOPES
@@ -711,7 +736,7 @@ COMMENT ON TABLE authority_profiles IS
 'Versioned authority profiles. id is the logical profile ID; (id, version) identifies a concrete version.';
 
 COMMENT ON TABLE authority_grants IS
-'Links agents to logical authority profiles. Grants should be revoked/suspended rather than deleted.';
+'Links agents to logical authority profiles. Grants participate in delegation chains for authority-graph lineage tracking and audit/reporting. Grants should be revoked/suspended rather than deleted.';
 
 COMMENT ON TABLE operational_envelopes IS
 'Five-section governance envelope wrapping each request through submission, authority resolution, evaluation, integrity tracking, and review.';
