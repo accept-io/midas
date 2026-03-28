@@ -1,24 +1,1461 @@
 openapi: "3.1.0"
 info:
-  title: Accept MIDAS API
-  version: 0.1.0
-  description: Decision authority engine for governing autonomous actors.
+  title: MIDAS API
+  version: "1.0.0"
+  description: >
+    Authority governance engine for autonomous decisions.
+    Every evaluation produces exactly one outcome and one tamper-evident audit envelope.
+servers:
+  - url: http://localhost:8080
+    description: Local development
+
+security:
+  - BearerAuth: []
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: >
+        Static bearer token. Configured via MIDAS_AUTH_TOKENS or midas.yaml auth.tokens.
+        Not required when auth.mode=open (development only).
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+
+    Consequence:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [monetary, risk_rating]
+        amount:
+          type: number
+          description: Monetary amount. Required when type=monetary.
+        currency:
+          type: string
+          description: ISO 4217 currency code. Required when type=monetary.
+        risk_rating:
+          type: string
+          enum: [low, medium, high, critical]
+          description: Risk rating value. Required when type=risk_rating.
+
+    EvaluateRequest:
+      type: object
+      required: [surface_id, agent_id, confidence]
+      properties:
+        surface_id:
+          type: string
+          description: ID of the governed decision surface.
+        agent_id:
+          type: string
+          description: ID of the acting agent.
+        confidence:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          description: Agent's confidence in the decision (0.0–1.0).
+        consequence:
+          $ref: "#/components/schemas/Consequence"
+        context:
+          type: object
+          additionalProperties: true
+          description: Key-value pairs satisfying the surface's required context keys.
+        request_id:
+          type: string
+          description: Caller-supplied idempotency key. Auto-generated if omitted.
+        request_source:
+          type: string
+          description: Logical source system identifier. Defaults to "api".
+
+    EvaluateResponse:
+      type: object
+      required: [outcome, reason]
+      properties:
+        outcome:
+          type: string
+          enum: [execute, escalate, reject, request_clarification]
+        reason:
+          type: string
+          description: Typed reason code (e.g. WITHIN_AUTHORITY, CONFIDENCE_BELOW_THRESHOLD).
+        envelope_id:
+          type: string
+          description: ID of the persisted governance envelope. Omitted on simulation.
+        explanation:
+          type: string
+          description: Human-readable explanation of the outcome.
+        policy_mode:
+          type: string
+          description: Active policy evaluator mode (e.g. noop).
+        policy_reference:
+          type: string
+          description: Policy bundle reference used during evaluation.
+        policy_skipped:
+          type: boolean
+          description: True when no policy was attached to the profile.
+        simulated:
+          type: boolean
+          description: True when the result was produced by the non-persistent simulate path.
+
+    ReviewRequest:
+      type: object
+      required: [envelope_id, decision, reviewer]
+      properties:
+        envelope_id:
+          type: string
+        decision:
+          type: string
+          enum: [approve, reject]
+        reviewer:
+          type: string
+          description: Reviewer identifier.
+        notes:
+          type: string
+
+    ReviewResponse:
+      type: object
+      required: [envelope_id, status]
+      properties:
+        envelope_id:
+          type: string
+        status:
+          type: string
+
+    Envelope:
+      type: object
+      description: Tamper-evident governance record for a single evaluation.
+      properties:
+        id:
+          type: string
+        state:
+          type: string
+          enum: [received, evaluating, outcome_recorded, escalated, awaiting_review, closed]
+        surface_id:
+          type: string
+        agent_id:
+          type: string
+        request_id:
+          type: string
+        request_source:
+          type: string
+        confidence:
+          type: number
+        outcome:
+          type: string
+        reason_code:
+          type: string
+        explanation:
+          type: string
+        profile_id:
+          type: string
+        grant_id:
+          type: string
+        surface_version:
+          type: integer
+        first_event_hash:
+          type: string
+        final_event_hash:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        closed_at:
+          type: string
+          format: date-time
+
+    Surface:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+          enum: [draft, review, active, deprecated, retired]
+        version:
+          type: integer
+        domain:
+          type: string
+        business_owner:
+          type: string
+        technical_owner:
+          type: string
+        effective_from:
+          type: string
+          format: date-time
+        approved_by:
+          type: string
+        approved_at:
+          type: string
+          format: date-time
+        deprecation_reason:
+          type: string
+        successor_surface_id:
+          type: string
+
+    Profile:
+      type: object
+      properties:
+        id:
+          type: string
+        version:
+          type: integer
+        surface_id:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+          enum: [draft, review, active, deprecated, retired]
+        effective_date:
+          type: string
+          format: date-time
+        confidence_threshold:
+          type: number
+        escalation_mode:
+          type: string
+          enum: [auto, manual]
+        fail_mode:
+          type: string
+          enum: [open, closed]
+        policy_reference:
+          type: string
+        required_context_keys:
+          type: array
+          items:
+            type: string
+        approved_by:
+          type: string
+        approved_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Agent:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+          enum: [ai, service, operator]
+        owner:
+          type: string
+        model_version:
+          type: string
+        endpoint:
+          type: string
+        operational_state:
+          type: string
+          enum: [active, suspended, revoked]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Grant:
+      type: object
+      properties:
+        id:
+          type: string
+        agent_id:
+          type: string
+        profile_id:
+          type: string
+        status:
+          type: string
+          enum: [active, suspended, revoked, expired]
+        granted_by:
+          type: string
+        effective_from:
+          type: string
+          format: date-time
+        effective_until:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ApproveSurfaceRequest:
+      type: object
+      required: [approver_id]
+      properties:
+        approver_id:
+          type: string
+        approver_name:
+          type: string
+        submitted_by:
+          type: string
+          description: ID of the principal who submitted the surface for review.
+
+    DeprecateSurfaceRequest:
+      type: object
+      required: [deprecated_by, reason]
+      properties:
+        deprecated_by:
+          type: string
+        reason:
+          type: string
+        successor_id:
+          type: string
+          description: Optional successor surface ID.
+
+    ApproveProfileRequest:
+      type: object
+      required: [version, approved_by]
+      properties:
+        version:
+          type: integer
+          minimum: 1
+        approved_by:
+          type: string
+
+    DeprecateProfileRequest:
+      type: object
+      required: [version, deprecated_by]
+      properties:
+        version:
+          type: integer
+          minimum: 1
+        deprecated_by:
+          type: string
+
+    GrantLifecycleRequest:
+      type: object
+      properties:
+        suspended_by:
+          type: string
+          description: Required for suspend action.
+        revoked_by:
+          type: string
+          description: Required for revoke action.
+        reinstated_by:
+          type: string
+          description: Required for reinstate action.
+        reason:
+          type: string
+
+    GrantLifecycleResponse:
+      type: object
+      required: [grant_id, status, agent_id]
+      properties:
+        grant_id:
+          type: string
+        status:
+          type: string
+          enum: [active, suspended, revoked]
+        agent_id:
+          type: string
+
 paths:
   /healthz:
     get:
-      summary: Health check
+      operationId: getHealth
+      summary: Liveness check
+      description: Returns 200 when the server is running. Does not verify store connectivity.
+      security: []
       responses:
         "200":
-          description: OK
+          description: Server is alive
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  service:
+                    type: string
+                    example: midas
+                  policy_mode:
+                    type: string
+                  policy_evaluator:
+                    type: string
+
   /readyz:
     get:
+      operationId: getReadiness
       summary: Readiness check
+      description: Returns 200 when the server is ready to serve traffic, including store connectivity.
+      security: []
       responses:
         "200":
           description: Ready
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+        "503":
+          description: Not ready — store unreachable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /v1/evaluate:
     post:
+      operationId: evaluate
       summary: Evaluate a decision request
+      description: >
+        Evaluates whether an agent is within authority to perform an action on
+        a governed decision surface. Produces exactly one outcome and one
+        tamper-evident audit envelope. Idempotent by request_id within a source.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EvaluateRequest"
       responses:
         "200":
-          description: Evaluation response
+          description: Evaluation complete
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvaluateResponse"
+        "400":
+          description: Invalid request (missing required fields, invalid confidence value, etc.)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated (auth.mode=required and no valid token provided)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.operator or platform.admin)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/reviews:
+    post:
+      operationId: createReview
+      summary: Resolve an escalated decision
+      description: >
+        Resolves a pending escalation by approving or rejecting the decision.
+        The envelope must be in the awaiting_review state. Transitions the
+        envelope to closed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewRequest"
+      responses:
+        "200":
+          description: Review recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewResponse"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.admin or governance.reviewer)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Envelope not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/envelopes:
+    get:
+      operationId: listEnvelopes
+      summary: List governance envelopes
+      description: Returns all envelopes, optionally filtered by lifecycle state.
+      parameters:
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [received, evaluating, outcome_recorded, escalated, awaiting_review, closed]
+          description: Filter by envelope lifecycle state.
+      responses:
+        "200":
+          description: List of envelopes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Envelope"
+        "400":
+          description: Invalid state filter
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/envelopes/{id}:
+    get:
+      operationId: getEnvelope
+      summary: Get a governance envelope by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Envelope found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "400":
+          description: Invalid envelope ID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Envelope not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/escalations:
+    get:
+      operationId: listEscalations
+      summary: List pending escalations
+      description: >
+        Returns all envelopes in the awaiting_review state — the operator's
+        pending escalation queue. Use POST /v1/reviews to resolve them.
+      responses:
+        "200":
+          description: List of escalated envelopes awaiting review
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Envelope"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/decisions/request/{requestId}:
+    get:
+      operationId: getDecisionByRequestId
+      summary: Look up a decision by request ID
+      description: >
+        Returns the governance envelope for a given caller-supplied request ID.
+        Optionally scoped by source system via the source query parameter.
+      parameters:
+        - name: requestId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: source
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Request source system. Scopes the lookup to a specific origin.
+      responses:
+        "200":
+          description: Envelope found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "400":
+          description: Invalid request ID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Decision not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/controlplane/apply:
+    post:
+      operationId: applyBundle
+      summary: Apply a control-plane configuration bundle
+      description: >
+        Applies a YAML bundle of surface, profile, grant, and agent documents.
+        All resources in the bundle are validated before any are persisted.
+        Surfaces are created in review state and must be approved separately.
+        Requires platform.admin role.
+      requestBody:
+        required: true
+        content:
+          application/yaml:
+            schema:
+              type: string
+              description: Multi-document YAML stream of control-plane resources.
+      responses:
+        "200":
+          description: Bundle applied (may contain per-resource validation errors)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  created:
+                    type: integer
+                  updated:
+                    type: integer
+                  errors:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        kind:
+                          type: string
+                        id:
+                          type: string
+                        field:
+                          type: string
+                        message:
+                          type: string
+        "400":
+          description: Invalid YAML or bundle-level validation failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.admin)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/controlplane/plan:
+    post:
+      operationId: planBundle
+      summary: Preview a control-plane bundle without applying it
+      description: >
+        Validates and plans a YAML bundle, returning the projected changes
+        without persisting anything. Useful for CI/CD dry-run workflows.
+        Requires platform.admin role.
+      requestBody:
+        required: true
+        content:
+          application/yaml:
+            schema:
+              type: string
+      responses:
+        "200":
+          description: Plan computed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  planned:
+                    type: integer
+                  errors:
+                    type: array
+                    items:
+                      type: object
+        "400":
+          description: Invalid YAML
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.admin)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/controlplane/audit:
+    get:
+      operationId: listControlAudit
+      summary: List control-plane audit events
+      description: Returns the audit trail of control-plane operations (apply, approve, deprecate).
+      responses:
+        "200":
+          description: Audit event list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    event_type:
+                      type: string
+                    resource_kind:
+                      type: string
+                    resource_id:
+                      type: string
+                    actor:
+                      type: string
+                    occurred_at:
+                      type: string
+                      format: date-time
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/controlplane/surfaces/{id}/approve:
+    post:
+      operationId: approveSurface
+      summary: Approve a surface in review state
+      description: >
+        Transitions a surface from review to active. Enforces maker-checker:
+        the approver must not be the same principal who submitted the surface.
+        Requires platform.admin or governance.approver role.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApproveSurfaceRequest"
+      responses:
+        "200":
+          description: Surface approved
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [surface_id, status, approved_by]
+                properties:
+                  surface_id:
+                    type: string
+                  status:
+                    type: string
+                    example: active
+                  approved_by:
+                    type: string
+        "400":
+          description: Invalid request or approval policy violation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role or approval policy denied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Surface not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Surface is not in review state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/controlplane/surfaces/{id}/deprecate:
+    post:
+      operationId: deprecateSurface
+      summary: Deprecate an active surface
+      description: >
+        Transitions a surface from active to deprecated. Deprecated surfaces
+        remain usable for existing grants but signal pending migration.
+        Requires platform.admin role.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeprecateSurfaceRequest"
+      responses:
+        "200":
+          description: Surface deprecated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  surface_id:
+                    type: string
+                  status:
+                    type: string
+                    example: deprecated
+                  deprecation_reason:
+                    type: string
+                  successor_surface_id:
+                    type: string
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.admin)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Surface not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/controlplane/profiles/{id}/approve:
+    post:
+      operationId: approveProfile
+      summary: Approve a profile version in review state
+      description: >
+        Transitions a specific profile version from review to active.
+        Requires platform.admin or governance.approver role.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApproveProfileRequest"
+      responses:
+        "200":
+          description: Profile approved
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [profile_id, version, status, approved_by]
+                properties:
+                  profile_id:
+                    type: string
+                  version:
+                    type: integer
+                  status:
+                    type: string
+                  approved_by:
+                    type: string
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Profile not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/controlplane/profiles/{id}/deprecate:
+    post:
+      operationId: deprecateProfile
+      summary: Deprecate a profile version
+      description: Requires platform.admin role.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeprecateProfileRequest"
+      responses:
+        "200":
+          description: Profile deprecated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  profile_id:
+                    type: string
+                  version:
+                    type: integer
+                  status:
+                    type: string
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.admin)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Profile not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/controlplane/grants/{id}/suspend:
+    post:
+      operationId: suspendGrant
+      summary: Suspend an active grant
+      description: >
+        Suspends an active authority grant, preventing the associated agent
+        from being authorized on the linked profile. Reversible via reinstate.
+        Requires platform.admin role.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [suspended_by]
+              properties:
+                suspended_by:
+                  type: string
+                reason:
+                  type: string
+      responses:
+        "200":
+          description: Grant suspended
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GrantLifecycleResponse"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.admin)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Grant not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/controlplane/grants/{id}/revoke:
+    post:
+      operationId: revokeGrant
+      summary: Revoke a grant permanently
+      description: >
+        Permanently revokes an authority grant. This is irreversible.
+        Requires platform.admin role.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [revoked_by]
+              properties:
+                revoked_by:
+                  type: string
+                reason:
+                  type: string
+      responses:
+        "200":
+          description: Grant revoked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GrantLifecycleResponse"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.admin)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Grant not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/controlplane/grants/{id}/reinstate:
+    post:
+      operationId: reinstateGrant
+      summary: Reinstate a suspended grant
+      description: >
+        Reactivates a suspended grant, restoring the agent's authority.
+        Only suspended grants can be reinstated; revoked grants cannot.
+        Requires platform.admin role.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reinstated_by]
+              properties:
+                reinstated_by:
+                  type: string
+      responses:
+        "200":
+          description: Grant reinstated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GrantLifecycleResponse"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.admin)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Grant not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/surfaces/{id}:
+    get:
+      operationId: getSurface
+      summary: Get a decision surface
+      description: >
+        Returns the latest version of a surface by default.
+        Append /versions to list all versions.
+        Append /impact to see profiles, grants, and agents linked to this surface.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Surface found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Surface"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Surface not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/profiles:
+    get:
+      operationId: listProfiles
+      summary: List authority profiles
+      description: Returns all profiles. Optionally filter by surface_id.
+      parameters:
+        - name: surface_id
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Profile list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Profile"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/profiles/{id}:
+    get:
+      operationId: getProfile
+      summary: Get an authority profile
+      description: >
+        Returns the latest active version of a profile.
+        Append /versions to list all versions.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Profile found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Profile"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Profile not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/agents/{id}:
+    get:
+      operationId: getAgent
+      summary: Get an agent
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Agent found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Agent"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Agent not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/grants:
+    get:
+      operationId: listGrants
+      summary: List authority grants
+      description: Returns all grants. Optionally filter by agent_id.
+      parameters:
+        - name: agent_id
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Grant list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Grant"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/grants/{id}:
+    get:
+      operationId: getGrant
+      summary: Get an authority grant
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Grant found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Grant"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Grant not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"

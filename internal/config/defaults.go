@@ -10,10 +10,14 @@ func DefaultConfig() Config {
 		Version: CurrentVersion,
 		Profile: ProfileDev,
 		Server: ServerConfig{
-			Port:            8080,
-			ShutdownTimeout: Duration(15 * time.Second),
-			ExplorerEnabled: true,
-			Headless:        false,
+			Port:              8080,
+			ShutdownTimeout:   Duration(15 * time.Second),
+			ReadTimeout:       Duration(30 * time.Second),
+			ReadHeaderTimeout: Duration(10 * time.Second),
+			WriteTimeout:      Duration(60 * time.Second),
+			IdleTimeout:       Duration(120 * time.Second),
+			ExplorerEnabled:   true,
+			Headless:          false,
 		},
 		Store: StoreConfig{
 			Backend: "memory",

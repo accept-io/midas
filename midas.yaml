@@ -53,6 +53,15 @@ server:
   headless: false
   port: 8080
   shutdown_timeout: 15s
+  # HTTP server timeouts — protect against slow clients and resource exhaustion.
+  # read_timeout:        time to read the full request including body. Default: 30s.
+  # read_header_timeout: time to read request headers only.             Default: 10s.
+  # write_timeout:       time to write the full response.               Default: 60s.
+  # idle_timeout:        max idle time for keep-alive connections.       Default: 120s.
+  read_timeout: 30s
+  read_header_timeout: 10s
+  write_timeout: 60s
+  idle_timeout: 120s
   explorer_enabled: true
 
 # ---------------------------------------------------------------------------

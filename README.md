@@ -38,8 +38,8 @@ docker compose up
 
 Starts Postgres 16 and MIDAS together. Schema applied automatically on startup.
 
-> **⚠️** The default compose file sets `MIDAS_AUTH_DISABLED=true` for local convenience.
-> Before exposing MIDAS to a network, remove it and set `MIDAS_AUTH_TOKENS`. See [Authentication](#authentication).
+> **⚠️** The default compose file sets `MIDAS_AUTH_MODE=open` for local convenience.
+> Before exposing MIDAS to a network, set `MIDAS_AUTH_MODE=required` and configure `MIDAS_AUTH_TOKENS`. See [Authentication](#authentication).
 
 ### First API evaluation
 
@@ -112,8 +112,8 @@ Verification requires only the stored event hashes and the anchored final hash o
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MIDAS_STORE` | `memory` | `memory` or `postgres` |
-| `DATABASE_URL` | _(none)_ | PostgreSQL connection string. Required when `MIDAS_STORE=postgres`. |
+| `MIDAS_STORE_BACKEND` | `memory` | `memory` or `postgres` |
+| `MIDAS_DATABASE_URL` | _(none)_ | PostgreSQL connection string. Required when `MIDAS_STORE_BACKEND=postgres`. |
 
 The schema is applied automatically at startup (`internal/store/postgres/schema.sql`). No separate migration step is needed.
 
@@ -121,23 +121,22 @@ The schema is applied automatically at startup (`internal/store/postgres/schema.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MIDAS_AUTH_TOKENS` | _(none)_ | Semicolon-separated entries: `token\|principal-id\|role1,role2`. Required in Postgres mode. |
-| `MIDAS_AUTH_DISABLED` | _(none)_ | Set to `true` to disable auth in Postgres mode. Dev use only. |
+| `MIDAS_AUTH_MODE` | `open` | `open` (no auth, dev only) or `required` (bearer token enforced). |
+| `MIDAS_AUTH_TOKENS` | _(none)_ | Semicolon-separated entries: `token\|principal-id\|role1,role2`. Required when `MIDAS_AUTH_MODE=required`. |
 
 Generate tokens with `openssl rand -base64 32`, then:
 
 ```bash
-export MIDAS_AUTH_TOKENS="<token>|svc:deploy|operator;<token2>|user:alice|admin,approver"
+export MIDAS_AUTH_TOKENS="<token>|svc:deploy|platform.operator;<token2>|user:alice|platform.admin,governance.approver"
 ```
 
-Roles: `admin`, `approver`, `operator`, `reviewer`.
+Roles: `platform.admin`, `platform.operator`, `platform.viewer`, `governance.approver`, `governance.reviewer`.
 
-| Mode | `MIDAS_AUTH_TOKENS` | `MIDAS_AUTH_DISABLED` | Result |
-|------|---------------------|-----------------------|--------|
-| Postgres | Set | * | Auth enforced |
-| Postgres | Unset | `true` | Starts — `UNSAFE FOR PRODUCTION` logged |
-| Postgres | Unset | unset | **Fatal** — startup aborted |
-| Memory | * | * | Auth optional |
+| `MIDAS_AUTH_MODE` | `MIDAS_AUTH_TOKENS` | Result |
+|-------------------|---------------------|--------|
+| `required` | Set | Bearer token auth enforced |
+| `required` | Unset | **Fatal** — no tokens configured |
+| `open` | — | No auth — `UNSAFE FOR PRODUCTION` logged |
 
 ### Key environment variables
 
@@ -165,9 +164,10 @@ Full variable reference: [docs/operations/deployment.md](docs/operations/deploym
 | [docs/operations/deployment.md](docs/operations/deployment.md) | Surface lifecycle: apply → approve → active → deprecated |
 | [docs/operations/escalations.md](docs/operations/escalations.md) | Escalation outcomes, listing and resolving |
 | [docs/operations/events.md](docs/operations/events.md) | Outbox, dispatcher, Kafka, event contracts |
-| [docs/operations/integrations.md](docs/operations/integrations.md) | Kafka integration, planned SSO/OIDC |
+| [docs/operations/integrations.md](docs/operations/integrations.md) | Kafka integration, SSO/OIDC |
 | [docs/api/http-api.md](docs/api/http-api.md) | Complete HTTP API reference |
 | [docs/architecture/architecture.md](docs/architecture/architecture.md) | Deep architecture overview |
+| [docs/guides/authentication.md](docs/guides/authentication.md) | Local IAM, OIDC/SSO, and API bearer token authentication |
 | [docs/guides/rego-policies.md](docs/guides/rego-policies.md) | Policy behavior: NoOp default and future direction |
 
 ---

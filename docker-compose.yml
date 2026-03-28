@@ -27,8 +27,6 @@ services:
       # Set MIDAS_LOCAL_IAM_ENABLED=false for headless/API-only deployments.
     ports:
       - "8080:8080"
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/readyz"]
-      interval: 10s
-      timeout: 2s
-      retries: 3
+    # No container-internal healthcheck: the runtime image is distroless and
+    # does not contain wget, curl, or /bin/sh. Use GET /readyz from an external
+    # orchestrator (Kubernetes readinessProbe, load-balancer health check, etc.).

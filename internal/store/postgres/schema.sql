@@ -300,7 +300,7 @@ CREATE TABLE IF NOT EXISTS agents (
     updated_at TIMESTAMPTZ NOT NULL,
 
     CONSTRAINT chk_agents_type
-        CHECK (type IN ('ai', 'human', 'system', 'hybrid')),
+        CHECK (type IN ('ai', 'service', 'operator')),
 
     CONSTRAINT chk_agents_operational_state
         CHECK (operational_state IN ('active', 'suspended', 'retired'))
