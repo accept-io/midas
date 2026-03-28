@@ -346,3 +346,125 @@ func TestExplorerGetEnvelope_Disabled_Returns404(t *testing.T) {
 		t.Errorf("want 404 when explorer disabled, got %d", rec.Code)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Explorer shell — server-side hardening tests
+// ---------------------------------------------------------------------------
+
+// TestExplorer_Shell_IAMActive_NoSession_ServesShellWithAuthRequired verifies
+// that when Local IAM is active and no session cookie is present:
+//   - the server still serves the HTML shell (200, for the login overlay)
+//   - X-Auth-Required: true signals an active server-side auth decision
+//   - Cache-Control: no-store is set
+//
+// This is the key hardening assertion: the server must NOT serve the shell as
+// anonymous public content when Local IAM is active.
+func TestExplorer_Shell_IAMActive_NoSession_ServesShellWithAuthRequired(t *testing.T) {
+	srv, _ := newIAMServer(t)
+	srv = srv.WithExplorerEnabled(true)
+
+	// No session cookie — unauthenticated request.
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("want 200 (shell serves login overlay), got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "MIDAS Explorer") {
+		t.Errorf("want HTML body to contain 'MIDAS Explorer'")
+	}
+	if rec.Header().Get("X-Auth-Required") != "true" {
+		t.Errorf("X-Auth-Required: want 'true', got %q — server must signal unauthenticated state intentionally", rec.Header().Get("X-Auth-Required"))
+	}
+	if rec.Header().Get("Cache-Control") != "no-store" {
+		t.Errorf("Cache-Control: want no-store, got %q", rec.Header().Get("Cache-Control"))
+	}
+}
+
+// TestExplorer_Shell_IAMActive_ValidSession_NoAuthRequired verifies that when
+// Local IAM is active and a valid session cookie is present:
+//   - the shell is served normally (200, HTML)
+//   - X-Auth-Required is NOT set (server sees an authenticated principal)
+//   - Cache-Control: no-store is still set
+func TestExplorer_Shell_IAMActive_ValidSession_NoAuthRequired(t *testing.T) {
+	srv, _ := newIAMServer(t)
+	srv = srv.WithExplorerEnabled(true)
+
+	// Log in to obtain a session cookie.
+	loginRec := doLogin(t, srv, "admin", "admin")
+	cookie := sessionCookie(loginRec)
+	if cookie == "" {
+		t.Fatal("login did not set session cookie")
+	}
+
+	rec := requestWithCookie(t, srv, http.MethodGet, "/explorer", nil, cookie)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "MIDAS Explorer") {
+		t.Errorf("want HTML body to contain 'MIDAS Explorer'")
+	}
+	if got := rec.Header().Get("X-Auth-Required"); got != "" {
+		t.Errorf("X-Auth-Required: want absent for authenticated session, got %q", got)
+	}
+	if rec.Header().Get("Cache-Control") != "no-store" {
+		t.Errorf("Cache-Control: want no-store, got %q", rec.Header().Get("Cache-Control"))
+	}
+}
+
+// TestExplorer_Shell_IAMDisabled_OpenAccess verifies that when Local IAM is
+// not configured the shell is served normally with no auth-related headers —
+// existing open-access behaviour is preserved.
+func TestExplorer_Shell_IAMDisabled_OpenAccess(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("want 200, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("X-Auth-Required"); got != "" {
+		t.Errorf("X-Auth-Required: want absent when IAM disabled, got %q", got)
+	}
+	if got := rec.Header().Get("Cache-Control"); got == "no-store" {
+		t.Errorf("Cache-Control: want no no-store header when IAM disabled, got %q", got)
+	}
+}
+
+// TestExplorer_Assets_AccessibleWithoutSession verifies that static assets
+// under /explorer/ are still served without a session — they are required by
+// the login overlay before any login can occur.
+func TestExplorer_Assets_AccessibleWithoutSession(t *testing.T) {
+	srv, _ := newIAMServer(t)
+	srv = srv.WithExplorerEnabled(true)
+
+	// /explorer/ serves the embed FS directory (FileServer); login-overlay CSS/JS lives here.
+	rec := performRequest(t, srv, http.MethodGet, "/explorer/", nil)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("want 200 for /explorer/ (assets must be open for login overlay), got %d", rec.Code)
+	}
+}
+
+// TestExplorer_Config_IAMActive_IncludesLocalIAMFlag verifies that
+// GET /explorer/config emits localiam=true when local IAM is wired up.
+// This endpoint must remain open (no session required) for JS to determine
+// which login mode to show.
+func TestExplorer_Config_IAMActive_IncludesLocalIAMFlag(t *testing.T) {
+	srv, _ := newIAMServer(t)
+	srv = srv.WithExplorerEnabled(true)
+
+	rec := performRequest(t, srv, http.MethodGet, "/explorer/config", nil)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	var resp map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if got, ok := resp["localiam"].(bool); !ok || !got {
+		t.Errorf("want localiam=true, got %v", resp["localiam"])
+	}
+}

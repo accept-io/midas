@@ -24,7 +24,7 @@ func DefaultConfig() Config {
 			Tokens: nil,
 		},
 		LocalIAM: LocalIAMConfig{
-			Enabled:       false,
+			Enabled:       true,
 			SessionTTL:    Duration(8 * time.Hour),
 			SecureCookies: false,
 		},

@@ -275,7 +275,7 @@ func (s *Server) WithExplorerEnabled(enabled bool) *Server {
 	if enabled {
 		// Build the Explorer's isolated in-memory runtime (seeded unconditionally).
 		s.initExplorerRuntime()
-		s.mux.HandleFunc("GET /explorer", s.handleExplorerIndex)
+		s.mux.HandleFunc("GET /explorer", s.explorerShellHandler(s.handleExplorerIndex))
 		s.mux.HandleFunc("POST /explorer", s.explorerAuthHandler(s.handleExplorerEvaluate))
 		s.mux.HandleFunc("POST /explorer/simulate", s.explorerAuthHandler(s.handleExplorerSimulate))
 		s.mux.HandleFunc("GET /explorer/config", s.handleExplorerConfig)
@@ -283,6 +283,21 @@ func (s *Server) WithExplorerEnabled(enabled bool) *Server {
 		s.mux.HandleFunc("GET /explorer/", s.handleExplorerAssets)
 	}
 	return s
+}
+
+// explorerShellHandler applies session extraction to GET /explorer when local
+// IAM is active. It does not enforce authentication — the shell contains the
+// login overlay which is the primary login UX. The middleware is applied so
+// the server makes an active, intentional auth decision on every shell request
+// rather than serving blindly as anonymous public content.
+func (s *Server) explorerShellHandler(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.localIAM != nil {
+			s.localIAM.AuthMiddleware()(http.HandlerFunc(h)).ServeHTTP(w, r)
+		} else {
+			h(w, r)
+		}
+	}
 }
 
 // explorerAuthHandler wraps an Explorer handler with authentication and

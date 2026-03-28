@@ -88,13 +88,13 @@ auth:
   tokens: []
 
 # ---------------------------------------------------------------------------
-# Local IAM — enable for browser-based console access with username/password login.
-# When enabled, a bootstrap admin/admin account is created on first run.
-# Disable for headless/API-only deployments.
-# Env: MIDAS_LOCAL_IAM_ENABLED=true
+# Local IAM — enabled by default for browser-based console access.
+# Bootstrap credentials: admin / admin (forced password change on first login).
+# To disable (headless/API-only deployments): set enabled: false or
+# MIDAS_LOCAL_IAM_ENABLED=false.
 # ---------------------------------------------------------------------------
 # local_iam:
-#   enabled: false
+#   enabled: true
 #   session_ttl: 8h
 #   secure_cookies: false   # set true in production behind TLS
 

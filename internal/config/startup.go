@@ -49,6 +49,25 @@ func LogStartupSummary(result LoadResult) {
 			"detail", "running as pure governance engine; /v1/*, /healthz, /readyz remain operational",
 		)
 	}
+
+	if explorerUnauthenticated(cfg) {
+		slog.Warn("explorer_unauthenticated",
+			"explorer", true,
+			"local_iam", false,
+			"message", "Explorer is running without authentication — do not expose in production",
+		)
+	}
+}
+
+// explorerUnauthenticated reports whether Explorer is running with no auth
+// layer active. Used to emit a startup warning for operators who have
+// explicitly disabled both local_iam and platform_oidc while leaving
+// Explorer enabled.
+func explorerUnauthenticated(cfg Config) bool {
+	return !cfg.Server.Headless &&
+		cfg.Server.ExplorerEnabled &&
+		!cfg.LocalIAM.Enabled &&
+		!cfg.PlatformOIDC.Enabled
 }
 
 // maskDSN extracts the host[:port]/database segment from a Postgres connection

@@ -544,6 +544,23 @@ platform_oidc:
 `, enabled, clientID, clientSecret)
 }
 
+func TestLoad_MIDAS_LOCAL_IAM_ENABLED_FalseOverridesDefault(t *testing.T) {
+	// Default is local_iam.enabled=true; env sets it false (headless/API-only opt-out).
+	result, err := Load(LoadOptions{
+		SearchPaths: noDiscovery,
+		EnvOverride: env("MIDAS_LOCAL_IAM_ENABLED", "false"),
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if result.Config.LocalIAM.Enabled {
+		t.Error("local_iam.enabled: want false (env wins over default), got true")
+	}
+	if result.Sources["local_iam"] != SourceEnv {
+		t.Errorf("local_iam source: want env, got %s", result.Sources["local_iam"])
+	}
+}
+
 func TestLoad_MIDAS_LOCAL_IAM_ENABLED_OverridesFile(t *testing.T) {
 	// File has local_iam.enabled=false; env sets it true.
 	cfgPath := writeConfig(t, localIAMYAML(false))
