@@ -9,6 +9,7 @@ import (
 // configuration. Secrets are masked:
 //   - Store DSN: host and database only; credentials stripped.
 //   - Auth tokens: count and principal IDs logged; token values never appear.
+//   - OIDC client_secret: never logged under any circumstances.
 func LogStartupSummary(result LoadResult) {
 	cfg := result.Config
 
@@ -23,13 +24,31 @@ func LogStartupSummary(result LoadResult) {
 		"log_level", cfg.Observability.LogLevel,
 		"log_format", cfg.Observability.LogFormat,
 		"server_port", cfg.Server.Port,
+		"server_headless", cfg.Server.Headless,
+		"explorer_enabled", cfg.Server.ExplorerEnabled,
+		"control_plane_enabled", cfg.ControlPlane.Enabled,
+		"local_iam_enabled", cfg.LocalIAM.Enabled,
+		"oidc_enabled", cfg.PlatformOIDC.Enabled,
+		"oidc_provider", cfg.PlatformOIDC.ProviderName,
 		"dispatcher_enabled", cfg.Dispatcher.Enabled,
 		"dispatcher_publisher", cfg.Dispatcher.Publisher,
 		"source_profile", string(result.Sources["profile"]),
 		"source_store", string(result.Sources["store"]),
 		"source_auth", string(result.Sources["auth"]),
+		"source_local_iam", string(result.Sources["local_iam"]),
+		"source_platform_oidc", string(result.Sources["platform_oidc"]),
 		"warnings", result.Warnings,
 	)
+
+	if cfg.Server.Headless {
+		slog.Info("midas_headless_mode",
+			"headless", true,
+			"explorer", "disabled",
+			"local_iam", "disabled",
+			"oidc", "disabled",
+			"detail", "running as pure governance engine; /v1/*, /healthz, /readyz remain operational",
+		)
+	}
 }
 
 // maskDSN extracts the host[:port]/database segment from a Postgres connection

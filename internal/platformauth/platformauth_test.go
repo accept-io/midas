@@ -20,7 +20,7 @@ func alicePrincipal() *identity.Principal {
 	return &identity.Principal{
 		ID:       "user:alice",
 		Provider: identity.ProviderStatic,
-		Roles:    []string{identity.RoleAdmin},
+		Roles:    []string{identity.RolePlatformAdmin},
 	}
 }
 
@@ -188,8 +188,8 @@ func TestAuthenticate_NilPrincipalNilError_PassesThroughWithoutPrincipal(t *test
 }
 
 func TestAuthenticate_DoesNotOverwriteExistingPrincipal(t *testing.T) {
-	existing := &identity.Principal{ID: "user:existing", Roles: []string{identity.RoleAdmin}}
-	incoming := &identity.Principal{ID: "user:incoming", Roles: []string{identity.RoleOperator}}
+	existing := &identity.Principal{ID: "user:existing", Roles: []string{identity.RolePlatformAdmin}}
+	incoming := &identity.Principal{ID: "user:incoming", Roles: []string{identity.RolePlatformOperator}}
 
 	a := &staticAuthenticator{principal: incoming}
 
@@ -284,7 +284,7 @@ func TestRequireRole_ZeroRoles_Panics(t *testing.T) {
 
 func TestRequireRole_NoPrincipal_Returns401(t *testing.T) {
 	called := false
-	mw := RequireRole(identity.RoleAdmin)(ok(&called))
+	mw := RequireRole(identity.RolePlatformAdmin)(ok(&called))
 
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
@@ -300,9 +300,9 @@ func TestRequireRole_NoPrincipal_Returns401(t *testing.T) {
 
 func TestRequireRole_WrongRole_Returns403(t *testing.T) {
 	called := false
-	mw := RequireRole(identity.RoleAdmin)(ok(&called))
+	mw := RequireRole(identity.RolePlatformAdmin)(ok(&called))
 
-	operator := &identity.Principal{ID: "user:op", Roles: []string{identity.RoleOperator}}
+	operator := &identity.Principal{ID: "user:op", Roles: []string{identity.RolePlatformOperator}}
 	ctx := WithPrincipal(context.Background(), operator)
 	r := httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx)
 	w := httptest.NewRecorder()
@@ -321,7 +321,7 @@ func TestRequireRole_WrongRole_Returns403(t *testing.T) {
 
 func TestRequireRole_CorrectRole_CallsNext(t *testing.T) {
 	called := false
-	mw := RequireRole(identity.RoleAdmin)(ok(&called))
+	mw := RequireRole(identity.RolePlatformAdmin)(ok(&called))
 
 	ctx := WithPrincipal(context.Background(), alicePrincipal())
 	r := httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx)
@@ -338,10 +338,10 @@ func TestRequireRole_CorrectRole_CallsNext(t *testing.T) {
 
 func TestRequireRole_MultiRole_AnyMatch_CallsNext(t *testing.T) {
 	called := false
-	// Require admin or approver; principal has only operator and approver.
-	mw := RequireRole(identity.RoleAdmin, identity.RoleApprover)(ok(&called))
+	// Require platform.admin or governance.approver; principal has only platform.operator and governance.approver.
+	mw := RequireRole(identity.RolePlatformAdmin, identity.RoleGovernanceApprover)(ok(&called))
 
-	p := &identity.Principal{ID: "user:appr", Roles: []string{identity.RoleOperator, identity.RoleApprover}}
+	p := &identity.Principal{ID: "user:appr", Roles: []string{identity.RolePlatformOperator, identity.RoleGovernanceApprover}}
 	ctx := WithPrincipal(context.Background(), p)
 	r := httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx)
 	w := httptest.NewRecorder()
@@ -357,10 +357,10 @@ func TestRequireRole_MultiRole_AnyMatch_CallsNext(t *testing.T) {
 
 func TestRequireRole_CaseInsensitive_Matches(t *testing.T) {
 	called := false
-	mw := RequireRole(identity.RoleAdmin)(ok(&called))
+	mw := RequireRole(identity.RolePlatformAdmin)(ok(&called))
 
-	// Role stored with uppercase — HasAnyRole uses EqualFold.
-	p := &identity.Principal{ID: "user:upper", Roles: []string{"ADMIN"}}
+	// Role stored with uppercase canonical form — HasAnyRole uses EqualFold.
+	p := &identity.Principal{ID: "user:upper", Roles: []string{"PLATFORM.ADMIN"}}
 	ctx := WithPrincipal(context.Background(), p)
 	r := httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx)
 	w := httptest.NewRecorder()
@@ -376,11 +376,11 @@ func TestRequireRole_CaseInsensitive_Matches(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestMiddlewareChain_AuthenticateThenRequireRole(t *testing.T) {
-	p := alicePrincipal() // has RoleAdmin
+	p := alicePrincipal() // has RolePlatformAdmin
 	a := &staticAuthenticator{principal: p}
 
 	called := false
-	chain := Authenticate(a)(RequireRole(identity.RoleAdmin)(ok(&called)))
+	chain := Authenticate(a)(RequireRole(identity.RolePlatformAdmin)(ok(&called)))
 
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
@@ -398,7 +398,7 @@ func TestMiddlewareChain_AuthFailThenRequireRole_Returns401(t *testing.T) {
 	a := &staticAuthenticator{err: auth.ErrNoCredentials}
 
 	called := false
-	chain := Authenticate(a)(RequireRole(identity.RoleAdmin)(ok(&called)))
+	chain := Authenticate(a)(RequireRole(identity.RolePlatformAdmin)(ok(&called)))
 
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()

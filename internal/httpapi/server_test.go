@@ -79,6 +79,10 @@ func (m *mockOrchestrator) ListEnvelopesByState(ctx context.Context, state envel
 	return nil, fmt.Errorf("listEnvelopesByState not implemented")
 }
 
+func (m *mockOrchestrator) Simulate(ctx context.Context, req eval.DecisionRequest, raw json.RawMessage) (decision.EvaluationResult, error) {
+	return decision.EvaluationResult{}, nil
+}
+
 // ---------------------------------------------------------------------------
 // Test Helpers
 // ---------------------------------------------------------------------------

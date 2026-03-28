@@ -46,6 +46,7 @@ func ExpandPlaceholders(data []byte) ([]byte, error) {
 // Fields expanded:
 //   - store.dsn
 //   - auth.tokens[i].token
+//   - platform_oidc.client_secret
 func expandConfigPlaceholders(cfg *Config, getenv func(string) string) error {
 	// store.dsn
 	if v, err := expandField(cfg.Store.DSN, "store.dsn", getenv); err != nil {
@@ -61,6 +62,13 @@ func expandConfigPlaceholders(cfg *Config, getenv func(string) string) error {
 			return err
 		}
 		cfg.Auth.Tokens[i].Token = v
+	}
+
+	// platform_oidc.client_secret
+	if v, err := expandField(cfg.PlatformOIDC.ClientSecret, "platform_oidc.client_secret", getenv); err != nil {
+		return err
+	} else {
+		cfg.PlatformOIDC.ClientSecret = v
 	}
 
 	return nil

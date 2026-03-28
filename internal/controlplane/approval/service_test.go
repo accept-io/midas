@@ -67,7 +67,7 @@ func activeSurface(id string) *surface.DecisionSurface {
 func adminApprover(id string) identity.Principal {
 	return identity.Principal{
 		ID:    id,
-		Roles: []string{identity.RoleAdmin},
+		Roles: []string{identity.RolePlatformAdmin},
 	}
 }
 
@@ -163,7 +163,7 @@ func TestApproveSurface_ForbidsSelfReview(t *testing.T) {
 	submitter := identity.Principal{ID: "user-1"}
 	approver := identity.Principal{
 		ID:    "user-1",
-		Roles: []string{identity.RoleAdmin},
+		Roles: []string{identity.RolePlatformAdmin},
 	}
 
 	_, err := svc.ApproveSurface(context.Background(), "payments.execute", submitter, approver)

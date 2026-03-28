@@ -812,3 +812,63 @@ COMMENT ON COLUMN controlplane_audit_events.metadata IS
 --   v_envelopes_open,
 --   v_envelopes_awaiting_review
 -- TO midas_app;
+
+-- =============================================================================
+-- PLATFORM IAM: local users and sessions
+-- =============================================================================
+-- These tables support local platform login for the Explorer/console only.
+-- They are entirely separate from runtime authority (agents, surfaces, grants).
+-- roles is stored as a comma-separated string matching the identity.Role* constants.
+
+CREATE TABLE IF NOT EXISTS platform_users (
+    id                   TEXT        PRIMARY KEY,
+    username             TEXT        NOT NULL UNIQUE,
+    password_hash        TEXT        NOT NULL,
+    roles                TEXT        NOT NULL DEFAULT '',
+    enabled              BOOLEAN     NOT NULL DEFAULT TRUE,
+    must_change_password BOOLEAN     NOT NULL DEFAULT FALSE,
+    created_at           TIMESTAMPTZ NOT NULL,
+    updated_at           TIMESTAMPTZ NOT NULL,
+    last_login_at        TIMESTAMPTZ
+);
+
+COMMENT ON TABLE platform_users IS
+    'Local platform IAM users (Explorer/console operators). Not agents.';
+
+CREATE INDEX IF NOT EXISTS idx_platform_users_username
+    ON platform_users (username);
+
+CREATE TABLE IF NOT EXISTS platform_sessions (
+    id             TEXT        PRIMARY KEY,
+    -- user_id is NULL for external-auth sessions (e.g. OIDC); principal_json
+    -- is populated instead. For local IAM sessions user_id references platform_users.
+    user_id        TEXT        REFERENCES platform_users (id) ON DELETE CASCADE,
+    created_at     TIMESTAMPTZ NOT NULL,
+    expires_at     TIMESTAMPTZ NOT NULL,
+    -- principal_json stores a JSON-encoded identity.Principal for external
+    -- auth sessions where no local user record exists (e.g. OIDC login).
+    principal_json TEXT
+);
+
+-- Idempotent column additions for databases created before schema v2.2.
+-- ALTER TABLE ... ADD COLUMN IF NOT EXISTS is safe to run on every startup.
+ALTER TABLE platform_sessions ADD COLUMN IF NOT EXISTS principal_json TEXT;
+-- Make user_id nullable for OIDC sessions (no-op if already nullable).
+ALTER TABLE platform_sessions ALTER COLUMN user_id DROP NOT NULL;
+-- Drop FK constraint if it still enforces NOT NULL via the reference.
+-- Uses IF EXISTS so this is safe on fresh installs that already use nullable.
+ALTER TABLE platform_sessions DROP CONSTRAINT IF EXISTS platform_sessions_user_id_fkey;
+-- Re-add FK as a deferred constraint allowing NULL (standard Postgres pattern).
+ALTER TABLE platform_sessions
+    ADD CONSTRAINT platform_sessions_user_id_fkey
+    FOREIGN KEY (user_id) REFERENCES platform_users (id) ON DELETE CASCADE
+    NOT VALID DEFERRABLE INITIALLY DEFERRED;
+
+COMMENT ON TABLE platform_sessions IS
+    'Server-side platform IAM sessions. Identified by HTTP-only cookie. '
+    'user_id is NULL for external-auth (OIDC) sessions; principal_json is set instead.';
+
+CREATE INDEX IF NOT EXISTS idx_platform_sessions_user_id
+    ON platform_sessions (user_id) WHERE user_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_platform_sessions_expires_at
+    ON platform_sessions (expires_at);

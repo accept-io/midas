@@ -539,14 +539,16 @@ func (r *EnvelopeRepo) Update(ctx context.Context, e *envelope.Envelope) error {
 
 func NewRepositories() *store.Repositories {
 	return &store.Repositories{
-		Surfaces:     NewSurfaceRepo(),
-		Agents:       NewAgentRepo(),
-		Profiles:     NewProfileRepo(),
-		Grants:       NewGrantRepo(),
-		Envelopes:    NewEnvelopeRepo(),
-		Audit:        audit.NewMemoryRepository(),
-		ControlAudit: NewControlAuditRepo(),
-		Outbox:       outbox.NewMemoryRepository(),
+		Surfaces:      NewSurfaceRepo(),
+		Agents:        NewAgentRepo(),
+		Profiles:      NewProfileRepo(),
+		Grants:        NewGrantRepo(),
+		Envelopes:     NewEnvelopeRepo(),
+		Audit:         audit.NewMemoryRepository(),
+		ControlAudit:  NewControlAuditRepo(),
+		Outbox:        outbox.NewMemoryRepository(),
+		LocalUsers:    NewLocalUserRepo(),
+		LocalSessions: NewLocalSessionRepo(),
 	}
 }
 

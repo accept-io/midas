@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -209,6 +210,120 @@ func TestValidateSemantic_DispatcherKafkaValid(t *testing.T) {
 
 	if err := ValidateSemantic(cfg); err != nil {
 		t.Errorf("valid kafka dispatcher config failed: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Headless conflict validation
+// ---------------------------------------------------------------------------
+
+func headlessCfg() Config {
+	cfg := DefaultConfig()
+	cfg.Server.Headless = true
+	cfg.Server.ExplorerEnabled = false // avoid conflict by default
+	return cfg
+}
+
+func TestValidateSemantic_Headless_DefaultsValid(t *testing.T) {
+	// headless=true with no conflicting options — must be valid.
+	cfg := headlessCfg()
+	if err := ValidateSemantic(cfg); err != nil {
+		t.Errorf("headless with no conflicts: want no error, got %v", err)
+	}
+}
+
+func TestValidateSemantic_Headless_WithRequiredAuth_Valid(t *testing.T) {
+	// headless + auth.mode=required is explicitly valid.
+	cfg := headlessCfg()
+	cfg.Auth.Mode = AuthModeRequired
+	cfg.Auth.Tokens = []TokenEntry{{Token: "tok", Principal: "svc:a", Roles: "platform.operator"}}
+	if err := ValidateSemantic(cfg); err != nil {
+		t.Errorf("headless + required auth: want no error, got %v", err)
+	}
+}
+
+func TestValidateSemantic_Headless_NoLocalIAMOrOIDC_Valid(t *testing.T) {
+	// Headless with neither local_iam nor platform_oidc in config — clean.
+	cfg := headlessCfg()
+	// local_iam.enabled and platform_oidc.enabled default to false
+	if err := ValidateSemantic(cfg); err != nil {
+		t.Errorf("headless with no iam/oidc: want no error, got %v", err)
+	}
+}
+
+func TestValidateSemantic_Headless_ConflictsWithExplorerEnabled(t *testing.T) {
+	cfg := headlessCfg()
+	cfg.Server.ExplorerEnabled = true
+	err := ValidateSemantic(cfg)
+	if err == nil {
+		t.Fatal("want error for headless + explorer_enabled, got nil")
+	}
+	if !strings.Contains(err.Error(), "server.headless") {
+		t.Errorf("error must mention server.headless, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "server.explorer_enabled") {
+		t.Errorf("error must mention server.explorer_enabled, got: %v", err)
+	}
+}
+
+func TestValidateSemantic_Headless_ConflictsWithLocalIAM(t *testing.T) {
+	cfg := headlessCfg()
+	cfg.LocalIAM.Enabled = true
+	err := ValidateSemantic(cfg)
+	if err == nil {
+		t.Fatal("want error for headless + local_iam.enabled, got nil")
+	}
+	if !strings.Contains(err.Error(), "server.headless") {
+		t.Errorf("error must mention server.headless, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "local_iam.enabled") {
+		t.Errorf("error must mention local_iam.enabled, got: %v", err)
+	}
+}
+
+func TestValidateSemantic_Headless_ConflictsWithOIDC(t *testing.T) {
+	cfg := headlessCfg()
+	cfg.PlatformOIDC.Enabled = true
+	err := ValidateSemantic(cfg)
+	if err == nil {
+		t.Fatal("want error for headless + platform_oidc.enabled, got nil")
+	}
+	if !strings.Contains(err.Error(), "server.headless") {
+		t.Errorf("error must mention server.headless, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "platform_oidc.enabled") {
+		t.Errorf("error must mention platform_oidc.enabled, got: %v", err)
+	}
+}
+
+func TestValidateSemantic_Headless_AllConflicts_ReturnsAllErrors(t *testing.T) {
+	// All three conflicts at once — must report all three.
+	cfg := headlessCfg()
+	cfg.Server.ExplorerEnabled = true
+	cfg.LocalIAM.Enabled = true
+	cfg.PlatformOIDC.Enabled = true
+	err := ValidateSemantic(cfg)
+	if err == nil {
+		t.Fatal("want error for all conflicts, got nil")
+	}
+	errs, ok := err.(ValidationErrors)
+	if !ok {
+		t.Fatalf("want ValidationErrors, got %T: %v", err, err)
+	}
+	if len(errs) < 3 {
+		t.Errorf("want at least 3 validation errors (one per conflict), got %d: %v", len(errs), err)
+	}
+}
+
+func TestValidateSemantic_NotHeadless_ExplorerAndIAMEnabled_Valid(t *testing.T) {
+	// headless=false — conflict checks must NOT fire.
+	cfg := DefaultConfig()
+	cfg.Server.Headless = false
+	cfg.Server.ExplorerEnabled = true
+	cfg.LocalIAM.Enabled = true
+	cfg.PlatformOIDC.Enabled = false
+	if err := ValidateSemantic(cfg); err != nil {
+		t.Errorf("non-headless with explorer + local_iam: want no error, got %v", err)
 	}
 }
 

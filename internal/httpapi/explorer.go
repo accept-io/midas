@@ -84,6 +84,14 @@ func (s *Server) handleExplorerConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	// Explorer always uses an isolated in-memory store regardless of main backend.
 	resp["explorerStore"] = "memory"
+	// Signal to the UI that local IAM (session-cookie auth) is active.
+	if s.localIAM != nil {
+		resp["localiam"] = true
+	}
+	// Signal to the UI that OIDC SSO login is active (replaces local login form).
+	if s.oidcService != nil {
+		resp["oidc"] = true
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp) //nolint:errcheck

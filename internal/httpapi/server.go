@@ -24,6 +24,8 @@ import (
 	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/eval"
 	"github.com/accept-io/midas/internal/identity"
+	"github.com/accept-io/midas/internal/localiam"
+	"github.com/accept-io/midas/internal/oidc"
 	"github.com/accept-io/midas/internal/surface"
 	"github.com/accept-io/midas/internal/value"
 )
@@ -95,6 +97,15 @@ type grantLifecycleService interface {
 	ReinstateGrant(ctx context.Context, grantID, reinstatedBy string) (*authority.AuthorityGrant, error)
 }
 
+// oidcProvider is the narrow interface required by the OIDC browser-login handlers.
+// *oidc.Service satisfies this interface; tests may inject a stub.
+type oidcProvider interface {
+	UsePKCE() bool
+	AuthURL(state, pkceChallenge string) string
+	Exchange(ctx context.Context, code, pkceVerifier string) (*oidc.Claims, error)
+	BuildPrincipal(claims *oidc.Claims) (*identity.Principal, error)
+}
+
 type Server struct {
 	mux                 *http.ServeMux
 	orchestrator        orchestrator
@@ -112,6 +123,9 @@ type Server struct {
 	storeBackend         string                       // e.g. "memory" or "postgres" — set via WithStoreBackend at boot
 	explorerDemoSeeded   *bool                        // nil = unknown, &true = seeded, &false = not seeded
 	explorerOrchestrator orchestrator                 // isolated in-memory orchestrator for POST /explorer
+	localIAM             *localiam.Service            // nil when local IAM is disabled
+	oidcService          oidcProvider                 // nil when OIDC is disabled
+	secureCookiesFlag    bool                         // mirrors LocalIAM.SecureCookies; used by OIDC helper cookies
 }
 
 type approveSurfaceRequest struct {
@@ -339,13 +353,13 @@ func (s *Server) handleSurfaceActions(w http.ResponseWriter, r *http.Request) {
 	action := parts[1]
 	switch action {
 	case "approve":
-		// ADMIN or APPROVER may approve surfaces.
-		s.requireRole(identity.RoleAdmin, identity.RoleApprover)(func(w http.ResponseWriter, r *http.Request) {
+		// platform.admin or governance.approver may approve surfaces.
+		s.requireRole(identity.RolePlatformAdmin, identity.RoleGovernanceApprover)(func(w http.ResponseWriter, r *http.Request) {
 			s.handleApproveSurface(w, r, surfaceID)
 		})(w, r)
 	case "deprecate":
-		// ADMIN only may deprecate surfaces (destructive lifecycle change).
-		s.requireRole(identity.RoleAdmin)(func(w http.ResponseWriter, r *http.Request) {
+		// platform.admin only may deprecate surfaces (destructive lifecycle change).
+		s.requireRole(identity.RolePlatformAdmin)(func(w http.ResponseWriter, r *http.Request) {
 			s.handleDeprecateSurface(w, r, surfaceID)
 		})(w, r)
 	default:
@@ -404,10 +418,17 @@ func (s *Server) handleApproveSurface(w http.ResponseWriter, r *http.Request, su
 	submitter := identity.Principal{
 		ID: req.SubmittedBy,
 	}
+	// Build the approver principal. When an authenticated principal is available its
+	// roles are preserved so that platform.admin callers bypass the owner-match check.
+	// In unauthenticated (open) deployments the body-supplied ID is used and the
+	// caller is treated as a governance.approver (subject to owner-match rules).
 	approver := identity.Principal{
 		ID:    approverID,
 		Name:  req.ApproverName,
-		Roles: []string{identity.RoleApprover},
+		Roles: []string{identity.RoleGovernanceApprover},
+	}
+	if p := PrincipalFromContext(r.Context()); p != nil {
+		approver.Roles = p.Roles
 	}
 
 	updated, err := s.approval.ApproveSurface(r.Context(), surfaceID, submitter, approver)
@@ -522,13 +543,13 @@ func (s *Server) handleProfileActions(w http.ResponseWriter, r *http.Request) {
 	action := parts[1]
 	switch action {
 	case "approve":
-		// ADMIN or APPROVER may approve profiles.
-		s.requireRole(identity.RoleAdmin, identity.RoleApprover)(func(w http.ResponseWriter, r *http.Request) {
+		// platform.admin or governance.approver may approve profiles.
+		s.requireRole(identity.RolePlatformAdmin, identity.RoleGovernanceApprover)(func(w http.ResponseWriter, r *http.Request) {
 			s.handleApproveProfile(w, r, profileID)
 		})(w, r)
 	case "deprecate":
-		// ADMIN only may deprecate profiles (destructive lifecycle change).
-		s.requireRole(identity.RoleAdmin)(func(w http.ResponseWriter, r *http.Request) {
+		// platform.admin only may deprecate profiles (destructive lifecycle change).
+		s.requireRole(identity.RolePlatformAdmin)(func(w http.ResponseWriter, r *http.Request) {
 			s.handleDeprecateProfile(w, r, profileID)
 		})(w, r)
 	default:
@@ -694,19 +715,19 @@ func (s *Server) handleGrantActions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// All grant lifecycle actions (suspend, revoke, reinstate) are ADMIN only —
+	// All grant lifecycle actions (suspend, revoke, reinstate) are platform.admin only —
 	// these are destructive/irreversible operational changes.
 	switch action {
 	case "suspend":
-		s.requireRole(identity.RoleAdmin)(func(w http.ResponseWriter, r *http.Request) {
+		s.requireRole(identity.RolePlatformAdmin)(func(w http.ResponseWriter, r *http.Request) {
 			s.handleSuspendGrant(w, r, grantID)
 		})(w, r)
 	case "revoke":
-		s.requireRole(identity.RoleAdmin)(func(w http.ResponseWriter, r *http.Request) {
+		s.requireRole(identity.RolePlatformAdmin)(func(w http.ResponseWriter, r *http.Request) {
 			s.handleRevokeGrant(w, r, grantID)
 		})(w, r)
 	case "reinstate":
-		s.requireRole(identity.RoleAdmin)(func(w http.ResponseWriter, r *http.Request) {
+		s.requireRole(identity.RolePlatformAdmin)(func(w http.ResponseWriter, r *http.Request) {
 			s.handleReinstateGrant(w, r, grantID)
 		})(w, r)
 	default:
@@ -895,6 +916,7 @@ func NewServerWithControlPlane(orchestrator orchestrator, controlPlane controlPl
 		mux:          mux,
 		orchestrator: orchestrator,
 		controlPlane: controlPlane,
+		authMode:     config.AuthModeOpen, // default matches config default; override with WithAuthMode
 	}
 	s.routes()
 
@@ -904,37 +926,36 @@ func NewServerWithControlPlane(orchestrator orchestrator, controlPlane controlPl
 func (s *Server) routes() {
 	s.mux.HandleFunc("/healthz", s.handleHealth)
 	s.mux.HandleFunc("/readyz", s.handleReady)
-	// Evaluation — operator or admin role required. Open mode (AuthModeOpen) bypasses
-	// authentication; all other modes require a valid bearer token and matching role.
-	s.mux.HandleFunc("/v1/evaluate", s.requireAuth(s.requireRole(identity.RoleOperator, identity.RoleAdmin)(s.handleEvaluate)))
+	// Evaluation — platform.operator or platform.admin role required.
+	s.mux.HandleFunc("/v1/evaluate", s.requireAuth(s.requireRole(identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleEvaluate)))
 
-	// Escalation review — ADMIN or REVIEWER.
-	s.mux.HandleFunc("/v1/reviews", s.requireAuth(s.requireRole(identity.RoleAdmin, identity.RoleReviewer)(s.handleCreateReview)))
+	// Escalation review — platform.admin or governance.reviewer.
+	s.mux.HandleFunc("/v1/reviews", s.requireAuth(s.requireRole(identity.RolePlatformAdmin, identity.RoleGovernanceReviewer)(s.handleCreateReview)))
 
-	// Runtime read — authenticated only (no role restriction).
-	s.mux.HandleFunc("/v1/envelopes/", s.requireAuth(s.handleGetEnvelope))
-	s.mux.HandleFunc("/v1/envelopes", s.requireAuth(s.handleListEnvelopes))
-	s.mux.HandleFunc("/v1/escalations", s.requireAuth(s.handleListEscalations))
-	s.mux.HandleFunc("/v1/decisions/request/", s.requireAuth(s.handleGetDecisionByRequestID))
+	// Runtime read — platform.viewer or above.
+	s.mux.HandleFunc("/v1/envelopes/", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleGetEnvelope)))
+	s.mux.HandleFunc("/v1/envelopes", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleListEnvelopes)))
+	s.mux.HandleFunc("/v1/escalations", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleListEscalations)))
+	s.mux.HandleFunc("/v1/decisions/request/", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleGetDecisionByRequestID)))
 
 	// Control plane — governed endpoints.
-	// apply/plan: ADMIN only (mutates or previews configuration).
-	s.mux.HandleFunc("/v1/controlplane/apply", s.requireAuth(s.requireRole(identity.RoleAdmin)(s.handleApplyBundle)))
-	s.mux.HandleFunc("/v1/controlplane/plan", s.requireAuth(s.requireRole(identity.RoleAdmin)(s.handlePlanBundle)))
-	// audit read: authenticated only.
-	s.mux.HandleFunc("/v1/controlplane/audit", s.requireAuth(s.handleListControlAudit))
+	// apply/plan: platform.admin only (mutates or previews configuration).
+	s.mux.HandleFunc("/v1/controlplane/apply", s.requireAuth(s.requireRole(identity.RolePlatformAdmin)(s.handleApplyBundle)))
+	s.mux.HandleFunc("/v1/controlplane/plan", s.requireAuth(s.requireRole(identity.RolePlatformAdmin)(s.handlePlanBundle)))
+	// audit read: platform.viewer or above.
+	s.mux.HandleFunc("/v1/controlplane/audit", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleListControlAudit)))
 	// Resource lifecycle — role enforcement applied per-action inside each dispatcher.
 	s.mux.HandleFunc("/v1/controlplane/surfaces/", s.requireAuth(s.handleSurfaceActions))
 	s.mux.HandleFunc("/v1/controlplane/profiles/", s.requireAuth(s.handleProfileActions))
 	s.mux.HandleFunc("/v1/controlplane/grants/", s.requireAuth(s.handleGrantActions))
 
-	// Operator introspection — authenticated only (no role restriction).
-	s.mux.HandleFunc("/v1/surfaces/", s.requireAuth(s.handleGetSurfaceOrVersions))
-	s.mux.HandleFunc("/v1/profiles/", s.requireAuth(s.handleGetProfileOrVersions))
-	s.mux.HandleFunc("/v1/profiles", s.requireAuth(s.handleListProfiles))
-	s.mux.HandleFunc("/v1/agents/", s.requireAuth(s.handleGetAgent))
-	s.mux.HandleFunc("/v1/grants/", s.requireAuth(s.handleGetGrant))
-	s.mux.HandleFunc("/v1/grants", s.requireAuth(s.handleListGrants))
+	// Operator introspection — platform.viewer or above.
+	s.mux.HandleFunc("/v1/surfaces/", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleGetSurfaceOrVersions)))
+	s.mux.HandleFunc("/v1/profiles/", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleGetProfileOrVersions)))
+	s.mux.HandleFunc("/v1/profiles", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleListProfiles)))
+	s.mux.HandleFunc("/v1/agents/", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleGetAgent)))
+	s.mux.HandleFunc("/v1/grants/", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleGetGrant)))
+	s.mux.HandleFunc("/v1/grants", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleListGrants)))
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {

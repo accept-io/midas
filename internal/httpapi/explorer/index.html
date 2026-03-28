@@ -536,14 +536,161 @@
     .simulate-cta-btn { width: 100%; }
     .curl-tabs { overflow-x: auto; }
   }
+
+  /* ── Local IAM overlays ─────────────────────────────────────────────────── */
+  .iam-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.55);
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
+  }
+  .iam-overlay.visible { display: flex; }
+
+  .iam-card {
+    background: #fff;
+    border-radius: 10px;
+    padding: 32px 36px;
+    width: 100%;
+    max-width: 380px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+  }
+  .iam-card h2 {
+    font-size: 18px;
+    font-weight: 700;
+    color: #1a1a2e;
+    margin-bottom: 6px;
+  }
+  .iam-card p {
+    font-size: 13px;
+    color: #6b7280;
+    margin-bottom: 20px;
+  }
+  .iam-field { margin-bottom: 14px; }
+  .iam-field label { display: block; font-size: 13px; font-weight: 500; color: #374151; margin-bottom: 4px; }
+  .iam-field input {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 13px;
+    font-family: inherit;
+    background: #fff;
+    color: #1a1a1a;
+    transition: border-color 0.15s;
+  }
+  .iam-field input:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
+  .iam-submit {
+    width: 100%;
+    padding: 9px 0;
+    background: #1a1a2e;
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    margin-top: 4px;
+    transition: background 0.15s;
+  }
+  .iam-submit:hover { background: #2d2d4e; }
+  .iam-submit:disabled { background: #9ca3af; cursor: not-allowed; }
+  .iam-error {
+    margin-top: 12px;
+    padding: 8px 12px;
+    background: #fee2e2;
+    border: 1px solid #fca5a5;
+    border-radius: 6px;
+    font-size: 12px;
+    color: #991b1b;
+    display: none;
+  }
+  .iam-error.visible { display: block; }
+
+  /* user pill in header */
+  #iam-user-pill {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: #94a3b8;
+  }
+  #iam-user-pill.visible { display: flex; }
+  #iam-logout-btn {
+    background: transparent;
+    border: 1px solid #4b5563;
+    color: #d1d5db;
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  #iam-logout-btn:hover { background: rgba(255,255,255,0.1); }
 </style>
 </head>
 <body>
+
+<!-- Local IAM: login overlay -->
+<div class="iam-overlay" id="iam-login-overlay" role="dialog" aria-modal="true" aria-label="Sign in">
+  <div class="iam-card">
+    <h2>Sign in to Explorer</h2>
+    <!-- OIDC sign-in (shown when cfg.oidc === true) -->
+    <div id="oidc-login-section" style="display:none">
+      <p>Sign in with your organisation account to access the MIDAS Explorer.</p>
+      <a href="/auth/oidc/login" class="iam-submit" id="oidc-login-btn"
+         style="display:block;text-align:center;text-decoration:none;margin-top:12px">
+        Sign in with your organisation
+      </a>
+    </div>
+    <!-- Local IAM credentials form (shown when cfg.localiam === true and cfg.oidc !== true) -->
+    <div id="localiam-login-section">
+      <p>Enter your credentials to access the MIDAS Explorer.</p>
+      <form id="iam-login-form" autocomplete="on">
+        <div class="iam-field">
+          <label for="iam-username">Username</label>
+          <input type="text" id="iam-username" name="username" autocomplete="username" required>
+        </div>
+        <div class="iam-field">
+          <label for="iam-password">Password</label>
+          <input type="password" id="iam-password" name="password" autocomplete="current-password" required>
+        </div>
+        <button type="submit" class="iam-submit" id="iam-login-btn">Sign in</button>
+        <div class="iam-error" id="iam-login-error"></div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Local IAM: change-password overlay -->
+<div class="iam-overlay" id="iam-chpw-overlay" role="dialog" aria-modal="true" aria-label="Change password">
+  <div class="iam-card">
+    <h2>Change your password</h2>
+    <p>Your account requires a new password before you can continue.</p>
+    <form id="iam-chpw-form" autocomplete="on">
+      <div class="iam-field">
+        <label for="iam-current-pw">Current password</label>
+        <input type="password" id="iam-current-pw" name="current_password" autocomplete="current-password" required>
+      </div>
+      <div class="iam-field">
+        <label for="iam-new-pw">New password</label>
+        <input type="password" id="iam-new-pw" name="new_password" autocomplete="new-password" required>
+      </div>
+      <button type="submit" class="iam-submit" id="iam-chpw-btn">Set new password</button>
+      <div class="iam-error" id="iam-chpw-error"></div>
+    </form>
+  </div>
+</div>
 
 <header>
   <h1>MIDAS Explorer</h1>
   <span class="badge">v1</span>
   <span class="spacer"></span>
+  <div id="iam-user-pill">
+    <span id="iam-username-display"></span>
+    <button id="iam-logout-btn" type="button">Sign out</button>
+  </div>
   <span id="runtime-badge">loading...</span>
 </header>
 
@@ -576,7 +723,7 @@
       </ul>
     </div>
 
-    <div class="section">
+    <div class="section" id="auth-bearer-section">
       <div class="section-title">Authentication</div>
       <div class="field">
         <label for="token-input">Bearer Token</label>
@@ -750,6 +897,147 @@
 <script>
 (function () {
   'use strict';
+
+  // ── Local IAM helpers ──────────────────────────────────────────────────────
+  // These functions handle session-cookie auth (localiam mode). They are no-ops
+  // when localiam is not configured (cfg.localiam !== true).
+
+  const loginOverlay  = document.getElementById('iam-login-overlay');
+  const chpwOverlay   = document.getElementById('iam-chpw-overlay');
+  const userPill      = document.getElementById('iam-user-pill');
+  const usernameDisp  = document.getElementById('iam-username-display');
+  const logoutBtn     = document.getElementById('iam-logout-btn');
+
+  function showLoginOverlay() {
+    loginOverlay.classList.add('visible');
+    chpwOverlay.classList.remove('visible');
+    document.getElementById('iam-username').focus();
+  }
+  function showChpwOverlay() {
+    chpwOverlay.classList.add('visible');
+    loginOverlay.classList.remove('visible');
+    document.getElementById('iam-current-pw').focus();
+  }
+  function hideOverlays() {
+    loginOverlay.classList.remove('visible');
+    chpwOverlay.classList.remove('visible');
+  }
+  function setIAMUser(username) {
+    usernameDisp.textContent = username;
+    userPill.classList.add('visible');
+  }
+
+  function showIAMError(elId, msg) {
+    const el = document.getElementById(elId);
+    el.textContent = msg;
+    el.classList.add('visible');
+  }
+  function clearIAMError(elId) {
+    const el = document.getElementById(elId);
+    el.textContent = '';
+    el.classList.remove('visible');
+  }
+
+  // Check current session state. Called after config fetch when localiam is active.
+  async function checkIAMSession(onReady) {
+    try {
+      const res = await fetch('/auth/me', { credentials: 'same-origin' });
+      if (res.status === 401) {
+        showLoginOverlay();
+        return;
+      }
+      const me = await res.json();
+      if (me.must_change_password) {
+        setIAMUser(me.username);
+        showChpwOverlay();
+        return;
+      }
+      setIAMUser(me.username);
+      hideOverlays();
+      onReady();
+    } catch {
+      showLoginOverlay();
+    }
+  }
+
+  // Wire up login form
+  document.getElementById('iam-login-form').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    clearIAMError('iam-login-error');
+    const btn = document.getElementById('iam-login-btn');
+    btn.disabled = true;
+    btn.textContent = 'Signing in\u2026';
+
+    const username = document.getElementById('iam-username').value.trim();
+    const password = document.getElementById('iam-password').value;
+
+    try {
+      const res = await fetch('/auth/login', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showIAMError('iam-login-error', data.error || 'Invalid credentials');
+      } else {
+        setIAMUser(data.username);
+        if (data.must_change_password) {
+          document.getElementById('iam-current-pw').value = password; // pre-fill
+          showChpwOverlay();
+        } else {
+          hideOverlays();
+          autoRun('chain-unknown-surface');
+        }
+      }
+    } catch {
+      showIAMError('iam-login-error', 'Network error — please retry');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Sign in';
+    }
+  });
+
+  // Wire up change-password form
+  document.getElementById('iam-chpw-form').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    clearIAMError('iam-chpw-error');
+    const btn = document.getElementById('iam-chpw-btn');
+    btn.disabled = true;
+    btn.textContent = 'Saving\u2026';
+
+    const current_password = document.getElementById('iam-current-pw').value;
+    const new_password     = document.getElementById('iam-new-pw').value;
+
+    try {
+      const res = await fetch('/auth/change-password', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ current_password, new_password }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        showIAMError('iam-chpw-error', data.error || 'Failed to change password');
+      } else {
+        hideOverlays();
+        autoRun('chain-unknown-surface');
+      }
+    } catch {
+      showIAMError('iam-chpw-error', 'Network error — please retry');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Set new password';
+    }
+  });
+
+  // Wire up logout button
+  logoutBtn.addEventListener('click', async function() {
+    await fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' });
+    userPill.classList.remove('visible');
+    showLoginOverlay();
+  });
 
   // ── Execution mode (Evaluate | Simulate) ───────────────────────────────────
   // currentExecMode drives which endpoint is called and how results are displayed.
@@ -925,7 +1213,21 @@
 
       // Auto-run: only when auth is open, or when a session token is already present.
       // In auth-required mode with no token, show a prompt instead of a silent 401.
-      if (cfg.authMode !== 'required' || getToken()) {
+      if (cfg.oidc) {
+        // OIDC SSO: hide local credentials form, show organisation sign-in button.
+        const bearerSection = document.getElementById('auth-bearer-section');
+        if (bearerSection) bearerSection.style.display = 'none';
+        document.getElementById('oidc-login-section').style.display = '';
+        document.getElementById('localiam-login-section').style.display = 'none';
+        // Check /auth/me — if the user already has a valid OIDC session, auto-run.
+        checkIAMSession(() => autoRun('chain-unknown-surface'));
+      } else if (cfg.localiam) {
+        // Local IAM session-cookie auth: hide bearer token section.
+        const bearerSection = document.getElementById('auth-bearer-section');
+        if (bearerSection) bearerSection.style.display = 'none';
+        // Check /auth/me to decide what to show.
+        checkIAMSession(() => autoRun('chain-unknown-surface'));
+      } else if (cfg.authMode !== 'required' || getToken()) {
         autoRun('chain-unknown-surface');
       } else {
         showAuthRequiredPrompt();

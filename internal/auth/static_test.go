@@ -10,7 +10,7 @@ import (
 
 func TestStaticTokenAuthenticator_ValidToken(t *testing.T) {
 	tokens := map[string]*identity.Principal{
-		"tok-alice": {ID: "user:alice", Provider: identity.ProviderStatic, Roles: []string{identity.RoleAdmin}},
+		"tok-alice": {ID: "user:alice", Provider: identity.ProviderStatic, Roles: []string{identity.RolePlatformAdmin}},
 	}
 	a := NewStaticTokenAuthenticator(tokens)
 
@@ -121,11 +121,11 @@ func TestLoadStaticTokensFromEnv_Valid(t *testing.T) {
 	if p.ID != "user:alice" {
 		t.Errorf("want ID user:alice, got %q", p.ID)
 	}
-	if !p.HasRole(identity.RoleAdmin) {
-		t.Error("want admin role")
+	if !p.HasRole(identity.RolePlatformAdmin) {
+		t.Error("want platform.admin role (normalized from 'admin')")
 	}
-	if !p.HasRole(identity.RoleApprover) {
-		t.Error("want approver role")
+	if !p.HasRole(identity.RoleGovernanceApprover) {
+		t.Error("want governance.approver role (normalized from 'approver')")
 	}
 }
 
