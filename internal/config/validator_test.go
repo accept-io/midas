@@ -221,6 +221,7 @@ func headlessCfg() Config {
 	cfg := DefaultConfig()
 	cfg.Server.Headless = true
 	cfg.Server.ExplorerEnabled = false // avoid conflict by default
+	cfg.LocalIAM.Enabled = false       // avoid conflict: headless + local_iam is invalid
 	return cfg
 }
 
@@ -245,7 +246,7 @@ func TestValidateSemantic_Headless_WithRequiredAuth_Valid(t *testing.T) {
 func TestValidateSemantic_Headless_NoLocalIAMOrOIDC_Valid(t *testing.T) {
 	// Headless with neither local_iam nor platform_oidc in config — clean.
 	cfg := headlessCfg()
-	// local_iam.enabled and platform_oidc.enabled default to false
+	// local_iam.enabled defaults to true but headlessCfg() sets it false to avoid conflict
 	if err := ValidateSemantic(cfg); err != nil {
 		t.Errorf("headless with no iam/oidc: want no error, got %v", err)
 	}

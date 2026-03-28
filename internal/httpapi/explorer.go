@@ -10,6 +10,7 @@ import (
 
 	"github.com/accept-io/midas/internal/bootstrap"
 	"github.com/accept-io/midas/internal/decision"
+	"github.com/accept-io/midas/internal/platformauth"
 	"github.com/accept-io/midas/internal/policy"
 	"github.com/accept-io/midas/internal/store/memory"
 )
@@ -41,6 +42,17 @@ func (s *Server) initExplorerRuntime() {
 }
 
 // handleExplorerIndex serves the Explorer single-page UI at GET /explorer.
+//
+// When local IAM is active this handler is reached via explorerShellHandler,
+// which applies AuthMiddleware (session extraction) before calling here. The
+// handler then branches intentionally on session presence:
+//   - authenticated: serve shell normally (Cache-Control: no-store)
+//   - unauthenticated: serve shell with X-Auth-Required: true to signal that
+//     the server has actively checked and found no session; the shell itself
+//     contains the login overlay which is the primary login UX
+//
+// Both branches serve the HTML shell so the client-side login overlay flow
+// remains intact for both local IAM and OIDC modes.
 func (s *Server) handleExplorerIndex(w http.ResponseWriter, r *http.Request) {
 	data, err := explorerFS.ReadFile("explorer/index.html")
 	if err != nil {
@@ -48,6 +60,14 @@ func (s *Server) handleExplorerIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if s.localIAM != nil {
+		w.Header().Set("Cache-Control", "no-store")
+		if _, ok := platformauth.PrincipalFromContext(r.Context()); !ok {
+			// Server has actively checked: no valid session present.
+			// The login overlay in the shell will handle the login flow.
+			w.Header().Set("X-Auth-Required", "true")
+		}
+	}
 	w.Write(data) //nolint:errcheck
 }
 

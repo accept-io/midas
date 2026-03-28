@@ -33,6 +33,7 @@ func TestDefaultConfig_Values(t *testing.T) {
 		{"server.port", cfg.Server.Port, 8080},
 		{"observability.log_level", cfg.Observability.LogLevel, "info"},
 		{"observability.log_format", cfg.Observability.LogFormat, "json"},
+		{"local_iam.enabled", cfg.LocalIAM.Enabled, true},
 		{"dispatcher.enabled", cfg.Dispatcher.Enabled, false},
 		{"dispatcher.publisher", cfg.Dispatcher.Publisher, "none"},
 		{"dispatcher.batch_size", cfg.Dispatcher.BatchSize, 100},

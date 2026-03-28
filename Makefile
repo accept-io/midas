@@ -40,13 +40,13 @@ lint:
 	go vet ./...
 
 docker:
-	docker build -f deploy/docker/Dockerfile -t accept-midas:latest .
+	docker build -f Dockerfile -t accept-midas:latest .
 
 seed:
 	./scripts/seed.sh
 
 dev:
-	docker compose -f deploy/compose/docker-compose.yml up --build
+	docker compose -f docker-compose.yml up --build
 
 run:
 	go run ./cmd/midas

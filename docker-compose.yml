@@ -21,11 +21,10 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      MIDAS_STORE: postgres
+      MIDAS_STORE_BACKEND: postgres
       DATABASE_URL: postgres://midas:midas@postgres:5432/midas?sslmode=disable
-      # MIDAS_AUTH_DISABLED=true bypasses auth enforcement for local development only.
-      # Remove this and set MIDAS_AUTH_TOKENS in production deployments.
-      MIDAS_AUTH_DISABLED: "true"
+      # Explorer login: admin / admin (forced password change on first run).
+      # Set MIDAS_LOCAL_IAM_ENABLED=false for headless/API-only deployments.
     ports:
       - "8080:8080"
     healthcheck:

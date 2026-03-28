@@ -667,3 +667,36 @@ func TestOIDCCallback_MethodNotAllowed_Returns405(t *testing.T) {
 		t.Errorf("want 405, got %d", rec.Code)
 	}
 }
+
+// TestOIDC_ExplorerShell_SessionFromOIDC_NotBlockedByHardening verifies that
+// the Explorer shell hardening change does not interfere with OIDC mode.
+// After a successful OIDC callback sets a session cookie, a GET /explorer
+// with that cookie must serve the shell normally (no X-Auth-Required header).
+func TestOIDC_ExplorerShell_SessionFromOIDC_NotBlockedByHardening(t *testing.T) {
+	srv, _, _ := newOIDCServer(t, defaultMockOIDC())
+	srv = srv.WithExplorerEnabled(true)
+
+	// Complete a successful OIDC callback to obtain a session cookie.
+	callbackRec := httptest.NewRecorder()
+	srv.ServeHTTP(callbackRec, callbackRequest("s1", "s1", "code123", ""))
+	if callbackRec.Code != http.StatusFound {
+		t.Fatalf("callback: want 302, got %d", callbackRec.Code)
+	}
+	c := cookieFromResponse(callbackRec, localiam.SessionCookieName)
+	if c == nil {
+		t.Fatal("no session cookie after OIDC callback")
+	}
+
+	// Follow the redirect to GET /explorer with the OIDC-issued session cookie.
+	rec := requestWithCookie(t, srv, http.MethodGet, "/explorer", nil, c.Value)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("want 200 for GET /explorer after OIDC login, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("X-Auth-Required"); got != "" {
+		t.Errorf("X-Auth-Required: want absent for authenticated OIDC session, got %q", got)
+	}
+	if rec.Header().Get("Cache-Control") != "no-store" {
+		t.Errorf("Cache-Control: want no-store, got %q", rec.Header().Get("Cache-Control"))
+	}
+}
