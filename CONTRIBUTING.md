@@ -24,7 +24,7 @@ The full DCO text is available at [https://developercertificate.org](https://dev
 
 ## Prerequisites
 
-- **Go 1.26+** — `go version` to check
+- **Go 1.26.1+** — `go version` to check
 - **Docker** — required to run the full test suite and Postgres integration tests
 - **Make** — `make help` lists available targets
 

@@ -20,6 +20,7 @@ import (
 	"github.com/accept-io/midas/internal/bootstrap"
 	"github.com/accept-io/midas/internal/config"
 	"github.com/accept-io/midas/internal/controlplane/apply"
+	"github.com/accept-io/midas/internal/controlplane/approval"
 	"github.com/accept-io/midas/internal/decision"
 	"github.com/accept-io/midas/internal/httpapi"
 	"github.com/accept-io/midas/internal/identity"
@@ -142,6 +143,14 @@ func main() {
 		ControlAudit: repos.ControlAudit,
 	})
 
+	approvalSvc := approval.NewServiceWithProfileAndOutbox(
+		repos.Surfaces,
+		repos.Profiles,
+		approval.DefaultPolicy(),
+		outboxRepo,
+		repos.ControlAudit,
+	)
+
 	introspectionSvc := httpapi.NewIntrospectionServiceFull(repos.Surfaces, repos.Profiles, repos.Agents, repos.Grants)
 
 	var controlAuditSvc *httpapi.ControlAuditReadService
@@ -173,7 +182,7 @@ func main() {
 
 	// --- HTTP server ---
 
-	srv := httpapi.NewServerFull(orchestrator, applyService, nil, introspectionSvc, controlAuditSvc, nil)
+	srv := httpapi.NewServerFull(orchestrator, applyService, approvalSvc, introspectionSvc, controlAuditSvc, nil)
 	srv.WithPolicyMeta(policyMode, policyEvaluatorName)
 	srv.WithHealthCheck(readyFn)
 	srv.WithAuthMode(cfg.Auth.Mode)
@@ -260,8 +269,12 @@ func main() {
 	}
 
 	httpSrv := &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.Server.Port),
-		Handler: srv,
+		Addr:              fmt.Sprintf(":%d", cfg.Server.Port),
+		Handler:           srv,
+		ReadTimeout:       cfg.Server.ReadTimeout.D(),
+		ReadHeaderTimeout: cfg.Server.ReadHeaderTimeout.D(),
+		WriteTimeout:      cfg.Server.WriteTimeout.D(),
+		IdleTimeout:       cfg.Server.IdleTimeout.D(),
 	}
 
 	// --- Startup banner ---

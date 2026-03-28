@@ -42,14 +42,21 @@ func mapAgentDocumentToAgent(doc types.AgentDocument, now time.Time) (*agent.Age
 }
 
 func mapAgentType(docType string) (agent.AgentType, error) {
+	var t agent.AgentType
 	switch strings.TrimSpace(docType) {
 	case "llm_agent", "copilot":
-		return agent.AgentTypeAI, nil
+		t = agent.AgentTypeAI
 	case "workflow", "automation", "rpa":
-		return agent.AgentTypeService, nil
+		t = agent.AgentTypeService
 	default:
 		return "", fmt.Errorf("unrecognised agent type %q; cannot map to domain AgentType", docType)
 	}
+	if err := t.Validate(); err != nil {
+		// This should never be reachable if the switch above is correct, but
+		// acts as a compile-time-visible invariant assertion.
+		return "", fmt.Errorf("internal: mapped agent type failed domain validation: %w", err)
+	}
+	return t, nil
 }
 
 // mapProfileDocumentToAuthorityProfile converts a validated ProfileDocument into

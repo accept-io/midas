@@ -6,7 +6,7 @@ This guide takes you from zero to a working MIDAS installation with a real evalu
 
 ## Prerequisites
 
-- **Go 1.23+** — `go version` should report `go1.23` or later
+- **Go 1.26.1+** — `go version` should report `go1.26.1` or later
 - **Docker** — required for PostgreSQL or the full compose stack
 - `curl` and `jq` — for the example commands
 
@@ -32,7 +32,7 @@ docker compose up
 
 This starts a Postgres 16 container and MIDAS together. The schema is applied automatically on startup. No demo data is seeded in Postgres mode; you must apply resources via the control plane.
 
-The compose file sets `MIDAS_AUTH_DISABLED=true` for local convenience. Remove this and set `MIDAS_AUTH_TOKENS` before exposing the service.
+The compose file sets `MIDAS_AUTH_MODE=open` for local convenience. Remove this and set `MIDAS_AUTH_TOKENS` before exposing the service.
 
 Connection string used: `postgres://midas:midas@postgres:5432/midas?sslmode=disable`
 
@@ -40,17 +40,17 @@ Connection string used: `postgres://midas:midas@postgres:5432/midas?sslmode=disa
 
 ## Option 3: External PostgreSQL
 
-MIDAS requires authentication in Postgres mode. Set `MIDAS_AUTH_TOKENS` or explicitly opt out for local development with `MIDAS_AUTH_DISABLED=true`.
+MIDAS requires authentication in Postgres mode. Set `MIDAS_AUTH_TOKENS` or explicitly opt out for local development with `MIDAS_AUTH_MODE=open`.
 
 ```bash
-export MIDAS_STORE=postgres
-export DATABASE_URL="postgresql://user:pass@host:5432/midas?sslmode=disable"
+export MIDAS_STORE_BACKEND=postgres
+export MIDAS_DATABASE_URL="postgresql://user:pass@host:5432/midas?sslmode=disable"
 
 # For production: set real tokens (format: token|principal-id|role1,role2)
-export MIDAS_AUTH_TOKENS="my-secret-token|user:admin|admin"
+export MIDAS_AUTH_TOKENS="my-secret-token|user:admin|platform.admin"
 
 # For local development only:
-# export MIDAS_AUTH_DISABLED=true
+# export MIDAS_AUTH_MODE=open
 
 go run ./cmd/midas
 ```
@@ -285,3 +285,4 @@ The surface is now `active` and its grants are eligible for evaluation.
 - [docs/control-plane.md](control-plane.md) — full control plane reference
 - [docs/core/runtime-evaluation.md](core/runtime-evaluation.md) — evaluation semantics, idempotency, and audit
 - [docs/api/http-api.md](api/http-api.md) — complete API reference
+- [docs/guides/authentication.md](guides/authentication.md) — Local IAM, OIDC/SSO, and API bearer token authentication

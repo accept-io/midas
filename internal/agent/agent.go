@@ -2,8 +2,14 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 )
+
+// ErrInvalidAgentType is returned when an AgentType value is not one of the
+// canonical domain values (ai, service, operator).
+var ErrInvalidAgentType = errors.New("invalid agent type")
 
 // AgentType classifies what kind of actor an agent is.
 type AgentType string
@@ -13,6 +19,24 @@ const (
 	AgentTypeService  AgentType = "service"
 	AgentTypeOperator AgentType = "operator"
 )
+
+// IsValid reports whether t is one of the canonical AgentType values.
+func (t AgentType) IsValid() bool {
+	switch t {
+	case AgentTypeAI, AgentTypeService, AgentTypeOperator:
+		return true
+	}
+	return false
+}
+
+// Validate returns ErrInvalidAgentType (wrapped with the offending value) if
+// the type is not canonical. Callers should use errors.Is to check.
+func (t AgentType) Validate() error {
+	if !t.IsValid() {
+		return fmt.Errorf("%w: %q", ErrInvalidAgentType, string(t))
+	}
+	return nil
+}
 
 // OperationalState represents whether an agent is permitted to act globally.
 // This is independent of authority grants, which are managed separately.

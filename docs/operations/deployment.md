@@ -22,6 +22,10 @@ Resources must be created before they can be referenced. Profiles reference surf
 
 ---
 
+For authentication configuration (Local IAM, OIDC/SSO, bearer tokens), see [docs/guides/authentication.md](../guides/authentication.md).
+
+---
+
 ## Step 1: Define your resources
 
 Create a YAML bundle file (e.g. `governance-bundle.yaml`). A bundle may contain one or more documents separated by `---`. Supported kinds are `Surface`, `Agent`, `Profile`, and `Grant`.

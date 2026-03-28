@@ -64,8 +64,8 @@ For full event payload schemas, see [`docs/operations/events.md`](events.md).
 
 ## SSO / OIDC authentication
 
-> **Not available in v1.** This integration is planned for v1.1+.
+MIDAS supports OIDC-based authentication for the Explorer and platform console. The implementation is provider-agnostic and works with any OIDC-compliant identity provider. Configuration examples are provided for Microsoft Entra ID and Google Workspace.
 
-MIDAS v1 uses static bearer tokens for authentication (see [Authentication](../../README.md#authentication) in the README). OIDC/JWT-based authentication is planned for a future release.
+OIDC is independent of the `/v1/*` API authentication surface. Configuring SSO for the Explorer does not affect how API clients authenticate.
 
-When SSO support arrives, it will be documented here.
+See [docs/guides/authentication.md](../guides/authentication.md) for configuration reference, provider-specific notes, role mapping, and deployment patterns.

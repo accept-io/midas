@@ -30,6 +30,8 @@ curl http://localhost:8080/readyz
 {"status": "ready", "service": "midas"}
 ```
 
+These endpoints are intended for external orchestrators and monitors. The production container image is distroless and does not include `wget`, `curl`, or a shell, so container-internal healthchecks using those tools will not work. Configure `/readyz` as the target for Kubernetes `readinessProbe`, load-balancer health checks, or equivalent external probes.
+
 ---
 
 ## Evaluation

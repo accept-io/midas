@@ -163,6 +163,18 @@ type ServerConfig struct {
 	Port int `yaml:"port"`
 	// ShutdownTimeout is the graceful shutdown deadline. Default: "15s".
 	ShutdownTimeout Duration `yaml:"shutdown_timeout"`
+	// ReadTimeout bounds the time to read the entire request including body.
+	// Default: "30s". Zero means no timeout (not recommended for production).
+	ReadTimeout Duration `yaml:"read_timeout"`
+	// ReadHeaderTimeout bounds the time to read request headers.
+	// Default: "10s". Zero means no timeout.
+	ReadHeaderTimeout Duration `yaml:"read_header_timeout"`
+	// WriteTimeout bounds the time to write the full response.
+	// Default: "60s". Zero means no timeout (not recommended for production).
+	WriteTimeout Duration `yaml:"write_timeout"`
+	// IdleTimeout bounds how long to keep idle keep-alive connections open.
+	// Default: "120s". Zero falls back to ReadTimeout.
+	IdleTimeout Duration `yaml:"idle_timeout"`
 	// ExplorerEnabled serves the interactive evaluation sandbox at /explorer.
 	// Enabled by default; set false in production if the UI is not needed.
 	ExplorerEnabled bool `yaml:"explorer_enabled"`

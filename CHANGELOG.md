@@ -9,6 +9,12 @@ Versioned releases will follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+---
+
+## [1.0.0] — 2026-03-28
+
+First public release of Accept MIDAS.
+
 ### Added
 
 - Runtime governance engine — `POST /v1/evaluate` with deterministic six-step evaluation pipeline (surface resolution, authority chain validation, context validation, threshold evaluation, policy check, outcome recording)
@@ -18,8 +24,8 @@ Versioned releases will follow [Semantic Versioning](https://semver.org/).
 - Authority model — Decision Surfaces, Authority Profiles, Authority Grants, and Agent Registry with full CRUD and versioning
 - Escalation and human review — escalation queue and `POST /v1/reviews` for recording human override decisions
 - Platform IAM — local username/password authentication with bootstrap admin account and forced password change on first login
-- OIDC integration — Entra ID and Google Workspace SSO via platform OIDC; role mapping from external groups to internal roles
-- Canonical role model — `platform_admin`, `platform_operator`, `platform_viewer`, `governance_approver`, `governance_reviewer` with separation between platform and governance responsibilities
+- OIDC integration — provider-agnostic SSO via any OIDC-compliant identity provider; documented configuration examples for Microsoft Entra ID and Google Workspace; role mapping from external groups to internal roles
+- Canonical role model — `platform.admin`, `platform.operator`, `platform.viewer`, `governance.approver`, `governance.reviewer` with separation between platform and governance responsibilities
 - Explorer UI — interactive developer sandbox for evaluating demo scenarios in-browser; isolated in-memory store; not for production use
 - Headless deployment mode — `server.headless: true` disables all browser-facing surfaces and platform-login routes; `/v1/*`, `/healthz`, and `/readyz` remain operational
 - Config-driven deployment — `midas.yaml` canonical runtime configuration with `MIDAS_*` environment variable overrides; structural and semantic validation at startup with descriptive fatal errors
@@ -32,6 +38,6 @@ Versioned releases will follow [Semantic Versioning](https://semver.org/).
 
 - Dockerfile hardened with distroless base image (`gcr.io/distroless/base-debian12`) and nonroot runtime user
 - SBOM generated in CycloneDX format (`security/sbom/`)
-- Continuous security scanning — govulncheck (clean), Trivy (0 vulnerabilities, 0 secrets), OSV scan
+- Security scanning — govulncheck (clean), Trivy (0 vulnerabilities, 0 secrets), OSV scan
 - `MIDAS_OIDC_CLIENT_SECRET` and bearer tokens excluded from startup log output and introspection endpoints
 - Responsible disclosure process documented in `SECURITY.md`
