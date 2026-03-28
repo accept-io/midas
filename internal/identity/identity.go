@@ -1,6 +1,9 @@
 package identity
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 // Principal represents a verified caller identity.
 // The Provider field indicates which authentication mechanism populated this
@@ -22,12 +25,60 @@ const (
 	ProviderPing   = "ping"   // Ping Identity — future
 )
 
+// Platform domain roles govern access to MIDAS operations.
 const (
-	RoleAdmin    = "admin"
-	RoleApprover = "approver"
-	RoleOperator = "operator"
-	RoleReviewer = "reviewer"
+	RolePlatformAdmin    = "platform.admin"
+	RolePlatformOperator = "platform.operator"
+	RolePlatformViewer   = "platform.viewer"
 )
+
+// Governance domain roles govern workflow participation (approval, review).
+const (
+	RoleGovernanceApprover = "governance.approver"
+	RoleGovernanceReviewer = "governance.reviewer"
+)
+
+// Deprecated: use RolePlatformAdmin instead.
+const RoleAdmin = "admin"
+
+// Deprecated: use RolePlatformOperator instead.
+const RoleOperator = "operator"
+
+// Deprecated: use RoleGovernanceApprover instead.
+const RoleApprover = "approver"
+
+// Deprecated: use RoleGovernanceReviewer instead.
+const RoleReviewer = "reviewer"
+
+// legacyRoleMap maps legacy role strings (lowercased) to their canonical equivalents.
+var legacyRoleMap = map[string]string{
+	"admin":    RolePlatformAdmin,
+	"operator": RolePlatformOperator,
+	"approver": RoleGovernanceApprover,
+	"reviewer": RoleGovernanceReviewer,
+}
+
+// NormalizeRoles maps legacy role strings to their canonical equivalents,
+// deduplicates, and returns a deterministic sorted slice.
+// Unknown or already-canonical roles are preserved as-is.
+// Normalization is case-insensitive for legacy role lookup.
+func NormalizeRoles(in []string) []string {
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, r := range in {
+		canonical, ok := legacyRoleMap[strings.ToLower(r)]
+		if ok {
+			r = canonical
+		}
+		if _, dup := seen[r]; dup {
+			continue
+		}
+		seen[r] = struct{}{}
+		out = append(out, r)
+	}
+	sort.Strings(out)
+	return out
+}
 
 // HasRole returns true if the principal has the given role.
 // Comparison is case-insensitive and trims surrounding whitespace.

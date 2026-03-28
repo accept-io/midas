@@ -19,10 +19,12 @@ import (
 	"github.com/accept-io/midas/internal/auth"
 	"github.com/accept-io/midas/internal/bootstrap"
 	"github.com/accept-io/midas/internal/config"
-	"github.com/accept-io/midas/internal/identity"
 	"github.com/accept-io/midas/internal/controlplane/apply"
 	"github.com/accept-io/midas/internal/decision"
 	"github.com/accept-io/midas/internal/httpapi"
+	"github.com/accept-io/midas/internal/identity"
+	"github.com/accept-io/midas/internal/localiam"
+	"github.com/accept-io/midas/internal/oidc"
 	"github.com/accept-io/midas/internal/outbox"
 	"github.com/accept-io/midas/internal/policy"
 	"github.com/accept-io/midas/internal/store"
@@ -180,11 +182,52 @@ func main() {
 	}
 	srv.WithStoreBackend(cfg.Store.Backend)
 	srv.WithDemoSeeded(demoSeeded)
-	// Explorer maintains its own isolated in-memory store, seeded unconditionally
-	// inside WithExplorerEnabled. The seeding above applies only to the main backend.
-	srv.WithExplorerEnabled(cfg.Server.ExplorerEnabled)
-	if cfg.Server.ExplorerEnabled {
-		slog.Info("explorer_ready", "path", "/explorer")
+
+	if !cfg.Server.Headless {
+		if cfg.LocalIAM.Enabled {
+			iamSvc := localiam.NewService(repos.LocalUsers, repos.LocalSessions, localiam.Config{
+				Enabled:       true,
+				SessionTTL:    cfg.LocalIAM.SessionTTL.D(),
+				SecureCookies: cfg.LocalIAM.SecureCookies,
+			})
+			if err := iamSvc.Bootstrap(context.Background()); err != nil {
+				log.Fatal("local_iam bootstrap failed: ", err)
+			}
+			srv.WithLocalIAM(iamSvc)
+			slog.Info("localiam_enabled", "session_ttl", cfg.LocalIAM.SessionTTL.D().String())
+		}
+
+		// OIDC platform login — optional, Entra-first.
+		// Requires LocalIAM to be enabled (for session creation).
+		if cfg.PlatformOIDC.Enabled {
+			if !cfg.LocalIAM.Enabled {
+				slog.Error("oidc_requires_localiam", "detail", "platform_oidc.enabled requires local_iam.enabled")
+				os.Exit(1)
+			}
+			oidcSvc, err := oidc.NewService(context.Background(), configToOIDC(cfg.PlatformOIDC))
+			if err != nil {
+				slog.Error("oidc_init_failed", "error", err)
+				os.Exit(1)
+			}
+			srv.WithOIDC(oidcSvc, cfg.LocalIAM.SecureCookies)
+			slog.Info("oidc_enabled",
+				"provider", cfg.PlatformOIDC.ProviderName,
+				"issuer", cfg.PlatformOIDC.IssuerURL,
+			)
+		}
+
+		// Explorer maintains its own isolated in-memory store, seeded unconditionally
+		// inside WithExplorerEnabled. The seeding above applies only to the main backend.
+		srv.WithExplorerEnabled(cfg.Server.ExplorerEnabled)
+		if cfg.Server.ExplorerEnabled {
+			authHint := "bearer"
+			if cfg.PlatformOIDC.Enabled {
+				authHint = "oidc"
+			} else if cfg.LocalIAM.Enabled {
+				authHint = "localiam"
+			}
+			slog.Info("explorer_ready", "path", "/explorer", "auth", authHint)
+		}
 	}
 
 	// --- Dispatcher ---
@@ -228,7 +271,9 @@ func main() {
 	fmt.Println("MIDAS — Authority Orchestration Engine")
 	fmt.Println()
 	fmt.Printf("✓ Server started on :%d\n", cfg.Server.Port)
-	if cfg.Server.ExplorerEnabled {
+	if cfg.Server.Headless {
+		fmt.Println("✓ Mode: headless (API-only — no Explorer, no /auth/*)")
+	} else if cfg.Server.ExplorerEnabled {
 		fmt.Printf("✓ Explorer available at http://localhost:%d/explorer\n", cfg.Server.Port)
 	}
 	fmt.Printf("✓ Store: %s", cfg.Store.Backend)
@@ -316,7 +361,7 @@ func buildAuthenticator(authCfg config.AuthConfig) (auth.Authenticator, error) {
 		tokenMap[t.Token] = &identity.Principal{
 			ID:       t.Principal,
 			Subject:  t.Principal,
-			Roles:    roles,
+			Roles:    identity.NormalizeRoles(roles),
 			Provider: identity.ProviderStatic,
 		}
 	}
@@ -389,6 +434,33 @@ func buildRepositories(ctx context.Context, storeCfg config.StoreConfig) (
 
 	default:
 		return nil, nil, nil, nil, nil, fmt.Errorf("unsupported store.backend: %q", storeCfg.Backend)
+	}
+}
+
+// configToOIDC converts a config.PlatformOIDCConfig to the oidc.Config
+// type that oidc.NewService expects.
+func configToOIDC(c config.PlatformOIDCConfig) oidc.Config {
+	mappings := make([]oidc.RoleMapping, len(c.RoleMappings))
+	for i, m := range c.RoleMappings {
+		mappings[i] = oidc.RoleMapping{External: m.External, Internal: m.Internal}
+	}
+	return oidc.Config{
+		ProviderName:  c.ProviderName,
+		IssuerURL:     c.IssuerURL,
+		AuthURL:       c.AuthURL,
+		TokenURL:      c.TokenURL,
+		ClientID:      c.ClientID,
+		ClientSecret:  c.ClientSecret,
+		RedirectURL:   c.RedirectURL,
+		Scopes:        c.Scopes,
+		SubjectClaim:  c.SubjectClaim,
+		UsernameClaim: c.UsernameClaim,
+		GroupsClaim:   c.GroupsClaim,
+		DomainHint:    c.DomainHint,
+		AllowedGroups: c.AllowedGroups,
+		RoleMappings:  mappings,
+		DenyIfNoRoles: c.DenyIfNoRoles,
+		UsePKCE:       c.UsePKCE,
 	}
 }
 

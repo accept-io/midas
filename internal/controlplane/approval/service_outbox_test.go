@@ -111,7 +111,7 @@ func TestApproveSurface_SelfReview_NoOutboxEvent(t *testing.T) {
 
 	svc := approval.NewServiceWithOutbox(repo, approval.DefaultPolicy(), ob)
 	submitter := identity.Principal{ID: "user-1"}
-	approver := identity.Principal{ID: "user-1", Roles: []string{identity.RoleAdmin}}
+	approver := identity.Principal{ID: "user-1", Roles: []string{identity.RolePlatformAdmin}}
 
 	_, err := svc.ApproveSurface(context.Background(), "payments.execute", submitter, approver)
 	if err == nil {

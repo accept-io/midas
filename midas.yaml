@@ -16,6 +16,29 @@
 # Profiles:
 #   dev        — permissive; any store backend; any auth mode; suitable for local use
 #   production — enforces: store.backend=postgres + auth.mode=required
+#
+# ---------------------------------------------------------------------------
+# Deployment modes
+# ---------------------------------------------------------------------------
+#
+# ── Headless / API-only mode ──────────────────────────────────────────────────
+# Runs MIDAS as a pure governance engine with no browser-facing surfaces.
+# Set server.headless: true (or MIDAS_SERVER_HEADLESS=true).
+# When true: Explorer, /auth/*, local IAM, and OIDC are not initialised.
+# /v1/*, /healthz, and /readyz remain fully operational.
+# Conflicts with: server.explorer_enabled=true, local_iam.enabled=true, platform_oidc.enabled=true
+# Startup will fail if any conflicting option is set alongside headless=true.
+#
+# ── Local platform mode ───────────────────────────────────────────────────────
+# Explorer UI + local username/password login.
+# Enable: server.headless: false, server.explorer_enabled: true, local_iam.enabled: true
+# A bootstrap admin/admin account is created on first run (MustChangePassword=true).
+#
+# ── OIDC platform mode ────────────────────────────────────────────────────────
+# Explorer UI + enterprise SSO via Entra ID or Google Workspace.
+# Enable: server.headless: false, server.explorer_enabled: true, platform_oidc.enabled: true
+# OIDC requires local_iam.enabled: true for session management.
+# Both local_iam and platform_oidc must be enabled together for OIDC login.
 
 version: 1
 profile: dev
@@ -24,6 +47,10 @@ profile: dev
 # HTTP server
 # ---------------------------------------------------------------------------
 server:
+  # headless: runs MIDAS as a pure API/governance engine.
+  # When true, Explorer, /auth/*, local IAM, and OIDC are not initialised.
+  # Env: MIDAS_SERVER_HEADLESS=true
+  headless: false
   port: 8080
   shutdown_timeout: 15s
   explorer_enabled: true
@@ -59,6 +86,53 @@ auth:
   #       principal: "svc:payments-engine"
   #       roles: "operator"
   tokens: []
+
+# ---------------------------------------------------------------------------
+# Local IAM — enable for browser-based console access with username/password login.
+# When enabled, a bootstrap admin/admin account is created on first run.
+# Disable for headless/API-only deployments.
+# Env: MIDAS_LOCAL_IAM_ENABLED=true
+# ---------------------------------------------------------------------------
+# local_iam:
+#   enabled: false
+#   session_ttl: 8h
+#   secure_cookies: false   # set true in production behind TLS
+
+# ---------------------------------------------------------------------------
+# Platform OIDC — enable for enterprise SSO via Entra ID or Google Workspace.
+# Requires local_iam.enabled: true for session management.
+# Single provider at a time. Disable for headless/API-only deployments.
+# Env: MIDAS_OIDC_ENABLED=true  MIDAS_OIDC_CLIENT_ID=...  MIDAS_OIDC_CLIENT_SECRET=...
+# ---------------------------------------------------------------------------
+# platform_oidc:
+#   enabled: false
+#   provider_name: entra    # entra or google
+#
+#   issuer_url: ""          # https://login.microsoftonline.com/<tenant>/v2.0  (Entra)
+#                           # https://accounts.google.com                      (Google)
+#   auth_url: ""            # optional: overrides discovered authorization endpoint
+#   token_url: ""           # optional: overrides discovered token endpoint
+#
+#   client_id: ""           # use MIDAS_OIDC_CLIENT_ID env var in production
+#   client_secret: ""       # use MIDAS_OIDC_CLIENT_SECRET env var in production
+#
+#   redirect_url: ""        # must match the registered redirect URI in your IdP
+#
+#   scopes:
+#     - openid
+#     - profile
+#     - email
+#
+#   subject_claim: sub
+#   username_claim: preferred_username   # use 'email' for Google
+#   groups_claim: groups                 # use 'hd' for Google (hosted domain)
+#
+#   # domain_hint: ""       # optional: login hint passed to provider
+#   # allowed_groups: []    # optional: restrict login to members of listed groups
+#
+#   role_mappings: []       # map external groups/domains to MIDAS roles
+#   deny_if_no_roles: true  # reject login when no internal roles are mapped
+#   use_pkce: true          # recommended; required by Google
 
 # ---------------------------------------------------------------------------
 # Observability

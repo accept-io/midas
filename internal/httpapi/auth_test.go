@@ -29,7 +29,7 @@ func aliceAuthenticator() auth.Authenticator {
 		"tok-alice": {
 			ID:       "user:alice",
 			Provider: identity.ProviderStatic,
-			Roles:    []string{identity.RoleAdmin},
+			Roles:    []string{identity.RolePlatformAdmin},
 		},
 	})
 }
@@ -66,7 +66,7 @@ func TestActorFromContext_NoPrincipal_ReturnsFallback(t *testing.T) {
 // A server that has not been given an authenticator must not silently allow
 // access — callers must explicitly use AuthModeOpen for unauthenticated access.
 func TestRequireAuth_NoAuthenticator_FailsClosed(t *testing.T) {
-	srv := newTestServer() // no WithAuthMode, no WithAuthenticator
+	srv := newTestServer().WithAuthMode(config.AuthModeRequired) // no WithAuthenticator
 
 	called := false
 	handler := srv.requireAuth(func(w http.ResponseWriter, r *http.Request) {
@@ -90,7 +90,7 @@ func TestRequireAuth_NoAuthenticator_FailsClosed(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRequireAuth_ValidToken_StoresPrincipalInContext(t *testing.T) {
-	srv := newTestServer().WithAuthenticator(aliceAuthenticator())
+	srv := newTestServer().WithAuthMode(config.AuthModeRequired).WithAuthenticator(aliceAuthenticator())
 
 	var capturedPrincipal *identity.Principal
 	handler := srv.requireAuth(func(w http.ResponseWriter, r *http.Request) {
@@ -115,7 +115,7 @@ func TestRequireAuth_ValidToken_StoresPrincipalInContext(t *testing.T) {
 }
 
 func TestRequireAuth_MissingToken_Returns401(t *testing.T) {
-	srv := newTestServer().WithAuthenticator(aliceAuthenticator())
+	srv := newTestServer().WithAuthMode(config.AuthModeRequired).WithAuthenticator(aliceAuthenticator())
 
 	called := false
 	handler := srv.requireAuth(func(w http.ResponseWriter, r *http.Request) {
@@ -135,7 +135,7 @@ func TestRequireAuth_MissingToken_Returns401(t *testing.T) {
 }
 
 func TestRequireAuth_UnknownToken_Returns401(t *testing.T) {
-	srv := newTestServer().WithAuthenticator(aliceAuthenticator())
+	srv := newTestServer().WithAuthMode(config.AuthModeRequired).WithAuthenticator(aliceAuthenticator())
 
 	handler := srv.requireAuth(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -175,7 +175,7 @@ func TestWithAuthenticator_AfterConstruction(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestActorFromContext_WithPrincipal_ReturnsID(t *testing.T) {
-	srv := newTestServer().WithAuthenticator(aliceAuthenticator())
+	srv := newTestServer().WithAuthMode(config.AuthModeRequired).WithAuthenticator(aliceAuthenticator())
 
 	var capturedActor string
 	handler := srv.requireAuth(func(w http.ResponseWriter, r *http.Request) {
@@ -201,7 +201,7 @@ func TestActorFromContext_WithPrincipal_ReturnsID(t *testing.T) {
 // rejects unauthenticated requests when an authenticator is configured.
 func TestHandlerAuth_Reviews_NoToken_Returns401(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithAuthenticator(aliceAuthenticator())
+		WithAuthMode(config.AuthModeRequired).WithAuthenticator(aliceAuthenticator())
 
 	body := marshalJSON(t, map[string]any{
 		"envelope_id": "env-abc",
@@ -229,7 +229,7 @@ func TestHandlerAuth_Reviews_TokenOverridesBodyReviewer(t *testing.T) {
 	}
 
 	srv := NewServerFull(mock, nil, nil, nil, nil, nil).
-		WithAuthenticator(aliceAuthenticator())
+		WithAuthMode(config.AuthModeRequired).WithAuthenticator(aliceAuthenticator())
 
 	body := marshalJSON(t, map[string]any{
 		"envelope_id": "env-abc",
@@ -267,7 +267,7 @@ func TestHandlerAuth_ApproveProfile_TokenOverridesBodyActor(t *testing.T) {
 	}
 
 	srv := NewServerFull(&mockOrchestrator{}, nil, mockApproval, nil, nil, nil).
-		WithAuthenticator(aliceAuthenticator())
+		WithAuthMode(config.AuthModeRequired).WithAuthenticator(aliceAuthenticator())
 
 	body := marshalJSON(t, map[string]any{
 		"version":     1,
@@ -291,14 +291,14 @@ func TestHandlerAuth_ApproveProfile_TokenOverridesBodyActor(t *testing.T) {
 // rbacAuthenticator returns an authenticator with one token per role scenario.
 func rbacAuthenticator() auth.Authenticator {
 	return auth.NewStaticTokenAuthenticator(map[string]*identity.Principal{
-		"tok-admin":        {ID: "user:admin", Provider: identity.ProviderStatic, Roles: []string{identity.RoleAdmin}},
-		"tok-approver":     {ID: "user:approver", Provider: identity.ProviderStatic, Roles: []string{identity.RoleApprover}},
-		"tok-reviewer":     {ID: "user:reviewer", Provider: identity.ProviderStatic, Roles: []string{identity.RoleReviewer}},
-		"tok-operator":     {ID: "user:operator", Provider: identity.ProviderStatic, Roles: []string{identity.RoleOperator}},
-		"tok-multi":        {ID: "user:multi", Provider: identity.ProviderStatic, Roles: []string{identity.RoleOperator, identity.RoleApprover}},
+		"tok-admin":        {ID: "user:admin", Provider: identity.ProviderStatic, Roles: []string{identity.RolePlatformAdmin}},
+		"tok-approver":     {ID: "user:approver", Provider: identity.ProviderStatic, Roles: []string{identity.RoleGovernanceApprover}},
+		"tok-reviewer":     {ID: "user:reviewer", Provider: identity.ProviderStatic, Roles: []string{identity.RoleGovernanceReviewer}},
+		"tok-operator":     {ID: "user:operator", Provider: identity.ProviderStatic, Roles: []string{identity.RolePlatformOperator}},
+		"tok-multi":        {ID: "user:multi", Provider: identity.ProviderStatic, Roles: []string{identity.RolePlatformOperator, identity.RoleGovernanceApprover}},
 		"tok-unknown-role": {ID: "user:unknown", Provider: identity.ProviderStatic, Roles: []string{"some_unknown_role"}},
 		"tok-empty-roles":  {ID: "user:empty", Provider: identity.ProviderStatic, Roles: []string{}},
-		"tok-upper-admin":  {ID: "user:upperadmin", Provider: identity.ProviderStatic, Roles: []string{"ADMIN"}},
+		"tok-upper-admin":  {ID: "user:upperadmin", Provider: identity.ProviderStatic, Roles: []string{"PLATFORM.ADMIN"}},
 	})
 }
 
@@ -315,7 +315,7 @@ func approvalSrvRBAC(t *testing.T) *Server {
 		},
 	}
 	return NewServerFull(&mockOrchestrator{}, nil, mockApproval, nil, nil, nil).
-		WithAuthenticator(rbacAuthenticator())
+		WithAuthMode(config.AuthModeRequired).WithAuthenticator(rbacAuthenticator())
 }
 
 // reviewSrvRBAC returns a server wired with the RBAC authenticator and a mock
@@ -328,7 +328,7 @@ func reviewSrvRBAC(t *testing.T) *Server {
 		},
 	}
 	return NewServerFull(mock, nil, nil, nil, nil, nil).
-		WithAuthenticator(rbacAuthenticator())
+		WithAuthMode(config.AuthModeRequired).WithAuthenticator(rbacAuthenticator())
 }
 
 // applySrvRBAC returns a server wired with the RBAC authenticator and a mock
@@ -341,7 +341,7 @@ func applySrvRBAC(t *testing.T) *Server {
 		},
 	}
 	return NewServerWithControlPlane(&mockOrchestrator{}, mockCP).
-		WithAuthenticator(rbacAuthenticator())
+		WithAuthMode(config.AuthModeRequired).WithAuthenticator(rbacAuthenticator())
 }
 
 // ---------------------------------------------------------------------------
@@ -507,7 +507,7 @@ func TestRBAC_RoleNormalization_UppercaseRoleMatches(t *testing.T) {
 // rejects requests with no Authorization header when auth is configured.
 func TestHandlerAuth_Evaluate_NoToken_Returns401(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithAuthenticator(rbacAuthenticator())
+		WithAuthMode(config.AuthModeRequired).WithAuthenticator(rbacAuthenticator())
 
 	body := marshalJSON(t, map[string]any{
 		"surface_id": "surf-1",
@@ -525,7 +525,7 @@ func TestHandlerAuth_Evaluate_NoToken_Returns401(t *testing.T) {
 // rejects requests carrying an unrecognised bearer token.
 func TestHandlerAuth_Evaluate_InvalidToken_Returns401(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithAuthenticator(rbacAuthenticator())
+		WithAuthMode(config.AuthModeRequired).WithAuthenticator(rbacAuthenticator())
 
 	body := marshalJSON(t, map[string]any{
 		"surface_id": "surf-1",
@@ -544,7 +544,7 @@ func TestHandlerAuth_Evaluate_InvalidToken_Returns401(t *testing.T) {
 // operator-role token is accepted and the request reaches the evaluate handler.
 func TestHandlerAuth_Evaluate_OperatorToken_ReachesHandler(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithAuthenticator(rbacAuthenticator())
+		WithAuthMode(config.AuthModeRequired).WithAuthenticator(rbacAuthenticator())
 
 	body := marshalJSON(t, map[string]any{
 		"surface_id": "surf-1",
@@ -625,7 +625,7 @@ func TestRequireRole_OpenMode_PassesThrough(t *testing.T) {
 	srv := newTestServer().WithAuthMode(config.AuthModeOpen)
 
 	called := false
-	handler := srv.requireRole(identity.RoleAdmin)(func(w http.ResponseWriter, r *http.Request) {
+	handler := srv.requireRole(identity.RolePlatformAdmin)(func(w http.ResponseWriter, r *http.Request) {
 		called = true
 		w.WriteHeader(http.StatusOK)
 	})
@@ -650,7 +650,7 @@ func TestRequireRole_OpenMode_AllowsWithPrincipalAndRole(t *testing.T) {
 	srv := newTestServer().WithAuthMode(config.AuthModeOpen)
 
 	called := false
-	handler := srv.requireRole(identity.RoleAdmin)(func(w http.ResponseWriter, r *http.Request) {
+	handler := srv.requireRole(identity.RolePlatformAdmin)(func(w http.ResponseWriter, r *http.Request) {
 		called = true
 		w.WriteHeader(http.StatusOK)
 	})
@@ -658,7 +658,7 @@ func TestRequireRole_OpenMode_AllowsWithPrincipalAndRole(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/test", nil)
 	r = withPrincipal(r, &identity.Principal{
 		ID:    "user:admin",
-		Roles: []string{identity.RoleAdmin},
+		Roles: []string{identity.RolePlatformAdmin},
 	})
 	w := httptest.NewRecorder()
 	handler(w, r)
@@ -726,7 +726,7 @@ func TestRequireRole_RequiredMode_RejectsNoPrincipal(t *testing.T) {
 		WithAuthenticator(aliceAuthenticator())
 
 	called := false
-	handler := srv.requireRole(identity.RoleAdmin)(func(w http.ResponseWriter, r *http.Request) {
+	handler := srv.requireRole(identity.RolePlatformAdmin)(func(w http.ResponseWriter, r *http.Request) {
 		called = true
 	})
 
@@ -749,14 +749,14 @@ func TestRequireRole_WrongRole_Returns403(t *testing.T) {
 	srv := newTestServer().WithAuthMode(config.AuthModeRequired).WithAuthenticator(aliceAuthenticator())
 
 	called := false
-	handler := srv.requireRole(identity.RoleAdmin)(func(w http.ResponseWriter, r *http.Request) {
+	handler := srv.requireRole(identity.RolePlatformAdmin)(func(w http.ResponseWriter, r *http.Request) {
 		called = true
 	})
 
 	r := httptest.NewRequest(http.MethodPost, "/test", nil)
 	r = withPrincipal(r, &identity.Principal{
 		ID:    "user:operator",
-		Roles: []string{identity.RoleOperator},
+		Roles: []string{identity.RolePlatformOperator},
 	})
 	w := httptest.NewRecorder()
 	handler(w, r)
@@ -766,5 +766,115 @@ func TestRequireRole_WrongRole_Returns403(t *testing.T) {
 	}
 	if w.Code != http.StatusForbidden {
 		t.Errorf("want 403, got %d", w.Code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Domain isolation: platform roles must not grant governance access and vice versa
+// ---------------------------------------------------------------------------
+
+// TestRequireRole_GovernanceRole_DoesNotGrantPlatformAccess verifies that a
+// governance.approver cannot access platform-only endpoints (e.g. /v1/evaluate).
+func TestRequireRole_GovernanceRole_DoesNotGrantPlatformAccess(t *testing.T) {
+	srv := newTestServer().WithAuthMode(config.AuthModeRequired)
+
+	called := false
+	handler := srv.requireRole(identity.RolePlatformOperator, identity.RolePlatformAdmin)(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+	})
+
+	r := httptest.NewRequest(http.MethodPost, "/v1/evaluate", nil)
+	r = withPrincipal(r, &identity.Principal{
+		ID:    "user:approver",
+		Roles: []string{identity.RoleGovernanceApprover},
+	})
+	w := httptest.NewRecorder()
+	handler(w, r)
+
+	if called {
+		t.Error("governance.approver must not access platform-only route")
+	}
+	if w.Code != http.StatusForbidden {
+		t.Errorf("want 403, got %d", w.Code)
+	}
+}
+
+// TestRequireRole_PlatformRole_DoesNotGrantGovernanceAccess verifies that a
+// platform.viewer cannot access governance-only endpoints (e.g. /v1/reviews).
+func TestRequireRole_PlatformRole_DoesNotGrantGovernanceAccess(t *testing.T) {
+	srv := newTestServer().WithAuthMode(config.AuthModeRequired)
+
+	called := false
+	handler := srv.requireRole(identity.RolePlatformAdmin, identity.RoleGovernanceReviewer)(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+	})
+
+	r := httptest.NewRequest(http.MethodPost, "/v1/reviews", nil)
+	r = withPrincipal(r, &identity.Principal{
+		ID:    "user:viewer",
+		Roles: []string{identity.RolePlatformViewer},
+	})
+	w := httptest.NewRecorder()
+	handler(w, r)
+
+	if called {
+		t.Error("platform.viewer must not access governance-only route")
+	}
+	if w.Code != http.StatusForbidden {
+		t.Errorf("want 403, got %d", w.Code)
+	}
+}
+
+// TestRequireRole_PlatformAdmin_OverridesGovernanceCheck verifies that
+// platform.admin can access governance-gated endpoints (admin override).
+func TestRequireRole_PlatformAdmin_OverridesGovernanceCheck(t *testing.T) {
+	srv := newTestServer().WithAuthMode(config.AuthModeRequired)
+
+	called := false
+	handler := srv.requireRole(identity.RolePlatformAdmin, identity.RoleGovernanceReviewer)(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	r := httptest.NewRequest(http.MethodPost, "/v1/reviews", nil)
+	r = withPrincipal(r, &identity.Principal{
+		ID:    "user:admin",
+		Roles: []string{identity.RolePlatformAdmin},
+	})
+	w := httptest.NewRecorder()
+	handler(w, r)
+
+	if !called {
+		t.Error("platform.admin should be able to access governance-gated route")
+	}
+	if w.Code != http.StatusOK {
+		t.Errorf("want 200, got %d", w.Code)
+	}
+}
+
+// TestRequireRole_ViewerRole_AllowedOnReadRoutes verifies that platform.viewer
+// can access read-only routes.
+func TestRequireRole_ViewerRole_AllowedOnReadRoutes(t *testing.T) {
+	srv := newTestServer().WithAuthMode(config.AuthModeRequired)
+
+	called := false
+	handler := srv.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	r := httptest.NewRequest(http.MethodGet, "/v1/envelopes", nil)
+	r = withPrincipal(r, &identity.Principal{
+		ID:    "user:viewer",
+		Roles: []string{identity.RolePlatformViewer},
+	})
+	w := httptest.NewRecorder()
+	handler(w, r)
+
+	if !called {
+		t.Error("platform.viewer should be allowed on read-only routes")
+	}
+	if w.Code != http.StatusOK {
+		t.Errorf("want 200, got %d", w.Code)
 	}
 }

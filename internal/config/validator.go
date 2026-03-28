@@ -173,6 +173,28 @@ func ValidateSemantic(cfg Config) error {
 		}
 	}
 
+	// Headless mode conflicts: headless=true is incompatible with browser-facing features.
+	if cfg.Server.Headless {
+		if cfg.Server.ExplorerEnabled {
+			errs = append(errs, ValidationError{
+				"server.headless",
+				"server.headless=true conflicts with server.explorer_enabled=true",
+			})
+		}
+		if cfg.LocalIAM.Enabled {
+			errs = append(errs, ValidationError{
+				"server.headless",
+				"server.headless=true conflicts with local_iam.enabled=true",
+			})
+		}
+		if cfg.PlatformOIDC.Enabled {
+			errs = append(errs, ValidationError{
+				"server.headless",
+				"server.headless=true conflicts with platform_oidc.enabled=true",
+			})
+		}
+	}
+
 	// Dispatcher: enabled requires a real publisher.
 	if cfg.Dispatcher.Enabled {
 		switch cfg.Dispatcher.Publisher {

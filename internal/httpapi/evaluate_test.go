@@ -14,9 +14,9 @@ import (
 // and reviewer (forbidden).
 func evaluateAuthenticator() auth.Authenticator {
 	return auth.NewStaticTokenAuthenticator(map[string]*identity.Principal{
-		"tok-eval-op":       {ID: "svc:caller", Provider: identity.ProviderStatic, Roles: []string{identity.RoleOperator}},
-		"tok-eval-admin":    {ID: "user:admin", Provider: identity.ProviderStatic, Roles: []string{identity.RoleAdmin}},
-		"tok-eval-reviewer": {ID: "user:reviewer", Provider: identity.ProviderStatic, Roles: []string{identity.RoleReviewer}},
+		"tok-eval-op":       {ID: "svc:caller", Provider: identity.ProviderStatic, Roles: []string{identity.RolePlatformOperator}},
+		"tok-eval-admin":    {ID: "user:admin", Provider: identity.ProviderStatic, Roles: []string{identity.RolePlatformAdmin}},
+		"tok-eval-reviewer": {ID: "user:reviewer", Provider: identity.ProviderStatic, Roles: []string{identity.RoleGovernanceReviewer}},
 	})
 }
 

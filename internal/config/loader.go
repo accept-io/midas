@@ -65,6 +65,7 @@ var candidatePaths = []string{
 // topLevelSections is the set of top-level YAML field names tracked in Sources.
 var topLevelSections = []string{
 	"version", "profile", "server", "store", "auth",
+	"local_iam", "platform_oidc",
 	"observability", "control_plane", "dev", "dispatcher", "kafka",
 }
 
@@ -209,6 +210,14 @@ func applyEnvOverrides(cfg *Config, sources map[string]Source, getenv func(strin
 	}
 
 	// Server
+	if v := getenv("MIDAS_SERVER_HEADLESS"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("config: MIDAS_SERVER_HEADLESS must be a boolean (true/false): %q", v)
+		}
+		cfg.Server.Headless = b
+		markEnv("server")
+	}
 	if v := getenv("MIDAS_SERVER_PORT"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n <= 0 || n > 65535 {
@@ -256,6 +265,44 @@ func applyEnvOverrides(cfg *Config, sources map[string]Source, getenv func(strin
 		}
 		cfg.Dispatcher.BatchSize = n
 		markEnv("dispatcher")
+	}
+
+	// Local IAM
+	if v := getenv("MIDAS_LOCAL_IAM_ENABLED"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("config: MIDAS_LOCAL_IAM_ENABLED must be a boolean (true/false): %q", v)
+		}
+		cfg.LocalIAM.Enabled = b
+		markEnv("local_iam")
+	}
+
+	// Platform OIDC
+	if v := getenv("MIDAS_OIDC_ENABLED"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("config: MIDAS_OIDC_ENABLED must be a boolean (true/false): %q", v)
+		}
+		cfg.PlatformOIDC.Enabled = b
+		markEnv("platform_oidc")
+	}
+	if v := getenv("MIDAS_OIDC_CLIENT_ID"); v != "" {
+		cfg.PlatformOIDC.ClientID = v
+		markEnv("platform_oidc")
+	}
+	if v := getenv("MIDAS_OIDC_CLIENT_SECRET"); v != "" {
+		cfg.PlatformOIDC.ClientSecret = v
+		markEnv("platform_oidc")
+	}
+
+	// Control plane
+	if v := getenv("MIDAS_CONTROL_PLANE_ENABLED"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("config: MIDAS_CONTROL_PLANE_ENABLED must be a boolean (true/false): %q", v)
+		}
+		cfg.ControlPlane.Enabled = b
+		markEnv("control_plane")
 	}
 
 	// Kafka

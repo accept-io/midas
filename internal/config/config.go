@@ -59,11 +59,91 @@ type Config struct {
 	Server        ServerConfig        `yaml:"server"`
 	Store         StoreConfig         `yaml:"store"`
 	Auth          AuthConfig          `yaml:"auth"`
+	LocalIAM      LocalIAMConfig      `yaml:"local_iam"`
+	PlatformOIDC  PlatformOIDCConfig  `yaml:"platform_oidc"`
 	Observability ObservabilityConfig `yaml:"observability"`
 	ControlPlane  ControlPlaneConfig  `yaml:"control_plane"`
 	Dev           DevConfig           `yaml:"dev"`
 	Dispatcher    DispatcherConfig    `yaml:"dispatcher"`
 	Kafka         KafkaConfig         `yaml:"kafka"`
+}
+
+// PlatformOIDCConfig configures OIDC-based platform login (Explorer/console SSO).
+// This is entirely separate from runtime governance auth on /v1/* routes.
+// The structure is provider-agnostic; any OIDC-compliant provider (e.g. Entra,
+// Google Workspace) is supported via configuration alone.
+type PlatformOIDCConfig struct {
+	// Enabled activates OIDC login. When true the /auth/oidc/* endpoints are
+	// registered. Requires LocalIAM to also be enabled for session management.
+	Enabled bool `yaml:"enabled"`
+	// ProviderName is a display label only (e.g. "entra", "google"). Not used in auth logic.
+	ProviderName string `yaml:"provider_name"`
+
+	// IssuerURL is the OIDC issuer used for provider discovery.
+	// e.g. https://login.microsoftonline.com/<tenant>/v2.0 (Entra)
+	// or   https://accounts.google.com (Google)
+	IssuerURL string `yaml:"issuer_url"`
+	// AuthURL overrides the discovered authorization endpoint (optional).
+	AuthURL string `yaml:"auth_url"`
+	// TokenURL overrides the discovered token endpoint (optional).
+	TokenURL string `yaml:"token_url"`
+
+	// ClientID is the OAuth2 application client ID. Supports ${VAR} expansion.
+	ClientID string `yaml:"client_id"`
+	// ClientSecret is the OAuth2 application client secret. Supports ${VAR} expansion.
+	ClientSecret string `yaml:"client_secret"`
+	// RedirectURL is the callback URL registered with the identity provider.
+	RedirectURL string `yaml:"redirect_url"`
+
+	// Scopes requested from the provider. Defaults: openid, profile, email.
+	Scopes []string `yaml:"scopes"`
+
+	// SubjectClaim is the ID token claim used as the principal subject. Default: "sub".
+	SubjectClaim string `yaml:"subject_claim"`
+	// UsernameClaim is the claim used as the display username.
+	// Default: "preferred_username" (Entra). Set to "email" for Google Workspace.
+	UsernameClaim string `yaml:"username_claim"`
+	// GroupsClaim is the claim containing group membership or domain identity.
+	// Default: "groups" (Entra array). Set to "hd" for Google Workspace (hosted domain).
+	// The value may be a JSON string or array; both are normalised to []string.
+	// If absent from the token, groups are treated as empty.
+	GroupsClaim string `yaml:"groups_claim"`
+
+	// DomainHint is passed to the provider as a login hint (optional).
+	DomainHint string `yaml:"domain_hint"`
+	// AllowedGroups restricts login to members of at least one listed group (optional).
+	// An empty slice allows any authenticated user.
+	AllowedGroups []string `yaml:"allowed_groups"`
+
+	// RoleMappings maps external group identifiers to MIDAS internal roles.
+	RoleMappings []OIDCRoleMapping `yaml:"role_mappings"`
+
+	// DenyIfNoRoles rejects login when no internal roles are mapped. Default: true.
+	DenyIfNoRoles bool `yaml:"deny_if_no_roles"`
+	// UsePKCE enables PKCE (Proof Key for Code Exchange). Default: true.
+	UsePKCE bool `yaml:"use_pkce"`
+}
+
+// OIDCRoleMapping maps a single external group value to a MIDAS internal role.
+type OIDCRoleMapping struct {
+	// External is the group name as returned by the identity provider.
+	External string `yaml:"external"`
+	// Internal is the canonical MIDAS role (e.g. "platform.admin").
+	Internal string `yaml:"internal"`
+}
+
+// LocalIAMConfig controls local platform IAM for the Explorer/console.
+// Local IAM provides username/password login with session cookies and is
+// entirely separate from runtime authority (bearer-token auth on /v1/* routes).
+type LocalIAMConfig struct {
+	// Enabled activates local platform IAM. When true, bootstrap admin/admin is
+	// created on first run and the /auth/* endpoints are registered.
+	Enabled bool `yaml:"enabled"`
+	// SessionTTL controls how long a session remains valid. Default: "8h".
+	SessionTTL Duration `yaml:"session_ttl"`
+	// SecureCookies sets the Secure flag on session cookies. Enable in
+	// production (HTTPS). Defaults to false for local HTTP development.
+	SecureCookies bool `yaml:"secure_cookies"`
 }
 
 // DevConfig holds settings that only apply in developer / local mode.
@@ -86,6 +166,12 @@ type ServerConfig struct {
 	// ExplorerEnabled serves the interactive evaluation sandbox at /explorer.
 	// Enabled by default; set false in production if the UI is not needed.
 	ExplorerEnabled bool `yaml:"explorer_enabled"`
+	// Headless disables all browser-facing surfaces and platform-login routes.
+	// When true: /explorer, /auth/*, local IAM, and OIDC are not initialised.
+	// /v1/*, /healthz, and /readyz remain fully operational.
+	// Conflicts with: explorer_enabled=true, local_iam.enabled=true, platform_oidc.enabled=true.
+	// Default: false.
+	Headless bool `yaml:"headless"`
 }
 
 // StoreConfig selects and configures the persistence backend.

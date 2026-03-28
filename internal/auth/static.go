@@ -122,7 +122,7 @@ func LoadStaticTokensFromEnv() (*StaticTokenAuthenticator, error) {
 		tokens[token] = &identity.Principal{
 			ID:       principalID,
 			Subject:  principalID,
-			Roles:    roles,
+			Roles:    identity.NormalizeRoles(roles),
 			Provider: identity.ProviderStatic,
 		}
 	}

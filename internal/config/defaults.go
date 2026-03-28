@@ -13,6 +13,7 @@ func DefaultConfig() Config {
 			Port:            8080,
 			ShutdownTimeout: Duration(15 * time.Second),
 			ExplorerEnabled: true,
+			Headless:        false,
 		},
 		Store: StoreConfig{
 			Backend: "memory",
@@ -21,6 +22,20 @@ func DefaultConfig() Config {
 		Auth: AuthConfig{
 			Mode:   AuthModeOpen,
 			Tokens: nil,
+		},
+		LocalIAM: LocalIAMConfig{
+			Enabled:       false,
+			SessionTTL:    Duration(8 * time.Hour),
+			SecureCookies: false,
+		},
+		PlatformOIDC: PlatformOIDCConfig{
+			Enabled:       false,
+			SubjectClaim:  "sub",
+			UsernameClaim: "preferred_username",
+			GroupsClaim:   "groups",
+			Scopes:        []string{"openid", "profile", "email"},
+			DenyIfNoRoles: true,
+			UsePKCE:       true,
 		},
 		Observability: ObservabilityConfig{
 			LogLevel:  "info",

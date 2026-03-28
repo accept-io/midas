@@ -33,13 +33,13 @@ func CanApproveSurface(policy Policy, submitter identity.Principal, approver ide
 		return false
 	}
 
-	// Admin can always approve.
-	if approver.HasRole(identity.RoleAdmin) {
+	// platform.admin can always approve.
+	if approver.HasRole(identity.RolePlatformAdmin) {
 		return true
 	}
 
-	// Approver role is required for owner-based approval.
-	if !approver.HasRole(identity.RoleApprover) {
+	// governance.approver role is required for owner-based approval.
+	if !approver.HasRole(identity.RoleGovernanceApprover) {
 		return false
 	}
 

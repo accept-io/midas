@@ -513,3 +513,352 @@ func TestLoad_MIDAS_STORE_KIND_NotRecognized(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// New env vars — local_iam, platform_oidc, control_plane
+// ---------------------------------------------------------------------------
+
+// localIAMYAML returns a minimal YAML config that includes a local_iam section.
+func localIAMYAML(enabled bool) string {
+	return fmt.Sprintf(`version: 1
+profile: dev
+local_iam:
+  enabled: %v
+  session_ttl: 8h
+  secure_cookies: false
+`, enabled)
+}
+
+// platformOIDCYAML returns a minimal YAML config that includes a platform_oidc section.
+func platformOIDCYAML(enabled bool, clientID, clientSecret string) string {
+	return fmt.Sprintf(`version: 1
+profile: dev
+platform_oidc:
+  enabled: %v
+  client_id: %q
+  client_secret: %q
+  subject_claim: sub
+  username_claim: preferred_username
+  groups_claim: groups
+  deny_if_no_roles: true
+  use_pkce: true
+`, enabled, clientID, clientSecret)
+}
+
+func TestLoad_MIDAS_LOCAL_IAM_ENABLED_OverridesFile(t *testing.T) {
+	// File has local_iam.enabled=false; env sets it true.
+	cfgPath := writeConfig(t, localIAMYAML(false))
+
+	result, err := Load(LoadOptions{
+		ConfigFile:  cfgPath,
+		EnvOverride: env("MIDAS_LOCAL_IAM_ENABLED", "true"),
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if !result.Config.LocalIAM.Enabled {
+		t.Error("local_iam.enabled: want true (env wins), got false")
+	}
+	if result.Sources["local_iam"] != SourceEnv {
+		t.Errorf("local_iam source: want env, got %s", result.Sources["local_iam"])
+	}
+}
+
+func TestLoad_MIDAS_OIDC_ENABLED_OverridesFile(t *testing.T) {
+	// File has platform_oidc.enabled=false; env sets it true.
+	cfgPath := writeConfig(t, platformOIDCYAML(false, "cid", "csecret"))
+
+	result, err := Load(LoadOptions{
+		ConfigFile:  cfgPath,
+		EnvOverride: env("MIDAS_OIDC_ENABLED", "true"),
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if !result.Config.PlatformOIDC.Enabled {
+		t.Error("platform_oidc.enabled: want true (env wins), got false")
+	}
+	if result.Sources["platform_oidc"] != SourceEnv {
+		t.Errorf("platform_oidc source: want env, got %s", result.Sources["platform_oidc"])
+	}
+}
+
+func TestLoad_MIDAS_OIDC_CLIENT_ID_OverridesFile(t *testing.T) {
+	cfgPath := writeConfig(t, platformOIDCYAML(false, "from-file-id", "csecret"))
+
+	result, err := Load(LoadOptions{
+		ConfigFile:  cfgPath,
+		EnvOverride: env("MIDAS_OIDC_CLIENT_ID", "from-env-id"),
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if result.Config.PlatformOIDC.ClientID != "from-env-id" {
+		t.Errorf("client_id: want from-env-id (env wins), got %q", result.Config.PlatformOIDC.ClientID)
+	}
+	if result.Sources["platform_oidc"] != SourceEnv {
+		t.Errorf("platform_oidc source: want env, got %s", result.Sources["platform_oidc"])
+	}
+}
+
+func TestLoad_MIDAS_OIDC_CLIENT_SECRET_OverridesFile(t *testing.T) {
+	cfgPath := writeConfig(t, platformOIDCYAML(false, "cid", "file-secret"))
+
+	result, err := Load(LoadOptions{
+		ConfigFile:  cfgPath,
+		EnvOverride: env("MIDAS_OIDC_CLIENT_SECRET", "env-secret"),
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if result.Config.PlatformOIDC.ClientSecret != "env-secret" {
+		t.Errorf("client_secret: want env-secret (env wins), got %q", result.Config.PlatformOIDC.ClientSecret)
+	}
+	// The secret value must not appear in Sources — Sources only contains
+	// the string values "default", "file", or "env", never config values.
+	for k, v := range result.Sources {
+		if strings.Contains(string(v), "env-secret") {
+			t.Errorf("secret value found in Sources[%s]=%q — must never appear in introspection", k, v)
+		}
+	}
+}
+
+func TestLoad_MIDAS_CONTROL_PLANE_ENABLED_OverridesDefault(t *testing.T) {
+	// Default is true; env disables it.
+	result, err := Load(LoadOptions{
+		SearchPaths: noDiscovery,
+		EnvOverride: env("MIDAS_CONTROL_PLANE_ENABLED", "false"),
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if result.Config.ControlPlane.Enabled {
+		t.Error("control_plane.enabled: want false (env wins over default true), got true")
+	}
+	if result.Sources["control_plane"] != SourceEnv {
+		t.Errorf("control_plane source: want env, got %s", result.Sources["control_plane"])
+	}
+}
+
+func TestLoad_FileValues_UsedWhenEnvAbsent(t *testing.T) {
+	// File sets local_iam.enabled=true, platform_oidc.enabled=true with a client_id.
+	// No env vars. File values must be used.
+	combined := `version: 1
+profile: dev
+local_iam:
+  enabled: true
+  session_ttl: 4h
+  secure_cookies: true
+platform_oidc:
+  enabled: true
+  client_id: "file-only-client-id"
+  subject_claim: sub
+  username_claim: email
+  groups_claim: hd
+  deny_if_no_roles: true
+  use_pkce: true
+`
+	cfgPath := writeConfig(t, combined)
+
+	result, err := Load(LoadOptions{
+		ConfigFile:  cfgPath,
+		EnvOverride: env(), // no env vars
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if !result.Config.LocalIAM.Enabled {
+		t.Error("local_iam.enabled: want true (from file), got false")
+	}
+	if !result.Config.PlatformOIDC.Enabled {
+		t.Error("platform_oidc.enabled: want true (from file), got false")
+	}
+	if result.Config.PlatformOIDC.ClientID != "file-only-client-id" {
+		t.Errorf("client_id: want file-only-client-id, got %q", result.Config.PlatformOIDC.ClientID)
+	}
+	if result.Sources["local_iam"] != SourceFile {
+		t.Errorf("local_iam source: want file, got %s", result.Sources["local_iam"])
+	}
+	if result.Sources["platform_oidc"] != SourceFile {
+		t.Errorf("platform_oidc source: want file, got %s", result.Sources["platform_oidc"])
+	}
+}
+
+func TestLoad_DirectEnvAndPlaceholder_WorkTogether(t *testing.T) {
+	// File has client_id (literal) and client_secret as a placeholder.
+	// MIDAS_OIDC_CLIENT_ID overrides client_id via direct env.
+	// MY_OIDC_SECRET is expanded into client_secret via placeholder expansion.
+	// Both mechanisms must work independently in the same Load call.
+	cfgPath := writeConfig(t, `version: 1
+profile: dev
+platform_oidc:
+  enabled: false
+  client_id: "file-client-id"
+  client_secret: "${MY_OIDC_SECRET}"
+  subject_claim: sub
+  username_claim: preferred_username
+  groups_claim: groups
+  deny_if_no_roles: true
+  use_pkce: true
+`)
+
+	result, err := Load(LoadOptions{
+		ConfigFile: cfgPath,
+		EnvOverride: env(
+			"MIDAS_OIDC_CLIENT_ID", "env-client-id",  // direct env override
+			"MY_OIDC_SECRET", "placeholder-secret",   // used for ${VAR} expansion
+		),
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	// Direct env override wins over file value for client_id.
+	if result.Config.PlatformOIDC.ClientID != "env-client-id" {
+		t.Errorf("client_id: want env-client-id (env override), got %q", result.Config.PlatformOIDC.ClientID)
+	}
+	// Placeholder expansion resolves client_secret.
+	if result.Config.PlatformOIDC.ClientSecret != "placeholder-secret" {
+		t.Errorf("client_secret: want placeholder-secret (${MY_OIDC_SECRET} expanded), got %q", result.Config.PlatformOIDC.ClientSecret)
+	}
+}
+
+func TestLoad_LocalIAMAndPlatformOIDC_InSources_PureDefaults(t *testing.T) {
+	// With no file and no env, both sections must appear in Sources as default.
+	result, err := Load(LoadOptions{
+		SearchPaths: noDiscovery,
+		EnvOverride: env(),
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if result.Sources["local_iam"] != SourceDefault {
+		t.Errorf("local_iam source: want default, got %s", result.Sources["local_iam"])
+	}
+	if result.Sources["platform_oidc"] != SourceDefault {
+		t.Errorf("platform_oidc source: want default, got %s", result.Sources["platform_oidc"])
+	}
+}
+
+func TestLoad_LocalIAMAndPlatformOIDC_InSources_FromFile(t *testing.T) {
+	// When a file includes local_iam, its source must be recorded as file.
+	cfgPath := writeConfig(t, localIAMYAML(true))
+
+	result, err := Load(LoadOptions{
+		ConfigFile:  cfgPath,
+		EnvOverride: env(),
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	// Any section present in topLevelSections is marked SourceFile when a file is loaded.
+	if result.Sources["local_iam"] != SourceFile {
+		t.Errorf("local_iam source: want file, got %s", result.Sources["local_iam"])
+	}
+	if result.Sources["platform_oidc"] != SourceFile {
+		t.Errorf("platform_oidc source: want file (file loaded), got %s", result.Sources["platform_oidc"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Headless mode — env var and loader
+// ---------------------------------------------------------------------------
+
+func TestLoad_ServerHeadless_DefaultsFalse(t *testing.T) {
+	result, err := Load(LoadOptions{
+		SearchPaths: noDiscovery,
+		EnvOverride: env(),
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if result.Config.Server.Headless {
+		t.Error("server.headless: want false (default), got true")
+	}
+}
+
+func TestLoad_MIDAS_SERVER_HEADLESS_OverridesDefault(t *testing.T) {
+	result, err := Load(LoadOptions{
+		SearchPaths: noDiscovery,
+		EnvOverride: env("MIDAS_SERVER_HEADLESS", "true"),
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if !result.Config.Server.Headless {
+		t.Error("server.headless: want true (from MIDAS_SERVER_HEADLESS), got false")
+	}
+	if result.Sources["server"] != SourceEnv {
+		t.Errorf("server source: want env, got %s", result.Sources["server"])
+	}
+}
+
+func TestLoad_MIDAS_SERVER_HEADLESS_OverridesFile(t *testing.T) {
+	cfgPath := writeConfig(t, `version: 1
+profile: dev
+server:
+  headless: false
+  port: 8080
+  explorer_enabled: false
+`)
+	result, err := Load(LoadOptions{
+		ConfigFile:  cfgPath,
+		EnvOverride: env("MIDAS_SERVER_HEADLESS", "true"),
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if !result.Config.Server.Headless {
+		t.Error("server.headless: want true (env wins over file), got false")
+	}
+}
+
+func TestLoad_HeadlessWithLocalIAMEnabled_TriggersFatalValidation(t *testing.T) {
+	// Confirms that validation runs after env overrides are applied.
+	// MIDAS_SERVER_HEADLESS=true combined with MIDAS_LOCAL_IAM_ENABLED=true
+	// must produce a ValidateSemantic error — proving the check runs on the merged config.
+	result, err := Load(LoadOptions{
+		SearchPaths: noDiscovery,
+		EnvOverride: env(
+			"MIDAS_SERVER_HEADLESS", "true",
+			"MIDAS_LOCAL_IAM_ENABLED", "true",
+		),
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	// Verify both env vars were applied.
+	if !result.Config.Server.Headless {
+		t.Error("server.headless: want true (from env)")
+	}
+	if !result.Config.LocalIAM.Enabled {
+		t.Error("local_iam.enabled: want true (from env)")
+	}
+	// Now validate — this must return a conflict error.
+	if err := ValidateSemantic(result.Config); err == nil {
+		t.Error("ValidateSemantic: want error for headless + local_iam.enabled, got nil")
+	} else if !strings.Contains(err.Error(), "server.headless") || !strings.Contains(err.Error(), "local_iam.enabled") {
+		t.Errorf("error message must include both conflicting keys, got: %v", err)
+	}
+}
+
+func TestLoad_InvalidBooleanEnvVars_ReturnErrors(t *testing.T) {
+	tests := []struct {
+		name   string
+		envKey string
+	}{
+		{"MIDAS_LOCAL_IAM_ENABLED", "MIDAS_LOCAL_IAM_ENABLED"},
+		{"MIDAS_OIDC_ENABLED", "MIDAS_OIDC_ENABLED"},
+		{"MIDAS_CONTROL_PLANE_ENABLED", "MIDAS_CONTROL_PLANE_ENABLED"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load(LoadOptions{
+				SearchPaths: noDiscovery,
+				EnvOverride: env(tc.envKey, "notabool"),
+			})
+			if err == nil {
+				t.Errorf("%s=notabool: want error, got nil", tc.envKey)
+			}
+		})
+	}
+}
+

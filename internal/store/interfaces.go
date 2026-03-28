@@ -6,6 +6,7 @@ import (
 	"github.com/accept-io/midas/internal/authority"
 	"github.com/accept-io/midas/internal/controlaudit"
 	"github.com/accept-io/midas/internal/envelope"
+	"github.com/accept-io/midas/internal/localiam"
 	"github.com/accept-io/midas/internal/outbox"
 	"github.com/accept-io/midas/internal/surface"
 )
@@ -22,4 +23,7 @@ type Repositories struct {
 	// orchestrator level: callers must check for nil before appending events,
 	// which preserves existing behaviour when the outbox is not configured.
 	Outbox outbox.Repository
+	// LocalUsers and LocalSessions are nil when local platform IAM is disabled.
+	LocalUsers    localiam.UserRepository
+	LocalSessions localiam.SessionRepository
 }
