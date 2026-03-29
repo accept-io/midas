@@ -1,27 +1,49 @@
 # Security Policy
 
-## Reporting a Vulnerability
+## Security bulletins
 
-If you discover a security vulnerability in Accept MIDAS, please report it responsibly by emailing **team@accept.io**.
+Security-related announcements for MIDAS will be communicated through the project repository and direct maintainer response where appropriate.
 
-Do not open a public GitHub issue for security vulnerabilities.
+For urgent security matters, please contact:
 
-We will respond within 48 hours.
+- Email: team@accept.io
 
-## Supported Versions
+## Reporting a vulnerability
+
+If you discover a security vulnerability in MIDAS, please report it responsibly by emailing **team@accept.io**.
+
+Please do **not** open a public GitHub issue for security vulnerabilities.
+
+Please include:
+- a description of the issue
+- affected version(s)
+- steps to reproduce, if available
+- any known mitigations or workarounds
+
+You will receive an acknowledgement within **48 hours**.
+
+We may follow up for additional detail as we investigate the report, reproduce the issue, and determine scope and impact.
+
+## Disclosure process
+
+MIDAS follows a coordinated disclosure approach. Reported vulnerabilities will be reviewed privately and remediated before public disclosure where appropriate.
+
+## Supported versions
 
 | Version | Supported |
 |---------|-----------|
 | 1.x     | ✅        |
 | < 1.0   | ❌        |
 
-## Security Scanning
+## Security scanning
 
-MIDAS undergoes continuous security scanning:
+MIDAS undergoes regular security scanning, including:
 
-- **Go vulnerabilities:** govulncheck (clean - 2026-03-27)
-- **Dependencies:** Trivy (0 vulnerabilities, 0 secrets)
-- **License compliance:** All dependencies BSD/MIT/Apache-2.0
-- **SBOM:** CycloneDX format available in `security/sbom/`
+- Go vulnerability scanning with `govulncheck`
+- Dependency and container scanning with `Trivy`
+- License compliance review
+- SBOM generation in CycloneDX format
 
-Scan results: `security/scans/`
+Security artifacts are maintained in the repository under:
+- `security/sbom/`
+- `security/scans/`
