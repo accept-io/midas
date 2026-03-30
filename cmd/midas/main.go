@@ -202,6 +202,11 @@ func main() {
 			if err := iamSvc.Bootstrap(context.Background()); err != nil {
 				log.Fatal("local_iam bootstrap failed: ", err)
 			}
+			if cfg.Dev.SeedDemoUser {
+				if err := iamSvc.SeedDemoUser(context.Background()); err != nil {
+					log.Fatal("local_iam demo user seed failed: ", err)
+				}
+			}
 			srv.WithLocalIAM(iamSvc)
 			slog.Info("localiam_enabled", "session_ttl", cfg.LocalIAM.SessionTTL.D().String())
 		}

@@ -244,6 +244,14 @@ func applyEnvOverrides(cfg *Config, sources map[string]Source, getenv func(strin
 		cfg.Dev.SeedDemoData = b
 		markEnv("dev")
 	}
+	if v := getenv("MIDAS_DEV_SEED_DEMO_USER"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("config: MIDAS_DEV_SEED_DEMO_USER must be a boolean (true/false): %q", v)
+		}
+		cfg.Dev.SeedDemoUser = b
+		markEnv("dev")
+	}
 
 	// Dispatcher
 	if v := getenv("MIDAS_DISPATCHER_ENABLED"); v != "" {
