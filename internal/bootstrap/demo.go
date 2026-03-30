@@ -25,15 +25,22 @@ const demoSurfaceID = "surf-payments-approval"
 //
 // Demo dataset:
 //
-//	Surface  surf-payments-approval  — payments approval decision surface
-//	Agent    agent-payments-bot      — AI agent authorised to approve payments
-//	Profile  profile-payments-std    — standard authority limits
-//	Grant    grant-payments-bot-std  — links agent to profile
+//	Surface  surf-payments-approval   — payments approval decision surface
+//	Surface  surf-context-validation  — context validation surface (requires customer_id)
+//	Agent    agent-payments-bot       — AI agent authorised to approve payments
+//	Profile  profile-payments-std     — standard authority limits
+//	Profile  profile-context-strict   — strict context authority (RequiredContextKeys: customer_id)
+//	Grant    grant-payments-bot-std   — links agent to profile-payments-std
+//	Grant    grant-context-strict     — links agent to profile-context-strict
 //
-// Authority thresholds:
+// Authority thresholds (payments surface):
 //
 //	Confidence ≥ 0.85   (Explorer Execute scenario sends 0.95 — passes)
 //	Consequence ≤ 1000  (Explorer Execute sends 100 — passes; escalate sends 1,000,000 — escalates)
+//
+// Context validation surface:
+//
+//	RequiredContextKeys: ["customer_id"] — triggers INSUFFICIENT_CONTEXT when absent
 func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 	// Idempotency guard: if the demo surface already exists, skip seeding entirely.
 	existing, err := repos.Surfaces.FindLatestByID(ctx, demoSurfaceID)
@@ -124,11 +131,81 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 		return err
 	}
 
-	// Grant — links agent to profile
+	// Grant — links agent to profile-payments-std
 	if err := repos.Grants.Create(ctx, &authority.AuthorityGrant{
 		ID:            "grant-payments-bot-std",
 		AgentID:       "agent-payments-bot",
 		ProfileID:     "profile-payments-std",
+		GrantedBy:     "system",
+		EffectiveDate: effective,
+		Status:        authority.GrantStatusActive,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}); err != nil {
+		return err
+	}
+
+	// Context validation surface — triggers INSUFFICIENT_CONTEXT when customer_id is absent
+	if err := repos.Surfaces.Create(ctx, &surface.DecisionSurface{
+		ID:      "surf-context-validation",
+		Version: 1,
+
+		Name:        "Customer Decision Validation",
+		Description: "Governs customer decisions requiring context validation",
+		Domain:      "compliance",
+
+		DecisionType:       surface.DecisionTypeTactical,
+		ReversibilityClass: surface.ReversibilityConditionallyReversible,
+		FailureMode:        surface.FailureModeClosed,
+
+		RequiredContext:  surface.ContextSchema{Fields: []surface.ContextField{}},
+		ConsequenceTypes: []surface.ConsequenceType{},
+
+		Status:        surface.SurfaceStatusActive,
+		EffectiveFrom: effective,
+
+		BusinessOwner:  "compliance-team",
+		TechnicalOwner: "midas",
+
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		return err
+	}
+
+	// Profile with required context keys — customer_id must be present in the request
+	if err := repos.Profiles.Create(ctx, &authority.AuthorityProfile{
+		ID:          "profile-context-strict",
+		Version:     1,
+		SurfaceID:   "surf-context-validation",
+		Name:        "Strict Context Authority",
+		Description: "Authority requiring customer_id context for compliance decisions",
+
+		Status:        authority.ProfileStatusActive,
+		EffectiveDate: effective,
+
+		ConfidenceThreshold: 0.85,
+		ConsequenceThreshold: authority.Consequence{
+			Type:     value.ConsequenceTypeMonetary,
+			Amount:   1000,
+			Currency: "GBP",
+		},
+
+		EscalationMode:      authority.EscalationModeAuto,
+		FailMode:            authority.FailModeClosed,
+		RequiredContextKeys: []string{"customer_id"},
+
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		return err
+	}
+
+	// Grant — links agent to profile-context-strict
+	if err := repos.Grants.Create(ctx, &authority.AuthorityGrant{
+		ID:            "grant-context-strict",
+		AgentID:       "agent-payments-bot",
+		ProfileID:     "profile-context-strict",
 		GrantedBy:     "system",
 		EffectiveDate: effective,
 		Status:        authority.GrantStatusActive,
