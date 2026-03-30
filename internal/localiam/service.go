@@ -108,6 +108,48 @@ func (s *Service) Bootstrap(ctx context.Context) error {
 	return nil
 }
 
+// SeedDemoUser creates a demo Local IAM user (username: demo, password: demo)
+// with the platform.operator role if one does not already exist. It is safe to
+// call on every startup — it is a no-op when the demo user already exists.
+//
+// WARNING: this creates a well-known credential. Never call in production.
+func (s *Service) SeedDemoUser(ctx context.Context) error {
+	existing, err := s.users.FindByUsername(ctx, "demo")
+	if err != nil {
+		return err
+	}
+	if existing != nil {
+		return nil // already seeded
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte("demo"), bcryptCost)
+	if err != nil {
+		return err
+	}
+
+	now := time.Now().UTC()
+	u := &User{
+		ID:                 generateID(),
+		Username:           "demo",
+		PasswordHash:       string(hash),
+		Roles:              []string{identity.RolePlatformOperator},
+		Enabled:            true,
+		MustChangePassword: false,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}
+
+	if err := s.users.Create(ctx, u); err != nil {
+		return err
+	}
+
+	slog.Info("localiam_demo_user_seeded",
+		"username", "demo",
+		"roles", []string{identity.RolePlatformOperator},
+	)
+	return nil
+}
+
 // Login validates credentials, creates a session, and returns the session and
 // user. Returns ErrInvalidCredentials on bad username or password.
 func (s *Service) Login(ctx context.Context, username, password string) (*Session, *User, error) {

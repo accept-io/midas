@@ -358,3 +358,60 @@ func TestUserToPrincipal_RolesAreDefensiveCopy(t *testing.T) {
 		t.Error("UserToPrincipal must return a defensive copy of Roles")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// SeedDemoUser
+// ---------------------------------------------------------------------------
+
+func TestSeedDemoUser_CreatesUser_WhenAbsent(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	// Bootstrap first so there is an admin user (realistic startup order).
+	if err := svc.Bootstrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.SeedDemoUser(ctx); err != nil {
+		t.Fatalf("SeedDemoUser: %v", err)
+	}
+
+	u, err := svc.users.FindByUsername(ctx, "demo")
+	if err != nil || u == nil {
+		t.Fatalf("want demo user, got nil (err=%v)", err)
+	}
+	if u.MustChangePassword {
+		t.Error("want must_change_password=false for demo user")
+	}
+	if !u.Enabled {
+		t.Error("want enabled=true for demo user")
+	}
+	if len(u.Roles) != 1 || u.Roles[0] != identity.RolePlatformOperator {
+		t.Errorf("want role %q, got %v", identity.RolePlatformOperator, u.Roles)
+	}
+	if u.ID == "" {
+		t.Error("want non-empty ID")
+	}
+}
+
+func TestSeedDemoUser_NoOp_WhenUserExists(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	if err := svc.Bootstrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.SeedDemoUser(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Second call must not error and must not duplicate the user.
+	if err := svc.SeedDemoUser(ctx); err != nil {
+		t.Fatalf("second SeedDemoUser should be no-op, got: %v", err)
+	}
+
+	n, _ := svc.users.Count(ctx)
+	if n != 2 { // admin + demo
+		t.Errorf("want exactly 2 users after 2 SeedDemoUser calls, got %d", n)
+	}
+}

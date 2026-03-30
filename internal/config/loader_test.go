@@ -879,3 +879,31 @@ func TestLoad_InvalidBooleanEnvVars_ReturnErrors(t *testing.T) {
 	}
 }
 
+func TestLoad_MIDAS_DEV_SEED_DEMO_USER_SetsFlag(t *testing.T) {
+	result, err := Load(LoadOptions{
+		SearchPaths: noDiscovery,
+		EnvOverride: env("MIDAS_DEV_SEED_DEMO_USER", "true"),
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if !result.Config.Dev.SeedDemoUser {
+		t.Error("dev.seed_demo_user: want true (from env), got false")
+	}
+	if result.Sources["dev"] != SourceEnv {
+		t.Errorf("dev source: want env, got %s", result.Sources["dev"])
+	}
+}
+
+func TestLoad_MIDAS_DEV_SEED_DEMO_USER_DefaultFalse(t *testing.T) {
+	result, err := Load(LoadOptions{
+		SearchPaths: noDiscovery,
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if result.Config.Dev.SeedDemoUser {
+		t.Error("dev.seed_demo_user: want false by default, got true")
+	}
+}
+

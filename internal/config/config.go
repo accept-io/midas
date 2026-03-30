@@ -155,6 +155,11 @@ type DevConfig struct {
 	// demo surface is a no-op. Defaults to true so that `make dev` / memory mode
 	// works out of the box; set false in production or when supplying real data.
 	SeedDemoData bool `yaml:"seed_demo_data"`
+
+	// SeedDemoUser creates a demo Local IAM user (username: demo, password: demo)
+	// with the platform.operator role at startup when true. The seed is idempotent.
+	// NEVER enable this in production — it creates a well-known credential.
+	SeedDemoUser bool `yaml:"seed_demo_user"`
 }
 
 // ServerConfig controls the HTTP listener.
