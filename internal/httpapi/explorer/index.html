@@ -628,6 +628,113 @@
     cursor: pointer;
   }
   #iam-logout-btn:hover { background: rgba(255,255,255,0.1); }
+
+  .badge-clarify { background: #ede9fe; color: #4c1d95; }
+
+  /* ── Auth gate blur ─────────────────────────────────────────────────────── */
+  .layout-gated {
+    filter: blur(3px);
+    pointer-events: none;
+    user-select: none;
+    transition: filter 0.15s;
+  }
+
+  /* ── Decision explanation panel ─────────────────────────────────────────── */
+  .decision-panel {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-bottom: 16px;
+    font-size: 12px;
+  }
+  .decision-panel-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: #6b7280;
+    margin-bottom: 10px;
+  }
+  .explain-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 5px 0;
+    border-bottom: 1px solid #f3f4f6;
+    gap: 12px;
+  }
+  .explain-row:last-child { border-bottom: none; }
+  .explain-key { color: #6b7280; flex-shrink: 0; }
+  .explain-val { font-family: "SF Mono", "Fira Code", monospace; color: #1a1a1a; text-align: right; }
+  .explain-pass { color: #10b981; font-weight: 700; margin-left: 6px; }
+  .explain-fail { color: #ef4444; font-weight: 700; margin-left: 6px; }
+
+  /* ── Authority chain ─────────────────────────────────────────────────────── */
+  .chain-flow {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 4px;
+  }
+  .chain-node {
+    background: #f3f4f6;
+    border: 1px solid #e5e7eb;
+    border-radius: 5px;
+    padding: 5px 9px;
+  }
+  .chain-node-label {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #9ca3af;
+    font-weight: 600;
+    margin-bottom: 1px;
+  }
+  .chain-node-id {
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 11px;
+    color: #1a1a1a;
+    word-break: break-all;
+  }
+  .chain-node-version { font-size: 10px; color: #9ca3af; margin-left: 4px; }
+  .chain-arrow { color: #9ca3af; font-size: 14px; padding: 0 2px; }
+
+  /* ── Resource reference cards ────────────────────────────────────────────── */
+  .resource-cards-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+  .resource-card {
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 11px;
+  }
+  .resource-card-type {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #9ca3af;
+    font-weight: 700;
+    margin-bottom: 2px;
+  }
+  .resource-card-name {
+    font-weight: 600;
+    color: #1a1a1a;
+    font-size: 12px;
+    margin-bottom: 2px;
+  }
+  .resource-card-id {
+    font-family: "SF Mono", "Fira Code", monospace;
+    color: #6b7280;
+    word-break: break-all;
+    font-size: 10px;
+  }
+  .resource-card-detail { color: #9ca3af; margin-top: 2px; font-size: 10px; }
 </style>
 </head>
 <body>
@@ -716,11 +823,17 @@
 
     <div class="section">
       <div class="section-title">Quick Start</div>
-      <p style="font-size:12px;color:#6b7280">Pick a scenario or fill the form, then submit.</p>
+      <p style="font-size:12px;color:#6b7280">MIDAS governs whether an autonomous actor has authority to execute a decision. Pick a scenario to see how the authority chain, thresholds, and context requirements interact.</p>
       <ul class="quick-start-list">
-        <li><strong>Evaluate</strong> &mdash; persists the decision, creates an audit record</li>
-        <li><strong>Simulate</strong> &mdash; tests inputs safely, nothing written</li>
+        <li><strong>Evaluate</strong> &mdash; persists the decision, creates a tamper-evident audit record</li>
+        <li><strong>Simulate</strong> &mdash; test threshold changes safely, nothing written</li>
+        <li><strong>Scenarios</strong> &mdash; pre-built payloads covering every outcome type</li>
       </ul>
+    </div>
+
+    <div class="section" id="resource-ref-section" style="display:none">
+      <div class="section-title">Demo Resources</div>
+      <div id="resource-cards" class="resource-cards-grid"></div>
     </div>
 
     <div class="section" id="auth-bearer-section">
@@ -840,6 +953,9 @@
       <div class="explanation-box" id="explanation-box"></div>
     </div>
 
+    <div id="decision-explanation-panel" class="decision-panel" style="display:none"></div>
+    <div id="authority-chain-panel" class="decision-panel" style="display:none"></div>
+
     <div class="raw-section" id="raw-section" style="display:none">
       <div class="raw-header">
         <span class="raw-label">Response JSON</span>
@@ -912,15 +1028,24 @@
     loginOverlay.classList.add('visible');
     chpwOverlay.classList.remove('visible');
     document.getElementById('iam-username').focus();
+    document.querySelector('.layout').classList.add('layout-gated');
+    document.querySelector('.mode-selector-bar').classList.add('layout-gated');
+    document.getElementById('mode-banner').classList.add('layout-gated');
   }
   function showChpwOverlay() {
     chpwOverlay.classList.add('visible');
     loginOverlay.classList.remove('visible');
     document.getElementById('iam-current-pw').focus();
+    document.querySelector('.layout').classList.add('layout-gated');
+    document.querySelector('.mode-selector-bar').classList.add('layout-gated');
+    document.getElementById('mode-banner').classList.add('layout-gated');
   }
   function hideOverlays() {
     loginOverlay.classList.remove('visible');
     chpwOverlay.classList.remove('visible');
+    document.querySelector('.layout').classList.remove('layout-gated');
+    document.querySelector('.mode-selector-bar').classList.remove('layout-gated');
+    document.getElementById('mode-banner').classList.remove('layout-gated');
   }
   function setIAMUser(username) {
     usernameDisp.textContent = username;
@@ -1257,10 +1382,10 @@
   // agent agent-payments-bot, confidence threshold ≥ 0.85, consequence ≤ 1000 GBP.
   //
   // NOTES:
-  //   - INSUFFICIENT_CONTEXT: demo profile has no RequiredContextKeys, so this
-  //     outcome cannot be triggered without custom configuration. Omitted.
+  //   - INSUFFICIENT_CONTEXT: triggered via surf-context-validation + profile-context-strict,
+  //     which has RequiredContextKeys: ["customer_id"]. Sending without context triggers clarify.
   //   - POLICY_DENY: Explorer uses NoOpPolicyEvaluator (always allows). Omitted.
-  //   - NO_ACTIVE_GRANT: only one agent is seeded with a grant. Using AGENT_NOT_FOUND
+  //   - NO_ACTIVE_GRANT: only one agent is seeded per surface. Using AGENT_NOT_FOUND
   //     as the representative authority-chain failure instead.
   const AUTHORITY_SCENARIOS = [
     // ── Thresholds ──────────────────────────────────────────────────────────
@@ -1365,13 +1490,45 @@
       description: 'Additional context fields provided alongside the core request',
       expected_outcome: 'Accept',
       expected_reason: 'WITHIN_AUTHORITY',
-      explanation: 'Demonstrates that MIDAS passes context through evaluation and records it in the envelope for audit. The demo profile has no required context keys, so this request executes normally. To trigger INSUFFICIENT_CONTEXT, configure a profile with required_context_keys.',
+      explanation: 'Demonstrates that MIDAS passes context through evaluation and records it in the envelope for audit. The demo profile has no required context keys, so this request executes normally.',
       request: {
         surface_id: 'surf-payments-approval',
         agent_id: 'agent-payments-bot',
         confidence: 0.95,
         consequence: { type: 'monetary', amount: 100, currency: 'GBP' },
         context: { customer_id: 'cust-12345', channel: 'api', reason: 'recurring-payment' },
+      },
+    },
+    {
+      id: 'context-insufficient',
+      category: 'Context',
+      title: 'Missing required context',
+      description: 'Request omits a context key required by the authority profile',
+      expected_outcome: 'Clarify',
+      expected_reason: 'INSUFFICIENT_CONTEXT',
+      explanation: 'Demonstrates RequestClarification when required context keys are absent. The surf-context-validation surface uses a profile that requires customer_id. Submitting without it causes MIDAS to request clarification rather than execute or escalate.',
+      request: {
+        surface_id: 'surf-context-validation',
+        agent_id: 'agent-payments-bot',
+        confidence: 0.95,
+        consequence: { type: 'monetary', amount: 100, currency: 'GBP' },
+        // no context — customer_id is required by profile-context-strict
+      },
+    },
+    {
+      id: 'context-insufficient-provided',
+      category: 'Context',
+      title: 'With required context',
+      description: 'Same surface, but customer_id context is present — executes normally',
+      expected_outcome: 'Accept',
+      expected_reason: 'WITHIN_AUTHORITY',
+      explanation: 'Demonstrates that providing the required customer_id context key satisfies the profile constraint. MIDAS records the context in the envelope for audit. Pair with the "Missing required context" scenario to compare outcomes.',
+      request: {
+        surface_id: 'surf-context-validation',
+        agent_id: 'agent-payments-bot',
+        confidence: 0.95,
+        consequence: { type: 'monetary', amount: 100, currency: 'GBP' },
+        context: { customer_id: 'cust-12345' },
       },
     },
 
@@ -1407,7 +1564,7 @@
   ];
 
   // ── Scenario list rendering ────────────────────────────────────────────────
-  const BADGE_CLASS = { Accept: 'badge-accept', Escalate: 'badge-escalate', Reject: 'badge-reject' };
+  const BADGE_CLASS = { Accept: 'badge-accept', Escalate: 'badge-escalate', Reject: 'badge-reject', Clarify: 'badge-clarify' };
 
   function renderScenarioList(filter) {
     const list = document.getElementById('scenario-list');
@@ -1580,6 +1737,8 @@
       // Capture for "Simulate from this" only after a successful evaluate call.
       if (!isSimulate) {
         lastEvalResult = { httpStatus: res.status, data, body };
+        // Eagerly fetch envelope to populate explanation and authority chain panels.
+        if (data.envelope_id) autoFetchEnvelopeForPanels(data.envelope_id);
       }
     } catch (e) {
       showError('Network error: ' + e.message, null);
@@ -1832,11 +1991,13 @@
     outcomeLabel.textContent = '\u2014';
     metaRow.innerHTML = '<span class="placeholder-text">Submit a request to see the governed outcome here</span>';
     explanationBox.classList.remove('visible');
-    document.getElementById('raw-section').style.display        = 'none';
-    document.getElementById('curl-section').style.display       = 'none';
-    document.getElementById('envelope-section').style.display   = 'none';
-    document.getElementById('comparison-section').style.display = 'none';
-    document.getElementById('simulate-from-bar').style.display  = 'none';
+    document.getElementById('raw-section').style.display                 = 'none';
+    document.getElementById('curl-section').style.display                = 'none';
+    document.getElementById('envelope-section').style.display            = 'none';
+    document.getElementById('comparison-section').style.display          = 'none';
+    document.getElementById('simulate-from-bar').style.display           = 'none';
+    document.getElementById('decision-explanation-panel').style.display  = 'none';
+    document.getElementById('authority-chain-panel').style.display       = 'none';
     document.getElementById('simulated-banner').classList.remove('visible');
   }
 
@@ -1895,6 +2056,171 @@
       btn.disabled    = false;
     }
   }
+
+  // ── Auto-fetch envelope for explanation and authority chain panels ──────────
+  async function autoFetchEnvelopeForPanels(envelopeId) {
+    try {
+      const headers = { 'Content-Type': 'application/json' };
+      const token = getToken();
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const res = await fetch(`${window.location.origin}/explorer/envelopes/${encodeURIComponent(envelopeId)}`, { headers });
+      if (!res.ok) return; // graceful degradation — panels remain hidden
+
+      const data = await res.json();
+      renderExplanationPanel(data);
+      renderAuthorityChain(data);
+    } catch { /* graceful degradation */ }
+  }
+
+  // ── Decision Explanation Panel ──────────────────────────────────────────────
+  function renderExplanationPanel(envData) {
+    const panel = document.getElementById('decision-explanation-panel');
+    if (!panel) return;
+
+    const ex = envData && envData.evaluation && envData.evaluation.explanation;
+    if (!ex) { panel.style.display = 'none'; return; }
+
+    const reasonCode = (envData.evaluation && envData.evaluation.reason_code) || '';
+    const rows = [];
+
+    // Confidence row
+    if (ex.confidence_provided != null && ex.confidence_threshold != null) {
+      const pass = ex.confidence_provided >= ex.confidence_threshold;
+      const indicator = pass
+        ? '<span class="explain-pass">\u2713</span>'
+        : '<span class="explain-fail">\u2717</span>';
+      rows.push(
+        `<div class="explain-row">` +
+        `<span class="explain-key">Confidence</span>` +
+        `<span class="explain-val">${ex.confidence_provided} &ge; ${ex.confidence_threshold} ${indicator}</span>` +
+        `</div>`
+      );
+    }
+
+    // Consequence row
+    if (ex.consequence_provided_type || ex.consequence_threshold_type) {
+      const prov   = formatConsequenceVal(ex.consequence_provided_type,   ex.consequence_provided_amount,   ex.consequence_provided_currency);
+      const thresh = formatConsequenceVal(ex.consequence_threshold_type,  ex.consequence_threshold_amount,  ex.consequence_threshold_currency);
+      const passC  = ex.consequence_provided_amount == null || ex.consequence_provided_amount <= ex.consequence_threshold_amount;
+      const indicator = passC
+        ? '<span class="explain-pass">\u2713</span>'
+        : '<span class="explain-fail">\u2717</span>';
+      rows.push(
+        `<div class="explain-row">` +
+        `<span class="explain-key">Consequence</span>` +
+        `<span class="explain-val">${escHtml(prov)} &le; ${escHtml(thresh)} ${indicator}</span>` +
+        `</div>`
+      );
+    }
+
+    // Outcome driver
+    if (ex.outcome_driver) {
+      rows.push(
+        `<div class="explain-row">` +
+        `<span class="explain-key">Outcome driver</span>` +
+        `<span class="explain-val">${escHtml(ex.outcome_driver)}</span>` +
+        `</div>`
+      );
+    }
+
+    if (rows.length === 0) { panel.style.display = 'none'; return; }
+
+    panel.innerHTML = `<div class="decision-panel-title">Threshold Evaluation</div>${rows.join('')}`;
+    panel.style.display = 'block';
+
+    // Feature 2: enhance plain-English explanation with actual values from envelope
+    enhanceExplanationText(reasonCode, ex);
+  }
+
+  function formatConsequenceVal(type, amount, currency) {
+    if (!type) return '\u2014';
+    if (type === 'monetary') {
+      if (amount == null) return type;
+      const sym = currency === 'GBP' ? '\u00a3' : (currency ? currency + '\u00a0' : '');
+      return `${sym}${Number(amount).toLocaleString()}`;
+    }
+    if (type === 'risk_rating') return amount != null ? String(amount) : type;
+    return type;
+  }
+
+  function enhanceExplanationText(reasonCode, ex) {
+    const box = document.getElementById('explanation-box');
+    if (!box || !box.classList.contains('visible')) return;
+    let enhanced = '';
+    if (reasonCode === 'CONFIDENCE_BELOW_THRESHOLD' && ex.confidence_provided != null && ex.confidence_threshold != null) {
+      enhanced = `Confidence ${ex.confidence_provided} is below the required threshold of ${ex.confidence_threshold}. Human review is required before this decision can execute.`;
+    } else if (reasonCode === 'CONSEQUENCE_EXCEEDS_LIMIT' && ex.consequence_provided_amount != null && ex.consequence_threshold_amount != null) {
+      const prov   = formatConsequenceVal(ex.consequence_provided_type,  ex.consequence_provided_amount,  ex.consequence_provided_currency);
+      const thresh = formatConsequenceVal(ex.consequence_threshold_type, ex.consequence_threshold_amount, ex.consequence_threshold_currency);
+      enhanced = `The consequence (${prov}) exceeds the authority limit (${thresh}). Human review is required.`;
+    } else if (reasonCode === 'WITHIN_AUTHORITY' && ex.confidence_provided != null) {
+      enhanced = `Confidence ${ex.confidence_provided} \u2265 ${ex.confidence_threshold} and consequence is within limits. The request is within the agent\u2019s granted authority.`;
+    }
+    if (enhanced) box.textContent = enhanced;
+  }
+
+  // ── Authority Chain Panel ───────────────────────────────────────────────────
+  function renderAuthorityChain(envData) {
+    const panel = document.getElementById('authority-chain-panel');
+    if (!panel) return;
+
+    const auth = envData && envData.resolved && envData.resolved.authority;
+    if (!auth || !auth.surface_id) { panel.style.display = 'none'; return; }
+
+    const nodes = [];
+    if (auth.surface_id) nodes.push({ label: 'Surface', id: auth.surface_id, version: auth.surface_version });
+    if (auth.profile_id) nodes.push({ label: 'Profile', id: auth.profile_id, version: auth.profile_version });
+    if (auth.grant_id)   nodes.push({ label: 'Grant',   id: auth.grant_id });
+    if (auth.agent_id)   nodes.push({ label: 'Agent',   id: auth.agent_id });
+
+    if (nodes.length === 0) { panel.style.display = 'none'; return; }
+
+    const parts = nodes.map((n, i) => {
+      const ver = n.version != null ? `<span class="chain-node-version">v${n.version}</span>` : '';
+      const node = `<div class="chain-node">` +
+        `<div class="chain-node-label">${escHtml(n.label)}</div>` +
+        `<div class="chain-node-id">${escHtml(n.id)}${ver}</div>` +
+        `</div>`;
+      return i < nodes.length - 1 ? node + `<span class="chain-arrow">\u2192</span>` : node;
+    });
+
+    panel.innerHTML =
+      `<div class="decision-panel-title">Authority Chain</div>` +
+      `<div class="chain-flow">${parts.join('')}</div>`;
+    panel.style.display = 'block';
+  }
+
+  // ── Resource Reference Panel ────────────────────────────────────────────────
+  // Static demo resource info — always shown. Matches the seeded demo dataset.
+  const DEMO_RESOURCES = [
+    { type: 'Surface',  name: 'Payments Approval',           id: 'surf-payments-approval',  detail: 'domain: payments' },
+    { type: 'Profile',  name: 'Standard Payments Authority', id: 'profile-payments-std',    detail: 'confidence \u2265 0.85, \u00a31\u2009000' },
+    { type: 'Agent',    name: 'Payments Bot',                id: 'agent-payments-bot',      detail: 'type: AI' },
+    { type: 'Grant',    name: 'Standard Grant',              id: 'grant-payments-bot-std',  detail: 'links agent \u2192 profile' },
+    { type: 'Surface',  name: 'Customer Decision Validation',id: 'surf-context-validation', detail: 'domain: compliance' },
+    { type: 'Profile',  name: 'Strict Context Authority',    id: 'profile-context-strict',  detail: 'requires: customer_id' },
+  ];
+
+  function renderResourcePanel() {
+    const section = document.getElementById('resource-ref-section');
+    const cards   = document.getElementById('resource-cards');
+    if (!section || !cards) return;
+
+    cards.innerHTML = DEMO_RESOURCES.map(r =>
+      `<div class="resource-card">` +
+      `<div class="resource-card-type">${escHtml(r.type)}</div>` +
+      `<div class="resource-card-name">${escHtml(r.name)}</div>` +
+      `<div class="resource-card-id">${escHtml(r.id)}</div>` +
+      `<div class="resource-card-detail">${r.detail}</div>` +
+      `</div>`
+    ).join('');
+
+    section.style.display = 'block';
+  }
+
+  // Initialise resource panel after a short delay so it appears after config fetch
+  setTimeout(renderResourcePanel, 0);
 
   // ── Copy helpers ───────────────────────────────────────────────────────────
   document.getElementById('raw-copy-btn').addEventListener('click', () => {
