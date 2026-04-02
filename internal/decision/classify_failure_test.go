@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+
+	"github.com/accept-io/midas/internal/envelope"
 )
 
 // ---------------------------------------------------------------------------
@@ -182,6 +184,24 @@ func TestCategorizePersistErr_EnvelopeCreate(t *testing.T) {
 	}
 	if !errors.Is(err, inner) {
 		t.Error("errors.Is should find original inner error")
+	}
+}
+
+func TestCategorizePersistErr_ScopeConflict_IsIdempotencyConflict(t *testing.T) {
+	// Simulate a concurrent duplicate insert: the postgres repo returns
+	// ErrEnvelopeScopeConflict directly (no wrapping) on pq code 23505.
+	// categorizePersistErr must recognise it via errors.Is and map it to
+	// FailureCategoryIdempotencyConflict so the HTTP layer returns 409.
+	err := categorizePersistErr(fmt.Errorf("persist evaluation: %w", envelope.ErrEnvelopeScopeConflict))
+
+	got := classifyFailure(err)
+	if got != string(FailureCategoryIdempotencyConflict) {
+		t.Errorf("classifyFailure = %q, want %q", got, FailureCategoryIdempotencyConflict)
+	}
+	// The categorised error must also satisfy errors.Is(err, ErrScopedRequestConflict)
+	// so that mapDomainError in the HTTP layer can route it to 409.
+	if !errors.Is(err, ErrScopedRequestConflict) {
+		t.Error("errors.Is(err, ErrScopedRequestConflict) should be true")
 	}
 }
 

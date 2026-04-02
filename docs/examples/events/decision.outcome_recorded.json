@@ -1,0 +1,15 @@
+{
+  "schema_version": "v1",
+  "event_id": "7f3a2b1e-0c4d-4e5f-9a8b-1c2d3e4f5a6b",
+  "type": "decision.outcome_recorded",
+  "occurred_at": "2025-11-15T14:32:00.123Z",
+  "envelope_id": "e1b2c3d4-5678-90ab-cdef-1234567890ab",
+  "payload": {
+    "request_source": "svc:payments",
+    "request_id": "req-abc-001",
+    "surface_id": "payments-gateway",
+    "agent_id": "agent-payments-prod",
+    "outcome": "accept",
+    "reason_code": "WITHIN_AUTHORITY"
+  }
+}

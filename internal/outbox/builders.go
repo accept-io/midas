@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // builders.go centralises construction of all outbox event payloads. Every
@@ -24,6 +26,10 @@ import (
 //   - Timestamp    = time.Now().UTC().Format(time.RFC3339)
 
 const eventVersion = "v1"
+
+// externalSchemaVersion is the schema_version field value for all external
+// event envelopes defined in docs/events.md.
+const externalSchemaVersion = "v1"
 
 func nowTimestamp() string {
 	return time.Now().UTC().Format(time.RFC3339)
@@ -210,6 +216,79 @@ func BuildGrantReinstatedEvent(grantID, agentID, profileID, reinstatedBy string)
 	b, err := json.Marshal(ev)
 	if err != nil {
 		return nil, fmt.Errorf("marshal GrantReinstatedEvent: %w", err)
+	}
+	return json.RawMessage(b), nil
+}
+
+// ---------------------------------------------------------------------------
+// External event contract builders (docs/events.md)
+// ---------------------------------------------------------------------------
+
+// BuildDecisionOutcomeRecordedEvent constructs the full external event envelope
+// for EventDecisionOutcomeRecorded. occurredAt is the wall-clock time the
+// evaluation outcome was produced; it is formatted as RFC3339Nano.
+func BuildDecisionOutcomeRecordedEvent(
+	envelopeID, requestSource, requestID,
+	surfaceID, agentID,
+	outcome, reasonCode string,
+	occurredAt time.Time,
+) (json.RawMessage, error) {
+	payloadBytes, err := json.Marshal(DecisionOutcomeRecordedPayload{
+		RequestSource: requestSource,
+		RequestID:     requestID,
+		SurfaceID:     surfaceID,
+		AgentID:       agentID,
+		Outcome:       outcome,
+		ReasonCode:    reasonCode,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal DecisionOutcomeRecordedPayload: %w", err)
+	}
+	wrapper := ExternalEventEnvelope{
+		SchemaVersion: externalSchemaVersion,
+		EventID:       uuid.NewString(),
+		Type:          string(EventDecisionOutcomeRecorded),
+		OccurredAt:    occurredAt.UTC().Format(time.RFC3339Nano),
+		EnvelopeID:    envelopeID,
+		Payload:       json.RawMessage(payloadBytes),
+	}
+	b, err := json.Marshal(wrapper)
+	if err != nil {
+		return nil, fmt.Errorf("marshal ExternalEventEnvelope(outcome_recorded): %w", err)
+	}
+	return json.RawMessage(b), nil
+}
+
+// BuildDecisionEnvelopeClosedEvent constructs the full external event envelope
+// for EventDecisionEnvelopeClosed. closedAt must be sourced from the envelope's
+// ClosedAt field — the authoritative time the envelope transitioned to closed.
+// review is nil for direct-close paths and non-nil for post-escalation-review closes.
+func BuildDecisionEnvelopeClosedEvent(
+	envelopeID, requestSource, requestID, finalOutcome string,
+	closedAt time.Time,
+	review *DecisionEnvelopeClosedReview,
+) (json.RawMessage, error) {
+	payloadBytes, err := json.Marshal(DecisionEnvelopeClosedPayload{
+		RequestSource: requestSource,
+		RequestID:     requestID,
+		FinalOutcome:  finalOutcome,
+		ClosedAt:      closedAt.UTC().Format(time.RFC3339Nano),
+		Review:        review,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal DecisionEnvelopeClosedPayload: %w", err)
+	}
+	wrapper := ExternalEventEnvelope{
+		SchemaVersion: externalSchemaVersion,
+		EventID:       uuid.NewString(),
+		Type:          string(EventDecisionEnvelopeClosed),
+		OccurredAt:    closedAt.UTC().Format(time.RFC3339Nano),
+		EnvelopeID:    envelopeID,
+		Payload:       json.RawMessage(payloadBytes),
+	}
+	b, err := json.Marshal(wrapper)
+	if err != nil {
+		return nil, fmt.Errorf("marshal ExternalEventEnvelope(envelope_closed): %w", err)
 	}
 	return json.RawMessage(b), nil
 }

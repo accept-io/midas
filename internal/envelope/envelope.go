@@ -417,6 +417,12 @@ func New(id, requestSource, requestID string, raw json.RawMessage, now time.Time
 // Repository
 // ---------------------------------------------------------------------------
 
+// ErrEnvelopeScopeConflict is returned by EnvelopeRepository.Create when a
+// concurrent insert races to the DB UNIQUE constraint on (request_source,
+// request_id) and loses. The caller should treat this as an idempotency
+// collision rather than a generic persistence failure.
+var ErrEnvelopeScopeConflict = errors.New("envelope already exists for this request scope")
+
 // EnvelopeRepository defines persistence operations for Envelope.
 type EnvelopeRepository interface {
 	GetByID(ctx context.Context, id string) (*Envelope, error)

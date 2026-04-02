@@ -1,5 +1,7 @@
 package outbox
 
+import "encoding/json"
+
 // contracts.go defines versioned event payload types for all outbox events
 // emitted by MIDAS. Each struct corresponds to a named integration event
 // that downstream consumers may subscribe to.
@@ -129,4 +131,57 @@ type GrantReinstatedEvent struct {
 	ProfileID     string `json:"profile_id"`
 	ReinstatedBy  string `json:"reinstated_by"`
 	Timestamp     string `json:"timestamp"`
+}
+
+// ---------------------------------------------------------------------------
+// External event contract types (docs/events.md)
+//
+// These types implement the versioned external event contract. The outer
+// ExternalEventEnvelope wraps a typed inner payload and carries the fields
+// that all external events share: schema_version, event_id, type,
+// occurred_at, envelope_id. Field names are authoritative — do not rename
+// json tags without incrementing schema_version.
+// ---------------------------------------------------------------------------
+
+// ExternalEventEnvelope is the outer wrapper for all external MIDAS events.
+// Payload holds the typed inner payload marshalled as raw JSON.
+type ExternalEventEnvelope struct {
+	SchemaVersion string          `json:"schema_version"`
+	EventID       string          `json:"event_id"`
+	Type          string          `json:"type"`
+	OccurredAt    string          `json:"occurred_at"`
+	EnvelopeID    string          `json:"envelope_id"`
+	Payload       json.RawMessage `json:"payload"`
+}
+
+// DecisionOutcomeRecordedPayload is the payload for EventDecisionOutcomeRecorded.
+// Emitted for all evaluation outcomes (accept, escalate, reject, request_clarification).
+type DecisionOutcomeRecordedPayload struct {
+	RequestSource string `json:"request_source"`
+	RequestID     string `json:"request_id"`
+	SurfaceID     string `json:"surface_id"`
+	AgentID       string `json:"agent_id"`
+	Outcome       string `json:"outcome"`
+	ReasonCode    string `json:"reason_code"`
+}
+
+// DecisionEnvelopeClosedPayload is the payload for EventDecisionEnvelopeClosed.
+// Emitted when a governance envelope reaches the closed terminal state.
+// Review is present only for envelopes closed via escalation review.
+type DecisionEnvelopeClosedPayload struct {
+	RequestSource string                        `json:"request_source"`
+	RequestID     string                        `json:"request_id"`
+	FinalOutcome  string                        `json:"final_outcome"`
+	ClosedAt      string                        `json:"closed_at"`
+	Review        *DecisionEnvelopeClosedReview `json:"review,omitempty"`
+}
+
+// DecisionEnvelopeClosedReview carries the reviewer's decision for envelopes
+// closed after escalation review. ReviewerKind has no omitempty because it is
+// always known when a review object is present; Notes is explicitly optional.
+type DecisionEnvelopeClosedReview struct {
+	Decision     string `json:"decision"`
+	ReviewerID   string `json:"reviewer_id"`
+	ReviewerKind string `json:"reviewer_kind"`
+	Notes        string `json:"notes,omitempty"`
 }

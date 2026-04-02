@@ -96,6 +96,12 @@ func categorizePersistErr(err error) error {
 	if err == nil {
 		return nil
 	}
+	// Concurrent duplicate insert: the DB UNIQUE constraint on (request_source,
+	// request_id) blocked a race-losing writer. Treat as idempotency conflict so
+	// the HTTP layer returns 409 rather than 500.
+	if errors.Is(err, envelope.ErrEnvelopeScopeConflict) {
+		return wrapFailure(FailureCategoryIdempotencyConflict, ErrScopedRequestConflict)
+	}
 	msg := err.Error()
 	if strings.Contains(msg, "audit append ") {
 		return wrapFailure(FailureCategoryAuditAppend, err)
@@ -761,6 +767,19 @@ func (o *Orchestrator) finish(
 			}
 		}
 
+		// Queue decision.outcome_recorded (external contract). The escalate path
+		// does not close the envelope, so decision.envelope_closed is not emitted
+		// here — it will be emitted when the reviewer closes the envelope.
+		if outboxEv, err := buildExternalOutcomeRecordedEvent(env, outcome, reason, now); err != nil {
+			return EvaluationResult{}, wrapFailure(FailureCategoryEnvelopePersistence,
+				fmt.Errorf("construct outbox event decision.outcome_recorded: %w", err))
+		} else if outboxEv != nil {
+			if err := acc.recordOutbox(outboxEv); err != nil {
+				return EvaluationResult{}, wrapFailure(FailureCategoryEnvelopePersistence,
+					fmt.Errorf("queue outbox event decision.outcome_recorded: %w", err))
+			}
+		}
+
 		if err := acc.persistNew(ctx, repos); err != nil {
 			return EvaluationResult{}, categorizePersistErr(fmt.Errorf("persist evaluation: %w", err))
 		}
@@ -816,6 +835,28 @@ func (o *Orchestrator) finish(
 				return EvaluationResult{}, wrapFailure(FailureCategoryEnvelopePersistence,
 					fmt.Errorf("queue outbox event decision.completed: %w", err))
 			}
+		}
+	}
+
+	// Queue decision.outcome_recorded and decision.envelope_closed (external
+	// contract) for all non-escalated outcomes. The envelope is already in the
+	// closed state (transition above), so env.ClosedAt is set.
+	if outboxEv, err := buildExternalOutcomeRecordedEvent(env, outcome, reason, now); err != nil {
+		return EvaluationResult{}, wrapFailure(FailureCategoryEnvelopePersistence,
+			fmt.Errorf("construct outbox event decision.outcome_recorded: %w", err))
+	} else if outboxEv != nil {
+		if err := acc.recordOutbox(outboxEv); err != nil {
+			return EvaluationResult{}, wrapFailure(FailureCategoryEnvelopePersistence,
+				fmt.Errorf("queue outbox event decision.outcome_recorded: %w", err))
+		}
+	}
+	if outboxEv, err := buildExternalEnvelopeClosedEvent(env, nil); err != nil {
+		return EvaluationResult{}, wrapFailure(FailureCategoryEnvelopePersistence,
+			fmt.Errorf("construct outbox event decision.envelope_closed: %w", err))
+	} else if outboxEv != nil {
+		if err := acc.recordOutbox(outboxEv); err != nil {
+			return EvaluationResult{}, wrapFailure(FailureCategoryEnvelopePersistence,
+				fmt.Errorf("queue outbox event decision.envelope_closed: %w", err))
 		}
 	}
 
@@ -933,6 +974,80 @@ func buildDecisionReviewResolvedOutboxEvent(
 	return ev, nil
 }
 
+// buildExternalOutcomeRecordedEvent constructs the decision.outcome_recorded
+// outbox event for the external event contract (docs/events.md). Emitted for
+// all evaluation outcomes on every evaluation path.
+func buildExternalOutcomeRecordedEvent(
+	env *envelope.Envelope,
+	outcome eval.Outcome,
+	reason eval.ReasonCode,
+	occurredAt time.Time,
+) (*outbox.OutboxEvent, error) {
+	payload, err := outbox.BuildDecisionOutcomeRecordedEvent(
+		env.ID(),
+		env.RequestSource(),
+		env.RequestID(),
+		env.ResolvedSurfaceID,
+		env.ResolvedAgentID,
+		string(outcome),
+		string(reason),
+		occurredAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("build outbox payload: %w", err)
+	}
+	ev, err := outbox.New(
+		outbox.EventDecisionOutcomeRecorded,
+		"envelope",
+		env.ID(),
+		"midas.decisions",
+		env.RequestSource()+":"+env.RequestID(),
+		payload,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("construct outbox event: %w", err)
+	}
+	return ev, nil
+}
+
+// buildExternalEnvelopeClosedEvent constructs the decision.envelope_closed
+// outbox event for the external event contract (docs/events.md). Emitted for
+// all close paths: direct close (accept/reject/request_clarification) and
+// post-escalation-review close. closed_at is sourced from env.ClosedAt, which
+// is set by env.Transition(EnvelopeStateClosed, ...) before this is called.
+// review is nil for direct-close paths.
+func buildExternalEnvelopeClosedEvent(
+	env *envelope.Envelope,
+	review *outbox.DecisionEnvelopeClosedReview,
+) (*outbox.OutboxEvent, error) {
+	if env.ClosedAt == nil {
+		return nil, fmt.Errorf("envelope %s ClosedAt is nil: must be in closed state before building envelope_closed event", env.ID())
+	}
+	payload, err := outbox.BuildDecisionEnvelopeClosedEvent(
+		env.ID(),
+		env.RequestSource(),
+		env.RequestID(),
+		string(env.Evaluation.Outcome),
+		*env.ClosedAt,
+		review,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("build outbox payload: %w", err)
+	}
+	ev, err := outbox.New(
+		outbox.EventDecisionEnvelopeClosed,
+		"envelope",
+		env.ID(),
+		"midas.decisions",
+		env.RequestSource()+":"+env.RequestID(),
+		payload,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("construct outbox event: %w", err)
+	}
+	return ev, nil
+}
+
 // ---------------------------------------------------------------------------
 // ResolveEscalation
 // ---------------------------------------------------------------------------
@@ -1033,6 +1148,28 @@ func (o *Orchestrator) ResolveEscalation(ctx context.Context, res EscalationReso
 			if oerr := acc.recordOutbox(outboxEv); oerr != nil {
 				return wrapFailure(FailureCategoryEnvelopePersistence,
 					fmt.Errorf("queue outbox event decision.review_resolved: %w", oerr))
+			}
+		}
+
+		// Queue decision.envelope_closed (external contract) for the post-review
+		// close path. Build the review object from the envelope's Review field,
+		// which was set before the transition above.
+		var extReview *outbox.DecisionEnvelopeClosedReview
+		if env.Review != nil {
+			extReview = &outbox.DecisionEnvelopeClosedReview{
+				Decision:     string(env.Review.Decision),
+				ReviewerID:   env.Review.ReviewerID,
+				ReviewerKind: env.Review.ReviewerKind,
+				Notes:        env.Review.Notes,
+			}
+		}
+		if outboxEv, oerr := buildExternalEnvelopeClosedEvent(env, extReview); oerr != nil {
+			return wrapFailure(FailureCategoryEnvelopePersistence,
+				fmt.Errorf("construct outbox event decision.envelope_closed: %w", oerr))
+		} else if outboxEv != nil {
+			if oerr := acc.recordOutbox(outboxEv); oerr != nil {
+				return wrapFailure(FailureCategoryEnvelopePersistence,
+					fmt.Errorf("queue outbox event decision.envelope_closed: %w", oerr))
 			}
 		}
 

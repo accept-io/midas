@@ -1066,13 +1066,17 @@ func (s *Server) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	s.handleEvaluateWith(w, r, s.orchestrator)
+	s.handleEvaluateWith(w, r, s.orchestrator, true)
 }
 
 // handleEvaluateWith contains the shared evaluation logic used by both
 // /v1/evaluate (main orchestrator) and POST /explorer (Explorer orchestrator).
 // Callers are responsible for method and nil checks before calling.
-func (s *Server) handleEvaluateWith(w http.ResponseWriter, r *http.Request, orch orchestrator) {
+//
+// requireRequestID controls whether an absent request_id is rejected with
+// HTTP 400. Set true for the governed /v1/evaluate path; false for Explorer
+// and other non-governed callers that tolerate auto-generated identifiers.
+func (s *Server) handleEvaluateWith(w http.ResponseWriter, r *http.Request, orch orchestrator, requireRequestID bool) {
 	rawBody, err := readRequestBody(w, r, maxRequestBodyBytes)
 	if err != nil {
 		status := http.StatusBadRequest
@@ -1120,6 +1124,12 @@ func (s *Server) handleEvaluateWith(w http.ResponseWriter, r *http.Request, orch
 	}
 
 	if req.RequestID == "" {
+		if requireRequestID {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "request_id is required",
+			})
+			return
+		}
 		req.RequestID = uuid.NewString()
 	} else if !isValidIdentifier(req.RequestID) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
