@@ -1,0 +1,19 @@
+{
+  "schema_version": "v1",
+  "event_id": "b9c8d7e6-f5a4-3210-9876-fedcba987654",
+  "type": "decision.envelope_closed",
+  "occurred_at": "2025-11-15T16:45:12.500Z",
+  "envelope_id": "f2e3d4c5-6789-01bc-defa-234567890abc",
+  "payload": {
+    "request_source": "svc:payments",
+    "request_id": "req-def-002",
+    "final_outcome": "escalate",
+    "closed_at": "2025-11-15T16:45:12.500Z",
+    "review": {
+      "decision": "APPROVED",
+      "reviewer_id": "human:alice",
+      "reviewer_kind": "human",
+      "notes": "Action reviewed and approved by on-call engineer"
+    }
+  }
+}

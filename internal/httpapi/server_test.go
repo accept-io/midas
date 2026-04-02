@@ -623,35 +623,25 @@ func TestEvaluate_NilOrchestrator(t *testing.T) {
 	}
 }
 
-func TestEvaluate_GeneratesRequestIDWhenMissing(t *testing.T) {
-	var capturedRequestID string
-
-	mock := &mockOrchestrator{
-		evaluateFn: func(ctx context.Context, req eval.DecisionRequest, raw json.RawMessage) (decision.EvaluationResult, error) {
-			capturedRequestID = req.RequestID
-			return decision.EvaluationResult{
-				Outcome:    eval.OutcomeAccept,
-				ReasonCode: eval.ReasonWithinAuthority,
-				EnvelopeID: "env-123",
-			}, nil
-		},
-	}
-
-	srv := NewServer(mock)
+func TestEvaluate_MissingRequestID_Returns400(t *testing.T) {
+	// The governed /v1/evaluate path must reject requests that omit request_id.
+	// Omitting it would silently defeat idempotency on every retry.
+	srv := NewServer(&mockOrchestrator{})
 	payload := marshalJSON(t, map[string]any{
 		"surface_id": "surf-1",
 		"agent_id":   "agent-1",
 		"confidence": 0.9,
+		// request_id intentionally absent
 	})
 
 	rec := performRequest(t, srv, http.MethodPost, "/v1/evaluate", payload)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d", rec.Code)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", rec.Code)
 	}
-
-	if capturedRequestID == "" {
-		t.Error("expected request_id to be generated, got empty string")
+	errResp := decodeError(t, rec)
+	if errResp["error"] != "request_id is required" {
+		t.Errorf("expected error %q, got %q", "request_id is required", errResp["error"])
 	}
 }
 
@@ -2266,6 +2256,7 @@ func TestEvaluate_ScopedConflictWrappedReturns409(t *testing.T) {
 		"surface_id": "surf-1",
 		"agent_id":   "agent-1",
 		"confidence": 0.9,
+		"request_id": "req-wrap-001",
 	})
 
 	rec := performRequest(t, srv, http.MethodPost, "/v1/evaluate", payload)
@@ -2290,6 +2281,7 @@ func TestDomainErrorMapping_ScopedRequestConflict(t *testing.T) {
 		"surface_id": "surf-1",
 		"agent_id":   "agent-1",
 		"confidence": 0.9,
+		"request_id": "req-domain-map-001",
 	})
 
 	rec := performRequest(t, srv, http.MethodPost, "/v1/evaluate", payload)
@@ -2341,6 +2333,33 @@ func TestEvaluate_SuccessfulReplayPassesThroughResult(t *testing.T) {
 	}
 	if resp.Outcome != string(eval.OutcomeAccept) {
 		t.Errorf("Outcome: got %q, want %q", resp.Outcome, eval.OutcomeAccept)
+	}
+}
+
+// TestEvaluate_IdempotencyConflict_Returns409 verifies that an idempotency
+// conflict — whether from the application-layer hash check or from a concurrent
+// DB race — maps to HTTP 409. The test uses ErrScopedRequestConflict directly
+// (the sentinel that categorizePersistErr maps ErrEnvelopeScopeConflict to),
+// keeping the HTTP layer test free of postgres/envelope package dependencies.
+func TestEvaluate_IdempotencyConflict_Returns409(t *testing.T) {
+	mock := &mockOrchestrator{
+		evaluateFn: func(ctx context.Context, req eval.DecisionRequest, raw json.RawMessage) (decision.EvaluationResult, error) {
+			return decision.EvaluationResult{}, decision.ErrScopedRequestConflict
+		},
+	}
+
+	srv := NewServer(mock)
+	payload := marshalJSON(t, map[string]any{
+		"surface_id": "surf-1",
+		"agent_id":   "agent-1",
+		"confidence": 0.9,
+		"request_id": "req-race-001",
+	})
+
+	rec := performRequest(t, srv, http.MethodPost, "/v1/evaluate", payload)
+
+	if rec.Code != http.StatusConflict {
+		t.Errorf("idempotency conflict must map to 409, got %d", rec.Code)
 	}
 }
 

@@ -91,6 +91,18 @@ const (
 	// EventGrantReinstated is emitted when ReinstateGrant restores a suspended
 	// grant to active.
 	EventGrantReinstated EventType = "grant.reinstated"
+
+	// EventDecisionOutcomeRecorded is the external contract event emitted for
+	// every evaluation outcome (accept, escalate, reject, request_clarification).
+	// It carries the full external event envelope defined in docs/events.md.
+	EventDecisionOutcomeRecorded EventType = "decision.outcome_recorded"
+
+	// EventDecisionEnvelopeClosed is the external contract event emitted when a
+	// governance envelope reaches the closed terminal state. It fires for all
+	// close paths: direct close after accept/reject/request_clarification, and
+	// deferred close after escalation review. It carries the full external event
+	// envelope defined in docs/events.md.
+	EventDecisionEnvelopeClosed EventType = "decision.envelope_closed"
 )
 
 // OutboxEvent is a single row in the outbox_events table.

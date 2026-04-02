@@ -170,7 +170,7 @@ func (s *Server) handleExplorerEvaluate(w http.ResponseWriter, r *http.Request) 
 		})
 		return
 	}
-	s.handleEvaluateWith(w, r, s.explorerOrchestrator)
+	s.handleEvaluateWith(w, r, s.explorerOrchestrator, false)
 }
 
 // handleExplorerSimulate handles POST /explorer/simulate using the Explorer's

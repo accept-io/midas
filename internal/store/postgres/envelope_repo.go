@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/lib/pq"
+
 	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/eval"
 	"github.com/accept-io/midas/internal/store/sqltx"
@@ -249,6 +251,10 @@ func (r *EnvelopeRepo) Create(ctx context.Context, e *envelope.Envelope) error {
 		nullableTime(e.ClosedAt),
 	)
 	if err != nil {
+		var pqErr *pq.Error
+		if errors.As(err, &pqErr) && pqErr.Code == "23505" {
+			return envelope.ErrEnvelopeScopeConflict
+		}
 		return fmt.Errorf("create envelope: %w", err)
 	}
 	return nil

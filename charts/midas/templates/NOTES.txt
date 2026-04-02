@@ -1,0 +1,30 @@
+MIDAS {{ .Chart.AppVersion }} has been deployed.
+
+  Release:   {{ .Release.Name }}
+  Namespace: {{ .Release.Namespace }}
+  Profile:   {{ .Values.midas.profile }}
+  Backend:   {{ .Values.midas.store.backend }}
+  Auth mode: {{ .Values.midas.auth.mode }}
+
+To reach the MIDAS API from within the cluster:
+
+  kubectl port-forward svc/{{ include "midas.fullname" . }} 8080:{{ .Values.service.port }} -n {{ .Release.Namespace }}
+  curl http://localhost:8080/healthz
+
+Check readiness (includes Postgres ping when backend=postgres):
+
+  curl http://localhost:8080/readyz
+
+{{- if eq .Values.midas.store.backend "postgres" }}
+
+IMPORTANT: store.backend is set to "postgres".
+Ensure a valid DATABASE_URL is present in the Secret referenced by this release,
+or the pods will not become ready.
+
+{{- end }}
+{{- if eq .Values.midas.auth.mode "open" }}
+
+WARNING: auth.mode is "open" — /v1/* routes are unauthenticated.
+Set auth.mode=required and supply AUTH_TOKENS for production deployments.
+
+{{- end }}

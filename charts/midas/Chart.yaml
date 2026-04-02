@@ -1,0 +1,20 @@
+apiVersion: v2
+name: midas
+description: >
+  Accept MIDAS — AI agent authority governance engine.
+  Governs which AI agents are authorised to act, under what conditions,
+  and with what consequence limits.
+type: application
+version: 0.1.0
+appVersion: "1.0.2"
+keywords:
+  - ai-governance
+  - authority
+  - decision-engine
+  - midas
+home: https://github.com/accept-io/midas
+sources:
+  - https://github.com/accept-io/midas
+maintainers:
+  - name: Accept
+    url: https://accept.io

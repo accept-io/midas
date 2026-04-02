@@ -1,0 +1,150 @@
+# Default values for the MIDAS Helm chart.
+# These defaults reflect the production-first deployment posture.
+# To evaluate MIDAS locally, override: profile=dev, store.backend=memory,
+# auth.mode=open, server.headless=false, localIam.enabled=true.
+
+# ---------------------------------------------------------------------------
+# Replica count
+# ---------------------------------------------------------------------------
+# Single replica is the safe default.
+# - memory backend: in-memory state is not shared across replicas
+# - postgres backend: horizontal scaling is not yet documented or guaranteed
+replicaCount: 1
+
+# ---------------------------------------------------------------------------
+# Image
+# ---------------------------------------------------------------------------
+# No official public image is published yet. Build from the Dockerfile in
+# the repository root and push to your own registry, or await an official
+# GHCR publication at ghcr.io/accept-io/midas.
+image:
+  repository: ghcr.io/accept-io/midas
+  # tag: defaults to Chart.appVersion when left empty
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# ---------------------------------------------------------------------------
+# Name overrides
+# ---------------------------------------------------------------------------
+nameOverride: ""
+fullnameOverride: ""
+
+# ---------------------------------------------------------------------------
+# Pod annotations
+# ---------------------------------------------------------------------------
+podAnnotations: {}
+
+# ---------------------------------------------------------------------------
+# Service
+# ---------------------------------------------------------------------------
+service:
+  type: ClusterIP
+  port: 8080
+
+# ---------------------------------------------------------------------------
+# Resource requests and limits
+# ---------------------------------------------------------------------------
+# Sized for a typical single-instance deployment backed by Postgres.
+# Adjust based on evaluation throughput and query complexity.
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# ---------------------------------------------------------------------------
+# MIDAS runtime configuration
+# ---------------------------------------------------------------------------
+# These values are rendered into a midas.yaml ConfigMap mounted at
+# /etc/midas/midas.yaml. Sensitive values (database URL, auth tokens,
+# OIDC client secret) are kept out of the ConfigMap and injected via
+# environment variables from a Secret — see the `secret` section below.
+midas:
+  # profile: "dev" or "production"
+  # production profile enforces: store.backend=postgres + auth.mode=required
+  profile: production
+
+  server:
+    port: 8080
+    # headless: run as a pure API/governance engine with no browser-facing
+    # surfaces. When true, Explorer, /auth/*, local IAM, and OIDC are not
+    # initialised. /v1/*, /healthz, and /readyz remain fully operational.
+    headless: true
+    # explorerEnabled: enable the MIDAS Explorer sandbox UI at /explorer.
+    # Backed by the real config key server.explorer_enabled / MIDAS_EXPLORER_ENABLED.
+    # Not meaningful when headless=true.
+    explorerEnabled: false
+    shutdownTimeout: "15s"
+
+  store:
+    # backend: "memory" (development/evaluation) or "postgres" (production).
+    # When backend=postgres, DATABASE_URL must be provided in the secret section
+    # or via an existing Secret — the deployment will not become ready without it.
+    backend: postgres
+
+  auth:
+    # mode: "open" (no authentication, development only) or "required"
+    # (bearer token enforced on all /v1/* routes).
+    mode: required
+
+  localIam:
+    # enabled: provide username/password login and session management for the
+    # Explorer UI and platform console. Disabled in headless mode.
+    enabled: false
+    sessionTtl: "8h"
+    # secureCookies: MUST be true when running behind TLS (Ingress or LoadBalancer).
+    secureCookies: false
+
+  observability:
+    # logLevel: debug | info | warn | error
+    logLevel: info
+    # logFormat: json | text
+    logFormat: json
+
+  controlPlane:
+    enabled: true
+
+  dev:
+    # seedDemoData: seed demonstration surfaces, agents, and profiles at startup.
+    # Idempotent. Disable in production or when supplying real governance data.
+    seedDemoData: false
+    # seedDemoUser: create a demo/demo Local IAM user at startup.
+    # NEVER enable in production — creates a well-known credential.
+    seedDemoUser: false
+
+  dispatcher:
+    # enabled: start the outbox dispatcher goroutine to publish decision events.
+    # Requires store.backend=postgres and a configured publisher.
+    enabled: false
+    # publisher: "none" or "kafka"
+    publisher: "none"
+
+# ---------------------------------------------------------------------------
+# Secret configuration
+# ---------------------------------------------------------------------------
+# MIDAS requires secrets for three values:
+#   DATABASE_URL       → MIDAS_DATABASE_URL  (postgres DSN; required when backend=postgres)
+#   AUTH_TOKENS        → MIDAS_AUTH_TOKENS   (bearer tokens; required when auth.mode=required)
+#   OIDC_CLIENT_SECRET → MIDAS_OIDC_CLIENT_SECRET (required when OIDC is configured)
+#
+# Option 1 — reference an existing Secret (recommended for production):
+#   Set existingSecret to the name of a Secret containing any of the three
+#   keys above. Keys that are absent are silently ignored.
+#
+# Option 2 — create a Secret from values (simple/dev installs only):
+#   Leave existingSecret empty and provide the values below.
+#   These appear in Helm release state; use Option 1 for real credentials.
+secret:
+  # existingSecret: name of an existing Kubernetes Secret to use.
+  # When set, databaseUrl/authTokens/oidcClientSecret below are ignored.
+  existingSecret: ""
+
+  # Provide values here only for simple installs.
+  # For production, use existingSecret instead.
+  databaseUrl: ""
+  authTokens: ""
+  oidcClientSecret: ""

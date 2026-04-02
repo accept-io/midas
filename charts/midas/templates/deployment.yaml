@@ -1,0 +1,102 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "midas.fullname" . }}
+  labels:
+    {{- include "midas.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "midas.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        # Restart pods when the ConfigMap changes.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "midas.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # MIDAS does not require Kubernetes API access or RBAC permissions.
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: midas
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.midas.server.port }}
+              protocol: TCP
+          env:
+            {{- $secretName := include "midas.secretName" . }}
+            {{- if or .Values.secret.existingSecret (include "midas.createSecret" .) }}
+            # DATABASE_URL → MIDAS_DATABASE_URL (postgres DSN)
+            - name: MIDAS_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: DATABASE_URL
+                  optional: true
+            # AUTH_TOKENS → MIDAS_AUTH_TOKENS (bearer token list)
+            # Format: "token|principal|roles;..." (semicolon-separated)
+            - name: MIDAS_AUTH_TOKENS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: AUTH_TOKENS
+                  optional: true
+            # OIDC_CLIENT_SECRET → MIDAS_OIDC_CLIENT_SECRET
+            - name: MIDAS_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: OIDC_CLIENT_SECRET
+                  optional: true
+            {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/midas
+              readOnly: true
+          # readinessProbe uses /readyz — returns 503 when Postgres is unreachable.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          # livenessProbe uses /healthz — always returns 200 to confirm the
+          # process is alive. A separate endpoint is used for each probe
+          # because MIDAS distinguishes liveness from dependency health.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 5
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "midas.fullname" . }}

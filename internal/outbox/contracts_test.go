@@ -3,6 +3,7 @@ package outbox_test
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/accept-io/midas/internal/outbox"
 )
@@ -476,5 +477,230 @@ func TestBuildSurfaceDeprecatedEvent_FieldsPopulated(t *testing.T) {
 	}
 	if ev.DeprecatedBy != "ops-team" {
 		t.Errorf("expected deprecated_by %q, got %q", "ops-team", ev.DeprecatedBy)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// BuildDecisionOutcomeRecordedEvent
+// ---------------------------------------------------------------------------
+
+func TestBuildDecisionOutcomeRecordedEvent_ValidJSON(t *testing.T) {
+	raw, err := outbox.BuildDecisionOutcomeRecordedEvent(
+		"env-1", "src", "req-1", "surf-1", "agent-1", "accept", "WITHIN_AUTHORITY",
+		time.Now(),
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !json.Valid(raw) {
+		t.Fatalf("expected valid JSON, got: %s", string(raw))
+	}
+}
+
+func TestBuildDecisionOutcomeRecordedEvent_EnvelopeWrapper(t *testing.T) {
+	raw, err := outbox.BuildDecisionOutcomeRecordedEvent(
+		"env-123", "svc:payments", "req-456", "surf-789", "agent-abc",
+		"accept", "WITHIN_AUTHORITY",
+		time.Now(),
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var wrapper outbox.ExternalEventEnvelope
+	if err := json.Unmarshal(raw, &wrapper); err != nil {
+		t.Fatalf("unmarshal wrapper: %v", err)
+	}
+	if wrapper.SchemaVersion != "v1" {
+		t.Errorf("schema_version: expected %q, got %q", "v1", wrapper.SchemaVersion)
+	}
+	if wrapper.EventID == "" {
+		t.Error("event_id must not be empty")
+	}
+	if wrapper.Type != "decision.outcome_recorded" {
+		t.Errorf("type: expected %q, got %q", "decision.outcome_recorded", wrapper.Type)
+	}
+	if wrapper.OccurredAt == "" {
+		t.Error("occurred_at must not be empty")
+	}
+	if wrapper.EnvelopeID != "env-123" {
+		t.Errorf("envelope_id: expected %q, got %q", "env-123", wrapper.EnvelopeID)
+	}
+}
+
+func TestBuildDecisionOutcomeRecordedEvent_Payload(t *testing.T) {
+	raw, err := outbox.BuildDecisionOutcomeRecordedEvent(
+		"env-123", "svc:payments", "req-456", "surf-789", "agent-abc",
+		"accept", "WITHIN_AUTHORITY",
+		time.Now(),
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var wrapper outbox.ExternalEventEnvelope
+	if err := json.Unmarshal(raw, &wrapper); err != nil {
+		t.Fatalf("unmarshal wrapper: %v", err)
+	}
+
+	var payload outbox.DecisionOutcomeRecordedPayload
+	if err := json.Unmarshal(wrapper.Payload, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if payload.RequestSource != "svc:payments" {
+		t.Errorf("request_source: expected %q, got %q", "svc:payments", payload.RequestSource)
+	}
+	if payload.RequestID != "req-456" {
+		t.Errorf("request_id: expected %q, got %q", "req-456", payload.RequestID)
+	}
+	if payload.SurfaceID != "surf-789" {
+		t.Errorf("surface_id: expected %q, got %q", "surf-789", payload.SurfaceID)
+	}
+	if payload.AgentID != "agent-abc" {
+		t.Errorf("agent_id: expected %q, got %q", "agent-abc", payload.AgentID)
+	}
+	if payload.Outcome != "accept" {
+		t.Errorf("outcome: expected %q, got %q", "accept", payload.Outcome)
+	}
+	if payload.ReasonCode != "WITHIN_AUTHORITY" {
+		t.Errorf("reason_code: expected %q, got %q", "WITHIN_AUTHORITY", payload.ReasonCode)
+	}
+}
+
+func TestBuildDecisionOutcomeRecordedEvent_EmptyFields_ValidJSON(t *testing.T) {
+	raw, err := outbox.BuildDecisionOutcomeRecordedEvent("", "", "", "", "", "", "", time.Now())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !json.Valid(raw) {
+		t.Fatalf("expected valid JSON, got: %s", string(raw))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// BuildDecisionEnvelopeClosedEvent
+// ---------------------------------------------------------------------------
+
+func TestBuildDecisionEnvelopeClosedEvent_ValidJSON(t *testing.T) {
+	raw, err := outbox.BuildDecisionEnvelopeClosedEvent(
+		"env-1", "src", "req-1", "accept", time.Now(), nil,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !json.Valid(raw) {
+		t.Fatalf("expected valid JSON, got: %s", string(raw))
+	}
+}
+
+func TestBuildDecisionEnvelopeClosedEvent_DirectClose_NoReview(t *testing.T) {
+	closedAt := time.Now().UTC()
+	raw, err := outbox.BuildDecisionEnvelopeClosedEvent(
+		"env-123", "svc:payments", "req-456", "accept", closedAt, nil,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var wrapper outbox.ExternalEventEnvelope
+	if err := json.Unmarshal(raw, &wrapper); err != nil {
+		t.Fatalf("unmarshal wrapper: %v", err)
+	}
+	if wrapper.SchemaVersion != "v1" {
+		t.Errorf("schema_version: expected %q, got %q", "v1", wrapper.SchemaVersion)
+	}
+	if wrapper.Type != "decision.envelope_closed" {
+		t.Errorf("type: expected %q, got %q", "decision.envelope_closed", wrapper.Type)
+	}
+	if wrapper.EnvelopeID != "env-123" {
+		t.Errorf("envelope_id: expected %q, got %q", "env-123", wrapper.EnvelopeID)
+	}
+
+	var payload outbox.DecisionEnvelopeClosedPayload
+	if err := json.Unmarshal(wrapper.Payload, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if payload.RequestSource != "svc:payments" {
+		t.Errorf("request_source: expected %q, got %q", "svc:payments", payload.RequestSource)
+	}
+	if payload.FinalOutcome != "accept" {
+		t.Errorf("final_outcome: expected %q, got %q", "accept", payload.FinalOutcome)
+	}
+	if payload.ClosedAt == "" {
+		t.Error("closed_at must not be empty")
+	}
+	if payload.Review != nil {
+		t.Error("review must be nil for direct-close path")
+	}
+}
+
+func TestBuildDecisionEnvelopeClosedEvent_WithReview(t *testing.T) {
+	review := &outbox.DecisionEnvelopeClosedReview{
+		Decision:     "APPROVED",
+		ReviewerID:   "human:alice",
+		ReviewerKind: "human",
+		Notes:        "looks good",
+	}
+	raw, err := outbox.BuildDecisionEnvelopeClosedEvent(
+		"env-123", "svc:payments", "req-456", "escalate", time.Now(), review,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var wrapper outbox.ExternalEventEnvelope
+	if err := json.Unmarshal(raw, &wrapper); err != nil {
+		t.Fatalf("unmarshal wrapper: %v", err)
+	}
+
+	var payload outbox.DecisionEnvelopeClosedPayload
+	if err := json.Unmarshal(wrapper.Payload, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if payload.Review == nil {
+		t.Fatal("review must be present")
+	}
+	if payload.Review.Decision != "APPROVED" {
+		t.Errorf("review.decision: expected %q, got %q", "APPROVED", payload.Review.Decision)
+	}
+	if payload.Review.ReviewerID != "human:alice" {
+		t.Errorf("review.reviewer_id: expected %q, got %q", "human:alice", payload.Review.ReviewerID)
+	}
+	if payload.Review.ReviewerKind != "human" {
+		t.Errorf("review.reviewer_kind: expected %q, got %q", "human", payload.Review.ReviewerKind)
+	}
+	if payload.Review.Notes != "looks good" {
+		t.Errorf("review.notes: expected %q, got %q", "looks good", payload.Review.Notes)
+	}
+}
+
+func TestBuildDecisionEnvelopeClosedEvent_ReviewerKind_NoOmitEmpty(t *testing.T) {
+	// reviewer_kind must always be present when a review object exists —
+	// it has no omitempty and must appear even as an empty string.
+	review := &outbox.DecisionEnvelopeClosedReview{
+		Decision:     "REJECTED",
+		ReviewerID:   "system:auto",
+		ReviewerKind: "system",
+	}
+	raw, err := outbox.BuildDecisionEnvelopeClosedEvent(
+		"env-1", "src", "req-1", "escalate", time.Now(), review,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var wrapper outbox.ExternalEventEnvelope
+	if err := json.Unmarshal(raw, &wrapper); err != nil {
+		t.Fatalf("unmarshal wrapper: %v", err)
+	}
+	var payload outbox.DecisionEnvelopeClosedPayload
+	if err := json.Unmarshal(wrapper.Payload, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if payload.Review == nil {
+		t.Fatal("review must be present")
+	}
+	if payload.Review.ReviewerKind != "system" {
+		t.Errorf("reviewer_kind: expected %q, got %q", "system", payload.Review.ReviewerKind)
 	}
 }

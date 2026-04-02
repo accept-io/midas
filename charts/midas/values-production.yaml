@@ -1,0 +1,35 @@
+# Production values for the MIDAS Helm chart.
+# The chart defaults are already production-first (postgres, required auth,
+# headless). This file pins the image tag, increases resource limits, and
+# references a pre-existing Secret for credentials.
+#
+# Usage:
+#   helm install midas charts/midas \
+#     -f charts/midas/values-production.yaml \
+#     --set secret.existingSecret=midas-secrets \
+#     --set image.repository=your-registry/midas \
+#     --set image.tag=1.0.2
+
+image:
+  # Pin to a specific release. Required for production deployments.
+  tag: "1.0.2"
+
+midas:
+  server:
+    shutdownTimeout: "30s"
+
+secret:
+  # Reference a pre-existing Secret containing DATABASE_URL and AUTH_TOKENS.
+  # Create it before installing:
+  #   kubectl create secret generic midas-secrets \
+  #     --from-literal=DATABASE_URL='postgres://user:pass@host:5432/midas?sslmode=require' \
+  #     --from-literal=AUTH_TOKENS='tok-abc123|svc:payments|platform.operator'
+  existingSecret: midas-secrets
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 1000m
+    memory: 512Mi

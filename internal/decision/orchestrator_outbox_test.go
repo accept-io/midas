@@ -248,24 +248,31 @@ func TestOrchestrator_Outbox_DecisionCompleted(t *testing.T) {
 	}
 
 	events := listOutboxEvents(t, db)
-	if len(events) != 1 {
-		t.Fatalf("expected 1 outbox event, got %d", len(events))
+	if len(events) != 3 {
+		t.Fatalf("expected 3 outbox events (decision.completed, decision.outcome_recorded, decision.envelope_closed), got %d", len(events))
 	}
-	ev := events[0]
-	if ev.EventType != outbox.EventDecisionCompleted {
-		t.Errorf("expected event_type %q, got %q", outbox.EventDecisionCompleted, ev.EventType)
+	if events[0].EventType != outbox.EventDecisionCompleted {
+		t.Errorf("events[0]: expected event_type %q, got %q", outbox.EventDecisionCompleted, events[0].EventType)
 	}
-	if ev.AggregateType != "envelope" {
-		t.Errorf("expected aggregate_type %q, got %q", "envelope", ev.AggregateType)
+	if events[1].EventType != outbox.EventDecisionOutcomeRecorded {
+		t.Errorf("events[1]: expected event_type %q, got %q", outbox.EventDecisionOutcomeRecorded, events[1].EventType)
 	}
-	if ev.AggregateID != result.EnvelopeID {
-		t.Errorf("expected aggregate_id %q, got %q", result.EnvelopeID, ev.AggregateID)
+	if events[2].EventType != outbox.EventDecisionEnvelopeClosed {
+		t.Errorf("events[2]: expected event_type %q, got %q", outbox.EventDecisionEnvelopeClosed, events[2].EventType)
 	}
-	if ev.Topic != "midas.decisions" {
-		t.Errorf("expected topic %q, got %q", "midas.decisions", ev.Topic)
-	}
-	if ev.PublishedAt != nil {
-		t.Error("expected published_at to be nil (unpublished)")
+	for i, ev := range events {
+		if ev.AggregateType != "envelope" {
+			t.Errorf("events[%d]: expected aggregate_type %q, got %q", i, "envelope", ev.AggregateType)
+		}
+		if ev.AggregateID != result.EnvelopeID {
+			t.Errorf("events[%d]: expected aggregate_id %q, got %q", i, result.EnvelopeID, ev.AggregateID)
+		}
+		if ev.Topic != "midas.decisions" {
+			t.Errorf("events[%d]: expected topic %q, got %q", i, "midas.decisions", ev.Topic)
+		}
+		if ev.PublishedAt != nil {
+			t.Errorf("events[%d]: expected published_at to be nil (unpublished)", i)
+		}
 	}
 }
 
@@ -303,15 +310,19 @@ func TestOrchestrator_Outbox_DecisionEscalated(t *testing.T) {
 	}
 
 	events := listOutboxEvents(t, db)
-	if len(events) != 1 {
-		t.Fatalf("expected 1 outbox event, got %d", len(events))
+	if len(events) != 2 {
+		t.Fatalf("expected 2 outbox events (decision.escalated, decision.outcome_recorded), got %d", len(events))
 	}
-	ev := events[0]
-	if ev.EventType != outbox.EventDecisionEscalated {
-		t.Errorf("expected event_type %q, got %q", outbox.EventDecisionEscalated, ev.EventType)
+	if events[0].EventType != outbox.EventDecisionEscalated {
+		t.Errorf("events[0]: expected event_type %q, got %q", outbox.EventDecisionEscalated, events[0].EventType)
 	}
-	if ev.AggregateID != result.EnvelopeID {
-		t.Errorf("expected aggregate_id %q, got %q", result.EnvelopeID, ev.AggregateID)
+	if events[1].EventType != outbox.EventDecisionOutcomeRecorded {
+		t.Errorf("events[1]: expected event_type %q, got %q", outbox.EventDecisionOutcomeRecorded, events[1].EventType)
+	}
+	for i, ev := range events {
+		if ev.AggregateID != result.EnvelopeID {
+			t.Errorf("events[%d]: expected aggregate_id %q, got %q", i, result.EnvelopeID, ev.AggregateID)
+		}
 	}
 }
 
@@ -367,15 +378,19 @@ func TestOrchestrator_Outbox_ReviewResolved(t *testing.T) {
 	}
 
 	events := listOutboxEvents(t, db)
-	if len(events) != 1 {
-		t.Fatalf("expected 1 outbox event after review resolution, got %d", len(events))
+	if len(events) != 2 {
+		t.Fatalf("expected 2 outbox events after review resolution (decision.review_resolved, decision.envelope_closed), got %d", len(events))
 	}
-	ev := events[0]
-	if ev.EventType != outbox.EventDecisionReviewResolved {
-		t.Errorf("expected event_type %q, got %q", outbox.EventDecisionReviewResolved, ev.EventType)
+	if events[0].EventType != outbox.EventDecisionReviewResolved {
+		t.Errorf("events[0]: expected event_type %q, got %q", outbox.EventDecisionReviewResolved, events[0].EventType)
 	}
-	if ev.AggregateID != result.EnvelopeID {
-		t.Errorf("expected aggregate_id %q, got %q", result.EnvelopeID, ev.AggregateID)
+	if events[1].EventType != outbox.EventDecisionEnvelopeClosed {
+		t.Errorf("events[1]: expected event_type %q, got %q", outbox.EventDecisionEnvelopeClosed, events[1].EventType)
+	}
+	for i, ev := range events {
+		if ev.AggregateID != result.EnvelopeID {
+			t.Errorf("events[%d]: expected aggregate_id %q, got %q", i, result.EnvelopeID, ev.AggregateID)
+		}
 	}
 }
 
@@ -480,10 +495,10 @@ func TestOrchestrator_Outbox_IdempotentReplayNoNewOutboxRow(t *testing.T) {
 	}
 }
 
-// TestOrchestrator_Outbox_RejectNoOutboxRow verifies that a Reject outcome
-// (e.g. unknown agent) does not emit a decision.completed or any other
-// decision outbox event. Reject outcomes carry no downstream action.
-func TestOrchestrator_Outbox_RejectNoOutboxRow(t *testing.T) {
+// TestOrchestrator_Outbox_RejectEmitsExternalEvents verifies that a Reject
+// outcome emits decision.outcome_recorded and decision.envelope_closed (external
+// contract events) but does not emit decision.completed.
+func TestOrchestrator_Outbox_RejectEmitsExternalEvents(t *testing.T) {
 	db := openOutboxTestDB(t)
 	defer db.Close()
 
@@ -551,24 +566,43 @@ func TestOrchestrator_Outbox_RejectNoOutboxRow(t *testing.T) {
 		t.Fatalf("expected Reject outcome, got %q", result.Outcome)
 	}
 
-	// Query only this test's outbox rows by event_key prefix.
-	const q = `SELECT COUNT(*) FROM outbox_events WHERE event_key LIKE 'outbox-reject-src:%'`
-	var count int
-	if err := db.QueryRow(q).Scan(&count); err != nil {
-		t.Fatalf("count outbox events: %v", err)
+	// Query only this test's outbox rows by event_key prefix, ordered by created_at.
+	const q = `SELECT event_type FROM outbox_events WHERE event_key LIKE 'outbox-reject-src:%' ORDER BY created_at ASC`
+	rows, err := db.Query(q)
+	if err != nil {
+		t.Fatalf("query outbox events: %v", err)
 	}
-	if count != 0 {
-		t.Fatalf("Reject outcome must emit no outbox rows, got %d", count)
+	defer rows.Close()
+	var types []string
+	for rows.Next() {
+		var et string
+		if err := rows.Scan(&et); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		types = append(types, et)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows error: %v", err)
+	}
+	if len(types) != 2 {
+		t.Fatalf("expected 2 outbox events for Reject outcome, got %d: %v", len(types), types)
+	}
+	if outbox.EventType(types[0]) != outbox.EventDecisionOutcomeRecorded {
+		t.Errorf("events[0]: expected %q, got %q", outbox.EventDecisionOutcomeRecorded, types[0])
+	}
+	if outbox.EventType(types[1]) != outbox.EventDecisionEnvelopeClosed {
+		t.Errorf("events[1]: expected %q, got %q", outbox.EventDecisionEnvelopeClosed, types[1])
 	}
 }
 
-// TestOrchestrator_Outbox_RequestClarificationNoOutboxRow verifies that a
-// RequestClarification outcome does not emit any outbox event.
-// RequestClarification is not a terminal executable approval.
+// TestOrchestrator_Outbox_RequestClarificationEmitsExternalEvents verifies that
+// a RequestClarification outcome emits decision.outcome_recorded and
+// decision.envelope_closed (external contract events) but does not emit
+// decision.completed.
 //
 // This test uses isolated surface/agent/profile/grant IDs with a required
 // context key. The request supplies no context, triggering INSUFFICIENT_CONTEXT.
-func TestOrchestrator_Outbox_RequestClarificationNoOutboxRow(t *testing.T) {
+func TestOrchestrator_Outbox_RequestClarificationEmitsExternalEvents(t *testing.T) {
 	db := openOutboxTestDB(t)
 	defer db.Close()
 
@@ -688,12 +722,264 @@ func TestOrchestrator_Outbox_RequestClarificationNoOutboxRow(t *testing.T) {
 	}
 
 	// Query outbox rows scoped to this test's aggregate IDs to avoid interference.
-	const q = `SELECT COUNT(*) FROM outbox_events WHERE event_key LIKE 'outbox-clarify-src:%'`
-	var count int
-	if err := db.QueryRow(q).Scan(&count); err != nil {
-		t.Fatalf("count outbox events: %v", err)
+	const q = `SELECT event_type FROM outbox_events WHERE event_key LIKE 'outbox-clarify-src:%' ORDER BY created_at ASC`
+	rows, err := db.Query(q)
+	if err != nil {
+		t.Fatalf("query outbox events: %v", err)
 	}
-	if count != 0 {
-		t.Fatalf("RequestClarification outcome must emit no outbox rows, got %d", count)
+	defer rows.Close()
+	var types []string
+	for rows.Next() {
+		var et string
+		if err := rows.Scan(&et); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		types = append(types, et)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows error: %v", err)
+	}
+	if len(types) != 2 {
+		t.Fatalf("expected 2 outbox events for RequestClarification outcome, got %d: %v", len(types), types)
+	}
+	if outbox.EventType(types[0]) != outbox.EventDecisionOutcomeRecorded {
+		t.Errorf("events[0]: expected %q, got %q", outbox.EventDecisionOutcomeRecorded, types[0])
+	}
+	if outbox.EventType(types[1]) != outbox.EventDecisionEnvelopeClosed {
+		t.Errorf("events[1]: expected %q, got %q", outbox.EventDecisionEnvelopeClosed, types[1])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// External event payload verification
+// ---------------------------------------------------------------------------
+
+// TestOrchestrator_Outbox_ExternalOutcomeRecorded_AcceptPayload verifies that
+// the decision.outcome_recorded event for an accept path carries correct
+// payload fields in the external envelope.
+func TestOrchestrator_Outbox_ExternalOutcomeRecorded_AcceptPayload(t *testing.T) {
+	db := openOutboxTestDB(t)
+	defer db.Close()
+
+	cleanupOutboxTestData(t, db)
+
+	s, err := pgstore.NewStore(db, nil)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	repos, err := s.Repositories()
+	if err != nil {
+		t.Fatalf("Repositories: %v", err)
+	}
+	seedOutboxTestData(t, repos)
+
+	orch, err := decision.NewOrchestrator(s, policy.NoOpPolicyEvaluator{}, nil)
+	if err != nil {
+		t.Fatalf("NewOrchestrator: %v", err)
+	}
+
+	raw := json.RawMessage(`{"request_source":"outbox-test-src","request_id":"req-ext-accept-payload"}`)
+	result, err := orch.Evaluate(context.Background(), outboxAcceptRequest("req-ext-accept-payload"), raw)
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+
+	events := listOutboxEvents(t, db)
+	// events[1] = decision.outcome_recorded
+	if len(events) < 2 {
+		t.Fatalf("expected at least 2 outbox events, got %d", len(events))
+	}
+	ev := events[1]
+	if ev.EventType != outbox.EventDecisionOutcomeRecorded {
+		t.Fatalf("events[1]: expected %q, got %q", outbox.EventDecisionOutcomeRecorded, ev.EventType)
+	}
+
+	var wrapper outbox.ExternalEventEnvelope
+	if err := json.Unmarshal(ev.Payload, &wrapper); err != nil {
+		t.Fatalf("unmarshal ExternalEventEnvelope: %v", err)
+	}
+	if wrapper.SchemaVersion != "v1" {
+		t.Errorf("schema_version: expected %q, got %q", "v1", wrapper.SchemaVersion)
+	}
+	if wrapper.EventID == "" {
+		t.Error("event_id must not be empty")
+	}
+	if wrapper.EnvelopeID != result.EnvelopeID {
+		t.Errorf("envelope_id: expected %q, got %q", result.EnvelopeID, wrapper.EnvelopeID)
+	}
+
+	var payload outbox.DecisionOutcomeRecordedPayload
+	if err := json.Unmarshal(wrapper.Payload, &payload); err != nil {
+		t.Fatalf("unmarshal DecisionOutcomeRecordedPayload: %v", err)
+	}
+	if payload.RequestSource != "outbox-test-src" {
+		t.Errorf("request_source: expected %q, got %q", "outbox-test-src", payload.RequestSource)
+	}
+	if payload.RequestID != "req-ext-accept-payload" {
+		t.Errorf("request_id: expected %q, got %q", "req-ext-accept-payload", payload.RequestID)
+	}
+	if payload.SurfaceID != "surf-outbox-1" {
+		t.Errorf("surface_id: expected %q, got %q", "surf-outbox-1", payload.SurfaceID)
+	}
+	if payload.AgentID != "agent-outbox-1" {
+		t.Errorf("agent_id: expected %q, got %q", "agent-outbox-1", payload.AgentID)
+	}
+	if payload.Outcome != "accept" {
+		t.Errorf("outcome: expected %q, got %q", "accept", payload.Outcome)
+	}
+	if payload.ReasonCode != "WITHIN_AUTHORITY" {
+		t.Errorf("reason_code: expected %q, got %q", "WITHIN_AUTHORITY", payload.ReasonCode)
+	}
+}
+
+// TestOrchestrator_Outbox_ExternalEnvelopeClosed_AcceptPayload verifies that
+// the decision.envelope_closed event for the accept path carries correct
+// payload fields and no review object.
+func TestOrchestrator_Outbox_ExternalEnvelopeClosed_AcceptPayload(t *testing.T) {
+	db := openOutboxTestDB(t)
+	defer db.Close()
+
+	cleanupOutboxTestData(t, db)
+
+	s, err := pgstore.NewStore(db, nil)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	repos, err := s.Repositories()
+	if err != nil {
+		t.Fatalf("Repositories: %v", err)
+	}
+	seedOutboxTestData(t, repos)
+
+	orch, err := decision.NewOrchestrator(s, policy.NoOpPolicyEvaluator{}, nil)
+	if err != nil {
+		t.Fatalf("NewOrchestrator: %v", err)
+	}
+
+	raw := json.RawMessage(`{"request_source":"outbox-test-src","request_id":"req-ext-closed-accept"}`)
+	result, err := orch.Evaluate(context.Background(), outboxAcceptRequest("req-ext-closed-accept"), raw)
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+
+	events := listOutboxEvents(t, db)
+	// events[2] = decision.envelope_closed
+	if len(events) < 3 {
+		t.Fatalf("expected at least 3 outbox events, got %d", len(events))
+	}
+	ev := events[2]
+	if ev.EventType != outbox.EventDecisionEnvelopeClosed {
+		t.Fatalf("events[2]: expected %q, got %q", outbox.EventDecisionEnvelopeClosed, ev.EventType)
+	}
+
+	var wrapper outbox.ExternalEventEnvelope
+	if err := json.Unmarshal(ev.Payload, &wrapper); err != nil {
+		t.Fatalf("unmarshal ExternalEventEnvelope: %v", err)
+	}
+	if wrapper.EnvelopeID != result.EnvelopeID {
+		t.Errorf("envelope_id: expected %q, got %q", result.EnvelopeID, wrapper.EnvelopeID)
+	}
+
+	var payload outbox.DecisionEnvelopeClosedPayload
+	if err := json.Unmarshal(wrapper.Payload, &payload); err != nil {
+		t.Fatalf("unmarshal DecisionEnvelopeClosedPayload: %v", err)
+	}
+	if payload.FinalOutcome != "accept" {
+		t.Errorf("final_outcome: expected %q, got %q", "accept", payload.FinalOutcome)
+	}
+	if payload.ClosedAt == "" {
+		t.Error("closed_at must not be empty")
+	}
+	if payload.Review != nil {
+		t.Error("review must be nil for direct-close accept path")
+	}
+}
+
+// TestOrchestrator_Outbox_ExternalEnvelopeClosed_PostReviewPayload verifies
+// that the decision.envelope_closed event emitted after escalation review
+// carries the correct review object fields.
+func TestOrchestrator_Outbox_ExternalEnvelopeClosed_PostReviewPayload(t *testing.T) {
+	db := openOutboxTestDB(t)
+	defer db.Close()
+
+	cleanupOutboxTestData(t, db)
+
+	s, err := pgstore.NewStore(db, nil)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	repos, err := s.Repositories()
+	if err != nil {
+		t.Fatalf("Repositories: %v", err)
+	}
+	seedOutboxTestData(t, repos)
+
+	orch, err := decision.NewOrchestrator(s, policy.NoOpPolicyEvaluator{}, nil)
+	if err != nil {
+		t.Fatalf("NewOrchestrator: %v", err)
+	}
+
+	// Escalate then resolve.
+	raw := json.RawMessage(`{"request_source":"outbox-test-src","request_id":"req-ext-review-closed"}`)
+	result, err := orch.Evaluate(context.Background(), outboxEscalateRequest("req-ext-review-closed"), raw)
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+
+	// Purge escalation outbox events so we only inspect resolution events.
+	if _, err := db.Exec(`DELETE FROM outbox_events`); err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+
+	_, err = orch.ResolveEscalation(context.Background(), decision.EscalationResolution{
+		EnvelopeID:   result.EnvelopeID,
+		Decision:     envelope.ReviewDecisionApproved,
+		ReviewerID:   "human:alice",
+		ReviewerKind: "human",
+		Notes:        "approved by on-call",
+	})
+	if err != nil {
+		t.Fatalf("ResolveEscalation: %v", err)
+	}
+
+	events := listOutboxEvents(t, db)
+	// events[1] = decision.envelope_closed
+	if len(events) < 2 {
+		t.Fatalf("expected at least 2 outbox events after resolution, got %d", len(events))
+	}
+	ev := events[1]
+	if ev.EventType != outbox.EventDecisionEnvelopeClosed {
+		t.Fatalf("events[1]: expected %q, got %q", outbox.EventDecisionEnvelopeClosed, ev.EventType)
+	}
+
+	var wrapper outbox.ExternalEventEnvelope
+	if err := json.Unmarshal(ev.Payload, &wrapper); err != nil {
+		t.Fatalf("unmarshal ExternalEventEnvelope: %v", err)
+	}
+
+	var payload outbox.DecisionEnvelopeClosedPayload
+	if err := json.Unmarshal(wrapper.Payload, &payload); err != nil {
+		t.Fatalf("unmarshal DecisionEnvelopeClosedPayload: %v", err)
+	}
+	if payload.FinalOutcome != "escalate" {
+		t.Errorf("final_outcome: expected %q, got %q", "escalate", payload.FinalOutcome)
+	}
+	if payload.ClosedAt == "" {
+		t.Error("closed_at must not be empty")
+	}
+	if payload.Review == nil {
+		t.Fatal("review must be present for post-escalation-review close")
+	}
+	if payload.Review.Decision != "APPROVED" {
+		t.Errorf("review.decision: expected %q, got %q", "APPROVED", payload.Review.Decision)
+	}
+	if payload.Review.ReviewerID != "human:alice" {
+		t.Errorf("review.reviewer_id: expected %q, got %q", "human:alice", payload.Review.ReviewerID)
+	}
+	if payload.Review.ReviewerKind != "human" {
+		t.Errorf("review.reviewer_kind: expected %q, got %q", "human", payload.Review.ReviewerKind)
+	}
+	if payload.Review.Notes != "approved by on-call" {
+		t.Errorf("review.notes: expected %q, got %q", "approved by on-call", payload.Review.Notes)
 	}
 }
