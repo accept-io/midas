@@ -42,6 +42,17 @@ Evaluate whether an agent is within authority to perform an action on a decision
 
 Maximum request body: 1 MiB.
 
+**Evaluation modes**
+
+MIDAS supports two modes selected by the presence of `process_id` in the request.
+
+| Mode | `process_id` | Behaviour |
+|------|-------------|-----------|
+| Explicit | Provided | Process must exist and belong to the given `surface_id`. |
+| Inferred | Omitted | MIDAS creates capability/process/surface automatically if absent. Requires `inference.enabled: true` and Postgres. |
+
+When `process_id` is omitted and inference is not enabled, the request returns `400`.
+
 **Request fields**
 
 | Field | Type | Required | Description |
@@ -49,6 +60,7 @@ Maximum request body: 1 MiB.
 | `surface_id` | string | Yes | Decision surface ID. |
 | `agent_id` | string | Yes | Agent ID. |
 | `confidence` | float64 | Yes | Caller confidence score in `[0.0, 1.0]`. |
+| `process_id` | string | No | Governed process ID. Required in explicit mode; omit for inferred mode. |
 | `consequence` | object | No | Consequence value. |
 | `consequence.type` | string | — | `monetary` or `risk_rating`. |
 | `consequence.amount` | float64 | — | Monetary amount (monetary type). |
@@ -66,6 +78,21 @@ Maximum request body: 1 MiB.
 | `reason` | string | Reason code — see table below. |
 | `envelope_id` | string | Envelope UUID. Present on all outcomes. |
 | `explanation` | string | Optional narrative. |
+| `inference` | object | Present only when inference was triggered. |
+| `inference.capability_id` | string | Resolved or created capability ID. |
+| `inference.process_id` | string | Resolved or created process ID. |
+| `inference.surface_id` | string | Resolved or created surface ID. |
+| `inference.capability_created` | bool | `true` if created on this call. |
+| `inference.process_created` | bool | `true` if created on this call. |
+| `inference.surface_created` | bool | `true` if created on this call. |
+
+**Response headers (inferred mode only)**
+
+| Header | Value |
+|--------|-------|
+| `X-MIDAS-Inference-Used` | `"true"` |
+| `X-MIDAS-Inferred-Capability` | Capability ID |
+| `X-MIDAS-Inferred-Process` | Process ID |
 
 **Outcomes and reason codes**
 
@@ -84,13 +111,14 @@ Maximum request body: 1 MiB.
 | `reject` | `GRANT_PROFILE_SURFACE_MISMATCH` |
 | `request_clarification` | `INSUFFICIENT_CONTEXT` |
 
-**Example**
+**Example (explicit mode)**
 
 ```bash
 curl -s -X POST http://localhost:8080/v1/evaluate \
   -H "Content-Type: application/json" \
   -d '{
     "surface_id":     "surf-loan-auto-approval",
+    "process_id":     "proc-loan-standard",
     "agent_id":       "agent-credit-001",
     "confidence":     0.91,
     "consequence":    {"type": "monetary", "amount": 4500, "currency": "GBP"},
@@ -108,11 +136,41 @@ curl -s -X POST http://localhost:8080/v1/evaluate \
 }
 ```
 
+**Example (inferred mode)**
+
+```bash
+curl -s -X POST http://localhost:8080/v1/evaluate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "surface_id":     "loan.approve",
+    "agent_id":       "agent-credit-001",
+    "confidence":     0.91,
+    "request_id":     "req-00512",
+    "request_source": "lending-service"
+  }'
+```
+
+```json
+{
+  "outcome":     "accept",
+  "reason":      "WITHIN_AUTHORITY",
+  "envelope_id": "01927f3c-8e21-7a4b-b9d0-2c4f6e8a1d3e",
+  "inference": {
+    "capability_id":      "auto:loan",
+    "process_id":         "auto:loan.approve",
+    "surface_id":         "loan.approve",
+    "capability_created": true,
+    "process_created":    true,
+    "surface_created":    true
+  }
+}
+```
+
 **Error cases**
 
 | Status | Condition |
 |--------|-----------|
-| `400` | Missing `surface_id` or `agent_id`; `confidence` outside `[0.0, 1.0]`; invalid characters in `request_id`; malformed JSON |
+| `400` | Missing `surface_id` or `agent_id`; `confidence` outside `[0.0, 1.0]`; invalid characters in `request_id`; malformed JSON; `process_id` absent with inference disabled; `process_id` present but process not found or belongs to wrong surface |
 | `409` | Same `(request_source, request_id)` submitted with a different payload |
 | `413` | Body exceeds 1 MiB |
 | `500` | Orchestrator not configured |
@@ -238,7 +296,7 @@ Returns the envelope object, or `404` if not found.
 
 ## Control plane
 
-All control plane endpoints accept YAML (`application/yaml`, `application/x-yaml`, or `text/yaml`). Maximum body: 10 MiB.
+Apply/plan endpoints accept YAML (`application/yaml`, `application/x-yaml`, or `text/yaml`). Maximum body: 10 MiB. The promote, cleanup, and lifecycle action endpoints accept JSON.
 
 ### POST /v1/controlplane/apply
 
@@ -303,6 +361,100 @@ Response:
 ```
 
 Entry actions: `create`, `conflict`, `invalid`, `unchanged`.
+
+### POST /v1/controlplane/promote
+
+Promote an inferred capability/process pair to managed equivalents. Creates new managed entities with `origin=manual`, migrates all decision surfaces attached to the old inferred process to the new process (updating `process_id` in place on all surface rows), and marks the old inferred entities as `deprecated`. Lineage is preserved via the `replaces` column. Requires `platform.admin` role.
+
+```bash
+curl -s -X POST http://localhost:8080/v1/controlplane/promote \
+  -H "Content-Type: application/json" \
+  -d '{
+    "from": {
+      "capability_id": "auto:loan",
+      "process_id":    "auto:loan.approve"
+    },
+    "to": {
+      "capability_id": "loan",
+      "process_id":    "loan.approve"
+    }
+  }' | jq .
+```
+
+```json
+{
+  "from": {
+    "capability_id": "auto:loan",
+    "process_id":    "auto:loan.approve"
+  },
+  "to": {
+    "capability_id": "loan",
+    "process_id":    "loan.approve"
+  },
+  "surfaces_migrated": 3
+}
+```
+
+`surfaces_migrated` is the number of decision surfaces whose `process_id` was updated.
+
+**Error cases**
+
+| Status | Condition |
+|--------|-----------|
+| `400` | Missing IDs; source entity not found or not inferred; target entity already exists; cycle detected in `replaces` chain |
+| `401` | Unauthenticated |
+| `403` | Insufficient role (requires `platform.admin`) |
+| `500` | Transaction failure or concurrent modification |
+| `501` | Promotion service not configured (requires Postgres) |
+
+### POST /v1/controlplane/cleanup
+
+Delete deprecated inferred capabilities and processes that are no longer referenced. All deletions run inside a single transaction. Processes are deleted before capabilities within the transaction, so a deprecated capability held only by an also-eligible process becomes eligible in the same transaction. Requires `platform.admin` role.
+
+```bash
+curl -s -X POST http://localhost:8080/v1/controlplane/cleanup \
+  -H "Content-Type: application/json" \
+  -d '{"older_than_days": 90}' | jq .
+```
+
+```json
+{
+  "processes_deleted":    ["auto:loan.origination", "auto:loan.servicing"],
+  "capabilities_deleted": ["auto:loan"]
+}
+```
+
+**Request fields**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `older_than_days` | integer | Minimum age in days. `0` = all otherwise-eligible entities regardless of age. Must be `>= 0`. |
+
+**Eligibility rules** — all must hold for an entity to be deleted:
+
+Processes:
+- `origin=inferred`, `managed=false`, `status=deprecated`
+- `updated_at < cutoff` (skipped when `older_than_days=0`)
+- No decision surface references this process
+- No other process has `replaces=<this process_id>`
+- No other process has `parent_process_id=<this process_id>`
+
+Capabilities:
+- `origin=inferred`, `managed=false`, `status=deprecated`
+- `updated_at < cutoff` (skipped when `older_than_days=0`)
+- No process references this capability
+- No other capability has `replaces=<this capability_id>`
+- No other capability has `parent_capability_id=<this capability_id>`
+
+**Error cases**
+
+| Status | Condition |
+|--------|-----------|
+| `400` | `older_than_days` is negative |
+| `401` | Unauthenticated |
+| `403` | Insufficient role (requires `platform.admin`) |
+| `500` | Transaction failure |
+| `501` | Cleanup service not configured (requires Postgres) |
 
 ### POST /v1/controlplane/surfaces/{id}/approve
 

@@ -1,49 +1,27 @@
 # Security Policy
 
-## Security bulletins
+## Reporting a Vulnerability
 
-Security-related announcements for MIDAS will be communicated through the project repository and direct maintainer response where appropriate.
+If you discover a security vulnerability in Accept MIDAS, please report it responsibly by emailing **team@accept.io**.
 
-For urgent security matters, please contact:
+Do not open a public GitHub issue for security vulnerabilities.
 
-- Email: team@accept.io
+We will respond within 48 hours.
 
-## Reporting a vulnerability
-
-If you discover a security vulnerability in MIDAS, please report it responsibly by emailing **team@accept.io**.
-
-Please do **not** open a public GitHub issue for security vulnerabilities.
-
-Please include:
-- a description of the issue
-- affected version(s)
-- steps to reproduce, if available
-- any known mitigations or workarounds
-
-You will receive an acknowledgement within **48 hours**.
-
-We may follow up for additional detail as we investigate the report, reproduce the issue, and determine scope and impact.
-
-## Disclosure process
-
-MIDAS follows a coordinated disclosure approach. Reported vulnerabilities will be reviewed privately and remediated before public disclosure where appropriate.
-
-## Supported versions
+## Supported Versions
 
 | Version | Supported |
 |---------|-----------|
 | 1.x     | ✅        |
 | < 1.0   | ❌        |
 
-## Security scanning
+## Security Scanning
 
-MIDAS undergoes regular security scanning, including:
+MIDAS undergoes continuous security scanning:
 
-- Go vulnerability scanning with `govulncheck`
-- Dependency and container scanning with `Trivy`
-- License compliance review
-- SBOM generation in CycloneDX format
+- **Go vulnerabilities:** govulncheck (clean - 2026-03-27)
+- **Dependencies:** Trivy (0 vulnerabilities, 0 secrets)
+- **License compliance:** All dependencies BSD/MIT/Apache-2.0
+- **SBOM:** CycloneDX format available in `security/sbom/`
 
-Security artifacts are maintained in the repository under:
-- `security/sbom/`
-- `security/scans/`
+Scan results: `security/scans/`

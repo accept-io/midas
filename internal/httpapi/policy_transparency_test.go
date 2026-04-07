@@ -31,6 +31,7 @@ func TestEvaluate_Response_IncludesPolicyModeNoop(t *testing.T) {
 		"surface_id": "surf-1",
 		"agent_id":   "agent-1",
 		"confidence": 0.9,
+		"request_id": "req-policy-noop-001",
 	})
 
 	rec := performRequest(t, srv, http.MethodPost, "/v1/evaluate", payload)
@@ -63,6 +64,7 @@ func TestEvaluate_Response_PolicySkipped_True_WhenNoopAndPolicyRef(t *testing.T)
 		"surface_id": "surf-1",
 		"agent_id":   "agent-1",
 		"confidence": 0.9,
+		"request_id": "req-policy-skip-001",
 	})
 
 	rec := performRequest(t, srv, http.MethodPost, "/v1/evaluate", payload)
@@ -97,6 +99,7 @@ func TestEvaluate_Response_PolicySkipped_Absent_WhenNoPolicyRef(t *testing.T) {
 		"surface_id": "surf-1",
 		"agent_id":   "agent-1",
 		"confidence": 0.9,
+		"request_id": "req-policy-noref-001",
 	})
 
 	rec := performRequest(t, srv, http.MethodPost, "/v1/evaluate", payload)

@@ -12,6 +12,8 @@ import (
 	"github.com/accept-io/midas/internal/config"
 	"github.com/accept-io/midas/internal/controlplane/apply"
 	"github.com/accept-io/midas/internal/controlplane/approval"
+	"github.com/accept-io/midas/internal/controlplane/parser"
+	"github.com/accept-io/midas/internal/controlplane/types"
 	"github.com/accept-io/midas/internal/decision"
 	"github.com/accept-io/midas/internal/httpapi"
 	"github.com/accept-io/midas/internal/policy"
@@ -44,11 +46,15 @@ func TestProductionWiring_ApproveSurface_EndpointIsWired(t *testing.T) {
 	}
 
 	applyService := apply.NewServiceWithRepos(apply.RepositorySet{
-		Surfaces:     repos.Surfaces,
-		Agents:       repos.Agents,
-		Profiles:     repos.Profiles,
-		Grants:       repos.Grants,
-		ControlAudit: repos.ControlAudit,
+		Surfaces:            repos.Surfaces,
+		Agents:              repos.Agents,
+		Profiles:            repos.Profiles,
+		Grants:              repos.Grants,
+		ControlAudit:        repos.ControlAudit,
+		Processes:           repos.Processes,
+		Capabilities:        repos.Capabilities,
+		BusinessServices:    repos.BusinessServices,
+		ProcessCapabilities: repos.ProcessCapabilities,
 	})
 
 	// This is the service that was previously nil in main.go.
@@ -118,5 +124,87 @@ func TestProductionWiring_ApproveSurface_EndpointIsWired(t *testing.T) {
 	}
 	if resp.ApprovedBy != "approver-a" {
 		t.Errorf("expected approved_by approver-a, got %q", resp.ApprovedBy)
+	}
+}
+
+// TestProductionWiring_StructuralApply_ReposAreWired verifies that the apply
+// service receives the full structural repository set in memory mode, so that
+// structural document kinds (Capability, BusinessService, etc.) are persisted
+// rather than silently dropped to validation-only.
+//
+// This test was added after discovering that apply.NewServiceWithRepos was
+// called without Processes, Capabilities, BusinessServices, or ProcessCapabilities,
+// causing structural apply operations to degrade silently without error.
+func TestProductionWiring_StructuralApply_ReposAreWired(t *testing.T) {
+	ctx := context.Background()
+
+	repos, _, _, cleanup, _, err := buildRepositories(ctx, config.StoreConfig{Backend: "memory"})
+	if err != nil {
+		t.Fatalf("buildRepositories: %v", err)
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+
+	// Verify structural repos are non-nil before wiring — if Phase 1 regressed
+	// these would be nil and the apply service would silently validate-only.
+	if repos.Capabilities == nil {
+		t.Fatal("repos.Capabilities is nil in memory mode")
+	}
+	if repos.Processes == nil {
+		t.Fatal("repos.Processes is nil in memory mode")
+	}
+	if repos.BusinessServices == nil {
+		t.Fatal("repos.BusinessServices is nil in memory mode")
+	}
+	if repos.ProcessCapabilities == nil {
+		t.Fatal("repos.ProcessCapabilities is nil in memory mode")
+	}
+
+	applyService := apply.NewServiceWithRepos(apply.RepositorySet{
+		Surfaces:            repos.Surfaces,
+		Agents:              repos.Agents,
+		Profiles:            repos.Profiles,
+		Grants:              repos.Grants,
+		ControlAudit:        repos.ControlAudit,
+		Processes:           repos.Processes,
+		Capabilities:        repos.Capabilities,
+		BusinessServices:    repos.BusinessServices,
+		ProcessCapabilities: repos.ProcessCapabilities,
+	})
+
+	// Apply a Capability document and verify it is persisted — not just planned.
+	// If the Capabilities repo is nil in the apply service, the executor's
+	// validation-only guard short-circuits and nothing is written.
+	result := applyService.Apply(ctx, []parser.ParsedDocument{
+		{
+			Kind: types.KindCapability,
+			ID:   "cap-wiring-check",
+			Doc: types.CapabilityDocument{
+				APIVersion: types.APIVersionV1,
+				Kind:       types.KindCapability,
+				Metadata:   types.DocumentMetadata{ID: "cap-wiring-check", Name: "Wiring Check Capability"},
+				Spec:       types.CapabilitySpec{Status: "active"},
+			},
+		},
+	}, "test-actor")
+
+	if len(result.Results) != 1 {
+		t.Fatalf("apply result: want 1 entry, got %d", len(result.Results))
+	}
+	entry := result.Results[0]
+	if entry.Status != types.ResourceStatusCreated {
+		t.Fatalf("apply entry status: want %q, got %q (message: %s)", types.ResourceStatusCreated, entry.Status, entry.Message)
+	}
+
+	got, err := repos.Capabilities.GetByID(ctx, "cap-wiring-check")
+	if err != nil {
+		t.Fatalf("GetByID after apply: %v", err)
+	}
+	if got == nil {
+		t.Fatal("Capability was not persisted: apply service structural repos are not wired")
+	}
+	if got.ID != "cap-wiring-check" {
+		t.Errorf("persisted capability ID: want %q, got %q", "cap-wiring-check", got.ID)
 	}
 }

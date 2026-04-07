@@ -159,14 +159,33 @@ control_plane:
   enabled: true
 
 # ---------------------------------------------------------------------------
+# Structural model enforcement
+# ---------------------------------------------------------------------------
+structural:
+  # mode: "permissive" (default) or "enforced"
+  # permissive: structural fields (process_id) are optional on /v1/evaluate.
+  # enforced:   process_id is required; requests without it are rejected 422.
+  # Env: MIDAS_STRUCTURAL_MODE=enforced
+  mode: permissive
+
+# ---------------------------------------------------------------------------
 # Dev (local / development only)
 # ---------------------------------------------------------------------------
 dev:
-  # seed_demo_data: when true MIDAS seeds a minimal demonstration dataset at
-  # startup. The seed is idempotent — re-running on an already-seeded store is
-  # a no-op. Enabled by default so `make dev` works out of the box. Set false
-  # in production or when supplying real governance data.
+  # seed_demo_data: when true MIDAS seeds the V2 structural demonstration
+  # dataset at startup (BusinessService → Process → Surface with Capability
+  # relationships). The seed is idempotent — re-running on an already-seeded
+  # store is a no-op. Works with both memory and postgres backends.
+  # Enabled by default so `make dev` works out of the box. Set false in
+  # production or when supplying real governance data.
   seed_demo_data: true
+
+  # seed_demo_user: when true and local_iam.enabled is true, MIDAS creates a
+  # demo Local IAM account (username: demo, password: demo, no forced password
+  # change) at startup. Enabled by default for local development so the Explorer
+  # login hint is accurate. Set false in production or when local_iam is disabled.
+  # Env: MIDAS_DEV_SEED_DEMO_USER=false
+  seed_demo_user: true
 
 # ---------------------------------------------------------------------------
 # Outbox dispatcher (optional)

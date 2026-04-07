@@ -364,6 +364,16 @@ func (r *fakeSurfaceRepo) ListByDomain(_ context.Context, domain string) ([]*sur
 	return out, nil
 }
 
+func (r *fakeSurfaceRepo) ListByProcessID(_ context.Context, processID string) ([]*surface.DecisionSurface, error) {
+	var out []*surface.DecisionSurface
+	for _, v := range r.surfaces {
+		if v.ProcessID == processID {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+
 func (r *fakeSurfaceRepo) Search(_ context.Context, criteria surface.SearchCriteria) ([]*surface.DecisionSurface, error) {
 	// Simple search implementation for testing
 	var out []*surface.DecisionSurface

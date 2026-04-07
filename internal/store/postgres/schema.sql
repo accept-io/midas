@@ -13,6 +13,182 @@
 -- ALTER TABLE statements (which have no IF NOT EXISTS in Postgres).
 
 -- =============================================================================
+-- CAPABILITIES
+-- =============================================================================
+-- Capabilities are top-level governance domains that group related processes
+-- and surfaces (e.g. "financial-approvals", "data-access").
+-- parent_capability_id supports optional nesting for sub-domain hierarchies.
+-- Cycle prevention is enforced at the application/control-plane layer, not
+-- at the database level.
+
+CREATE TABLE IF NOT EXISTS capabilities (
+    capability_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    parent_capability_id TEXT,
+    status TEXT NOT NULL,
+    description TEXT,
+    owner_id TEXT,
+    external_ref TEXT,
+
+    -- Inferred-structure fields (schema v2.3)
+    -- origin: 'manual' for operator-applied resources, 'inferred' for system-discovered.
+    -- managed: false means the record is read-only from the inferred source; true means
+    --          it has been promoted to full operator control.
+    -- replaces: the capability_id this record supersedes when promoting an inferred resource.
+    origin  TEXT    NOT NULL DEFAULT 'manual',
+    managed BOOLEAN NOT NULL DEFAULT TRUE,
+    replaces TEXT,
+
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+
+    CONSTRAINT fk_capabilities_parent
+        FOREIGN KEY (parent_capability_id) REFERENCES capabilities(capability_id),
+
+    CONSTRAINT fk_capabilities_replaces
+        FOREIGN KEY (replaces) REFERENCES capabilities(capability_id),
+
+    CONSTRAINT chk_capabilities_status
+        CHECK (status IN ('active', 'inactive', 'deprecated')),
+
+    CONSTRAINT chk_capabilities_origin
+        CHECK (origin IN ('manual', 'inferred')),
+
+    CONSTRAINT chk_capabilities_origin_managed
+        CHECK (NOT (origin = 'manual' AND managed = false)),
+
+    CONSTRAINT chk_capabilities_no_self_replaces
+        CHECK (replaces IS NULL OR replaces <> capability_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_capabilities_parent_capability_id
+    ON capabilities (parent_capability_id);
+
+CREATE INDEX IF NOT EXISTS idx_capabilities_status
+    ON capabilities (status);
+
+CREATE INDEX IF NOT EXISTS idx_capabilities_origin
+    ON capabilities (origin);
+
+CREATE INDEX IF NOT EXISTS idx_capabilities_replaces
+    ON capabilities (replaces)
+    WHERE replaces IS NOT NULL;
+
+-- =============================================================================
+-- PROCESSES
+-- =============================================================================
+-- Processes are workflows within a Capability. Each process belongs to exactly
+-- one Capability (capability_id). parent_process_id supports optional nesting
+-- for sub-process hierarchies within the same Capability.
+--
+-- Invariant: a child process must share the same capability_id as its parent.
+-- This cross-row rule is enforced by trg_processes_parent_capability_check
+-- because PostgreSQL CHECK constraints cannot reference other rows.
+--
+-- Cycle prevention is enforced at the application/control-plane layer.
+
+CREATE TABLE IF NOT EXISTS processes (
+    process_id TEXT PRIMARY KEY,
+    capability_id TEXT NOT NULL,
+    parent_process_id TEXT,
+    name TEXT NOT NULL,
+    status TEXT NOT NULL,
+    description TEXT,
+    external_ref TEXT,
+    level INTEGER,
+
+    -- Inferred-structure fields (schema v2.3)
+    origin  TEXT    NOT NULL DEFAULT 'manual',
+    managed BOOLEAN NOT NULL DEFAULT TRUE,
+    replaces TEXT,
+    owner_id TEXT,
+
+    -- V2 structural layer (schema v2.4)
+    business_service_id TEXT,
+
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+
+    CONSTRAINT fk_processes_capability
+        FOREIGN KEY (capability_id) REFERENCES capabilities(capability_id),
+
+    CONSTRAINT fk_processes_parent
+        FOREIGN KEY (parent_process_id) REFERENCES processes(process_id),
+
+    CONSTRAINT fk_processes_replaces
+        FOREIGN KEY (replaces) REFERENCES processes(process_id),
+
+    CONSTRAINT chk_processes_status
+        CHECK (status IN ('active', 'inactive', 'deprecated')),
+
+    CONSTRAINT chk_processes_no_self_parent
+        CHECK (parent_process_id IS NULL OR parent_process_id <> process_id),
+
+    CONSTRAINT chk_processes_origin
+        CHECK (origin IN ('manual', 'inferred')),
+
+    CONSTRAINT chk_processes_origin_managed
+        CHECK (NOT (origin = 'manual' AND managed = false)),
+
+    CONSTRAINT chk_processes_no_self_replaces
+        CHECK (replaces IS NULL OR replaces <> process_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_processes_capability_id
+    ON processes (capability_id);
+
+CREATE INDEX IF NOT EXISTS idx_processes_parent_process_id
+    ON processes (parent_process_id);
+
+CREATE INDEX IF NOT EXISTS idx_processes_status
+    ON processes (status);
+
+CREATE INDEX IF NOT EXISTS idx_processes_origin
+    ON processes (origin);
+
+CREATE INDEX IF NOT EXISTS idx_processes_replaces
+    ON processes (replaces)
+    WHERE replaces IS NOT NULL;
+
+-- Trigger: enforce that a child process shares its parent's capability_id.
+-- Fires on INSERT and on UPDATE of parent_process_id or capability_id.
+
+CREATE OR REPLACE FUNCTION enforce_process_parent_capability_match()
+RETURNS trigger AS $$
+DECLARE
+    parent_capability_id TEXT;
+BEGIN
+    IF NEW.parent_process_id IS NULL THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT capability_id
+      INTO parent_capability_id
+      FROM processes
+     WHERE process_id = NEW.parent_process_id;
+
+    IF NOT FOUND THEN
+        -- Parent row absent: the FK constraint on parent_process_id will reject this.
+        RETURN NEW;
+    END IF;
+
+    IF parent_capability_id <> NEW.capability_id THEN
+        RAISE EXCEPTION
+            'process % capability_id (%) must match parent process % capability_id (%)',
+            NEW.process_id, NEW.capability_id,
+            NEW.parent_process_id, parent_capability_id;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER trg_processes_parent_capability_check
+BEFORE INSERT OR UPDATE OF parent_process_id, capability_id ON processes
+FOR EACH ROW
+EXECUTE FUNCTION enforce_process_parent_capability_match();
+
+-- =============================================================================
 -- DECISION SURFACES
 -- =============================================================================
 -- id is the LOGICAL surface identifier across versions.
@@ -72,6 +248,19 @@ CREATE TABLE IF NOT EXISTS decision_surfaces (
     approved_by TEXT,
     approved_at TIMESTAMPTZ,
 
+    -- Process link
+    process_id TEXT,
+
+    -- Inferred-structure fields (schema v2.3)
+    -- origin: 'manual' for operator-applied surfaces, 'inferred' for system-discovered.
+    -- managed: false means the record is read-only from the inferred source.
+    -- replaces: logical surface ID this version supersedes when promoting an inferred surface.
+    --           References the logical (id) column; no FK because decision_surfaces is keyed
+    --           by (id, version) — same pattern as authority_profiles.surface_id.
+    origin   TEXT    NOT NULL DEFAULT 'manual',
+    managed  BOOLEAN NOT NULL DEFAULT TRUE,
+    replaces TEXT,
+
     PRIMARY KEY (id, version),
 
     -- Optional self-reference for successor version
@@ -112,7 +301,16 @@ CREATE TABLE IF NOT EXISTS decision_surfaces (
             (status IN ('draft', 'review') AND approved_at IS NULL)
             OR
             (status IN ('active', 'deprecated', 'retired'))
-        )
+        ),
+
+    CONSTRAINT fk_decision_surfaces_process
+        FOREIGN KEY (process_id) REFERENCES processes(process_id),
+
+    CONSTRAINT chk_surfaces_origin
+        CHECK (origin IN ('manual', 'inferred')),
+
+    CONSTRAINT chk_surfaces_origin_managed
+        CHECK (NOT (origin = 'manual' AND managed = false))
 );
 
 CREATE INDEX IF NOT EXISTS idx_decision_surfaces_id_version_desc
@@ -136,6 +334,16 @@ CREATE INDEX IF NOT EXISTS idx_decision_surfaces_taxonomy_gin
 
 CREATE INDEX IF NOT EXISTS idx_decision_surfaces_tags_gin
     ON decision_surfaces USING GIN (tags jsonb_path_ops);
+
+CREATE INDEX IF NOT EXISTS idx_decision_surfaces_process_id
+    ON decision_surfaces (process_id);
+
+CREATE INDEX IF NOT EXISTS idx_decision_surfaces_origin
+    ON decision_surfaces (origin);
+
+CREATE INDEX IF NOT EXISTS idx_decision_surfaces_replaces
+    ON decision_surfaces (replaces)
+    WHERE replaces IS NOT NULL;
 
 -- =============================================================================
 -- AUTHORITY PROFILES
@@ -681,6 +889,109 @@ CREATE INDEX IF NOT EXISTS idx_cp_audit_actor          ON controlplane_audit_eve
 CREATE INDEX IF NOT EXISTS idx_cp_audit_action         ON controlplane_audit_events (action);
 
 -- =============================================================================
+-- V2 STRUCTURAL LAYER (BusinessService Model)
+-- =============================================================================
+-- business_services: top-level structural entity for the V2 model.
+-- Represents a deployable or logical service that owns decision surfaces and
+-- executes governed processes. Supports the same origin/managed/replaces
+-- lifecycle semantics as capabilities and processes.
+--
+-- process_capabilities: many-to-many junction between processes and capabilities.
+-- In the V2 model, Process <-> Capability is a usage relationship rather than
+-- strict containment (replacing the V1 process.capability_id ownership model).
+--
+-- These tables are additive. No existing tables are modified.
+-- No application logic uses these tables until Chunk 2 (domain models).
+
+CREATE TABLE IF NOT EXISTS business_services (
+    business_service_id TEXT PRIMARY KEY,
+    name                TEXT NOT NULL,
+    description         TEXT,
+    service_type        TEXT NOT NULL,
+    regulatory_scope    TEXT,
+    status              TEXT NOT NULL DEFAULT 'active',
+    origin              TEXT NOT NULL DEFAULT 'manual',
+    managed             BOOLEAN NOT NULL DEFAULT TRUE,
+    replaces            TEXT,
+    owner_id            TEXT,
+    created_at          TIMESTAMPTZ NOT NULL,
+    updated_at          TIMESTAMPTZ NOT NULL,
+
+    CONSTRAINT chk_services_status
+        CHECK (status IN ('active', 'deprecated')),
+
+    CONSTRAINT chk_services_type
+        CHECK (service_type IN ('customer_facing', 'internal', 'technical')),
+
+    CONSTRAINT chk_services_origin
+        CHECK (origin IN ('manual', 'inferred')),
+
+    CONSTRAINT chk_services_origin_managed
+        CHECK (NOT (origin = 'manual' AND managed = false)),
+
+    CONSTRAINT chk_services_no_self_replaces
+        CHECK (replaces IS NULL OR replaces <> business_service_id),
+
+    CONSTRAINT fk_services_replaces
+        FOREIGN KEY (replaces)
+        REFERENCES business_services(business_service_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_business_services_status
+    ON business_services (status);
+
+CREATE INDEX IF NOT EXISTS idx_business_services_origin
+    ON business_services (origin);
+
+CREATE INDEX IF NOT EXISTS idx_business_services_replaces
+    ON business_services (replaces)
+    WHERE replaces IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS process_capabilities (
+    process_id    TEXT NOT NULL,
+    capability_id TEXT NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL,
+
+    PRIMARY KEY (process_id, capability_id),
+
+    CONSTRAINT fk_process_capabilities_process
+        FOREIGN KEY (process_id)
+        REFERENCES processes(process_id)
+        ON DELETE CASCADE,
+
+    CONSTRAINT fk_process_capabilities_capability
+        FOREIGN KEY (capability_id)
+        REFERENCES capabilities(capability_id)
+        ON DELETE RESTRICT
+);
+
+CREATE INDEX IF NOT EXISTS idx_process_capabilities_capability
+    ON process_capabilities (capability_id);
+
+-- process_business_services: many-to-many junction between processes and business services.
+-- Additive to process.business_service_id (N:1); this table captures additional memberships.
+CREATE TABLE IF NOT EXISTS process_business_services (
+    process_id          TEXT NOT NULL,
+    business_service_id TEXT NOT NULL,
+    created_at          TIMESTAMPTZ NOT NULL,
+
+    PRIMARY KEY (process_id, business_service_id),
+
+    CONSTRAINT fk_pbs_process
+        FOREIGN KEY (process_id)
+        REFERENCES processes(process_id)
+        ON DELETE CASCADE,
+
+    CONSTRAINT fk_pbs_business_service
+        FOREIGN KEY (business_service_id)
+        REFERENCES business_services(business_service_id)
+        ON DELETE RESTRICT
+);
+
+CREATE INDEX IF NOT EXISTS idx_pbs_business_service
+    ON process_business_services (business_service_id);
+
+-- =============================================================================
 -- VIEWS
 -- =============================================================================
 
@@ -728,6 +1039,12 @@ WHERE state = 'awaiting_review';
 -- =============================================================================
 -- COMMENTS
 -- =============================================================================
+
+COMMENT ON TABLE capabilities IS
+'Top-level governance domains grouping related processes and surfaces. Supports optional parent/child nesting for sub-domain hierarchies. Acyclicity is enforced at the application layer.';
+
+COMMENT ON TABLE processes IS
+'Workflows within a Capability. Each process belongs to exactly one Capability. Supports optional parent/child nesting within the same Capability; same-capability invariant enforced by trg_processes_parent_capability_check.';
 
 COMMENT ON TABLE decision_surfaces IS
 'Versioned decision surface definitions. id is the logical surface ID; (id, version) identifies a concrete version.';
@@ -853,6 +1170,82 @@ CREATE TABLE IF NOT EXISTS platform_sessions (
 -- Idempotent column additions for databases created before schema v2.2.
 -- ALTER TABLE ... ADD COLUMN IF NOT EXISTS is safe to run on every startup.
 ALTER TABLE platform_sessions ADD COLUMN IF NOT EXISTS principal_json TEXT;
+
+-- Idempotent column additions for databases created before schema v2.3.
+-- Adds inferred-structure columns to capabilities, processes, and decision_surfaces.
+-- DEFAULT values ensure existing rows get valid data without backfill.
+ALTER TABLE capabilities     ADD COLUMN IF NOT EXISTS origin   TEXT    NOT NULL DEFAULT 'manual';
+ALTER TABLE capabilities     ADD COLUMN IF NOT EXISTS managed  BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE capabilities     ADD COLUMN IF NOT EXISTS replaces TEXT;
+ALTER TABLE processes        ADD COLUMN IF NOT EXISTS origin   TEXT    NOT NULL DEFAULT 'manual';
+ALTER TABLE processes        ADD COLUMN IF NOT EXISTS managed  BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE processes        ADD COLUMN IF NOT EXISTS replaces TEXT;
+ALTER TABLE decision_surfaces ADD COLUMN IF NOT EXISTS origin   TEXT    NOT NULL DEFAULT 'manual';
+ALTER TABLE decision_surfaces ADD COLUMN IF NOT EXISTS managed  BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE decision_surfaces ADD COLUMN IF NOT EXISTS replaces TEXT;
+
+-- Idempotent constraint additions for databases created before schema v2.3.1.
+-- Postgres does not support ADD CONSTRAINT IF NOT EXISTS, so DO blocks are used
+-- to check pg_constraint before adding. Safe to run on every startup.
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_capabilities_origin_managed') THEN
+        ALTER TABLE capabilities
+            ADD CONSTRAINT chk_capabilities_origin_managed
+            CHECK (NOT (origin = 'manual' AND managed = false));
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_capabilities_no_self_replaces') THEN
+        ALTER TABLE capabilities
+            ADD CONSTRAINT chk_capabilities_no_self_replaces
+            CHECK (replaces IS NULL OR replaces <> capability_id);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_processes_origin_managed') THEN
+        ALTER TABLE processes
+            ADD CONSTRAINT chk_processes_origin_managed
+            CHECK (NOT (origin = 'manual' AND managed = false));
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_processes_no_self_replaces') THEN
+        ALTER TABLE processes
+            ADD CONSTRAINT chk_processes_no_self_replaces
+            CHECK (replaces IS NULL OR replaces <> process_id);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_surfaces_origin_managed') THEN
+        ALTER TABLE decision_surfaces
+            ADD CONSTRAINT chk_surfaces_origin_managed
+            CHECK (NOT (origin = 'manual' AND managed = false));
+    END IF;
+END $$;
+
+-- Idempotent column additions for databases created before schema v2.4.
+-- business_service_id links a process to its owning business service (V2 structural model).
+-- Nullable: existing process rows are not required to reference a business service.
+-- FK is added via DO block rather than inline in CREATE TABLE because business_services
+-- is defined after processes in this file; the inline CREATE TABLE cannot forward-reference it.
+ALTER TABLE processes ADD COLUMN IF NOT EXISTS business_service_id TEXT;
+
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_processes_business_service') THEN
+        ALTER TABLE processes
+            ADD CONSTRAINT fk_processes_business_service
+            FOREIGN KEY (business_service_id) REFERENCES business_services(business_service_id) ON DELETE RESTRICT;
+    END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_processes_business_service_id
+    ON processes (business_service_id)
+    WHERE business_service_id IS NOT NULL;
+
 -- Make user_id nullable for OIDC sessions (no-op if already nullable).
 ALTER TABLE platform_sessions ALTER COLUMN user_id DROP NOT NULL;
 -- Drop FK constraint if it still enforces NOT NULL via the reference.

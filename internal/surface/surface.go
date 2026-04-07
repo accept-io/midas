@@ -500,6 +500,10 @@ type DecisionSurface struct {
 	// ApprovedAt is when this surface was approved for activation.
 	// MUTABLE: set when transitioning to Status == Active.
 	ApprovedAt *time.Time `json:"approved_at,omitempty"`
+
+	// ProcessID links this surface to its governing process.
+	// Optional. When set, must reference an existing process in the processes table.
+	ProcessID string `json:"process_id,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -552,6 +556,10 @@ type SurfaceRepository interface {
 	// "Latest" is determined by MAX(version) grouped by ID.
 	// Implementations MUST ensure consistent version ordering.
 	ListByDomain(ctx context.Context, domain string) ([]*DecisionSurface, error)
+
+	// ListByProcessID returns surfaces (latest version only) linked to the given process.
+	// "Latest" is determined by MAX(version) grouped by ID.
+	ListByProcessID(ctx context.Context, processID string) ([]*DecisionSurface, error)
 
 	// Search finds surfaces (latest version only) matching criteria.
 	// "Latest" is determined by MAX(version) grouped by ID.

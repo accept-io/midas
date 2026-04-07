@@ -3,13 +3,19 @@ package memory
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/accept-io/midas/internal/agent"
 	"github.com/accept-io/midas/internal/audit"
 	"github.com/accept-io/midas/internal/authority"
+	"github.com/accept-io/midas/internal/businessservice"
+	"github.com/accept-io/midas/internal/capability"
 	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/outbox"
+	"github.com/accept-io/midas/internal/process"
+	"github.com/accept-io/midas/internal/processbusinessservice"
+	"github.com/accept-io/midas/internal/processcapability"
 	"github.com/accept-io/midas/internal/store"
 	"github.com/accept-io/midas/internal/surface"
 )
@@ -29,7 +35,8 @@ import (
 type SurfaceRepo struct {
 	// versions maps logical surface ID → versions in ascending-version order.
 	// The last element is the latest version.
-	versions map[string][]*surface.DecisionSurface
+	versions  map[string][]*surface.DecisionSurface
+	processes process.ProcessRepository
 }
 
 func NewSurfaceRepo() *SurfaceRepo {
@@ -137,6 +144,21 @@ func (r *SurfaceRepo) ListByDomain(_ context.Context, domain string) ([]*surface
 	return out, nil
 }
 
+// ListByProcessID returns the latest version of each surface linked to the given process.
+func (r *SurfaceRepo) ListByProcessID(_ context.Context, processID string) ([]*surface.DecisionSurface, error) {
+	var out []*surface.DecisionSurface
+	for _, vs := range r.versions {
+		if len(vs) == 0 {
+			continue
+		}
+		latest := vs[len(vs)-1]
+		if latest.ProcessID == processID {
+			out = append(out, latest)
+		}
+	}
+	return out, nil
+}
+
 // Search returns the latest version of each surface whose latest version
 // matches the given search criteria.
 func (r *SurfaceRepo) Search(_ context.Context, criteria surface.SearchCriteria) ([]*surface.DecisionSurface, error) {
@@ -216,7 +238,16 @@ func matchesCriteria(s *surface.DecisionSurface, criteria surface.SearchCriteria
 // Create appends a new version for the surface's logical ID. The caller
 // (the apply executor) is responsible for assigning a monotonically increasing
 // Version number.
-func (r *SurfaceRepo) Create(_ context.Context, s *surface.DecisionSurface) error {
+func (r *SurfaceRepo) Create(ctx context.Context, s *surface.DecisionSurface) error {
+	if r.processes != nil && s.ProcessID != "" {
+		ok, err := r.processes.Exists(ctx, s.ProcessID)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("process %q does not exist", s.ProcessID)
+		}
+	}
 	r.versions[s.ID] = append(r.versions[s.ID], s)
 	return nil
 }
@@ -538,17 +569,39 @@ func (r *EnvelopeRepo) Update(ctx context.Context, e *envelope.Envelope) error {
 }
 
 func NewRepositories() *store.Repositories {
+	caps := NewCapabilityRepo()
+	bsvcs := NewBusinessServiceRepo()
+	procs := NewProcessRepo()
+	procs.capabilities = caps
+	procs.businessSvcs = bsvcs
+
+	pcRepo := NewProcessCapabilityRepo()
+	pcRepo.processes = procs
+	pcRepo.capabilities = caps
+
+	pbsRepo := NewProcessBusinessServiceRepo()
+	pbsRepo.processes = procs
+	pbsRepo.businessSvcs = bsvcs
+
+	surfRepo := NewSurfaceRepo()
+	surfRepo.processes = procs
+
 	return &store.Repositories{
-		Surfaces:      NewSurfaceRepo(),
-		Agents:        NewAgentRepo(),
-		Profiles:      NewProfileRepo(),
-		Grants:        NewGrantRepo(),
-		Envelopes:     NewEnvelopeRepo(),
-		Audit:         audit.NewMemoryRepository(),
-		ControlAudit:  NewControlAuditRepo(),
-		Outbox:        outbox.NewMemoryRepository(),
-		LocalUsers:    NewLocalUserRepo(),
-		LocalSessions: NewLocalSessionRepo(),
+		Surfaces:                surfRepo,
+		Agents:                  NewAgentRepo(),
+		Profiles:                NewProfileRepo(),
+		Grants:                  NewGrantRepo(),
+		Envelopes:               NewEnvelopeRepo(),
+		Audit:                   audit.NewMemoryRepository(),
+		ControlAudit:            NewControlAuditRepo(),
+		Outbox:                  outbox.NewMemoryRepository(),
+		LocalUsers:              NewLocalUserRepo(),
+		LocalSessions:           NewLocalSessionRepo(),
+		Capabilities:            caps,
+		Processes:               procs,
+		BusinessServices:        bsvcs,
+		ProcessCapabilities:     pcRepo,
+		ProcessBusinessServices: pbsRepo,
 	}
 }
 
@@ -557,3 +610,8 @@ var _ agent.AgentRepository = (*AgentRepo)(nil)
 var _ authority.ProfileRepository = (*ProfileRepo)(nil)
 var _ authority.GrantRepository = (*GrantRepo)(nil)
 var _ envelope.EnvelopeRepository = (*EnvelopeRepo)(nil)
+var _ capability.CapabilityRepository = (*CapabilityRepo)(nil)
+var _ process.ProcessRepository = (*ProcessRepo)(nil)
+var _ businessservice.BusinessServiceRepository = (*BusinessServiceRepo)(nil)
+var _ processcapability.ProcessCapabilityRepository = (*ProcessCapabilityRepo)(nil)
+var _ processbusinessservice.ProcessBusinessServiceRepository = (*ProcessBusinessServiceRepo)(nil)

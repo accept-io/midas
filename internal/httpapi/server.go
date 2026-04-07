@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -15,6 +16,8 @@ import (
 	"github.com/accept-io/midas/internal/agent"
 	"github.com/accept-io/midas/internal/auth"
 	"github.com/accept-io/midas/internal/authority"
+	"github.com/accept-io/midas/internal/businessservice"
+	"github.com/accept-io/midas/internal/capability"
 	"github.com/accept-io/midas/internal/config"
 	"github.com/accept-io/midas/internal/controlaudit"
 	"github.com/accept-io/midas/internal/controlplane/apply"
@@ -24,6 +27,8 @@ import (
 	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/eval"
 	"github.com/accept-io/midas/internal/identity"
+	"github.com/accept-io/midas/internal/inference"
+	"github.com/accept-io/midas/internal/process"
 	"github.com/accept-io/midas/internal/localiam"
 	"github.com/accept-io/midas/internal/oidc"
 	"github.com/accept-io/midas/internal/surface"
@@ -97,6 +102,56 @@ type grantLifecycleService interface {
 	ReinstateGrant(ctx context.Context, grantID, reinstatedBy string) (*authority.AuthorityGrant, error)
 }
 
+// structuralService defines the read-only interface for structural entities
+// (Capability, Process, BusinessService). If nil, the structural endpoints return 501.
+type structuralService interface {
+	GetCapability(ctx context.Context, id string) (*capability.Capability, error)
+	ListCapabilities(ctx context.Context) ([]*capability.Capability, error)
+	GetProcess(ctx context.Context, id string) (*process.Process, error)
+	ListProcesses(ctx context.Context) ([]*process.Process, error)
+	// ListProcessesByCapability returns (nil, false, nil) when capability not found,
+	// or (procs, true, nil) including empty slice when found.
+	ListProcessesByCapability(ctx context.Context, capabilityID string) ([]*process.Process, bool, error)
+	// ListSurfacesByProcess returns (nil, false, nil) when process not found,
+	// or (surfs, true, nil) including empty slice when found.
+	ListSurfacesByProcess(ctx context.Context, processID string) ([]*surface.DecisionSurface, bool, error)
+	// GetBusinessService returns nil, nil when not found or BS reader not configured.
+	GetBusinessService(ctx context.Context, id string) (*businessservice.BusinessService, error)
+	// ListBusinessServices returns an empty slice when BS reader not configured.
+	ListBusinessServices(ctx context.Context) ([]*businessservice.BusinessService, error)
+}
+
+// inferenceService is the narrow interface required by the inference wiring in
+// handleEvaluateWith. *inference.Service satisfies this interface.
+type inferenceService interface {
+	EnsureInferredStructure(ctx context.Context, surfaceID string) (inference.InferenceResult, error)
+}
+
+// explicitModeValidator is the narrow interface required for explicit-mode
+// structural validation in handleEvaluateWith. *ExplicitValidationService satisfies this.
+type explicitModeValidator interface {
+	GetProcess(ctx context.Context, id string) (*process.Process, error)
+	FindLatestSurface(ctx context.Context, id string) (*surface.DecisionSurface, error)
+}
+
+// promotionService is the narrow interface required for the promote endpoint.
+// *inference.PromoteService satisfies this interface.
+type promotionService interface {
+	Promote(ctx context.Context, req inference.PromoteRequest) (inference.PromoteResponse, error)
+}
+
+// cleanupService is the narrow interface required for the cleanup endpoint.
+// *inference.CleanupService satisfies this interface.
+type cleanupService interface {
+	CleanupInferredEntities(ctx context.Context, cutoff time.Time) (inference.CleanupResult, error)
+}
+
+// validationErr is an unexported sentinel type for request-level structural
+// validation failures that map to HTTP 400. Returned by validateExplicitStructure.
+type validationErr string
+
+func (e validationErr) Error() string { return string(e) }
+
 // oidcProvider is the narrow interface required by the OIDC browser-login handlers.
 // *oidc.Service satisfies this interface; tests may inject a stub.
 type oidcProvider interface {
@@ -114,6 +169,7 @@ type Server struct {
 	introspection       introspectionService
 	controlAudit        controlAuditService
 	grantLifecycle      grantLifecycleService
+	structural          structuralService
 	authenticator       auth.Authenticator
 	authMode            config.AuthMode              // set via WithAuthMode; must be called at startup with cfg.Auth.Mode
 	policyMode          string                       // e.g. "noop" — set via WithPolicyMeta at boot
@@ -122,10 +178,17 @@ type Server struct {
 	explorerEnabled      bool                         // set via WithExplorerEnabled; registers /explorer routes when true
 	storeBackend         string                       // e.g. "memory" or "postgres" — set via WithStoreBackend at boot
 	explorerDemoSeeded   *bool                        // nil = unknown, &true = seeded, &false = not seeded
+	seedDemoUser         bool                         // set via WithSeedDemoUser; mirrors cfg.Dev.SeedDemoUser
 	explorerOrchestrator orchestrator                 // isolated in-memory orchestrator for POST /explorer
 	localIAM             *localiam.Service            // nil when local IAM is disabled
 	oidcService          oidcProvider                 // nil when OIDC is disabled
 	secureCookiesFlag    bool                         // mirrors LocalIAM.SecureCookies; used by OIDC helper cookies
+	inferenceSvc         inferenceService             // nil when inference is not wired
+	inferenceEnabled     bool                         // set via WithInference; mirrors cfg.Inference.Enabled
+	structuralMode       config.StructuralMode        // set via WithStructuralMode; empty/unset treated as permissive
+	explicitValidator    explicitModeValidator        // nil when explicit-mode validation is not wired
+	promotionSvc         promotionService             // nil when promotion is not wired
+	cleanupSvc           cleanupService               // nil when cleanup is not wired
 }
 
 type approveSurfaceRequest struct {
@@ -221,6 +284,41 @@ type profileResponse struct {
 	UpdatedAt            time.Time  `json:"updated_at"`
 	ApprovedBy           string     `json:"approved_by,omitempty"`
 	ApprovedAt           *time.Time `json:"approved_at,omitempty"`
+}
+
+// capabilityResponse is the wire format for GET /v1/capabilities/{id} and list items.
+type capabilityResponse struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description,omitempty"`
+	Status      string    `json:"status"`
+	Owner       string    `json:"owner,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// processResponse is the wire format for GET /v1/processes/{id} and list items.
+type processResponse struct {
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	CapabilityID string    `json:"capability_id"`
+	Description  string    `json:"description,omitempty"`
+	Status       string    `json:"status"`
+	Owner        string    `json:"owner,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// businessServiceResponse is the wire format for GET /v1/businessservices/{id} and list items.
+type businessServiceResponse struct {
+	ID              string    `json:"id"`
+	Name            string    `json:"name"`
+	Description     string    `json:"description,omitempty"`
+	ServiceType     string    `json:"service_type"`
+	RegulatoryScope string    `json:"regulatory_scope,omitempty"`
+	Status          string    `json:"status"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 // agentResponse is the wire format for GET /v1/agents/{id}.
@@ -909,6 +1007,48 @@ func NewServerFull(
 	return s
 }
 
+// WithStructural attaches a structural service to the server, enabling
+// the /v1/capabilities and /v1/processes endpoints.
+func (s *Server) WithStructural(svc structuralService) *Server {
+	s.structural = svc
+	return s
+}
+
+// WithInference attaches an inference service and enables/disables automatic
+// structure inference on the governed /v1/evaluate path.
+func (s *Server) WithInference(svc inferenceService, enabled bool) *Server {
+	s.inferenceSvc = svc
+	s.inferenceEnabled = enabled
+	return s
+}
+
+// WithStructuralMode sets the structural enforcement mode. In permissive mode
+// (the default when not called), process_id is optional on /v1/evaluate.
+// In enforced mode, process_id is required when inference is not enabled.
+func (s *Server) WithStructuralMode(mode config.StructuralMode) *Server {
+	s.structuralMode = mode
+	return s
+}
+
+// WithExplicitValidator attaches a structural validation service used to
+// verify explicit process_id requests on the governed /v1/evaluate path.
+func (s *Server) WithExplicitValidator(svc explicitModeValidator) *Server {
+	s.explicitValidator = svc
+	return s
+}
+
+// WithPromotion attaches a promotion service for the POST /v1/controlplane/promote endpoint.
+func (s *Server) WithPromotion(svc promotionService) *Server {
+	s.promotionSvc = svc
+	return s
+}
+
+// WithCleanup attaches a cleanup service for the POST /v1/controlplane/cleanup endpoint.
+func (s *Server) WithCleanup(svc cleanupService) *Server {
+	s.cleanupSvc = svc
+	return s
+}
+
 func NewServerWithControlPlane(orchestrator orchestrator, controlPlane controlPlaneService) *Server {
 	mux := http.NewServeMux()
 
@@ -942,6 +1082,8 @@ func (s *Server) routes() {
 	// apply/plan: platform.admin only (mutates or previews configuration).
 	s.mux.HandleFunc("/v1/controlplane/apply", s.requireAuth(s.requireRole(identity.RolePlatformAdmin)(s.handleApplyBundle)))
 	s.mux.HandleFunc("/v1/controlplane/plan", s.requireAuth(s.requireRole(identity.RolePlatformAdmin)(s.handlePlanBundle)))
+	s.mux.HandleFunc("/v1/controlplane/promote", s.requireAuth(s.requireRole(identity.RolePlatformAdmin)(s.handlePromote)))
+	s.mux.HandleFunc("/v1/controlplane/cleanup", s.requireAuth(s.requireRole(identity.RolePlatformAdmin)(s.handleCleanup)))
 	// audit read: platform.viewer or above.
 	s.mux.HandleFunc("/v1/controlplane/audit", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleListControlAudit)))
 	// Resource lifecycle — role enforcement applied per-action inside each dispatcher.
@@ -956,6 +1098,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/v1/agents/", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleGetAgent)))
 	s.mux.HandleFunc("/v1/grants/", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleGetGrant)))
 	s.mux.HandleFunc("/v1/grants", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleListGrants)))
+
+	// Structural entities — platform.viewer or above.
+	s.mux.HandleFunc("/v1/capabilities/", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleGetCapabilityOrProcesses)))
+	s.mux.HandleFunc("/v1/capabilities", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleListCapabilities)))
+	s.mux.HandleFunc("/v1/processes/", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleGetProcessOrSurfaces)))
+	s.mux.HandleFunc("/v1/processes", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleListProcesses)))
+	s.mux.HandleFunc("/v1/businessservices/", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleGetBusinessService)))
+	s.mux.HandleFunc("/v1/businessservices", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleListBusinessServices)))
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -1030,6 +1180,7 @@ type evaluateRequest struct {
 	Context       map[string]any       `json:"context,omitempty"`
 	RequestSource string               `json:"request_source,omitempty"`
 	RequestID     string               `json:"request_id,omitempty"`
+	ProcessID     string               `json:"process_id,omitempty"`
 }
 
 type evaluateConsequence struct {
@@ -1037,6 +1188,17 @@ type evaluateConsequence struct {
 	Amount     float64               `json:"amount,omitempty"`
 	Currency   string                `json:"currency,omitempty"`
 	RiskRating value.RiskRating      `json:"risk_rating,omitempty"`
+}
+
+// inferenceMeta carries the structural inference result attached to evaluate
+// responses when automatic inference was triggered on the /v1/evaluate path.
+type inferenceMeta struct {
+	CapabilityID      string `json:"capability_id"`
+	ProcessID         string `json:"process_id"`
+	SurfaceID         string `json:"surface_id"`
+	CapabilityCreated bool   `json:"capability_created"`
+	ProcessCreated    bool   `json:"process_created"`
+	SurfaceCreated    bool   `json:"surface_created"`
 }
 
 type evaluateResponse struct {
@@ -1053,6 +1215,50 @@ type evaluateResponse struct {
 	PolicyMode      string `json:"policy_mode,omitempty"`
 	PolicyReference string `json:"policy_reference,omitempty"`
 	PolicySkipped   bool   `json:"policy_skipped,omitempty"`
+
+	// Inference is populated when structural inference was triggered automatically.
+	// Omitted when process_id was supplied explicitly or when inference is disabled.
+	Inference *inferenceMeta `json:"inference,omitempty"`
+}
+
+// validateExplicitStructure checks that the provided processID and surfaceID are
+// structurally consistent:
+//  1. the process exists
+//  2. the surface exists (latest version)
+//  3. the surface belongs to the process
+//
+// Returns a validationErr (maps to HTTP 400) for structural failures.
+// Returns a wrapped system error (maps to HTTP 500) for unexpected lookup failures.
+// Returns nil when all checks pass.
+func (s *Server) validateExplicitStructure(ctx context.Context, surfaceID, processID string) error {
+	if s.explicitValidator == nil {
+		return fmt.Errorf("explicit validation service not configured")
+	}
+
+	proc, err := s.explicitValidator.GetProcess(ctx, processID)
+	if err != nil {
+		return fmt.Errorf("process lookup failed: %w", err)
+	}
+	if proc == nil {
+		return validationErr(fmt.Sprintf("process %q does not exist", processID))
+	}
+
+	surf, err := s.explicitValidator.FindLatestSurface(ctx, surfaceID)
+	if err != nil {
+		return fmt.Errorf("surface lookup failed: %w", err)
+	}
+	if surf == nil {
+		return validationErr(fmt.Sprintf("surface %q does not exist", surfaceID))
+	}
+
+	if surf.ProcessID != processID {
+		return validationErr(fmt.Sprintf(
+			"surface %q belongs to process %q, not requested process %q",
+			surfaceID, surf.ProcessID, processID,
+		))
+	}
+
+	return nil
 }
 
 func (s *Server) handleEvaluate(w http.ResponseWriter, r *http.Request) {
@@ -1101,6 +1307,7 @@ func (s *Server) handleEvaluateWith(w http.ResponseWriter, r *http.Request, orch
 	req.AgentID = strings.TrimSpace(req.AgentID)
 	req.RequestSource = strings.TrimSpace(req.RequestSource)
 	req.RequestID = strings.TrimSpace(req.RequestID)
+	req.ProcessID = strings.TrimSpace(req.ProcessID)
 	if req.Consequence != nil {
 		req.Consequence.Currency = strings.TrimSpace(req.Consequence.Currency)
 	}
@@ -1138,6 +1345,59 @@ func (s *Server) handleEvaluateWith(w http.ResponseWriter, r *http.Request, orch
 		return
 	}
 
+	// Explicit-mode structural validation: only on the governed path, only when process_id is provided.
+	// Inference is skipped entirely in explicit mode.
+	if requireRequestID && req.ProcessID != "" {
+		if err := s.validateExplicitStructure(r.Context(), req.SurfaceID, req.ProcessID); err != nil {
+			var ve validationErr
+			if errors.As(err, &ve) {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			} else {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "explicit validation failed"})
+			}
+			return
+		}
+	}
+
+	// Inference / permissive-mode routing: only on the governed /v1/evaluate path,
+	// only when process_id is absent.
+	// When process_id is provided, skip this block entirely (explicit mode, unchanged behaviour).
+	var infMeta *inferenceMeta
+	if requireRequestID && req.ProcessID == "" {
+		if s.inferenceEnabled && s.inferenceSvc != nil {
+			// Inference path: infer capability/process/surface from surface_id.
+			if err := inference.ValidateSurfaceID(req.SurfaceID); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{
+					"error": "invalid surface_id: " + err.Error(),
+				})
+				return
+			}
+			infResult, err := s.inferenceSvc.EnsureInferredStructure(r.Context(), req.SurfaceID)
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{
+					"error": "inference failed: " + err.Error(),
+				})
+				return
+			}
+			infMeta = &inferenceMeta{
+				CapabilityID:      infResult.CapabilityID,
+				ProcessID:         infResult.ProcessID,
+				SurfaceID:         infResult.SurfaceID,
+				CapabilityCreated: infResult.CapabilityCreated,
+				ProcessCreated:    infResult.ProcessCreated,
+				SurfaceCreated:    infResult.SurfaceCreated,
+			}
+		} else if s.structuralMode == config.StructuralModeEnforced {
+			// Enforced mode: process_id is required when inference is not available.
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "process_id is required when inference is not enabled",
+			})
+			return
+		}
+		// Permissive mode (default): allow evaluation with an absent process_id.
+		// The orchestrator handles empty process_id consistently with Explorer behaviour.
+	}
+
 	result, err := orch.Evaluate(r.Context(), toEvalRequest(req), json.RawMessage(rawBody))
 	if err != nil {
 		statusCode, errResp := mapDomainError(err, entityEvaluation)
@@ -1145,6 +1405,11 @@ func (s *Server) handleEvaluateWith(w http.ResponseWriter, r *http.Request, orch
 		return
 	}
 
+	if infMeta != nil {
+		w.Header().Set("X-MIDAS-Inference-Used", "true")
+		w.Header().Set("X-MIDAS-Inferred-Capability", infMeta.CapabilityID)
+		w.Header().Set("X-MIDAS-Inferred-Process", infMeta.ProcessID)
+	}
 	writeJSON(w, http.StatusOK, evaluateResponse{
 		Outcome:         string(result.Outcome),
 		Reason:          string(result.ReasonCode),
@@ -1153,6 +1418,7 @@ func (s *Server) handleEvaluateWith(w http.ResponseWriter, r *http.Request, orch
 		PolicyMode:      result.PolicyMode,
 		PolicyReference: result.PolicyReference,
 		PolicySkipped:   result.PolicySkipped,
+		Inference:       infMeta,
 	})
 }
 
@@ -1518,6 +1784,149 @@ func (s *Server) handleGetDecisionByRequestID(w http.ResponseWriter, r *http.Req
 // ---------------------------------------------------------------------------
 // Control Plane - Apply Bundle
 // ---------------------------------------------------------------------------
+
+// promoteRequestBody is the JSON body for POST /v1/controlplane/promote.
+type promoteRequestBody struct {
+	From promoteSpec `json:"from"`
+	To   promoteSpec `json:"to"`
+}
+
+// promoteSpec identifies a capability/process pair in a promote request or response.
+type promoteSpec struct {
+	CapabilityID string `json:"capability_id"`
+	ProcessID    string `json:"process_id"`
+}
+
+// promoteResponseBody is the JSON response for POST /v1/controlplane/promote.
+type promoteResponseBody struct {
+	From             promoteSpec `json:"from"`
+	To               promoteSpec `json:"to"`
+	SurfacesMigrated int         `json:"surfaces_migrated"`
+}
+
+// handlePromote processes POST /v1/controlplane/promote.
+// It promotes an inferred capability/process pair to managed equivalents, migrating
+// all attached surfaces to the new process and deprecating the old inferred entities.
+func (s *Server) handlePromote(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+
+	if s.promotionSvc == nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{
+			"error": "promotion service not configured",
+		})
+		return
+	}
+
+	rawBody, err := readRequestBody(w, r, maxRequestBodyBytes)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, errRequestBodyTooLarge) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		writeJSON(w, status, map[string]string{"error": err.Error()})
+		return
+	}
+
+	var req promoteRequestBody
+	if err := decodeStrictJSON(rawBody, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	promReq := inference.PromoteRequest{
+		FromCapabilityID: strings.TrimSpace(req.From.CapabilityID),
+		FromProcessID:    strings.TrimSpace(req.From.ProcessID),
+		ToCapabilityID:   strings.TrimSpace(req.To.CapabilityID),
+		ToProcessID:      strings.TrimSpace(req.To.ProcessID),
+	}
+
+	resp, err := s.promotionSvc.Promote(r.Context(), promReq)
+	if err != nil {
+		var pe inference.PromoteErr
+		if errors.As(err, &pe) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "promotion failed"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, promoteResponseBody{
+		From:             promoteSpec{CapabilityID: resp.FromCapabilityID, ProcessID: resp.FromProcessID},
+		To:               promoteSpec{CapabilityID: resp.ToCapabilityID, ProcessID: resp.ToProcessID},
+		SurfacesMigrated: resp.SurfacesMigrated,
+	})
+}
+
+// cleanupRequestBody is the JSON body for POST /v1/controlplane/cleanup.
+type cleanupRequestBody struct {
+	OlderThanDays int `json:"older_than_days"`
+}
+
+// cleanupResponseBody is the JSON body returned by POST /v1/controlplane/cleanup.
+type cleanupResponseBody struct {
+	ProcessesDeleted    []string `json:"processes_deleted"`
+	CapabilitiesDeleted []string `json:"capabilities_deleted"`
+}
+
+// handleCleanup processes POST /v1/controlplane/cleanup.
+// It deletes deprecated inferred capabilities and processes that are no longer
+// referenced, subject to an optional age threshold.
+func (s *Server) handleCleanup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+
+	if s.cleanupSvc == nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{
+			"error": "cleanup service not configured",
+		})
+		return
+	}
+
+	rawBody, err := readRequestBody(w, r, maxRequestBodyBytes)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, errRequestBodyTooLarge) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		writeJSON(w, status, map[string]string{"error": err.Error()})
+		return
+	}
+
+	var req cleanupRequestBody
+	if err := decodeStrictJSON(rawBody, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	if req.OlderThanDays < 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "older_than_days must be >= 0",
+		})
+		return
+	}
+
+	var cutoff time.Time
+	if req.OlderThanDays > 0 {
+		cutoff = time.Now().UTC().Add(-time.Duration(req.OlderThanDays) * 24 * time.Hour)
+	}
+
+	result, err := s.cleanupSvc.CleanupInferredEntities(r.Context(), cutoff)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "cleanup failed"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, cleanupResponseBody{
+		ProcessesDeleted:    result.ProcessesDeleted,
+		CapabilitiesDeleted: result.CapabilitiesDeleted,
+	})
+}
 
 func (s *Server) handleApplyBundle(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -2218,6 +2627,288 @@ func toGrantResponse(g *authority.AuthorityGrant) grantResponse {
 		CreatedAt:     g.CreatedAt,
 		UpdatedAt:     g.UpdatedAt,
 	}
+}
+
+// toCapabilityResponse maps a Capability to its wire format.
+func toCapabilityResponse(c *capability.Capability) capabilityResponse {
+	return capabilityResponse{
+		ID:          c.ID,
+		Name:        c.Name,
+		Description: c.Description,
+		Status:      c.Status,
+		Owner:       c.Owner,
+		CreatedAt:   c.CreatedAt,
+		UpdatedAt:   c.UpdatedAt,
+	}
+}
+
+// toProcessResponse maps a Process to its wire format.
+func toProcessResponse(p *process.Process) processResponse {
+	return processResponse{
+		ID:           p.ID,
+		Name:         p.Name,
+		CapabilityID: p.CapabilityID,
+		Description:  p.Description,
+		Status:       p.Status,
+		Owner:        p.Owner,
+		CreatedAt:    p.CreatedAt,
+		UpdatedAt:    p.UpdatedAt,
+	}
+}
+
+// toBusinessServiceResponse maps a BusinessService to its wire format.
+func toBusinessServiceResponse(s *businessservice.BusinessService) businessServiceResponse {
+	return businessServiceResponse{
+		ID:              s.ID,
+		Name:            s.Name,
+		Description:     s.Description,
+		ServiceType:     string(s.ServiceType),
+		RegulatoryScope: s.RegulatoryScope,
+		Status:          s.Status,
+		CreatedAt:       s.CreatedAt,
+		UpdatedAt:       s.UpdatedAt,
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Structural handlers — /v1/capabilities and /v1/processes
+// ---------------------------------------------------------------------------
+
+// handleListCapabilities serves GET /v1/capabilities.
+func (s *Server) handleListCapabilities(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	if s.structural == nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "structural service not configured"})
+		return
+	}
+	caps, err := s.structural.ListCapabilities(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	out := make([]capabilityResponse, 0, len(caps))
+	for _, c := range caps {
+		out = append(out, toCapabilityResponse(c))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleGetCapabilityOrProcesses dispatches:
+//
+//	GET /v1/capabilities/{id}            → handleGetCapability
+//	GET /v1/capabilities/{id}/processes  → handleGetCapabilityProcesses
+func (s *Server) handleGetCapabilityOrProcesses(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	const prefix = "/v1/capabilities/"
+	rest := strings.TrimPrefix(r.URL.Path, prefix)
+	rest = strings.Trim(rest, "/")
+	if rest == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing capability id"})
+		return
+	}
+	parts := strings.SplitN(rest, "/", 2)
+	id := strings.TrimSpace(parts[0])
+	if !isValidIdentifier(id) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid capability id"})
+		return
+	}
+	if len(parts) == 2 && parts[1] == "processes" {
+		s.handleGetCapabilityProcesses(w, r, id)
+		return
+	}
+	if len(parts) > 1 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+	s.handleGetCapability(w, r, id)
+}
+
+func (s *Server) handleGetCapability(w http.ResponseWriter, r *http.Request, id string) {
+	if s.structural == nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "structural service not configured"})
+		return
+	}
+	cap, err := s.structural.GetCapability(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if cap == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "capability not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, toCapabilityResponse(cap))
+}
+
+func (s *Server) handleGetCapabilityProcesses(w http.ResponseWriter, r *http.Request, capabilityID string) {
+	if s.structural == nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "structural service not configured"})
+		return
+	}
+	procs, found, err := s.structural.ListProcessesByCapability(r.Context(), capabilityID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "capability not found"})
+		return
+	}
+	out := make([]processResponse, 0, len(procs))
+	for _, p := range procs {
+		out = append(out, toProcessResponse(p))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleListProcesses serves GET /v1/processes.
+func (s *Server) handleListProcesses(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	if s.structural == nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "structural service not configured"})
+		return
+	}
+	procs, err := s.structural.ListProcesses(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	out := make([]processResponse, 0, len(procs))
+	for _, p := range procs {
+		out = append(out, toProcessResponse(p))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleGetProcessOrSurfaces dispatches:
+//
+//	GET /v1/processes/{id}           → handleGetProcess
+//	GET /v1/processes/{id}/surfaces  → handleGetProcessSurfaces
+func (s *Server) handleGetProcessOrSurfaces(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	const prefix = "/v1/processes/"
+	rest := strings.TrimPrefix(r.URL.Path, prefix)
+	rest = strings.Trim(rest, "/")
+	if rest == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing process id"})
+		return
+	}
+	parts := strings.SplitN(rest, "/", 2)
+	id := strings.TrimSpace(parts[0])
+	if !isValidIdentifier(id) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid process id"})
+		return
+	}
+	if len(parts) == 2 && parts[1] == "surfaces" {
+		s.handleGetProcessSurfaces(w, r, id)
+		return
+	}
+	if len(parts) > 1 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+	s.handleGetProcess(w, r, id)
+}
+
+func (s *Server) handleGetProcess(w http.ResponseWriter, r *http.Request, id string) {
+	if s.structural == nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "structural service not configured"})
+		return
+	}
+	proc, err := s.structural.GetProcess(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if proc == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "process not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, toProcessResponse(proc))
+}
+
+func (s *Server) handleGetProcessSurfaces(w http.ResponseWriter, r *http.Request, processID string) {
+	if s.structural == nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "structural service not configured"})
+		return
+	}
+	surfs, found, err := s.structural.ListSurfacesByProcess(r.Context(), processID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "process not found"})
+		return
+	}
+	out := make([]surfaceResponse, 0, len(surfs))
+	for _, surf := range surfs {
+		out = append(out, toSurfaceResponse(surf))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleListBusinessServices serves GET /v1/businessservices.
+func (s *Server) handleListBusinessServices(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	if s.structural == nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "structural service not configured"})
+		return
+	}
+	svcs, err := s.structural.ListBusinessServices(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	out := make([]businessServiceResponse, 0, len(svcs))
+	for _, s := range svcs {
+		out = append(out, toBusinessServiceResponse(s))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleGetBusinessService serves GET /v1/businessservices/{id}.
+func (s *Server) handleGetBusinessService(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	if s.structural == nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "structural service not configured"})
+		return
+	}
+	const prefix = "/v1/businessservices/"
+	id := strings.TrimPrefix(r.URL.Path, prefix)
+	id = strings.Trim(id, "/")
+	if id == "" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+	svc, err := s.structural.GetBusinessService(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if svc == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "business service not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, toBusinessServiceResponse(svc))
 }
 
 // ---------------------------------------------------------------------------

@@ -352,6 +352,13 @@ func (s *Server) WithDemoSeeded(seeded bool) *Server {
 	return s
 }
 
+// WithSeedDemoUser records whether the demo Local IAM user (demo/demo) is
+// seeded at startup, so the Explorer login panel can display a contextual hint.
+func (s *Server) WithSeedDemoUser(v bool) *Server {
+	s.seedDemoUser = v
+	return s
+}
+
 // PrincipalFromContext retrieves the verified Principal that requireAuth stored
 // in the request context. Returns nil when no principal is present (i.e. the
 // authenticator was not configured or the middleware was not applied).

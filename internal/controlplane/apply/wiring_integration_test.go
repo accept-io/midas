@@ -34,6 +34,7 @@ func fullBundle() []parser.ParsedDocument {
 					Category:    "financial",
 					RiskTier:    "high",
 					Status:      "active",
+					ProcessID:   "test.process",
 				},
 			},
 		},
@@ -116,11 +117,13 @@ func fullBundle() []parser.ParsedDocument {
 // repositories, then confirms every resource is retrievable from its backing store.
 func TestApplyWithRepos_AllFourKindsPersisted(t *testing.T) {
 	repos := memory.NewRepositories()
+	seedTestProcess(t, repos)
 	svc := apply.NewServiceWithRepos(apply.RepositorySet{
-		Surfaces: repos.Surfaces,
-		Agents:   repos.Agents,
-		Profiles: repos.Profiles,
-		Grants:   repos.Grants,
+		Surfaces:  repos.Surfaces,
+		Agents:    repos.Agents,
+		Profiles:  repos.Profiles,
+		Grants:    repos.Grants,
+		Processes: alwaysExistsProcessRepo{},
 	})
 
 	ctx := context.Background()

@@ -27,6 +27,13 @@ var (
 	ValidFailModes        = []string{"open", "closed"}
 	ValidAgentTypes       = []string{"llm_agent", "workflow", "automation", "copilot", "rpa"}
 	ValidConsequenceTypes = []string{"monetary", "risk_rating"}
+	ValidServiceTypes     = []string{"customer_facing", "internal", "technical"}
+
+	// ValidBusinessServiceStatuses is narrower than ValidStatuses: the business_services
+	// schema CHECK constraint allows only 'active' and 'deprecated' (not 'inactive').
+	// Using ValidStatuses here would let 'inactive' pass validation and then fail
+	// at the DB with a constraint error instead of a clean 422.
+	ValidBusinessServiceStatuses = []string{"active", "deprecated"}
 )
 
 type document interface {
@@ -43,6 +50,16 @@ func ValidateDocument(doc parser.ParsedDocument) []types.ValidationError {
 	errs = append(errs, validateIdentity(doc)...)
 
 	switch d := doc.Doc.(type) {
+	case types.ProcessCapabilityDocument:
+		errs = append(errs, validateProcessCapability(d)...)
+	case types.ProcessBusinessServiceDocument:
+		errs = append(errs, validateProcessBusinessService(d)...)
+	case types.BusinessServiceDocument:
+		errs = append(errs, validateBusinessService(d)...)
+	case types.CapabilityDocument:
+		errs = append(errs, validateCapability(d)...)
+	case types.ProcessDocument:
+		errs = append(errs, validateProcess(d)...)
 	case types.SurfaceDocument:
 		errs = append(errs, validateSurface(d)...)
 	case types.AgentDocument:
@@ -154,6 +171,101 @@ func validateIDFormat(id string) error {
 	return nil
 }
 
+func validateProcessCapability(doc types.ProcessCapabilityDocument) []types.ValidationError {
+	var errs []types.ValidationError
+	if strings.TrimSpace(doc.Spec.ProcessID) == "" {
+		errs = append(errs, requiredFieldErr(doc, "spec.process_id"))
+	} else if err := validateIDFormat(doc.Spec.ProcessID); err != nil {
+		errs = append(errs, fieldErr(doc, "spec.process_id", err.Error()))
+	}
+	if strings.TrimSpace(doc.Spec.CapabilityID) == "" {
+		errs = append(errs, requiredFieldErr(doc, "spec.capability_id"))
+	} else if err := validateIDFormat(doc.Spec.CapabilityID); err != nil {
+		errs = append(errs, fieldErr(doc, "spec.capability_id", err.Error()))
+	}
+	return errs
+}
+
+func validateProcessBusinessService(doc types.ProcessBusinessServiceDocument) []types.ValidationError {
+	var errs []types.ValidationError
+	if strings.TrimSpace(doc.Spec.ProcessID) == "" {
+		errs = append(errs, requiredFieldErr(doc, "spec.process_id"))
+	} else if err := validateIDFormat(doc.Spec.ProcessID); err != nil {
+		errs = append(errs, fieldErr(doc, "spec.process_id", err.Error()))
+	}
+	if strings.TrimSpace(doc.Spec.BusinessServiceID) == "" {
+		errs = append(errs, requiredFieldErr(doc, "spec.business_service_id"))
+	} else if err := validateIDFormat(doc.Spec.BusinessServiceID); err != nil {
+		errs = append(errs, fieldErr(doc, "spec.business_service_id", err.Error()))
+	}
+	return errs
+}
+
+func validateBusinessService(doc types.BusinessServiceDocument) []types.ValidationError {
+	var errs []types.ValidationError
+	if strings.TrimSpace(doc.Metadata.Name) == "" {
+		errs = append(errs, requiredFieldErr(doc, "metadata.name"))
+	} else if len(doc.Metadata.Name) > MaxNameLength {
+		errs = append(errs, fieldErr(doc, "metadata.name", fmt.Sprintf("exceeds maximum length of %d characters", MaxNameLength)))
+	}
+	if strings.TrimSpace(doc.Spec.ServiceType) == "" {
+		errs = append(errs, requiredFieldErr(doc, "spec.service_type"))
+	} else if !contains(ValidServiceTypes, doc.Spec.ServiceType) {
+		errs = append(errs, enumErr(doc, "spec.service_type", doc.Spec.ServiceType, ValidServiceTypes))
+	}
+	if strings.TrimSpace(doc.Spec.Status) == "" {
+		errs = append(errs, requiredFieldErr(doc, "spec.status"))
+	} else if !contains(ValidBusinessServiceStatuses, doc.Spec.Status) {
+		errs = append(errs, enumErr(doc, "spec.status", doc.Spec.Status, ValidBusinessServiceStatuses))
+	}
+	return errs
+}
+
+func validateCapability(doc types.CapabilityDocument) []types.ValidationError {
+	var errs []types.ValidationError
+	if strings.TrimSpace(doc.Metadata.Name) == "" {
+		errs = append(errs, requiredFieldErr(doc, "metadata.name"))
+	} else if len(doc.Metadata.Name) > MaxNameLength {
+		errs = append(errs, fieldErr(doc, "metadata.name", fmt.Sprintf("exceeds maximum length of %d characters", MaxNameLength)))
+	}
+	if strings.TrimSpace(doc.Spec.Status) == "" {
+		errs = append(errs, requiredFieldErr(doc, "spec.status"))
+	} else if !contains(ValidStatuses, doc.Spec.Status) {
+		errs = append(errs, enumErr(doc, "spec.status", doc.Spec.Status, ValidStatuses))
+	}
+	if parentID := strings.TrimSpace(doc.Spec.ParentCapabilityID); parentID != "" {
+		if err := validateIDFormat(parentID); err != nil {
+			errs = append(errs, fieldErr(doc, "spec.parent_capability_id", err.Error()))
+		}
+	}
+	return errs
+}
+
+func validateProcess(doc types.ProcessDocument) []types.ValidationError {
+	var errs []types.ValidationError
+	if strings.TrimSpace(doc.Metadata.Name) == "" {
+		errs = append(errs, requiredFieldErr(doc, "metadata.name"))
+	} else if len(doc.Metadata.Name) > MaxNameLength {
+		errs = append(errs, fieldErr(doc, "metadata.name", fmt.Sprintf("exceeds maximum length of %d characters", MaxNameLength)))
+	}
+	if strings.TrimSpace(doc.Spec.CapabilityID) == "" {
+		errs = append(errs, requiredFieldErr(doc, "spec.capability_id"))
+	} else if err := validateIDFormat(doc.Spec.CapabilityID); err != nil {
+		errs = append(errs, fieldErr(doc, "spec.capability_id", err.Error()))
+	}
+	if strings.TrimSpace(doc.Spec.Status) == "" {
+		errs = append(errs, requiredFieldErr(doc, "spec.status"))
+	} else if !contains(ValidStatuses, doc.Spec.Status) {
+		errs = append(errs, enumErr(doc, "spec.status", doc.Spec.Status, ValidStatuses))
+	}
+	if parentID := strings.TrimSpace(doc.Spec.ParentProcessID); parentID != "" {
+		if err := validateIDFormat(parentID); err != nil {
+			errs = append(errs, fieldErr(doc, "spec.parent_process_id", err.Error()))
+		}
+	}
+	return errs
+}
+
 func validateSurface(doc types.SurfaceDocument) []types.ValidationError {
 	var errs []types.ValidationError
 
@@ -186,6 +298,12 @@ func validateSurface(doc types.SurfaceDocument) []types.ValidationError {
 	if len(doc.Spec.Description) > MaxFieldLength {
 		errs = append(errs, fieldErr(doc, "spec.description",
 			fmt.Sprintf("exceeds maximum length of %d characters", MaxFieldLength)))
+	}
+
+	if strings.TrimSpace(doc.Spec.ProcessID) == "" {
+		errs = append(errs, requiredFieldErr(doc, "spec.process_id"))
+	} else if err := validateIDFormat(doc.Spec.ProcessID); err != nil {
+		errs = append(errs, fieldErr(doc, "spec.process_id", err.Error()))
 	}
 
 	return errs

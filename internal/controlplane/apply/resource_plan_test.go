@@ -252,7 +252,8 @@ func (r *controlledGrantRepo) Reactivate(_ context.Context, _ string) error {
 	panic("Reactivate called unexpectedly in grant planner test")
 }
 
-// newServiceWithAll constructs an apply service with all four repositories wired.
+// newServiceWithAll constructs an apply service with all four repositories wired,
+// plus a process repository that always reports processes as existing.
 func newServiceWithAll(
 	surfaceRepo SurfaceRepository,
 	agentRepo AgentRepository,
@@ -260,10 +261,11 @@ func newServiceWithAll(
 	grantRepo GrantRepository,
 ) *Service {
 	return NewServiceWithRepos(RepositorySet{
-		Surfaces: surfaceRepo,
-		Agents:   agentRepo,
-		Profiles: profileRepo,
-		Grants:   grantRepo,
+		Surfaces:  surfaceRepo,
+		Agents:    agentRepo,
+		Profiles:  profileRepo,
+		Grants:    grantRepo,
+		Processes: processRepoAlwaysExists(),
 	})
 }
 

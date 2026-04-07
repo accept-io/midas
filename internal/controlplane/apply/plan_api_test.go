@@ -65,7 +65,7 @@ func TestPlan_WithRepo_ValidNewSurface_Create(t *testing.T) {
 			return nil, nil
 		},
 	}
-	svc := NewServiceWithRepo(repo)
+	svc := NewServiceWithRepos(RepositorySet{Surfaces: repo, Processes: processRepoAlwaysExists()})
 
 	plan := svc.Plan(context.Background(), []parser.ParsedDocument{validSurface("surf-brand-new")})
 
@@ -295,7 +295,7 @@ func TestPlan_BundleDependency_ProfileReferencesInBundleSurface(t *testing.T) {
 			return nil, nil
 		},
 	}
-	svc := NewServiceWithRepos(RepositorySet{Surfaces: surfaceRepo, Profiles: profileRepo})
+	svc := NewServiceWithRepos(RepositorySet{Surfaces: surfaceRepo, Profiles: profileRepo, Processes: processRepoAlwaysExists()})
 
 	docs := []parser.ParsedDocument{
 		validSurface("surf-bundle"),

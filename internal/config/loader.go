@@ -66,7 +66,7 @@ var candidatePaths = []string{
 var topLevelSections = []string{
 	"version", "profile", "server", "store", "auth",
 	"local_iam", "platform_oidc",
-	"observability", "control_plane", "dev", "dispatcher", "kafka",
+	"observability", "control_plane", "dev", "dispatcher", "kafka", "inference", "structural",
 }
 
 // Load discovers, reads, and returns the merged Config.
@@ -311,6 +311,22 @@ func applyEnvOverrides(cfg *Config, sources map[string]Source, getenv func(strin
 		}
 		cfg.ControlPlane.Enabled = b
 		markEnv("control_plane")
+	}
+
+	// Structural
+	if v := getenv("MIDAS_STRUCTURAL_MODE"); v != "" {
+		cfg.Structural.Mode = StructuralMode(strings.ToLower(strings.TrimSpace(v)))
+		markEnv("structural")
+	}
+
+	// Inference
+	if v := getenv("MIDAS_INFERENCE_ENABLED"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("config: MIDAS_INFERENCE_ENABLED must be a boolean (true/false): %q", v)
+		}
+		cfg.Inference.Enabled = b
+		markEnv("inference")
 	}
 
 	// Kafka

@@ -106,6 +106,16 @@ func ValidateStructural(cfg Config) error {
 		})
 	}
 
+	switch cfg.Structural.Mode {
+	case StructuralModePermissive, StructuralModeEnforced:
+	case "": // unset: treated as permissive; not a config error
+	default:
+		errs = append(errs, ValidationError{
+			"structural.mode",
+			fmt.Sprintf("must be %q or %q, got %q", StructuralModePermissive, StructuralModeEnforced, cfg.Structural.Mode),
+		})
+	}
+
 	if len(errs) > 0 {
 		return errs
 	}

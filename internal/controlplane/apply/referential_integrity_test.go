@@ -76,7 +76,7 @@ func TestRefIntegrity_Profile_InBundleSurface_Succeeds(t *testing.T) {
 			return nil, nil
 		},
 	}
-	svc := NewServiceWithRepos(RepositorySet{Surfaces: surfaceRepo, Profiles: profileRepo})
+	svc := NewServiceWithRepos(RepositorySet{Surfaces: surfaceRepo, Profiles: profileRepo, Processes: processRepoAlwaysExists()})
 
 	docs := []parser.ParsedDocument{
 		validSurface("surf-new"),
@@ -351,10 +351,11 @@ func TestRefIntegrity_MixedBundle_DependencyOrderPreserved(t *testing.T) {
 	recordingGrant := &recordingGrantRepo{inner: grantRepo, order: &createOrder}
 
 	svc := NewServiceWithRepos(RepositorySet{
-		Surfaces: recordingSurface,
-		Agents:   recordingAgent,
-		Profiles: recordingProfile,
-		Grants:   recordingGrant,
+		Surfaces:  recordingSurface,
+		Agents:    recordingAgent,
+		Profiles:  recordingProfile,
+		Grants:    recordingGrant,
+		Processes: processRepoAlwaysExists(),
 	})
 
 	// Submit bundle in reverse dependency order to confirm that the executor

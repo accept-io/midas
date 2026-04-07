@@ -16,11 +16,16 @@ import (
 
 // Service coordinates control-plane apply operations.
 type Service struct {
-	surfaceRepo      SurfaceRepository
-	agentRepo        AgentRepository
-	profileRepo      ProfileRepository
-	grantRepo        GrantRepository
-	controlAuditRepo controlaudit.Repository
+	surfaceRepo             SurfaceRepository
+	agentRepo               AgentRepository
+	profileRepo             ProfileRepository
+	grantRepo               GrantRepository
+	processRepo             ProcessRepository
+	capabilityRepo          CapabilityRepository
+	businessServiceRepo     BusinessServiceRepository
+	processCapabilityRepo         ProcessCapabilityRepository
+	processBusinessServiceRepo    ProcessBusinessServiceRepository
+	controlAuditRepo        controlaudit.Repository
 }
 
 // NewService constructs a new apply service with no repositories configured.
@@ -44,11 +49,16 @@ func NewServiceWithRepo(surfaceRepo surface.SurfaceRepository) *Service {
 // for that kind. If ControlAudit is nil, audit events are silently skipped.
 func NewServiceWithRepos(repos RepositorySet) *Service {
 	return &Service{
-		surfaceRepo:      repos.Surfaces,
-		agentRepo:        repos.Agents,
-		profileRepo:      repos.Profiles,
-		grantRepo:        repos.Grants,
-		controlAuditRepo: repos.ControlAudit,
+		surfaceRepo:           repos.Surfaces,
+		agentRepo:             repos.Agents,
+		profileRepo:           repos.Profiles,
+		grantRepo:             repos.Grants,
+		processRepo:           repos.Processes,
+		capabilityRepo:        repos.Capabilities,
+		businessServiceRepo:   repos.BusinessServices,
+		processCapabilityRepo:      repos.ProcessCapabilities,
+		processBusinessServiceRepo: repos.ProcessBusinessServices,
+		controlAuditRepo:      repos.ControlAudit,
 	}
 }
 
@@ -205,6 +215,60 @@ func (s *Service) buildApplyPlan(ctx context.Context, docs []parser.ParsedDocume
 		errsByDoc[k] = append(errsByDoc[k], ve)
 	}
 
+	// Pre-pass: collect the IDs of Capability, Process, and BusinessService
+	// documents in this bundle so that cross-document references can be
+	// satisfied without a round-trip to the repository.
+	//
+	// bundleProcessCapabilityIDs maps process ID → capability_id for all
+	// Process documents in the bundle, enabling same-capability hierarchy
+	// checks without a repo round-trip when parent and child are co-bundled.
+	//
+	// bundleCapabilityParentIDs maps capability ID → parent_capability_id
+	// (empty string when no parent) for all Capability documents in the bundle,
+	// enabling bundle-aware cycle detection for the Capability hierarchy.
+	//
+	// bundleProcessParentIDs maps process ID → parent_process_id (empty string
+	// when no parent) for all Process documents in the bundle, enabling
+	// bundle-aware cycle detection for the Process hierarchy.
+	bundleCapabilityIDs := make(map[string]struct{})
+	bundleProcessIDs := make(map[string]struct{})
+	bundleBusinessServiceIDs := make(map[string]struct{})
+	bundleProcessCapabilityIDs := make(map[string]string)
+	bundleCapabilityParentIDs := make(map[string]string)
+	bundleProcessParentIDs := make(map[string]string)
+	// bundlePCLinks tracks "processID|capabilityID" pairs for all ProcessCapability
+	// documents in the bundle, enabling G-10 Option A enforcement: a Process's
+	// primary capability must also appear as a ProcessCapability link in the same bundle.
+	bundlePCLinks := make(map[string]struct{})
+	for _, doc := range docs {
+		switch doc.Kind {
+		case types.KindCapability:
+			if doc.ID != "" {
+				bundleCapabilityIDs[doc.ID] = struct{}{}
+				if capDoc, ok := doc.Doc.(types.CapabilityDocument); ok {
+					bundleCapabilityParentIDs[doc.ID] = strings.TrimSpace(capDoc.Spec.ParentCapabilityID)
+				}
+			}
+		case types.KindProcess:
+			if doc.ID != "" {
+				bundleProcessIDs[doc.ID] = struct{}{}
+				if procDoc, ok := doc.Doc.(types.ProcessDocument); ok {
+					bundleProcessCapabilityIDs[doc.ID] = procDoc.Spec.CapabilityID
+					bundleProcessParentIDs[doc.ID] = strings.TrimSpace(procDoc.Spec.ParentProcessID)
+				}
+			}
+		case types.KindBusinessService:
+			if doc.ID != "" {
+				bundleBusinessServiceIDs[doc.ID] = struct{}{}
+			}
+		case types.KindProcessCapability:
+			if pcDoc, ok := doc.Doc.(types.ProcessCapabilityDocument); ok {
+				key := strings.TrimSpace(pcDoc.Spec.ProcessID) + "|" + strings.TrimSpace(pcDoc.Spec.CapabilityID)
+				bundlePCLinks[key] = struct{}{}
+			}
+		}
+	}
+
 	for i, doc := range docs {
 		entry := ApplyPlanEntry{
 			Kind:          doc.Kind,
@@ -220,9 +284,44 @@ func (s *Service) buildApplyPlan(ctx context.Context, docs []parser.ParsedDocume
 			entry.ValidationErrors = errs
 		} else {
 			switch doc.Kind {
+			case types.KindBusinessService:
+				if s.businessServiceRepo != nil {
+					s.planBusinessServiceEntry(ctx, doc, &entry)
+				} else {
+					entry.Action = ApplyActionCreate
+					entry.DecisionSource = DecisionSourceValidation
+				}
+			case types.KindCapability:
+				if s.capabilityRepo != nil {
+					s.planCapabilityEntry(ctx, doc, bundleCapabilityIDs, bundleCapabilityParentIDs, &entry)
+				} else {
+					entry.Action = ApplyActionCreate
+					entry.DecisionSource = DecisionSourceValidation
+				}
+			case types.KindProcess:
+				if s.processRepo != nil {
+					s.planProcessEntry(ctx, doc, bundleCapabilityIDs, bundleBusinessServiceIDs, bundleProcessCapabilityIDs, bundleProcessParentIDs, bundlePCLinks, &entry)
+				} else {
+					entry.Action = ApplyActionCreate
+					entry.DecisionSource = DecisionSourceValidation
+				}
+			case types.KindProcessCapability:
+				if s.processCapabilityRepo != nil {
+					s.planProcessCapabilityEntry(ctx, doc, bundleProcessIDs, bundleCapabilityIDs, &entry)
+				} else {
+					entry.Action = ApplyActionCreate
+					entry.DecisionSource = DecisionSourceValidation
+				}
+			case types.KindProcessBusinessService:
+				if s.processBusinessServiceRepo != nil {
+					s.planProcessBusinessServiceEntry(ctx, doc, bundleProcessIDs, bundleBusinessServiceIDs, &entry)
+				} else {
+					entry.Action = ApplyActionCreate
+					entry.DecisionSource = DecisionSourceValidation
+				}
 			case types.KindSurface:
 				if s.surfaceRepo != nil {
-					s.planSurfaceEntry(ctx, doc, &entry)
+					s.planSurfaceEntry(ctx, doc, bundleProcessIDs, &entry)
 				} else {
 					entry.Action = ApplyActionCreate
 					entry.DecisionSource = DecisionSourceValidation
@@ -443,7 +542,7 @@ func (s *Service) resolveRef(ctx context.Context, key refKey, bundleCreates map[
 // planSurfaceEntry inspects the current persisted state for a Surface document
 // and sets the entry action accordingly. If the repository lookup fails, the
 // entry is set to ApplyActionInvalid so that no silent data loss can occur.
-func (s *Service) planSurfaceEntry(ctx context.Context, doc parser.ParsedDocument, entry *ApplyPlanEntry) {
+func (s *Service) planSurfaceEntry(ctx context.Context, doc parser.ParsedDocument, bundleProcessIDs map[string]struct{}, entry *ApplyPlanEntry) {
 	surfaceDoc, ok := doc.Doc.(types.SurfaceDocument)
 	if !ok {
 		entry.Action = ApplyActionInvalid
@@ -473,6 +572,10 @@ func (s *Service) planSurfaceEntry(ctx context.Context, doc parser.ParsedDocumen
 
 	if latest == nil {
 		// No existing version: this is a new surface.
+		// Check process existence before committing to create.
+		if !s.checkProcessExists(ctx, doc, surfaceDoc.Spec.ProcessID, bundleProcessIDs, entry) {
+			return
+		}
 		entry.Action = ApplyActionCreate
 		entry.DecisionSource = DecisionSourcePersistedState
 		return
@@ -494,8 +597,596 @@ func (s *Service) planSurfaceEntry(ctx context.Context, doc parser.ParsedDocumen
 
 	// Latest version is in draft, active, deprecated, or retired status.
 	// The versioning model creates a new governed version in each case.
+	if !s.checkProcessExists(ctx, doc, surfaceDoc.Spec.ProcessID, bundleProcessIDs, entry) {
+		return
+	}
 	entry.Action = ApplyActionCreate
 	entry.DecisionSource = DecisionSourcePersistedState
+}
+
+// checkProcessExists validates that process_id is present and references an
+// existing process. Returns true when the check passes. Returns false and marks
+// the entry invalid when:
+//   - process_id is missing or empty (invariant I-1: Surface must belong to a Process)
+//   - no ProcessRepository is configured (cannot validate existence)
+//   - the process does not exist in the repository
+//   - the repository lookup returns an error
+func (s *Service) checkProcessExists(ctx context.Context, doc parser.ParsedDocument, processID string, bundleProcessIDs map[string]struct{}, entry *ApplyPlanEntry) bool {
+	processID = strings.TrimSpace(processID)
+	if processID == "" {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourcePersistedState
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Field:   "spec.process_id",
+			Message: "process_id is required",
+		})
+		return false
+	}
+	// If the process is being created in the same bundle, the reference is satisfied.
+	if _, inBundle := bundleProcessIDs[processID]; inBundle {
+		return true
+	}
+	if s.processRepo == nil {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourcePersistedState
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Field:   "spec.process_id",
+			Message: "process_id validation unavailable: ProcessRepository not configured",
+		})
+		return false
+	}
+	exists, err := s.processRepo.Exists(ctx, processID)
+	if err != nil {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourcePersistedState
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Field:   "spec.process_id",
+			Message: "repository error checking process existence: " + err.Error(),
+		})
+		return false
+	}
+	if !exists {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourcePersistedState
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Field:   "spec.process_id",
+			Message: fmt.Sprintf("process_id %q does not exist", processID),
+		})
+		return false
+	}
+	return true
+}
+
+// planBusinessServiceEntry inspects the current persisted state for a BusinessService
+// document and sets the entry action accordingly.
+//
+// BusinessServices are identified by ID and are immutable once created in the apply path.
+// If a business service with the same ID already exists, the entry is marked as conflict.
+// If the repository lookup fails, the entry is marked invalid.
+func (s *Service) planBusinessServiceEntry(ctx context.Context, doc parser.ParsedDocument, entry *ApplyPlanEntry) {
+	bsDoc, ok := doc.Doc.(types.BusinessServiceDocument)
+	if !ok {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourceValidation
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Message: "document payload is not a BusinessServiceDocument",
+		})
+		return
+	}
+
+	existing, err := s.businessServiceRepo.GetByID(ctx, bsDoc.Metadata.ID)
+	if err != nil {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourcePersistedState
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Message: "repository error during planning: " + err.Error(),
+		})
+		return
+	}
+
+	if existing != nil {
+		entry.Action = ApplyActionConflict
+		entry.DecisionSource = DecisionSourcePersistedState
+		entry.Message = fmt.Sprintf(
+			"business service %q already exists; business services are immutable once created in the apply path",
+			bsDoc.Metadata.ID,
+		)
+		return
+	}
+
+	entry.Action = ApplyActionCreate
+	entry.DecisionSource = DecisionSourcePersistedState
+}
+
+// planCapabilityEntry inspects the current persisted state for a Capability document
+// and sets the entry action accordingly.
+//
+// Capabilities are identified by ID and are immutable once created in the apply path.
+// If a capability with the same ID already exists, the entry is marked as conflict.
+// If parent_capability_id is set, its existence is verified and the hierarchy is
+// checked for self-parenting and cycles. If the repository lookup fails, the entry
+// is marked invalid.
+func (s *Service) planCapabilityEntry(ctx context.Context, doc parser.ParsedDocument, bundleCapabilityIDs map[string]struct{}, bundleCapabilityParentIDs map[string]string, entry *ApplyPlanEntry) {
+	capDoc, ok := doc.Doc.(types.CapabilityDocument)
+	if !ok {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourceValidation
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Message: "document payload is not a CapabilityDocument",
+		})
+		return
+	}
+
+	existing, err := s.capabilityRepo.GetByID(ctx, capDoc.Metadata.ID)
+	if err != nil {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourcePersistedState
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Message: "repository error during planning: " + err.Error(),
+		})
+		return
+	}
+
+	if existing != nil {
+		entry.Action = ApplyActionConflict
+		entry.DecisionSource = DecisionSourcePersistedState
+		entry.Message = fmt.Sprintf(
+			"capability %q already exists; capabilities are immutable once created in the apply path",
+			capDoc.Metadata.ID,
+		)
+		return
+	}
+
+	if parentID := strings.TrimSpace(capDoc.Spec.ParentCapabilityID); parentID != "" {
+		if !s.checkCapabilityHierarchy(ctx, doc, capDoc.Metadata.ID, parentID, bundleCapabilityIDs, bundleCapabilityParentIDs, entry) {
+			return
+		}
+	}
+
+	entry.Action = ApplyActionCreate
+	entry.DecisionSource = DecisionSourcePersistedState
+}
+
+// planProcessEntry inspects the current persisted state for a Process document
+// and sets the entry action accordingly.
+//
+// Processes are identified by ID and are immutable once created in the apply path.
+// If a process with the same ID already exists, the entry is marked as conflict.
+// The spec.capability_id is also validated for existence. If the repository
+// lookup fails, the entry is marked invalid.
+func (s *Service) planProcessEntry(ctx context.Context, doc parser.ParsedDocument, bundleCapabilityIDs map[string]struct{}, bundleBusinessServiceIDs map[string]struct{}, bundleProcessCapabilityIDs map[string]string, bundleProcessParentIDs map[string]string, bundlePCLinks map[string]struct{}, entry *ApplyPlanEntry) {
+	procDoc, ok := doc.Doc.(types.ProcessDocument)
+	if !ok {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourceValidation
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Message: "document payload is not a ProcessDocument",
+		})
+		return
+	}
+
+	existing, err := s.processRepo.GetByID(ctx, procDoc.Metadata.ID)
+	if err != nil {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourcePersistedState
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Message: "repository error during planning: " + err.Error(),
+		})
+		return
+	}
+
+	if existing != nil {
+		entry.Action = ApplyActionConflict
+		entry.DecisionSource = DecisionSourcePersistedState
+		entry.Message = fmt.Sprintf(
+			"process %q already exists; processes are immutable once created in the apply path",
+			procDoc.Metadata.ID,
+		)
+		return
+	}
+
+	if !s.checkCapabilityExists(ctx, doc, procDoc.Spec.CapabilityID, bundleCapabilityIDs, entry) {
+		return
+	}
+
+	if bsID := strings.TrimSpace(procDoc.Spec.BusinessServiceID); bsID != "" {
+		if !s.checkBusinessServiceExists(ctx, doc, bsID, bundleBusinessServiceIDs, entry) {
+			return
+		}
+	}
+
+	if parentID := strings.TrimSpace(procDoc.Spec.ParentProcessID); parentID != "" {
+		if !s.checkParentProcessSameCapability(ctx, doc, parentID, strings.TrimSpace(procDoc.Spec.CapabilityID), bundleProcessCapabilityIDs, entry) {
+			return
+		}
+		if !s.checkProcessNoCycle(ctx, doc, procDoc.Metadata.ID, parentID, bundleProcessParentIDs, entry) {
+			return
+		}
+	}
+
+	// G-10 Option A: a Process's primary capability must also appear as a
+	// ProcessCapability link in the same bundle. This ensures that the
+	// process_capabilities table is the single complete source for all
+	// capability memberships of a process, including the primary.
+	//
+	// This check only applies when a ProcessCapabilityRepository is configured;
+	// in validation-only mode (no PC repo) the requirement is not enforced.
+	if s.processCapabilityRepo != nil {
+		primaryCapID := strings.TrimSpace(procDoc.Spec.CapabilityID)
+		linkKey := procDoc.Metadata.ID + "|" + primaryCapID
+		if _, hasLink := bundlePCLinks[linkKey]; !hasLink {
+			entry.Action = ApplyActionInvalid
+			entry.DecisionSource = DecisionSourceValidation
+			entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+				Kind:    doc.Kind,
+				ID:      doc.ID,
+				Field:   "spec.capability_id",
+				Message: fmt.Sprintf("process primary capability %q must also appear as a ProcessCapability link in the same bundle", primaryCapID),
+			})
+			return
+		}
+	}
+
+	entry.Action = ApplyActionCreate
+	entry.DecisionSource = DecisionSourcePersistedState
+}
+
+// checkCapabilityExists validates that capability_id is present and references an
+// existing capability. Returns true when the check passes. Returns false and marks
+// the entry invalid when:
+//   - capability_id is missing or empty
+//   - no CapabilityRepository is configured (cannot validate existence)
+//   - the capability does not exist in the repository
+//   - the repository lookup returns an error
+func (s *Service) checkCapabilityExists(ctx context.Context, doc parser.ParsedDocument, capabilityID string, bundleCapabilityIDs map[string]struct{}, entry *ApplyPlanEntry) bool {
+	capabilityID = strings.TrimSpace(capabilityID)
+	if capabilityID == "" {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourcePersistedState
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Field:   "spec.capability_id",
+			Message: "capability_id is required",
+		})
+		return false
+	}
+	// If the capability is being created in the same bundle, the reference is satisfied.
+	if _, inBundle := bundleCapabilityIDs[capabilityID]; inBundle {
+		return true
+	}
+	if s.capabilityRepo == nil {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourcePersistedState
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Field:   "spec.capability_id",
+			Message: "capability_id validation unavailable: CapabilityRepository not configured",
+		})
+		return false
+	}
+	exists, err := s.capabilityRepo.Exists(ctx, capabilityID)
+	if err != nil {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourcePersistedState
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Field:   "spec.capability_id",
+			Message: "repository error checking capability existence: " + err.Error(),
+		})
+		return false
+	}
+	if !exists {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourcePersistedState
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Field:   "spec.capability_id",
+			Message: fmt.Sprintf("capability_id %q does not exist", capabilityID),
+		})
+		return false
+	}
+	return true
+}
+
+// checkBusinessServiceExists validates that business_service_id references an
+// existing BusinessService. Returns true when the check passes. Returns false
+// and marks the entry invalid when:
+//   - no BusinessServiceRepository is configured (cannot validate existence)
+//   - the business service does not exist in the repository
+//   - the repository lookup returns an error
+//
+// Callers are responsible for only invoking this when business_service_id is
+// non-empty; this helper does not treat an empty ID as an error.
+func (s *Service) checkBusinessServiceExists(ctx context.Context, doc parser.ParsedDocument, businessServiceID string, bundleBusinessServiceIDs map[string]struct{}, entry *ApplyPlanEntry) bool {
+	// If the business service is being created in the same bundle, the reference is satisfied.
+	if _, inBundle := bundleBusinessServiceIDs[businessServiceID]; inBundle {
+		return true
+	}
+	if s.businessServiceRepo == nil {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourcePersistedState
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Field:   "spec.business_service_id",
+			Message: "business_service_id validation unavailable: BusinessServiceRepository not configured",
+		})
+		return false
+	}
+	exists, err := s.businessServiceRepo.Exists(ctx, businessServiceID)
+	if err != nil {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourcePersistedState
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Field:   "spec.business_service_id",
+			Message: "repository error checking business service existence: " + err.Error(),
+		})
+		return false
+	}
+	if !exists {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourcePersistedState
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Field:   "spec.business_service_id",
+			Message: fmt.Sprintf("business_service_id %q does not exist", businessServiceID),
+		})
+		return false
+	}
+	return true
+}
+
+// checkParentProcessSameCapability validates that when a Process document
+// specifies a parent_process_id, the referenced parent:
+//  1. Exists (in the bundle or in the repository)
+//  2. Belongs to the same capability as the child
+//
+// Returns true when the check passes. Returns false and marks the entry
+// invalid otherwise. Callers must only invoke this when parentID is non-empty.
+func (s *Service) checkParentProcessSameCapability(ctx context.Context, doc parser.ParsedDocument, parentID, childCapabilityID string, bundleProcessCapabilityIDs map[string]string, entry *ApplyPlanEntry) bool {
+	// If the parent is being created in the same bundle, resolve its
+	// capability_id from the bundle pre-pass map — no repo round-trip needed.
+	if parentCapabilityID, inBundle := bundleProcessCapabilityIDs[parentID]; inBundle {
+		if parentCapabilityID != childCapabilityID {
+			entry.Action = ApplyActionInvalid
+			entry.DecisionSource = DecisionSourcePersistedState
+			entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+				Kind:    doc.Kind,
+				ID:      doc.ID,
+				Field:   "spec.parent_process_id",
+				Message: fmt.Sprintf("parent process %q belongs to capability %q but child belongs to %q; parent and child must share the same capability", parentID, parentCapabilityID, childCapabilityID),
+			})
+			return false
+		}
+		return true
+	}
+
+	// Parent not in bundle — look it up in the repository.
+	if s.processRepo == nil {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourcePersistedState
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Field:   "spec.parent_process_id",
+			Message: "parent_process_id validation unavailable: ProcessRepository not configured",
+		})
+		return false
+	}
+
+	parent, err := s.processRepo.GetByID(ctx, parentID)
+	if err != nil {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourcePersistedState
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Field:   "spec.parent_process_id",
+			Message: "repository error checking parent process: " + err.Error(),
+		})
+		return false
+	}
+	if parent == nil {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourcePersistedState
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Field:   "spec.parent_process_id",
+			Message: fmt.Sprintf("parent process %q does not exist", parentID),
+		})
+		return false
+	}
+	if parent.CapabilityID != childCapabilityID {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourcePersistedState
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Field:   "spec.parent_process_id",
+			Message: fmt.Sprintf("parent process %q belongs to capability %q but child belongs to %q; parent and child must share the same capability", parentID, parent.CapabilityID, childCapabilityID),
+		})
+		return false
+	}
+	return true
+}
+
+// checkProcessNoCycle verifies that adding the parent→child edge does not create
+// a cycle in the Process hierarchy. It walks the parent chain (resolving via the
+// bundle pre-pass map first, then the repository) and rejects the entry if any
+// ancestor equals childID. Self-parenting (childID == parentID) is considered a
+// cycle of length 1 and is also rejected here.
+//
+// Returns true when no cycle is detected; returns false and marks the entry
+// invalid with Field: "spec.parent_process_id" otherwise.
+func (s *Service) checkProcessNoCycle(ctx context.Context, doc parser.ParsedDocument, childID, parentID string, bundleProcessParentIDs map[string]string, entry *ApplyPlanEntry) bool {
+	// Self-parenting is caught by checkParentProcessSameCapability's "parent does not
+	// exist" path in most cases, but we check it explicitly here for clarity.
+	if parentID == childID {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourcePersistedState
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Field:   "spec.parent_process_id",
+			Message: fmt.Sprintf("process %q cannot be its own parent", childID),
+		})
+		return false
+	}
+
+	// Walk the ancestor chain. visited tracks all nodes we have seen so far;
+	// if we encounter childID again, or any repeated node, there is a cycle.
+	visited := map[string]bool{childID: true}
+	current := parentID
+	for depth := 0; depth < 50 && current != ""; depth++ {
+		if visited[current] {
+			entry.Action = ApplyActionInvalid
+			entry.DecisionSource = DecisionSourcePersistedState
+			entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+				Kind:    doc.Kind,
+				ID:      doc.ID,
+				Field:   "spec.parent_process_id",
+				Message: fmt.Sprintf("process %q would introduce a cycle in the process hierarchy", childID),
+			})
+			return false
+		}
+		visited[current] = true
+
+		// Resolve current's parent from bundle or repository.
+		if next, inBundle := bundleProcessParentIDs[current]; inBundle {
+			current = next
+			continue
+		}
+		if s.processRepo == nil {
+			break
+		}
+		p, err := s.processRepo.GetByID(ctx, current)
+		if err != nil || p == nil {
+			break
+		}
+		current = p.ParentProcessID
+	}
+	return true
+}
+
+// checkCapabilityHierarchy verifies that parent_capability_id references an
+// existing capability (in the bundle or repository) and that the hierarchy
+// does not contain a cycle. Self-parenting is treated as a cycle of length 1.
+//
+// Returns true when the hierarchy is valid; returns false and marks the entry
+// invalid with Field: "spec.parent_capability_id" otherwise.
+func (s *Service) checkCapabilityHierarchy(ctx context.Context, doc parser.ParsedDocument, childID, parentID string, bundleCapabilityIDs map[string]struct{}, bundleCapabilityParentIDs map[string]string, entry *ApplyPlanEntry) bool {
+	// Self-parenting check.
+	if parentID == childID {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourcePersistedState
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Field:   "spec.parent_capability_id",
+			Message: fmt.Sprintf("capability %q cannot be its own parent", childID),
+		})
+		return false
+	}
+
+	// Verify that the parent exists (in bundle or in repo).
+	_, inBundle := bundleCapabilityIDs[parentID]
+	if !inBundle {
+		if s.capabilityRepo == nil {
+			entry.Action = ApplyActionInvalid
+			entry.DecisionSource = DecisionSourcePersistedState
+			entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+				Kind:    doc.Kind,
+				ID:      doc.ID,
+				Field:   "spec.parent_capability_id",
+				Message: "parent_capability_id validation unavailable: CapabilityRepository not configured",
+			})
+			return false
+		}
+		exists, err := s.capabilityRepo.Exists(ctx, parentID)
+		if err != nil {
+			entry.Action = ApplyActionInvalid
+			entry.DecisionSource = DecisionSourcePersistedState
+			entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+				Kind:    doc.Kind,
+				ID:      doc.ID,
+				Field:   "spec.parent_capability_id",
+				Message: "repository error checking parent capability: " + err.Error(),
+			})
+			return false
+		}
+		if !exists {
+			entry.Action = ApplyActionInvalid
+			entry.DecisionSource = DecisionSourcePersistedState
+			entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+				Kind:    doc.Kind,
+				ID:      doc.ID,
+				Field:   "spec.parent_capability_id",
+				Message: fmt.Sprintf("parent capability %q does not exist", parentID),
+			})
+			return false
+		}
+	}
+
+	// Cycle detection: walk the ancestor chain.
+	visited := map[string]bool{childID: true}
+	current := parentID
+	for depth := 0; depth < 50 && current != ""; depth++ {
+		if visited[current] {
+			entry.Action = ApplyActionInvalid
+			entry.DecisionSource = DecisionSourcePersistedState
+			entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+				Kind:    doc.Kind,
+				ID:      doc.ID,
+				Field:   "spec.parent_capability_id",
+				Message: fmt.Sprintf("capability %q would introduce a cycle in the capability hierarchy", childID),
+			})
+			return false
+		}
+		visited[current] = true
+
+		// Resolve current's parent from bundle or repository.
+		if next, inBundleMap := bundleCapabilityParentIDs[current]; inBundleMap {
+			current = next
+			continue
+		}
+		if s.capabilityRepo == nil {
+			break
+		}
+		c, err := s.capabilityRepo.GetByID(ctx, current)
+		if err != nil || c == nil {
+			break
+		}
+		current = c.ParentCapabilityID
+	}
+	return true
 }
 
 // planAgentEntry inspects the current persisted state for an Agent document
@@ -684,7 +1375,9 @@ func (s *Service) executePlan(ctx context.Context, plan ApplyPlan, actor string)
 	// Validation-only mode: no repositories configured. Record all entries as
 	// created (conflicts are still reported; unchanged entries are skipped).
 	// Dependency order is maintained for consistency even in this mode.
-	if s.surfaceRepo == nil && s.agentRepo == nil && s.profileRepo == nil && s.grantRepo == nil {
+	if s.surfaceRepo == nil && s.agentRepo == nil && s.profileRepo == nil && s.grantRepo == nil &&
+		s.processRepo == nil && s.capabilityRepo == nil && s.businessServiceRepo == nil &&
+		s.processCapabilityRepo == nil {
 		for _, entry := range orderedEntries(plan.Entries) {
 			switch entry.Action {
 			case ApplyActionConflict:
@@ -712,6 +1405,46 @@ func (s *Service) executePlan(ctx context.Context, plan ApplyPlan, actor string)
 
 		case ApplyActionCreate:
 			switch entry.Kind {
+			case types.KindBusinessService:
+				if s.businessServiceRepo != nil {
+					if err := s.applyBusinessService(ctx, entry.Doc, now, &result); err != nil {
+						result.AddError(entry.Kind, entry.ID, err.Error())
+					}
+				} else {
+					result.AddCreated(entry.Kind, entry.ID)
+				}
+			case types.KindCapability:
+				if s.capabilityRepo != nil {
+					if err := s.applyCapability(ctx, entry.Doc, now, actor, &result); err != nil {
+						result.AddError(entry.Kind, entry.ID, err.Error())
+					}
+				} else {
+					result.AddCreated(entry.Kind, entry.ID)
+				}
+			case types.KindProcess:
+				if s.processRepo != nil {
+					if err := s.applyProcess(ctx, entry.Doc, now, actor, &result); err != nil {
+						result.AddError(entry.Kind, entry.ID, err.Error())
+					}
+				} else {
+					result.AddCreated(entry.Kind, entry.ID)
+				}
+			case types.KindProcessCapability:
+				if s.processCapabilityRepo != nil {
+					if err := s.applyProcessCapability(ctx, entry.Doc, now, &result); err != nil {
+						result.AddError(entry.Kind, entry.ID, err.Error())
+					}
+				} else {
+					result.AddCreated(entry.Kind, entry.ID)
+				}
+			case types.KindProcessBusinessService:
+				if s.processBusinessServiceRepo != nil {
+					if err := s.applyProcessBusinessService(ctx, entry.Doc, now, &result); err != nil {
+						result.AddError(entry.Kind, entry.ID, err.Error())
+					}
+				} else {
+					result.AddCreated(entry.Kind, entry.ID)
+				}
 			case types.KindSurface:
 				if s.surfaceRepo != nil {
 					if err := s.applySurface(ctx, entry.Doc, now, actor, &result); err != nil {
@@ -771,25 +1504,35 @@ func (s *Service) appendControlAudit(ctx context.Context, rec *controlaudit.Cont
 // orderedEntries returns plan entries sorted into dependency-respecting execution
 // order. Create entries are emitted in the following sequence:
 //
-//  1. Surface  — no dependencies
-//  2. Agent    — no dependencies
-//  3. Profile  — depends on Surface
-//  4. Grant    — depends on Agent and Profile
-//  5. Other    — unknown kinds, emitted after known kinds
+//  1. BusinessService         — no dependencies
+//  2. Capability              — no dependencies
+//  3. Process                 — depends on Capability
+//  4. ProcessCapability       — depends on Process and Capability
+//  4. ProcessBusinessService  — depends on Process and BusinessService (same tier)
+//  5. Surface                 — depends on Process
+//  6. Agent                   — no dependencies
+//  7. Profile                 — depends on Surface
+//  8. Grant                   — depends on Agent and Profile
+//  9. Other                   — unknown kinds, emitted after known kinds
 //
 // Within each tier, relative document order is preserved. Conflict and unchanged
 // entries are emitted after all create entries, in their original document order,
 // because they produce no persisted output and carry no dependency implications.
 func orderedEntries(entries []ApplyPlanEntry) []ApplyPlanEntry {
 	kindOrder := map[string]int{
-		types.KindSurface: 0,
-		types.KindAgent:   1,
-		types.KindProfile: 2,
-		types.KindGrant:   3,
+		types.KindBusinessService:       0,
+		types.KindCapability:            1,
+		types.KindProcess:               2,
+		types.KindProcessCapability:     3,
+		types.KindProcessBusinessService: 3,
+		types.KindSurface:               4,
+		types.KindAgent:                 5,
+		types.KindProfile:               6,
+		types.KindGrant:                 7,
 	}
 
 	// Separate create entries (must respect order) from non-create entries.
-	creates := make([][]ApplyPlanEntry, 5) // 4 known tiers + 1 unknown
+	creates := make([][]ApplyPlanEntry, 9) // 8 known tiers + 1 unknown
 	var nonCreates []ApplyPlanEntry
 
 	for _, e := range entries {
@@ -799,7 +1542,7 @@ func orderedEntries(entries []ApplyPlanEntry) []ApplyPlanEntry {
 		}
 		tier, known := kindOrder[e.Kind]
 		if !known {
-			tier = 4
+			tier = 8
 		}
 		creates[tier] = append(creates[tier], e)
 	}
@@ -936,5 +1679,225 @@ func (s *Service) applyGrant(
 
 	result.AddCreated(doc.Kind, doc.ID)
 	s.appendControlAudit(ctx, controlaudit.NewGrantCreatedRecord(actor, g.ID))
+	return nil
+}
+
+// applyCapability maps a CapabilityDocument to a Capability domain model and persists it.
+func (s *Service) applyCapability(
+	ctx context.Context,
+	doc parser.ParsedDocument,
+	now time.Time,
+	actor string,
+	result *types.ApplyResult,
+) error {
+	capDoc, ok := doc.Doc.(types.CapabilityDocument)
+	if !ok {
+		return fmt.Errorf("%w: invalid document payload for kind %q", ErrInvalidBundle, types.KindCapability)
+	}
+
+	c := mapCapabilityDocumentToCapability(capDoc, now, actor)
+
+	if err := s.capabilityRepo.Create(ctx, c); err != nil {
+		return fmt.Errorf("create capability: %w", err)
+	}
+
+	result.AddCreated(doc.Kind, doc.ID)
+	return nil
+}
+
+// planProcessCapabilityEntry inspects the current persisted state for a
+// ProcessCapability document and sets the entry action accordingly.
+//
+// ProcessCapability links are identified by the (process_id, capability_id) pair.
+// If a link with the same pair already exists, the entry is marked as conflict.
+// The metadata.id is a synthetic control-plane handle and is not stored.
+func (s *Service) planProcessCapabilityEntry(ctx context.Context, doc parser.ParsedDocument, bundleProcessIDs map[string]struct{}, bundleCapabilityIDs map[string]struct{}, entry *ApplyPlanEntry) {
+	pcDoc, ok := doc.Doc.(types.ProcessCapabilityDocument)
+	if !ok {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourceValidation
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Message: "document payload is not a ProcessCapabilityDocument",
+		})
+		return
+	}
+
+	if !s.checkProcessExists(ctx, doc, pcDoc.Spec.ProcessID, bundleProcessIDs, entry) {
+		return
+	}
+	if !s.checkCapabilityExists(ctx, doc, pcDoc.Spec.CapabilityID, bundleCapabilityIDs, entry) {
+		return
+	}
+
+	existing, err := s.processCapabilityRepo.ListByProcessID(ctx, pcDoc.Spec.ProcessID)
+	if err != nil {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourcePersistedState
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Message: "repository error during planning: " + err.Error(),
+		})
+		return
+	}
+
+	for _, pc := range existing {
+		if pc.CapabilityID == pcDoc.Spec.CapabilityID {
+			entry.Action = ApplyActionConflict
+			entry.DecisionSource = DecisionSourcePersistedState
+			entry.Message = fmt.Sprintf(
+				"process capability link between process %q and capability %q already exists",
+				pcDoc.Spec.ProcessID, pcDoc.Spec.CapabilityID,
+			)
+			return
+		}
+	}
+
+	entry.Action = ApplyActionCreate
+	entry.DecisionSource = DecisionSourcePersistedState
+}
+
+// applyProcessCapability maps a ProcessCapabilityDocument to a ProcessCapability
+// domain model and persists it.
+func (s *Service) applyProcessCapability(
+	ctx context.Context,
+	doc parser.ParsedDocument,
+	now time.Time,
+	result *types.ApplyResult,
+) error {
+	pcDoc, ok := doc.Doc.(types.ProcessCapabilityDocument)
+	if !ok {
+		return fmt.Errorf("%w: invalid document payload for kind %q", ErrInvalidBundle, types.KindProcessCapability)
+	}
+
+	pc := mapProcessCapabilityDocumentToProcessCapability(pcDoc, now)
+	if err := s.processCapabilityRepo.Create(ctx, pc); err != nil {
+		return fmt.Errorf("create process capability: %w", err)
+	}
+
+	result.AddCreated(doc.Kind, doc.ID)
+	return nil
+}
+
+// planProcessBusinessServiceEntry inspects the current persisted state for a
+// ProcessBusinessService document and sets the entry action accordingly.
+//
+// ProcessBusinessService links are identified by the (process_id, business_service_id) pair.
+// If a link with the same pair already exists, the entry is marked as conflict.
+// The metadata.id is a synthetic control-plane handle and is not stored.
+func (s *Service) planProcessBusinessServiceEntry(ctx context.Context, doc parser.ParsedDocument, bundleProcessIDs map[string]struct{}, bundleBusinessServiceIDs map[string]struct{}, entry *ApplyPlanEntry) {
+	pbsDoc, ok := doc.Doc.(types.ProcessBusinessServiceDocument)
+	if !ok {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourceValidation
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Message: "document payload is not a ProcessBusinessServiceDocument",
+		})
+		return
+	}
+
+	if !s.checkProcessExists(ctx, doc, pbsDoc.Spec.ProcessID, bundleProcessIDs, entry) {
+		return
+	}
+	if !s.checkBusinessServiceExists(ctx, doc, pbsDoc.Spec.BusinessServiceID, bundleBusinessServiceIDs, entry) {
+		return
+	}
+
+	existing, err := s.processBusinessServiceRepo.ListByProcessID(ctx, pbsDoc.Spec.ProcessID)
+	if err != nil {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourcePersistedState
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Message: "repository error during planning: " + err.Error(),
+		})
+		return
+	}
+
+	for _, pbs := range existing {
+		if pbs.BusinessServiceID == pbsDoc.Spec.BusinessServiceID {
+			entry.Action = ApplyActionConflict
+			entry.DecisionSource = DecisionSourcePersistedState
+			entry.Message = fmt.Sprintf(
+				"process business service link between process %q and business service %q already exists",
+				pbsDoc.Spec.ProcessID, pbsDoc.Spec.BusinessServiceID,
+			)
+			return
+		}
+	}
+
+	entry.Action = ApplyActionCreate
+	entry.DecisionSource = DecisionSourcePersistedState
+}
+
+// applyProcessBusinessService maps a ProcessBusinessServiceDocument to a ProcessBusinessService
+// domain model and persists it.
+func (s *Service) applyProcessBusinessService(
+	ctx context.Context,
+	doc parser.ParsedDocument,
+	now time.Time,
+	result *types.ApplyResult,
+) error {
+	pbsDoc, ok := doc.Doc.(types.ProcessBusinessServiceDocument)
+	if !ok {
+		return fmt.Errorf("%w: invalid document payload for kind %q", ErrInvalidBundle, types.KindProcessBusinessService)
+	}
+
+	pbs := mapProcessBusinessServiceDocumentToProcessBusinessService(pbsDoc, now)
+	if err := s.processBusinessServiceRepo.Create(ctx, pbs); err != nil {
+		return fmt.Errorf("create process business service: %w", err)
+	}
+
+	result.AddCreated(doc.Kind, doc.ID)
+	return nil
+}
+
+// applyBusinessService maps a BusinessServiceDocument to a BusinessService domain model and persists it.
+func (s *Service) applyBusinessService(
+	ctx context.Context,
+	doc parser.ParsedDocument,
+	now time.Time,
+	result *types.ApplyResult,
+) error {
+	bsDoc, ok := doc.Doc.(types.BusinessServiceDocument)
+	if !ok {
+		return fmt.Errorf("%w: invalid document payload for kind %q", ErrInvalidBundle, types.KindBusinessService)
+	}
+
+	bs := mapBusinessServiceDocumentToBusinessService(bsDoc, now)
+
+	if err := s.businessServiceRepo.Create(ctx, bs); err != nil {
+		return fmt.Errorf("create business service: %w", err)
+	}
+
+	result.AddCreated(doc.Kind, doc.ID)
+	return nil
+}
+
+// applyProcess maps a ProcessDocument to a Process domain model and persists it.
+func (s *Service) applyProcess(
+	ctx context.Context,
+	doc parser.ParsedDocument,
+	now time.Time,
+	actor string,
+	result *types.ApplyResult,
+) error {
+	procDoc, ok := doc.Doc.(types.ProcessDocument)
+	if !ok {
+		return fmt.Errorf("%w: invalid document payload for kind %q", ErrInvalidBundle, types.KindProcess)
+	}
+
+	p := mapProcessDocumentToProcess(procDoc, now, actor)
+
+	if err := s.processRepo.Create(ctx, p); err != nil {
+		return fmt.Errorf("create process: %w", err)
+	}
+
+	result.AddCreated(doc.Kind, doc.ID)
 	return nil
 }

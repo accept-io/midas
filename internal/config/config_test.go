@@ -61,6 +61,38 @@ func TestDefaultConfig_Values(t *testing.T) {
 	}
 }
 
+// TestDefaultConfig_StructuralModeIsPermissive verifies that the default
+// structural mode is permissive, preserving out-of-box usability.
+func TestDefaultConfig_StructuralModeIsPermissive(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.Structural.Mode != StructuralModePermissive {
+		t.Errorf("structural.mode: want %q (default), got %q", StructuralModePermissive, cfg.Structural.Mode)
+	}
+}
+
+// TestValidateStructural_InvalidStructuralMode verifies that an unknown
+// structural mode is rejected.
+func TestValidateStructural_InvalidStructuralMode(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Structural.Mode = "strict"
+	if err := ValidateStructural(cfg); err == nil {
+		t.Error("want error for unknown structural.mode, got nil")
+	}
+}
+
+// TestValidateStructural_KnownStructuralModes verifies that both known modes pass.
+func TestValidateStructural_KnownStructuralModes(t *testing.T) {
+	for _, mode := range []StructuralMode{StructuralModePermissive, StructuralModeEnforced} {
+		t.Run(string(mode), func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.Structural.Mode = mode
+			if err := ValidateStructural(cfg); err != nil {
+				t.Errorf("structural.mode=%q: unexpected validation error: %v", mode, err)
+			}
+		})
+	}
+}
+
 // TestDuration_UnmarshalYAML verifies that Duration YAML roundtrips correctly.
 func TestDuration_UnmarshalYAML(t *testing.T) {
 	cases := []struct {

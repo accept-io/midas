@@ -11,7 +11,7 @@ import (
 
 // ParsedDocument is a generic wrapper around a parsed control-plane resource.
 type ParsedDocument struct {
-	Kind string         // Surface | Agent | Profile | Grant
+	Kind string         // Surface | Agent | Profile | Grant | Capability | Process
 	ID   string         // metadata.id
 	Doc  types.Document // typed document
 }
@@ -74,8 +74,43 @@ func ParseYAML(data []byte) (ParsedDocument, error) {
 		}
 		return wrapDocument(doc), nil
 
+	case types.KindCapability:
+		var doc types.CapabilityDocument
+		if err := yaml.Unmarshal(data, &doc); err != nil {
+			return ParsedDocument{}, fmt.Errorf("failed to parse Capability document: %w", err)
+		}
+		return wrapDocument(doc), nil
+
+	case types.KindProcess:
+		var doc types.ProcessDocument
+		if err := yaml.Unmarshal(data, &doc); err != nil {
+			return ParsedDocument{}, fmt.Errorf("failed to parse Process document: %w", err)
+		}
+		return wrapDocument(doc), nil
+
+	case types.KindBusinessService:
+		var doc types.BusinessServiceDocument
+		if err := yaml.Unmarshal(data, &doc); err != nil {
+			return ParsedDocument{}, fmt.Errorf("failed to parse BusinessService document: %w", err)
+		}
+		return wrapDocument(doc), nil
+
+	case types.KindProcessCapability:
+		var doc types.ProcessCapabilityDocument
+		if err := yaml.Unmarshal(data, &doc); err != nil {
+			return ParsedDocument{}, fmt.Errorf("failed to parse ProcessCapability document: %w", err)
+		}
+		return wrapDocument(doc), nil
+
+	case types.KindProcessBusinessService:
+		var doc types.ProcessBusinessServiceDocument
+		if err := yaml.Unmarshal(data, &doc); err != nil {
+			return ParsedDocument{}, fmt.Errorf("failed to parse ProcessBusinessService document: %w", err)
+		}
+		return wrapDocument(doc), nil
+
 	default:
-		return ParsedDocument{}, fmt.Errorf("unsupported kind: %q (must be Surface, Agent, Profile, or Grant)", meta.Kind)
+		return ParsedDocument{}, fmt.Errorf("unsupported kind: %q (must be Surface, Agent, Profile, Grant, Capability, Process, BusinessService, ProcessCapability, or ProcessBusinessService)", meta.Kind)
 	}
 }
 

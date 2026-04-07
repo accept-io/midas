@@ -19,7 +19,7 @@ import (
 var explorerFS embed.FS
 
 // initExplorerRuntime creates the isolated in-memory evaluation runtime used by
-// POST /explorer. It always seeds demo data unconditionally, independent
+// POST /explorer. It always seeds the demo dataset unconditionally, independent
 // of cfg.Dev.SeedDemoData. Seeding failures are logged as warnings — Explorer
 // continues to work as a request builder even without seeded data.
 func (s *Server) initExplorerRuntime() {
@@ -107,6 +107,11 @@ func (s *Server) handleExplorerConfig(w http.ResponseWriter, r *http.Request) {
 	// Signal to the UI that local IAM (session-cookie auth) is active.
 	if s.localIAM != nil {
 		resp["localiam"] = true
+	}
+	// Signal to the UI that the demo Local IAM user (demo/demo) is seeded.
+	// Used by the login panel to display a contextual hint.
+	if s.seedDemoUser {
+		resp["demoUser"] = true
 	}
 	// Signal to the UI that OIDC SSO login is active (replaces local login form).
 	if s.oidcService != nil {

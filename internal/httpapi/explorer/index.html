@@ -608,6 +608,20 @@
     display: none;
   }
   .iam-error.visible { display: block; }
+  .iam-login-hint {
+    margin-top: 14px;
+    padding: 10px 12px;
+    background: #f0f9ff;
+    border: 1px solid #bae6fd;
+    border-radius: 6px;
+    font-size: 11px;
+    color: #0369a1;
+    line-height: 1.6;
+    display: none;
+  }
+  .iam-login-hint.visible { display: block; }
+  .iam-login-hint strong { display: block; font-weight: 600; margin-bottom: 2px; }
+  .iam-login-hint .iam-hint-entry + .iam-hint-entry { margin-top: 8px; border-top: 1px solid #bae6fd; padding-top: 8px; }
 
   /* user pill in header */
   #iam-user-pill {
@@ -636,7 +650,6 @@
     filter: blur(3px);
     pointer-events: none;
     user-select: none;
-    transition: filter 0.15s;
   }
 
   /* ── Decision explanation panel ─────────────────────────────────────────── */
@@ -734,13 +747,69 @@
     word-break: break-all;
     font-size: 10px;
   }
+
+  /* ── Structural context chain display ─────────────────────────────────── */
+  .structural-chain-block {
+    background: #f0f7ff;
+    border: 1px solid #bfdbfe;
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin-bottom: 6px;
+  }
+  .structural-chain-surface {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #1e40af;
+    margin-bottom: 5px;
+  }
+  .structural-chain-steps {
+    display: flex;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .structural-chain-node {
+    background: #fff;
+    border: 1px solid #bfdbfe;
+    border-radius: 4px;
+    padding: 3px 7px;
+  }
+  .structural-chain-node-type {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: #64748b;
+    display: block;
+    margin-bottom: 1px;
+  }
+  .structural-chain-node-name {
+    font-size: 11px;
+    font-weight: 600;
+    color: #1e3a8a;
+  }
+  .structural-chain-node-id {
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 9px;
+    color: #64748b;
+    display: block;
+    margin-top: 1px;
+  }
+  .structural-chain-arrow {
+    color: #93c5fd;
+    font-size: 14px;
+    line-height: 1;
+    align-self: center;
+    padding-top: 2px;
+  }
   .resource-card-detail { color: #9ca3af; margin-top: 2px; font-size: 10px; }
 </style>
 </head>
 <body>
 
 <!-- Local IAM: login overlay -->
-<div class="iam-overlay" id="iam-login-overlay" role="dialog" aria-modal="true" aria-label="Sign in">
+<div class="iam-overlay" id="iam-login-overlay" role="dialog" aria-modal="true" aria-label="Sign in" aria-hidden="true">
   <div class="iam-card">
     <h2>Sign in to Explorer</h2>
     <!-- OIDC sign-in (shown when cfg.oidc === true) -->
@@ -766,12 +835,14 @@
         <button type="submit" class="iam-submit" id="iam-login-btn">Sign in</button>
         <div class="iam-error" id="iam-login-error"></div>
       </form>
+      <!-- Login hints — populated and shown by JS when cfg.localiam is true -->
+      <div class="iam-login-hint" id="iam-login-hint"></div>
     </div>
   </div>
 </div>
 
 <!-- Local IAM: change-password overlay -->
-<div class="iam-overlay" id="iam-chpw-overlay" role="dialog" aria-modal="true" aria-label="Change password">
+<div class="iam-overlay" id="iam-chpw-overlay" role="dialog" aria-modal="true" aria-label="Change password" aria-hidden="true">
   <div class="iam-card">
     <h2>Change your password</h2>
     <p>Your account requires a new password before you can continue.</p>
@@ -834,6 +905,8 @@
     <div class="section" id="resource-ref-section" style="display:none">
       <div class="section-title">Demo Resources</div>
       <div id="resource-cards" class="resource-cards-grid"></div>
+      <div class="section-title" style="margin-top:14px">Structural Context</div>
+      <div id="structural-context-cards"></div>
     </div>
 
     <div class="section" id="auth-bearer-section">
@@ -871,11 +944,11 @@
       <div class="form-fields visible" id="form-fields">
         <div class="field">
           <label for="f-surface">Surface ID <span style="color:#ef4444">*</span></label>
-          <input type="text" id="f-surface" placeholder="e.g. surf-payments-approval">
+          <input type="text" id="f-surface" placeholder="e.g. surf-v2-merchant-payment">
         </div>
         <div class="field">
           <label for="f-agent">Agent ID <span style="color:#ef4444">*</span></label>
-          <input type="text" id="f-agent" placeholder="e.g. agent-payments-bot">
+          <input type="text" id="f-agent" placeholder="e.g. agent-v2-evaluator">
         </div>
         <div class="field">
           <label for="f-confidence">
@@ -1025,6 +1098,7 @@
   const logoutBtn     = document.getElementById('iam-logout-btn');
 
   function showLoginOverlay() {
+    loginOverlay.removeAttribute('aria-hidden');
     loginOverlay.classList.add('visible');
     chpwOverlay.classList.remove('visible');
     document.getElementById('iam-username').focus();
@@ -1033,6 +1107,7 @@
     document.getElementById('mode-banner').classList.add('layout-gated');
   }
   function showChpwOverlay() {
+    chpwOverlay.removeAttribute('aria-hidden');
     chpwOverlay.classList.add('visible');
     loginOverlay.classList.remove('visible');
     document.getElementById('iam-current-pw').focus();
@@ -1042,7 +1117,9 @@
   }
   function hideOverlays() {
     loginOverlay.classList.remove('visible');
+    loginOverlay.setAttribute('aria-hidden', 'true');
     chpwOverlay.classList.remove('visible');
+    chpwOverlay.setAttribute('aria-hidden', 'true');
     document.querySelector('.layout').classList.remove('layout-gated');
     document.querySelector('.mode-selector-bar').classList.remove('layout-gated');
     document.getElementById('mode-banner').classList.remove('layout-gated');
@@ -1333,7 +1410,7 @@
         // All sandbox scenarios are immediately available — no badge update needed.
         // Threshold hints are always valid for the sandbox store
         document.getElementById('confidence-hint').textContent = 'threshold \u2265 0.85';
-        document.getElementById('consequence-hint').textContent = 'threshold \u2264 1000 GBP';
+        document.getElementById('consequence-hint').textContent = 'threshold \u2264 5\u202f000 GBP';
       }
 
       // Auto-run: only when auth is open, or when a session token is already present.
@@ -1350,6 +1427,17 @@
         // Local IAM session-cookie auth: hide bearer token section.
         const bearerSection = document.getElementById('auth-bearer-section');
         if (bearerSection) bearerSection.style.display = 'none';
+        // Populate login hint panel.
+        const hintEl = document.getElementById('iam-login-hint');
+        if (hintEl) {
+          let html = '';
+          if (cfg.demoUser) {
+            html += '<div class="iam-hint-entry"><strong>Demo login</strong>Username: <b>demo</b> &nbsp;/&nbsp; Password: <b>demo</b></div>';
+          }
+          html += '<div class="iam-hint-entry"><strong>Admin login</strong>Username: <b>admin</b> &nbsp;/&nbsp; Password: <b>admin</b><br>You\'ll be asked to change the password on first sign-in.</div>';
+          hintEl.innerHTML = html;
+          hintEl.classList.add('visible');
+        }
         // Check /auth/me to decide what to show.
         checkIAMSession(() => autoRun('chain-unknown-surface'));
       } else if (cfg.authMode !== 'required' || getToken()) {
@@ -1378,11 +1466,15 @@
   // ── Authority Scenarios ────────────────────────────────────────────────────
   // Structured scenario definitions. Each scenario maps to a real evaluation path
   // against the demo (Explorer sandbox) data. Payloads are verified against the
-  // seeded demo data (SeedDemo): surface surf-payments-approval,
-  // agent agent-payments-bot, confidence threshold ≥ 0.85, consequence ≤ 1000 GBP.
+  // V2 seeded demo data (SeedDemo):
+  //   Primary:  surface surf-v2-merchant-payment, agent agent-v2-evaluator,
+  //             confidence threshold ≥ 0.85, consequence ≤ £5 000.
+  //   Context:  surface surf-v2-id-verify, agent agent-v2-evaluator,
+  //             confidence threshold ≥ 0.80, consequence ≤ £2 000,
+  //             requires customer_id context key (profile-v2-onboarding).
   //
   // NOTES:
-  //   - INSUFFICIENT_CONTEXT: triggered via surf-context-validation + profile-context-strict,
+  //   - INSUFFICIENT_CONTEXT: triggered via surf-v2-id-verify + profile-v2-onboarding,
   //     which has RequiredContextKeys: ["customer_id"]. Sending without context triggers clarify.
   //   - POLICY_DENY: Explorer uses NoOpPolicyEvaluator (always allows). Omitted.
   //   - NO_ACTIVE_GRANT: only one agent is seeded per surface. Using AGENT_NOT_FOUND
@@ -1396,10 +1488,10 @@
       description: 'High confidence, low consequence',
       expected_outcome: 'Accept',
       expected_reason: 'WITHIN_AUTHORITY',
-      explanation: 'Demonstrates autonomous execution when confidence is above the threshold (0.95 \u2265 0.85) and consequence remains within the configured limit (\u00a3100 \u2264 \u00a31,000).',
+      explanation: 'Demonstrates autonomous execution when confidence is above the threshold (0.95 \u2265 0.85) and consequence remains within the configured limit (\u00a3100 \u2264 \u00a35,000).',
       request: {
-        surface_id: 'surf-payments-approval',
-        agent_id: 'agent-payments-bot',
+        surface_id: 'surf-v2-merchant-payment',
+        agent_id: 'agent-v2-evaluator',
         confidence: 0.95,
         consequence: { type: 'monetary', amount: 100, currency: 'GBP' },
       },
@@ -1413,8 +1505,8 @@
       expected_reason: 'CONFIDENCE_BELOW_THRESHOLD',
       explanation: 'Demonstrates escalation when the agent\'s certainty score (0.30) falls below the minimum required by the authority profile (0.85). Human review is required before execution.',
       request: {
-        surface_id: 'surf-payments-approval',
-        agent_id: 'agent-payments-bot',
+        surface_id: 'surf-v2-merchant-payment',
+        agent_id: 'agent-v2-evaluator',
         confidence: 0.3,
         consequence: { type: 'monetary', amount: 100, currency: 'GBP' },
       },
@@ -1428,8 +1520,8 @@
       expected_reason: 'WITHIN_AUTHORITY',
       explanation: 'Demonstrates that MIDAS uses \u2265 comparison for confidence: a score exactly equal to the threshold is permitted. Boundary-passing requests execute normally.',
       request: {
-        surface_id: 'surf-payments-approval',
-        agent_id: 'agent-payments-bot',
+        surface_id: 'surf-v2-merchant-payment',
+        agent_id: 'agent-v2-evaluator',
         confidence: 0.85,
         consequence: { type: 'monetary', amount: 100, currency: 'GBP' },
       },
@@ -1443,10 +1535,10 @@
       description: 'Monetary consequence well within the allowed limit',
       expected_outcome: 'Accept',
       expected_reason: 'WITHIN_AUTHORITY',
-      explanation: 'Demonstrates execution when the monetary impact (\u00a350) is well below the consequence threshold (\u00a31,000). Both confidence and consequence are within the authority envelope.',
+      explanation: 'Demonstrates execution when the monetary impact (\u00a350) is well below the consequence threshold (\u00a35,000). Both confidence and consequence are within the authority envelope.',
       request: {
-        surface_id: 'surf-payments-approval',
-        agent_id: 'agent-payments-bot',
+        surface_id: 'surf-v2-merchant-payment',
+        agent_id: 'agent-v2-evaluator',
         confidence: 0.95,
         consequence: { type: 'monetary', amount: 50, currency: 'GBP' },
       },
@@ -1455,15 +1547,15 @@
       id: 'consequence-near-limit',
       category: 'Consequence',
       title: 'Near consequence limit',
-      description: 'Monetary consequence just below the allowed maximum (\u00a3999)',
+      description: 'Monetary consequence just below the allowed maximum (\u00a34,999)',
       expected_outcome: 'Accept',
       expected_reason: 'WITHIN_AUTHORITY',
-      explanation: 'Demonstrates that MIDAS uses \u2264 comparison: a consequence of \u00a3999 is still within the configured limit of \u00a31,000. One pound more would trigger escalation.',
+      explanation: 'Demonstrates that MIDAS uses \u2264 comparison: a consequence of \u00a34,999 is still within the configured limit of \u00a35,000. One pound more would trigger escalation.',
       request: {
-        surface_id: 'surf-payments-approval',
-        agent_id: 'agent-payments-bot',
+        surface_id: 'surf-v2-merchant-payment',
+        agent_id: 'agent-v2-evaluator',
         confidence: 0.95,
-        consequence: { type: 'monetary', amount: 999, currency: 'GBP' },
+        consequence: { type: 'monetary', amount: 4999, currency: 'GBP' },
       },
     },
     {
@@ -1473,12 +1565,12 @@
       description: 'Monetary consequence exceeds the allowed limit',
       expected_outcome: 'Escalate',
       expected_reason: 'CONSEQUENCE_EXCEEDS_LIMIT',
-      explanation: 'Demonstrates escalation when the consequence of the action (\u00a32,500) exceeds the authority envelope (\u00a31,000). MIDAS requires human review before this decision can execute.',
+      explanation: 'Demonstrates escalation when the consequence of the action (\u00a36,000) exceeds the authority envelope (\u00a35,000). MIDAS requires human review before this decision can execute.',
       request: {
-        surface_id: 'surf-payments-approval',
-        agent_id: 'agent-payments-bot',
+        surface_id: 'surf-v2-merchant-payment',
+        agent_id: 'agent-v2-evaluator',
         confidence: 0.95,
-        consequence: { type: 'monetary', amount: 2500, currency: 'GBP' },
+        consequence: { type: 'monetary', amount: 6000, currency: 'GBP' },
       },
     },
 
@@ -1490,10 +1582,10 @@
       description: 'Additional context fields provided alongside the core request',
       expected_outcome: 'Accept',
       expected_reason: 'WITHIN_AUTHORITY',
-      explanation: 'Demonstrates that MIDAS passes context through evaluation and records it in the envelope for audit. The demo profile has no required context keys, so this request executes normally.',
+      explanation: 'Demonstrates that MIDAS passes context through evaluation and records it in the envelope for audit. The demo profile (profile-v2-standard) has no required context keys, so this request executes normally.',
       request: {
-        surface_id: 'surf-payments-approval',
-        agent_id: 'agent-payments-bot',
+        surface_id: 'surf-v2-merchant-payment',
+        agent_id: 'agent-v2-evaluator',
         confidence: 0.95,
         consequence: { type: 'monetary', amount: 100, currency: 'GBP' },
         context: { customer_id: 'cust-12345', channel: 'api', reason: 'recurring-payment' },
@@ -1506,13 +1598,13 @@
       description: 'Request omits a context key required by the authority profile',
       expected_outcome: 'Clarify',
       expected_reason: 'INSUFFICIENT_CONTEXT',
-      explanation: 'Demonstrates RequestClarification when required context keys are absent. The surf-context-validation surface uses a profile that requires customer_id. Submitting without it causes MIDAS to request clarification rather than execute or escalate.',
+      explanation: 'Demonstrates RequestClarification when required context keys are absent. The surf-v2-id-verify surface uses a profile (profile-v2-onboarding) that requires customer_id. Submitting without it causes MIDAS to request clarification rather than execute or escalate.',
       request: {
-        surface_id: 'surf-context-validation',
-        agent_id: 'agent-payments-bot',
+        surface_id: 'surf-v2-id-verify',
+        agent_id: 'agent-v2-evaluator',
         confidence: 0.95,
         consequence: { type: 'monetary', amount: 100, currency: 'GBP' },
-        // no context — customer_id is required by profile-context-strict
+        // no context — customer_id is required by profile-v2-onboarding
       },
     },
     {
@@ -1524,8 +1616,8 @@
       expected_reason: 'WITHIN_AUTHORITY',
       explanation: 'Demonstrates that providing the required customer_id context key satisfies the profile constraint. MIDAS records the context in the envelope for audit. Pair with the "Missing required context" scenario to compare outcomes.',
       request: {
-        surface_id: 'surf-context-validation',
-        agent_id: 'agent-payments-bot',
+        surface_id: 'surf-v2-id-verify',
+        agent_id: 'agent-v2-evaluator',
         confidence: 0.95,
         consequence: { type: 'monetary', amount: 100, currency: 'GBP' },
         context: { customer_id: 'cust-12345' },
@@ -1543,7 +1635,7 @@
       explanation: 'Demonstrates authority failure when the requested decision surface is not configured. MIDAS rejects the request immediately — no agent or profile lookup is attempted.',
       request: {
         surface_id: 'surf-unknown-xyz',
-        agent_id: 'agent-payments-bot',
+        agent_id: 'agent-v2-evaluator',
         confidence: 0.95,
       },
     },
@@ -1556,7 +1648,7 @@
       expected_reason: 'AGENT_NOT_FOUND',
       explanation: 'Demonstrates authority failure when the acting agent is not registered. MIDAS cannot establish an authority chain without a known agent identity.',
       request: {
-        surface_id: 'surf-payments-approval',
+        surface_id: 'surf-v2-merchant-payment',
         agent_id: 'agent-unknown-xyz',
         confidence: 0.95,
       },
@@ -2192,14 +2284,41 @@
   }
 
   // ── Resource Reference Panel ────────────────────────────────────────────────
-  // Static demo resource info — always shown. Matches the seeded demo dataset.
+  // Static demo resource info — always shown. Matches the V2 seeded demo dataset.
+  // Authority chain entities:
   const DEMO_RESOURCES = [
-    { type: 'Surface',  name: 'Payments Approval',           id: 'surf-payments-approval',  detail: 'domain: payments' },
-    { type: 'Profile',  name: 'Standard Payments Authority', id: 'profile-payments-std',    detail: 'confidence \u2265 0.85, \u00a31\u2009000' },
-    { type: 'Agent',    name: 'Payments Bot',                id: 'agent-payments-bot',      detail: 'type: AI' },
-    { type: 'Grant',    name: 'Standard Grant',              id: 'grant-payments-bot-std',  detail: 'links agent \u2192 profile' },
-    { type: 'Surface',  name: 'Customer Decision Validation',id: 'surf-context-validation', detail: 'domain: compliance' },
-    { type: 'Profile',  name: 'Strict Context Authority',    id: 'profile-context-strict',  detail: 'requires: customer_id' },
+    { type: 'Surface',          name: 'Merchant Payment Auth',        id: 'surf-v2-merchant-payment',   detail: 'domain: merchant-services' },
+    { type: 'Profile',          name: 'Standard Payment Authority',   id: 'profile-v2-standard',         detail: 'confidence \u2265 0.85, \u00a35\u2009000' },
+    { type: 'Agent',            name: 'V2 Demo Evaluator',            id: 'agent-v2-evaluator',           detail: 'type: AI' },
+    { type: 'Grant',            name: 'Standard Grant',               id: 'grant-v2-standard',            detail: 'links agent \u2192 profile' },
+    { type: 'Surface',          name: 'Identity Verification',        id: 'surf-v2-id-verify',            detail: 'domain: consumer-lending' },
+    { type: 'Profile',          name: 'Onboarding Context Authority', id: 'profile-v2-onboarding',        detail: 'requires: customer_id' },
+    // Structural entities — source of truth: internal/bootstrap/demo.go
+    { type: 'Business Service', name: 'Merchant Services',            id: 'bs-merchant-services',         detail: 'type: customer-facing' },
+    { type: 'Business Service', name: 'Consumer Lending',             id: 'bs-consumer-lending',          detail: 'type: customer-facing' },
+    { type: 'Capability',       name: 'Payment Authorization',        id: 'cap-payment-authorization',    detail: 'process: merchant-payment-auth' },
+    { type: 'Capability',       name: 'Identity Verification',        id: 'cap-identity-verification',    detail: 'process: consumer-onboarding' },
+    { type: 'Process',          name: 'Merchant Payment Auth',        id: 'proc-merchant-payment-auth',   detail: 'service: merchant-services' },
+    { type: 'Process',          name: 'Consumer Onboarding',          id: 'proc-consumer-onboarding',     detail: 'service: consumer-lending' },
+  ];
+
+  // STRUCTURAL_CONTEXT maps each Explorer-evaluable surface to its full V2 structural chain.
+  // Source of truth: internal/bootstrap/demo.go.
+  const STRUCTURAL_CONTEXT = [
+    {
+      surfaceId:       'surf-v2-merchant-payment',
+      surfaceName:     'Merchant Payment Authorization',
+      businessService: { id: 'bs-merchant-services',      name: 'Merchant Services' },
+      capability:      { id: 'cap-payment-authorization',  name: 'Payment Authorization' },
+      process:         { id: 'proc-merchant-payment-auth', name: 'Merchant Payment Auth' },
+    },
+    {
+      surfaceId:       'surf-v2-id-verify',
+      surfaceName:     'Identity Verification',
+      businessService: { id: 'bs-consumer-lending',        name: 'Consumer Lending' },
+      capability:      { id: 'cap-identity-verification',  name: 'Identity Verification' },
+      process:         { id: 'proc-consumer-onboarding',   name: 'Consumer Onboarding' },
+    },
   ];
 
   function renderResourcePanel() {
@@ -2215,6 +2334,30 @@
       `<div class="resource-card-detail">${r.detail}</div>` +
       `</div>`
     ).join('');
+
+    // Structural context chains — one block per evaluable surface.
+    const ctxEl = document.getElementById('structural-context-cards');
+    if (ctxEl) {
+      const node = (type, name, id) =>
+        `<div class="structural-chain-node">` +
+        `<span class="structural-chain-node-type">${escHtml(type)}</span>` +
+        `<span class="structural-chain-node-name">${escHtml(name)}</span>` +
+        `<span class="structural-chain-node-id">${escHtml(id)}</span>` +
+        `</div>`;
+      const arrow = `<span class="structural-chain-arrow">\u2192</span>`;
+
+      ctxEl.innerHTML = STRUCTURAL_CONTEXT.map(ctx =>
+        `<div class="structural-chain-block">` +
+        `<div class="structural-chain-surface">${escHtml(ctx.surfaceName)}</div>` +
+        `<div class="structural-chain-steps">` +
+        node('Business Service', ctx.businessService.name, ctx.businessService.id) + arrow +
+        node('Capability',       ctx.capability.name,      ctx.capability.id)      + arrow +
+        node('Process',          ctx.process.name,         ctx.process.id)         + arrow +
+        node('Surface',          ctx.surfaceName,          ctx.surfaceId) +
+        `</div>` +
+        `</div>`
+      ).join('');
+    }
 
     section.style.display = 'block';
   }

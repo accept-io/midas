@@ -111,3 +111,81 @@ func TestMapAgentDocumentToAgent_InvalidType(t *testing.T) {
 	// Otherwise, the mapper error is acceptable as long as it is not a DB error.
 	// The key invariant is that the error is non-nil and comes from the application layer.
 }
+
+// TestMapProcessDocument_BusinessServiceID verifies that the mapper correctly
+// carries spec.business_service_id into the domain model, and that an absent
+// business_service_id leaves BusinessServiceID empty (backward compatibility).
+func TestMapProcessDocument_BusinessServiceID(t *testing.T) {
+	now := time.Now()
+
+	makeDoc := func(bsID string) types.ProcessDocument {
+		return types.ProcessDocument{
+			APIVersion: types.APIVersionV1,
+			Kind:       types.KindProcess,
+			Metadata:   types.DocumentMetadata{ID: "proc-mapper-test", Name: "Mapper Test Process"},
+			Spec: types.ProcessSpec{
+				CapabilityID:      "cap-mapper-test",
+				Status:            "active",
+				BusinessServiceID: bsID,
+			},
+		}
+	}
+
+	t.Run("business_service_id mapped correctly", func(t *testing.T) {
+		p := mapProcessDocumentToProcess(makeDoc("bs-payments"), now, "tester")
+		if p.BusinessServiceID != "bs-payments" {
+			t.Errorf("BusinessServiceID = %q, want %q", p.BusinessServiceID, "bs-payments")
+		}
+	})
+
+	t.Run("absent business_service_id maps to empty string", func(t *testing.T) {
+		p := mapProcessDocumentToProcess(makeDoc(""), now, "tester")
+		if p.BusinessServiceID != "" {
+			t.Errorf("BusinessServiceID = %q, want empty string", p.BusinessServiceID)
+		}
+	})
+}
+
+// TestMapSurfaceDocument_ProcessID verifies that the mapper correctly carries
+// spec.process_id into the domain model, and that absent process_id results
+// in an empty ProcessID field (backward compatibility).
+func TestMapSurfaceDocument_ProcessID(t *testing.T) {
+	now := time.Now()
+
+	makeDoc := func(processID string) types.SurfaceDocument {
+		return types.SurfaceDocument{
+			APIVersion: types.APIVersionV1,
+			Kind:       types.KindSurface,
+			Metadata: types.DocumentMetadata{
+				ID:   "surf-mapper-test",
+				Name: "Mapper Test Surface",
+			},
+			Spec: types.SurfaceSpec{
+				Category:  "financial",
+				RiskTier:  "high",
+				Status:    "active",
+				ProcessID: processID,
+			},
+		}
+	}
+
+	t.Run("process_id mapped correctly", func(t *testing.T) {
+		ds, err := mapSurfaceDocumentToDecisionSurface(makeDoc("payments.limits-v1"), now, "tester", 1)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if ds.ProcessID != "payments.limits-v1" {
+			t.Errorf("ProcessID = %q, want %q", ds.ProcessID, "payments.limits-v1")
+		}
+	})
+
+	t.Run("absent process_id maps to empty string", func(t *testing.T) {
+		ds, err := mapSurfaceDocumentToDecisionSurface(makeDoc(""), now, "tester", 1)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if ds.ProcessID != "" {
+			t.Errorf("ProcessID = %q, want empty string", ds.ProcessID)
+		}
+	})
+}

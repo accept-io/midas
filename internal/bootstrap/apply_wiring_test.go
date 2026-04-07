@@ -13,12 +13,31 @@ package bootstrap_test
 import (
 	"context"
 	"testing"
+	"time"
 
+	"github.com/accept-io/midas/internal/capability"
 	"github.com/accept-io/midas/internal/controlplane/apply"
 	"github.com/accept-io/midas/internal/controlplane/parser"
 	"github.com/accept-io/midas/internal/controlplane/types"
+	"github.com/accept-io/midas/internal/process"
 	"github.com/accept-io/midas/internal/store/memory"
 )
+
+// alwaysExistsProcessRepo is a test double for apply.ProcessRepository that
+// reports every process ID as existing.
+type alwaysExistsProcessRepo struct{}
+
+func (alwaysExistsProcessRepo) Exists(_ context.Context, _ string) (bool, error) {
+	return true, nil
+}
+
+func (alwaysExistsProcessRepo) GetByID(_ context.Context, _ string) (*process.Process, error) {
+	return nil, nil
+}
+
+func (alwaysExistsProcessRepo) Create(_ context.Context, _ *process.Process) error {
+	return nil
+}
 
 // TestApplyServiceWiring_WithRepos_PersistsAllKinds verifies that the apply
 // service construction used in main.go (NewServiceWithRepos) actually writes
@@ -28,12 +47,29 @@ import (
 func TestApplyServiceWiring_WithRepos_PersistsAllKinds(t *testing.T) {
 	repos := memory.NewRepositories()
 
+	// Seed the process referenced by the surface fixture so the memory-store
+	// structural integrity check (G-12) passes.
+	seedCtx := context.Background()
+	now := time.Now().UTC()
+	if err := repos.Capabilities.Create(seedCtx, &capability.Capability{
+		ID: "test.cap", Name: "Test Cap", Status: "active", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed capability: %v", err)
+	}
+	if err := repos.Processes.Create(seedCtx, &process.Process{
+		ID: "test.process", Name: "Test Process", CapabilityID: "test.cap",
+		Status: "active", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed process: %v", err)
+	}
+
 	// This is the constructor that main.go must use.
 	svc := apply.NewServiceWithRepos(apply.RepositorySet{
-		Surfaces: repos.Surfaces,
-		Agents:   repos.Agents,
-		Profiles: repos.Profiles,
-		Grants:   repos.Grants,
+		Surfaces:  repos.Surfaces,
+		Agents:    repos.Agents,
+		Profiles:  repos.Profiles,
+		Grants:    repos.Grants,
+		Processes: alwaysExistsProcessRepo{},
 	})
 
 	docs := []parser.ParsedDocument{
@@ -49,6 +85,7 @@ func TestApplyServiceWiring_WithRepos_PersistsAllKinds(t *testing.T) {
 					Category:    "financial",
 					RiskTier:    "medium",
 					Status:      "active",
+					ProcessID:   "test.process",
 				},
 			},
 		},
