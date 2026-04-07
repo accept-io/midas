@@ -59,7 +59,7 @@ Then open [http://localhost:8080/explorer](http://localhost:8080/explorer) and s
 
 ### First API evaluation
 
-MIDAS supports two evaluation modes. Choose based on your governance requirements.
+MIDAS supports two evaluation modes. Choose evaluation mode based on your governance requirements.
 
 **Inferred mode** — no setup required. Enable inference and evaluate immediately. MIDAS creates the structural entities (capability, process, surface) automatically on first call.
 
