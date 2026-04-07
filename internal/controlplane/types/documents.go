@@ -6,10 +6,15 @@ import "time"
 const (
 	APIVersionV1 = "midas.accept.io/v1"
 
-	KindSurface = "Surface"
-	KindAgent   = "Agent"
-	KindProfile = "Profile"
-	KindGrant   = "Grant"
+	KindSurface         = "Surface"
+	KindAgent           = "Agent"
+	KindProfile         = "Profile"
+	KindGrant           = "Grant"
+	KindCapability          = "Capability"
+	KindProcess             = "Process"
+	KindBusinessService     = "BusinessService"
+	KindProcessCapability        = "ProcessCapability"
+	KindProcessBusinessService   = "ProcessBusinessService"
 )
 
 // Document is the common interface implemented by all control plane documents.
@@ -88,6 +93,9 @@ type SurfaceSpec struct {
 	// Documentation / references
 	DocumentationURL   string            `json:"documentation_url,omitempty" yaml:"documentation_url,omitempty"`
 	ExternalReferences map[string]string `json:"external_references,omitempty" yaml:"external_references,omitempty"`
+
+	// Process link
+	ProcessID string `json:"process_id,omitempty" yaml:"process_id,omitempty"`
 }
 
 // ContextSchema defines the structure and validation rules for the context map
@@ -279,3 +287,117 @@ func (g GrantDocument) GetKind() string { return g.Kind }
 
 // GetID returns the resource ID.
 func (g GrantDocument) GetID() string { return g.Metadata.ID }
+
+// ---------------------------------------------------------------------------
+// Capability
+// ---------------------------------------------------------------------------
+
+type CapabilityDocument struct {
+	APIVersion string           `json:"apiVersion" yaml:"apiVersion"`
+	Kind       string           `json:"kind" yaml:"kind"`
+	Metadata   DocumentMetadata `json:"metadata" yaml:"metadata"`
+	Spec       CapabilitySpec   `json:"spec" yaml:"spec"`
+}
+
+type CapabilitySpec struct {
+	Description        string `json:"description,omitempty" yaml:"description,omitempty"`
+	Status             string `json:"status" yaml:"status"`
+	Owner              string `json:"owner,omitempty" yaml:"owner,omitempty"`
+	ParentCapabilityID string `json:"parent_capability_id,omitempty" yaml:"parent_capability_id,omitempty"`
+}
+
+func (c CapabilityDocument) GetKind() string { return c.Kind }
+func (c CapabilityDocument) GetID() string   { return c.Metadata.ID }
+
+// ---------------------------------------------------------------------------
+// Process
+// ---------------------------------------------------------------------------
+
+type ProcessDocument struct {
+	APIVersion string           `json:"apiVersion" yaml:"apiVersion"`
+	Kind       string           `json:"kind" yaml:"kind"`
+	Metadata   DocumentMetadata `json:"metadata" yaml:"metadata"`
+	Spec       ProcessSpec      `json:"spec" yaml:"spec"`
+}
+
+type ProcessSpec struct {
+	Description       string `json:"description,omitempty" yaml:"description,omitempty"`
+	CapabilityID      string `json:"capability_id" yaml:"capability_id"`
+	Status            string `json:"status" yaml:"status"`
+	Owner             string `json:"owner,omitempty" yaml:"owner,omitempty"`
+	BusinessServiceID string `json:"business_service_id,omitempty" yaml:"business_service_id,omitempty"`
+	ParentProcessID   string `json:"parent_process_id,omitempty" yaml:"parent_process_id,omitempty"`
+}
+
+func (p ProcessDocument) GetKind() string { return p.Kind }
+func (p ProcessDocument) GetID() string   { return p.Metadata.ID }
+
+// ---------------------------------------------------------------------------
+// BusinessService
+// ---------------------------------------------------------------------------
+
+type BusinessServiceDocument struct {
+	APIVersion string              `json:"apiVersion" yaml:"apiVersion"`
+	Kind       string              `json:"kind" yaml:"kind"`
+	Metadata   DocumentMetadata    `json:"metadata" yaml:"metadata"`
+	Spec       BusinessServiceSpec `json:"spec" yaml:"spec"`
+}
+
+type BusinessServiceSpec struct {
+	Description     string `json:"description,omitempty" yaml:"description,omitempty"`
+	ServiceType     string `json:"service_type" yaml:"service_type"`
+	RegulatoryScope string `json:"regulatory_scope,omitempty" yaml:"regulatory_scope,omitempty"`
+	Status          string `json:"status" yaml:"status"`
+	OwnerID         string `json:"owner_id,omitempty" yaml:"owner_id,omitempty"`
+}
+
+func (b BusinessServiceDocument) GetKind() string { return b.Kind }
+func (b BusinessServiceDocument) GetID() string   { return b.Metadata.ID }
+
+// ---------------------------------------------------------------------------
+// ProcessCapability
+// ---------------------------------------------------------------------------
+
+// ProcessCapabilityDocument declares a link between a Process and a Capability.
+// The metadata.id is a synthetic control-plane handle used for bundle identity
+// and duplicate detection. It is not stored in the process_capabilities table.
+type ProcessCapabilityDocument struct {
+	APIVersion string                 `json:"apiVersion" yaml:"apiVersion"`
+	Kind       string                 `json:"kind" yaml:"kind"`
+	Metadata   DocumentMetadata       `json:"metadata" yaml:"metadata"`
+	Spec       ProcessCapabilitySpec  `json:"spec" yaml:"spec"`
+}
+
+// ProcessCapabilitySpec identifies the process ↔ capability link.
+type ProcessCapabilitySpec struct {
+	ProcessID    string `json:"process_id" yaml:"process_id"`
+	CapabilityID string `json:"capability_id" yaml:"capability_id"`
+}
+
+func (pc ProcessCapabilityDocument) GetKind() string { return pc.Kind }
+func (pc ProcessCapabilityDocument) GetID() string   { return pc.Metadata.ID }
+
+// ---------------------------------------------------------------------------
+// ProcessBusinessService
+// ---------------------------------------------------------------------------
+
+// ProcessBusinessServiceDocument declares a link between a Process and a BusinessService.
+// This represents membership in the N:M process_business_services relationship,
+// additive to the existing process.business_service_id N:1 field.
+// The metadata.id is a synthetic control-plane handle used for bundle identity
+// and duplicate detection. It is not stored in the process_business_services table.
+type ProcessBusinessServiceDocument struct {
+	APIVersion string                        `json:"apiVersion" yaml:"apiVersion"`
+	Kind       string                        `json:"kind" yaml:"kind"`
+	Metadata   DocumentMetadata              `json:"metadata" yaml:"metadata"`
+	Spec       ProcessBusinessServiceSpec    `json:"spec" yaml:"spec"`
+}
+
+// ProcessBusinessServiceSpec identifies the process ↔ business-service link.
+type ProcessBusinessServiceSpec struct {
+	ProcessID         string `json:"process_id" yaml:"process_id"`
+	BusinessServiceID string `json:"business_service_id" yaml:"business_service_id"`
+}
+
+func (pbs ProcessBusinessServiceDocument) GetKind() string { return pbs.Kind }
+func (pbs ProcessBusinessServiceDocument) GetID() string   { return pbs.Metadata.ID }

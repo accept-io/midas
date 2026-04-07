@@ -10,9 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/accept-io/midas/internal/capability"
 	"github.com/accept-io/midas/internal/controlplane/apply"
 	"github.com/accept-io/midas/internal/controlplane/parser"
 	"github.com/accept-io/midas/internal/controlplane/types"
+	"github.com/accept-io/midas/internal/process"
 	"github.com/accept-io/midas/internal/store/memory"
 	"github.com/accept-io/midas/internal/surface"
 )
@@ -25,7 +27,8 @@ import (
 // surface for the first time creates version 1 in review status.
 func TestModification_Surface_FirstApply_CreatesVersion1(t *testing.T) {
 	repos := memory.NewRepositories()
-	svc := apply.NewServiceWithRepos(apply.RepositorySet{Surfaces: repos.Surfaces})
+	seedTestProcess(t, repos)
+	svc := apply.NewServiceWithRepos(apply.RepositorySet{Surfaces: repos.Surfaces, Processes: alwaysExistsProcessRepo{}})
 	ctx := context.Background()
 
 	result := svc.Apply(ctx, []parser.ParsedDocument{modSurfaceDoc("surf-mod-1")}, "ops-user")
@@ -50,7 +53,8 @@ func TestModification_Surface_FirstApply_CreatesVersion1(t *testing.T) {
 // version (v2) in review status, while v1 (active) continues to exist.
 func TestModification_Surface_Reapply_ActiveVersion_CreatesNewVersion(t *testing.T) {
 	repos := memory.NewRepositories()
-	svc := apply.NewServiceWithRepos(apply.RepositorySet{Surfaces: repos.Surfaces})
+	seedTestProcess(t, repos)
+	svc := apply.NewServiceWithRepos(apply.RepositorySet{Surfaces: repos.Surfaces, Processes: alwaysExistsProcessRepo{}})
 	ctx := context.Background()
 
 	// First apply → v1 in review.
@@ -98,7 +102,8 @@ func TestModification_Surface_Reapply_ActiveVersion_CreatesNewVersion(t *testing
 // reapplying while the latest version is already in review returns conflict.
 func TestModification_Surface_Reapply_ReviewVersion_Conflict(t *testing.T) {
 	repos := memory.NewRepositories()
-	svc := apply.NewServiceWithRepos(apply.RepositorySet{Surfaces: repos.Surfaces})
+	seedTestProcess(t, repos)
+	svc := apply.NewServiceWithRepos(apply.RepositorySet{Surfaces: repos.Surfaces, Processes: alwaysExistsProcessRepo{}})
 	ctx := context.Background()
 
 	// First apply → v1 in review.
@@ -256,7 +261,8 @@ func TestModification_Grant_Reapply_Conflict(t *testing.T) {
 // is in review — the governance invariant that keeps evaluations stable.
 func TestModification_Surface_LatestVsActive_DistinctDuringReviewCycle(t *testing.T) {
 	repos := memory.NewRepositories()
-	svc := apply.NewServiceWithRepos(apply.RepositorySet{Surfaces: repos.Surfaces})
+	seedTestProcess(t, repos)
+	svc := apply.NewServiceWithRepos(apply.RepositorySet{Surfaces: repos.Surfaces, Processes: alwaysExistsProcessRepo{}})
 	ctx := context.Background()
 
 	// First apply → v1 in review.
@@ -301,6 +307,38 @@ func TestModification_Surface_LatestVsActive_DistinctDuringReviewCycle(t *testin
 // Document and domain-object constructors for this test file
 // ---------------------------------------------------------------------------
 
+// alwaysExistsProcessRepo is a test double for apply.ProcessRepository that
+// reports every process ID as existing. Shared across the apply_test package.
+type alwaysExistsProcessRepo struct{}
+
+func (alwaysExistsProcessRepo) Exists(_ context.Context, _ string) (bool, error) {
+	return true, nil
+}
+
+func (alwaysExistsProcessRepo) GetByID(_ context.Context, _ string) (*process.Process, error) {
+	return nil, nil
+}
+
+func (alwaysExistsProcessRepo) Create(_ context.Context, _ *process.Process) error {
+	return nil
+}
+
+// alwaysExistsCapabilityRepo is a test double for apply.CapabilityRepository that
+// reports every capability ID as existing. Shared across the apply_test package.
+type alwaysExistsCapabilityRepo struct{}
+
+func (alwaysExistsCapabilityRepo) Exists(_ context.Context, _ string) (bool, error) {
+	return true, nil
+}
+
+func (alwaysExistsCapabilityRepo) GetByID(_ context.Context, _ string) (*capability.Capability, error) {
+	return nil, nil
+}
+
+func (alwaysExistsCapabilityRepo) Create(_ context.Context, _ *capability.Capability) error {
+	return nil
+}
+
 // modSurfaceDoc builds a valid Surface ParsedDocument for modification model tests.
 func modSurfaceDoc(id string) parser.ParsedDocument {
 	return parser.ParsedDocument{
@@ -315,6 +353,7 @@ func modSurfaceDoc(id string) parser.ParsedDocument {
 				Category:    "financial",
 				RiskTier:    "high",
 				Status:      "active",
+				ProcessID:   "test.process",
 			},
 		},
 	}

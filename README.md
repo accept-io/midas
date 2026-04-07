@@ -8,46 +8,102 @@ MIDAS determines whether an automated agent is within authority to perform a con
 
 ## Explorer
 
-When MIDAS starts in memory mode, an interactive developer sandbox is available immediately:
+An interactive developer sandbox is available at:
 
 ```
 http://localhost:8080/explorer
 ```
 
-Open it in a browser. Demo scenarios (accept, escalate, reject, request clarification) are pre-loaded and ready to run — no configuration, no curl commands, no auth required in default mode.
-
-Explorer runs on an isolated in-memory store. Requests sent through it never touch the configured backend. It is a **developer tool only** — do not expose it in production.
+Open it in a browser. Demo scenarios (accept, escalate, reject, request clarification) are pre-loaded and ready to run. Sign in with **demo / demo** in default mode. Explorer runs on an isolated in-memory store — requests sent through it never touch the configured backend. It is a **developer tool only** — do not expose it in production.
 
 ---
 
 ## Quick Start
 
-### Memory mode (no dependencies)
+### Docker (recommended)
+
+```bash
+docker compose up --build
+```
+
+Then open [http://localhost:8080/explorer](http://localhost:8080/explorer) and sign in with **demo / demo**.
+
+No database required. MIDAS starts with an in-memory store and demo data pre-loaded.
+
+**Run without demo mode:**
+
+Bash/sh:
+```bash
+MIDAS_DEV_SEED_DEMO_DATA=false MIDAS_DEV_SEED_DEMO_USER=false docker compose up --build
+```
+
+PowerShell:
+```powershell
+$env:MIDAS_DEV_SEED_DEMO_DATA="false"; $env:MIDAS_DEV_SEED_DEMO_USER="false"; docker compose up --build
+```
+
+> These variables persist for the current shell session. Open a fresh shell (or unset the variables) to return to default demo behaviour.
+
+**Run with Postgres:** uncomment the `postgres` service and `environment` block in `docker-compose.yml`.
+
+### Go (no dependencies)
 
 ```bash
 go run ./cmd/midas
 ```
 
-Then open [http://localhost:8080/explorer](http://localhost:8080/explorer).
+Then open [http://localhost:8080/explorer](http://localhost:8080/explorer) and sign in with **demo / demo**.
 
-### Docker Compose (Postgres)
-
-```bash
-docker compose up
-```
-
-Starts Postgres 16 and MIDAS together. Schema applied automatically on startup.
-
-> **⚠️** The default compose file sets `MIDAS_AUTH_MODE=open` for local convenience.
+> **⚠️** Auth mode defaults to `open` for local development.
 > Before exposing MIDAS to a network, set `MIDAS_AUTH_MODE=required` and configure `MIDAS_AUTH_TOKENS`. See [Authentication](#authentication).
 
 ### First API evaluation
+
+MIDAS supports two evaluation modes. Choose based on your governance requirements.
+
+**Inferred mode** — no setup required. Enable inference and evaluate immediately. MIDAS creates the structural entities (capability, process, surface) automatically on first call.
+
+```bash
+# Enable inference (Postgres required)
+export MIDAS_INFERENCE_ENABLED=true
+
+curl -s -X POST http://localhost:8080/v1/evaluate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "surface_id":  "loan.approve",
+    "agent_id":    "agent-credit-001",
+    "confidence":  0.91,
+    "request_id":  "req-demo-001",
+    "request_source": "lending-service"
+  }' | jq .
+```
+
+Expected response (inference creates structure on first call):
+
+```json
+{
+  "outcome":     "accept",
+  "reason":      "WITHIN_AUTHORITY",
+  "envelope_id": "...",
+  "inference": {
+    "capability_id":       "auto:loan",
+    "process_id":          "auto:loan.approve",
+    "surface_id":          "loan.approve",
+    "capability_created":  true,
+    "process_created":     true,
+    "surface_created":     true
+  }
+}
+```
+
+**Explicit mode** — requires pre-created structure (via control plane apply). Provides strict governance validation: `process_id` must exist and must belong to the given `surface_id`. This is the default and is recommended for production.
 
 ```bash
 curl -s -X POST http://localhost:8080/v1/evaluate \
   -H "Content-Type: application/json" \
   -d '{
     "surface_id":     "surf-loan-auto-approval",
+    "process_id":     "proc-loan-standard",
     "agent_id":       "agent-credit-001",
     "confidence":     0.91,
     "consequence":    {"type": "monetary", "amount": 4500, "currency": "GBP"},
@@ -55,17 +111,6 @@ curl -s -X POST http://localhost:8080/v1/evaluate \
     "request_id":     "req-demo-001",
     "request_source": "lending-service"
   }' | jq .
-```
-
-Expected response:
-
-```json
-{
-  "outcome":     "accept",
-  "reason":      "WITHIN_AUTHORITY",
-  "envelope_id": "...",
-  "policy_mode": "noop"
-}
 ```
 
 Retrieve the full governance record:
@@ -138,6 +183,14 @@ Roles: `platform.admin`, `platform.operator`, `platform.viewer`, `governance.app
 | `required` | Unset | **Fatal** — no tokens configured |
 | `open` | — | No auth — `UNSAFE FOR PRODUCTION` logged |
 
+### Inference
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MIDAS_INFERENCE_ENABLED` | `false` | `true` enables automatic structure inference on `POST /v1/evaluate`. Requires Postgres. |
+
+When `false` (the default), `process_id` is required on every evaluate call. When `true`, omitting `process_id` causes MIDAS to infer and create the structural entities automatically.
+
 ### Key environment variables
 
 | Variable | Default | Description |
@@ -161,14 +214,16 @@ Full variable reference: [docs/operations/deployment.md](docs/operations/deploym
 | [docs/core/authority-model.md](docs/core/authority-model.md) | Surfaces, profiles, grants, the authority chain |
 | [docs/core/runtime-evaluation.md](docs/core/runtime-evaluation.md) | Evaluate endpoint, outcomes, idempotency, audit |
 | [docs/core/envelope-integrity.md](docs/core/envelope-integrity.md) | Envelope structure, hash chain, integrity verification |
+| [docs/core/data-model.md](docs/core/data-model.md) | PostgreSQL schema reference |
+| [docs/guides/lifecycle-management.md](docs/guides/lifecycle-management.md) | Inferred structure lifecycle: promote and cleanup |
+| [docs/guides/authentication.md](docs/guides/authentication.md) | Local IAM, OIDC/SSO, and API bearer token authentication |
+| [docs/guides/rego-policies.md](docs/guides/rego-policies.md) | Policy behavior: NoOp default and future direction |
 | [docs/operations/deployment.md](docs/operations/deployment.md) | Surface lifecycle: apply → approve → active → deprecated |
 | [docs/operations/escalations.md](docs/operations/escalations.md) | Escalation outcomes, listing and resolving |
 | [docs/operations/events.md](docs/operations/events.md) | Outbox, dispatcher, Kafka, event contracts |
 | [docs/operations/integrations.md](docs/operations/integrations.md) | Kafka integration, SSO/OIDC |
 | [docs/api/http-api.md](docs/api/http-api.md) | Complete HTTP API reference |
 | [docs/architecture/architecture.md](docs/architecture/architecture.md) | Deep architecture overview |
-| [docs/guides/authentication.md](docs/guides/authentication.md) | Local IAM, OIDC/SSO, and API bearer token authentication |
-| [docs/guides/rego-policies.md](docs/guides/rego-policies.md) | Policy behavior: NoOp default and future direction |
 
 ---
 

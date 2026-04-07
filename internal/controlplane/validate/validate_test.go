@@ -29,6 +29,7 @@ var (
 			Category:    "financial",
 			RiskTier:    "high",
 			Status:      "active",
+			ProcessID:   "payment.process",
 		},
 	}
 
@@ -421,6 +422,42 @@ func TestValidateSurface_FieldLengthLimits(t *testing.T) {
 			}
 			if !found {
 				t.Errorf("expected length error for %q, got: %v", tt.expectedField, errs)
+			}
+		})
+	}
+}
+
+func TestValidateSurface_ProcessID(t *testing.T) {
+	tests := []struct {
+		name      string
+		processID string
+		wantErr   bool
+	}{
+		{"absent is invalid", "", true},
+		{"valid id", "payments.limits-v1", false},
+		{"invalid id with spaces", "invalid id", true},
+		{"invalid id uppercase", "InvalidID", true},
+		{"invalid id leading hyphen", "-bad", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			doc := validSurfaceDoc
+			doc.Spec.ProcessID = tt.processID
+			errs := validateSurface(doc)
+
+			hasProcessErr := false
+			for _, e := range errs {
+				if e.Field == "spec.process_id" {
+					hasProcessErr = true
+					break
+				}
+			}
+			if tt.wantErr && !hasProcessErr {
+				t.Errorf("want process_id error for %q, got none", tt.processID)
+			}
+			if !tt.wantErr && hasProcessErr {
+				t.Errorf("want no process_id error for %q, got one", tt.processID)
 			}
 		})
 	}
@@ -1173,6 +1210,32 @@ func TestValidateDocument_AllTypes(t *testing.T) {
 				Doc:  validGrantDoc,
 			},
 		},
+		{
+			name: "BusinessService",
+			doc: parser.ParsedDocument{
+				Kind: types.KindBusinessService,
+				ID:   "bs-consumer-lending",
+				Doc: types.BusinessServiceDocument{
+					APIVersion: types.APIVersionV1,
+					Kind:       types.KindBusinessService,
+					Metadata:   types.DocumentMetadata{ID: "bs-consumer-lending", Name: "Consumer Lending"},
+					Spec:       types.BusinessServiceSpec{ServiceType: "customer_facing", Status: "active"},
+				},
+			},
+		},
+		{
+			name: "ProcessCapability",
+			doc: parser.ParsedDocument{
+				Kind: types.KindProcessCapability,
+				ID:   "pc-onboarding-fraud",
+				Doc: types.ProcessCapabilityDocument{
+					APIVersion: types.APIVersionV1,
+					Kind:       types.KindProcessCapability,
+					Metadata:   types.DocumentMetadata{ID: "pc-onboarding-fraud"},
+					Spec:       types.ProcessCapabilitySpec{ProcessID: "proc-onboarding", CapabilityID: "cap-fraud"},
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -1182,6 +1245,169 @@ func TestValidateDocument_AllTypes(t *testing.T) {
 				t.Errorf("expected no errors for valid %s document, got: %v", tt.name, errs)
 			}
 		})
+	}
+}
+
+// ============================================================================
+// BusinessService Validation Tests
+// ============================================================================
+
+func TestValidateBusinessService_MissingRequiredFields(t *testing.T) {
+	tests := []struct {
+		name          string
+		modify        func(types.BusinessServiceDocument) types.BusinessServiceDocument
+		expectedField string
+	}{
+		{
+			name: "missing name",
+			modify: func(d types.BusinessServiceDocument) types.BusinessServiceDocument {
+				d.Metadata.Name = ""
+				return d
+			},
+			expectedField: "metadata.name",
+		},
+		{
+			name: "missing service_type",
+			modify: func(d types.BusinessServiceDocument) types.BusinessServiceDocument {
+				d.Spec.ServiceType = ""
+				return d
+			},
+			expectedField: "spec.service_type",
+		},
+		{
+			name: "missing status",
+			modify: func(d types.BusinessServiceDocument) types.BusinessServiceDocument {
+				d.Spec.Status = ""
+				return d
+			},
+			expectedField: "spec.status",
+		},
+	}
+
+	base := types.BusinessServiceDocument{
+		APIVersion: types.APIVersionV1,
+		Kind:       types.KindBusinessService,
+		Metadata:   types.DocumentMetadata{ID: "bs-test", Name: "Test Service"},
+		Spec:       types.BusinessServiceSpec{ServiceType: "customer_facing", Status: "active"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			doc := tt.modify(base)
+			errs := validateBusinessService(doc)
+			if len(errs) == 0 {
+				t.Fatalf("expected validation error for %s, got none", tt.name)
+			}
+			found := false
+			for _, e := range errs {
+				if e.Field == tt.expectedField {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("expected error on %q, got: %v", tt.expectedField, errs)
+			}
+		})
+	}
+}
+
+func TestValidateBusinessService_InvalidEnumValues(t *testing.T) {
+	base := types.BusinessServiceDocument{
+		APIVersion: types.APIVersionV1,
+		Kind:       types.KindBusinessService,
+		Metadata:   types.DocumentMetadata{ID: "bs-test", Name: "Test Service"},
+		Spec:       types.BusinessServiceSpec{ServiceType: "customer_facing", Status: "active"},
+	}
+
+	tests := []struct {
+		name          string
+		modify        func(types.BusinessServiceDocument) types.BusinessServiceDocument
+		expectedField string
+	}{
+		{
+			name: "invalid service_type",
+			modify: func(d types.BusinessServiceDocument) types.BusinessServiceDocument {
+				d.Spec.ServiceType = "unknown_type"
+				return d
+			},
+			expectedField: "spec.service_type",
+		},
+		{
+			name: "invalid status",
+			modify: func(d types.BusinessServiceDocument) types.BusinessServiceDocument {
+				d.Spec.Status = "unknown_status"
+				return d
+			},
+			expectedField: "spec.status",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			doc := tt.modify(base)
+			errs := validateBusinessService(doc)
+			if len(errs) == 0 {
+				t.Fatalf("expected validation error for %s, got none", tt.name)
+			}
+			found := false
+			for _, e := range errs {
+				if e.Field == tt.expectedField {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("expected enum error on %q, got: %v", tt.expectedField, errs)
+			}
+		})
+	}
+}
+
+// TestValidateBusinessService_InactiveStatusRejected confirms that 'inactive' is not
+// a valid BusinessService status. The business_services schema CHECK constraint allows
+// only ('active', 'deprecated') — 'inactive' is valid for Capability and Process but
+// not BusinessService, and must be caught here before any DB write occurs.
+func TestValidateBusinessService_InactiveStatusRejected(t *testing.T) {
+	doc := types.BusinessServiceDocument{
+		APIVersion: types.APIVersionV1,
+		Kind:       types.KindBusinessService,
+		Metadata:   types.DocumentMetadata{ID: "bs-test", Name: "Test Service"},
+		Spec:       types.BusinessServiceSpec{ServiceType: "customer_facing", Status: "inactive"},
+	}
+	errs := validateBusinessService(doc)
+	if len(errs) == 0 {
+		t.Fatal("expected validation error for status=inactive on BusinessService, got none")
+	}
+	found := false
+	for _, e := range errs {
+		if e.Field == "spec.status" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected error on spec.status; got: %v", errs)
+	}
+}
+
+// TestValidateBusinessService_ValidStatuses confirms 'active' and 'deprecated' pass.
+func TestValidateBusinessService_ValidStatuses(t *testing.T) {
+	base := types.BusinessServiceDocument{
+		APIVersion: types.APIVersionV1,
+		Kind:       types.KindBusinessService,
+		Metadata:   types.DocumentMetadata{ID: "bs-test", Name: "Test Service"},
+		Spec:       types.BusinessServiceSpec{ServiceType: "customer_facing", Status: "active"},
+	}
+	for _, status := range []string{"active", "deprecated"} {
+		doc := base
+		doc.Spec.Status = status
+		errs := validateBusinessService(doc)
+		for _, e := range errs {
+			if e.Field == "spec.status" {
+				t.Errorf("status=%q should be valid for BusinessService, got error: %s", status, e.Message)
+			}
+		}
 	}
 }
 
@@ -1206,6 +1432,114 @@ func TestValidateDocument_UnsupportedType(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected unsupported type error, got: %v", errs)
+	}
+}
+
+// ============================================================================
+// ProcessCapability Validation Tests
+// ============================================================================
+
+func TestValidateProcessCapability_MissingRequiredFields(t *testing.T) {
+	base := types.ProcessCapabilityDocument{
+		APIVersion: types.APIVersionV1,
+		Kind:       types.KindProcessCapability,
+		Metadata:   types.DocumentMetadata{ID: "pc-test"},
+		Spec:       types.ProcessCapabilitySpec{ProcessID: "proc-one", CapabilityID: "cap-one"},
+	}
+
+	tests := []struct {
+		name          string
+		modify        func(types.ProcessCapabilityDocument) types.ProcessCapabilityDocument
+		expectedField string
+	}{
+		{
+			name: "missing process_id",
+			modify: func(d types.ProcessCapabilityDocument) types.ProcessCapabilityDocument {
+				d.Spec.ProcessID = ""
+				return d
+			},
+			expectedField: "spec.process_id",
+		},
+		{
+			name: "missing capability_id",
+			modify: func(d types.ProcessCapabilityDocument) types.ProcessCapabilityDocument {
+				d.Spec.CapabilityID = ""
+				return d
+			},
+			expectedField: "spec.capability_id",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			doc := tt.modify(base)
+			errs := validateProcessCapability(doc)
+			if len(errs) == 0 {
+				t.Fatalf("expected validation error for %s, got none", tt.name)
+			}
+			found := false
+			for _, e := range errs {
+				if e.Field == tt.expectedField {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("expected error on %q, got: %v", tt.expectedField, errs)
+			}
+		})
+	}
+}
+
+func TestValidateProcessCapability_InvalidIDFormat(t *testing.T) {
+	base := types.ProcessCapabilityDocument{
+		APIVersion: types.APIVersionV1,
+		Kind:       types.KindProcessCapability,
+		Metadata:   types.DocumentMetadata{ID: "pc-test"},
+		Spec:       types.ProcessCapabilitySpec{ProcessID: "proc-one", CapabilityID: "cap-one"},
+	}
+
+	tests := []struct {
+		name          string
+		modify        func(types.ProcessCapabilityDocument) types.ProcessCapabilityDocument
+		expectedField string
+	}{
+		{
+			name: "invalid process_id format",
+			modify: func(d types.ProcessCapabilityDocument) types.ProcessCapabilityDocument {
+				d.Spec.ProcessID = "Invalid ID"
+				return d
+			},
+			expectedField: "spec.process_id",
+		},
+		{
+			name: "invalid capability_id format",
+			modify: func(d types.ProcessCapabilityDocument) types.ProcessCapabilityDocument {
+				d.Spec.CapabilityID = "Invalid ID"
+				return d
+			},
+			expectedField: "spec.capability_id",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			doc := tt.modify(base)
+			errs := validateProcessCapability(doc)
+			if len(errs) == 0 {
+				t.Fatalf("expected validation error for %s, got none", tt.name)
+			}
+			found := false
+			for _, e := range errs {
+				if e.Field == tt.expectedField {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("expected format error on %q, got: %v", tt.expectedField, errs)
+			}
+		})
 	}
 }
 

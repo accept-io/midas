@@ -24,6 +24,7 @@ import (
 	"github.com/accept-io/midas/internal/decision"
 	"github.com/accept-io/midas/internal/httpapi"
 	"github.com/accept-io/midas/internal/identity"
+	"github.com/accept-io/midas/internal/inference"
 	"github.com/accept-io/midas/internal/localiam"
 	"github.com/accept-io/midas/internal/oidc"
 	"github.com/accept-io/midas/internal/outbox"
@@ -136,11 +137,16 @@ func main() {
 	}
 
 	applyService := apply.NewServiceWithRepos(apply.RepositorySet{
-		Surfaces:     repos.Surfaces,
-		Agents:       repos.Agents,
-		Profiles:     repos.Profiles,
-		Grants:       repos.Grants,
-		ControlAudit: repos.ControlAudit,
+		Surfaces:                repos.Surfaces,
+		Agents:                  repos.Agents,
+		Profiles:                repos.Profiles,
+		Grants:                  repos.Grants,
+		ControlAudit:            repos.ControlAudit,
+		Processes:               repos.Processes,
+		Capabilities:            repos.Capabilities,
+		BusinessServices:        repos.BusinessServices,
+		ProcessCapabilities:     repos.ProcessCapabilities,
+		ProcessBusinessServices: repos.ProcessBusinessServices,
 	})
 
 	approvalSvc := approval.NewServiceWithProfileAndOutbox(
@@ -152,6 +158,9 @@ func main() {
 	)
 
 	introspectionSvc := httpapi.NewIntrospectionServiceFull(repos.Surfaces, repos.Profiles, repos.Agents, repos.Grants)
+	structuralSvc := httpapi.NewStructuralService(repos.Capabilities, repos.Processes, repos.Surfaces).
+		WithBusinessServices(repos.BusinessServices)
+	explicitValidationSvc := httpapi.NewExplicitValidationService(repos.Processes, repos.Surfaces)
 
 	var controlAuditSvc *httpapi.ControlAuditReadService
 	if repos.ControlAudit != nil {
@@ -183,14 +192,48 @@ func main() {
 	// --- HTTP server ---
 
 	srv := httpapi.NewServerFull(orchestrator, applyService, approvalSvc, introspectionSvc, controlAuditSvc, nil)
+	srv.WithStructural(structuralSvc)
+	srv.WithExplicitValidator(explicitValidationSvc)
 	srv.WithPolicyMeta(policyMode, policyEvaluatorName)
 	srv.WithHealthCheck(readyFn)
 	srv.WithAuthMode(cfg.Auth.Mode)
+	srv.WithStructuralMode(cfg.Structural.Mode)
 	if authenticator != nil {
 		srv.WithAuthenticator(authenticator)
 	}
 	srv.WithStoreBackend(cfg.Store.Backend)
 	srv.WithDemoSeeded(demoSeeded)
+	srv.WithSeedDemoUser(cfg.Dev.SeedDemoUser)
+
+	// Wire inference service for postgres backends only.
+	// Inference requires direct transaction management via *sql.DB, which is only
+	// available on the postgres backend. Memory mode does not support inference.
+	if cfg.Store.Backend == "postgres" {
+		type dbProvider interface{ DB() *sql.DB }
+		if dbp, ok := repoStore.(dbProvider); ok {
+			db := dbp.DB()
+			caps, err := postgres.NewCapabilityRepo(db)
+			if err != nil {
+				log.Fatal(err)
+			}
+			procs, err := postgres.NewProcessRepo(db)
+			if err != nil {
+				log.Fatal(err)
+			}
+			surfs, err := postgres.NewSurfaceRepo(db)
+			if err != nil {
+				log.Fatal(err)
+			}
+			inferenceSvc := inference.NewService(db, caps, procs, surfs)
+			srv.WithInference(inferenceSvc, cfg.Inference.Enabled)
+
+			promotionSvc := inference.NewPromoteService(db, caps, procs, surfs)
+			srv.WithPromotion(promotionSvc)
+
+			cleanupSvc := inference.NewCleanupService(db, procs, caps)
+			srv.WithCleanup(cleanupSvc)
+		}
+	}
 
 	if !cfg.Server.Headless {
 		if cfg.LocalIAM.Enabled {

@@ -50,6 +50,7 @@ func DefaultConfig() Config {
 		},
 		Dev: DevConfig{
 			SeedDemoData: true,
+			SeedDemoUser: true,
 		},
 		Dispatcher: DispatcherConfig{
 			Enabled:      false,
@@ -61,6 +62,12 @@ func DefaultConfig() Config {
 		Kafka: KafkaConfig{
 			ClientID:     "midas",
 			RequiredAcks: -1,
+		},
+		Inference: InferenceConfig{
+			Enabled: false,
+		},
+		Structural: StructuralConfig{
+			Mode: StructuralModePermissive,
 		},
 	}
 }

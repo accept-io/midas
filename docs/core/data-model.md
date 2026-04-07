@@ -16,15 +16,92 @@ This file is the single source of truth for the database structure. There is no 
 
 # Core Tables
 
-MIDAS stores governance configuration and runtime evaluation evidence across five primary tables.
+MIDAS stores governance configuration and runtime evaluation evidence across seven primary tables.
 
 | Table | Purpose |
 |------|--------|
+| capabilities | Logical business domains grouping related processes |
+| processes | Governed actions within a capability |
 | decision_surfaces | Registry of governed business decisions |
 | authority_profiles | Authority rules and thresholds for a surface |
 | agents | Autonomous actors (AI, service, or operator) |
 | agent_authorizations | Grants linking agents to authority profiles |
 | operational_envelopes | Runtime evaluation records |
+
+---
+
+# capabilities
+
+Stores logical business domains that group related processes. Capabilities and processes form the structural layer that evaluation requests are mapped to.
+
+## Columns
+
+| Column | Type | Description |
+|------|------|-------------|
+| capability_id | text | Capability identifier |
+| name | text | Human-readable name |
+| status | text | `active` or `deprecated` |
+| origin | text | How this record was created: `manual` or `inferred` |
+| managed | boolean | Whether this is a user-managed entity |
+| replaces | text | ID of the inferred capability this record promoted from (nullable) |
+| description | text | Optional description |
+| owner_id | text | Owning team or system (nullable) |
+| parent_capability_id | text | Parent capability for hierarchical grouping (nullable) |
+| created_at | timestamp | Record creation time |
+| updated_at | timestamp | Last update time |
+
+## Primary Key
+
+```
+capability_id
+```
+
+## Origin and managed semantics
+
+The `origin` and `managed` columns describe how a capability came to exist:
+
+| origin | managed | Meaning |
+|--------|---------|---------|
+| `inferred` | `false` | System-created by the inference engine. Uses `auto:` prefix convention. |
+| `manual` | `true` | User-created via the promotion workflow. Canonical, governed entity. |
+
+The `replaces` column tracks lineage: when an inferred capability is promoted to a managed one, the new managed record sets `replaces = <old inferred capability_id>`. The old inferred capability is then set to `status = deprecated`.
+
+---
+
+# processes
+
+Stores governed actions within a capability. Each decision surface is associated with a process; each process belongs to a capability.
+
+## Columns
+
+| Column | Type | Description |
+|------|------|-------------|
+| process_id | text | Process identifier |
+| capability_id | text | Parent capability |
+| name | text | Human-readable name |
+| status | text | `active` or `deprecated` |
+| origin | text | `manual` or `inferred` |
+| managed | boolean | Whether this is a user-managed entity |
+| replaces | text | ID of the inferred process this record promoted from (nullable) |
+| description | text | Optional description |
+| owner_id | text | Owning team or system (nullable) |
+| parent_process_id | text | Parent process for sub-process hierarchies (nullable) |
+| level | integer | Depth in the process hierarchy (nullable) |
+| created_at | timestamp | Record creation time |
+| updated_at | timestamp | Last update time |
+
+## Primary Key
+
+```
+process_id
+```
+
+## Notes
+
+- `capability_id` is a foreign key to `capabilities.capability_id`
+- The `origin` and `managed` columns follow the same semantics as capabilities (see table above)
+- When a process is promoted, `decision_surfaces.process_id` is updated in place to point to the new managed process
 
 ---
 

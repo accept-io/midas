@@ -319,6 +319,148 @@ auth:
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Load — inference config
+// ---------------------------------------------------------------------------
+
+// TestLoad_InferenceDefaultIsFalse verifies that the default for inference.enabled
+// is false when no file and no env are present.
+func TestLoad_InferenceDefaultIsFalse(t *testing.T) {
+	result, err := Load(LoadOptions{
+		SearchPaths: noDiscovery,
+		EnvOverride: env(),
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if result.Config.Inference.Enabled {
+		t.Error("inference.enabled: want false (default), got true")
+	}
+	if result.Sources["inference"] != SourceDefault {
+		t.Errorf("inference source: want default, got %s", result.Sources["inference"])
+	}
+}
+
+// TestLoad_InferenceEnabledFromEnv verifies that MIDAS_INFERENCE_ENABLED=true
+// overrides the default.
+func TestLoad_InferenceEnabledFromEnv(t *testing.T) {
+	result, err := Load(LoadOptions{
+		SearchPaths: noDiscovery,
+		EnvOverride: env("MIDAS_INFERENCE_ENABLED", "true"),
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if !result.Config.Inference.Enabled {
+		t.Error("inference.enabled: want true (env override), got false")
+	}
+	if result.Sources["inference"] != SourceEnv {
+		t.Errorf("inference source: want env, got %s", result.Sources["inference"])
+	}
+}
+
+// TestLoad_InferenceInvalidEnvRejected verifies that a non-boolean value for
+// MIDAS_INFERENCE_ENABLED produces an error.
+func TestLoad_InferenceInvalidEnvRejected(t *testing.T) {
+	_, err := Load(LoadOptions{
+		SearchPaths: noDiscovery,
+		EnvOverride: env("MIDAS_INFERENCE_ENABLED", "notabool"),
+	})
+	if err == nil {
+		t.Error("want error for non-boolean MIDAS_INFERENCE_ENABLED, got nil")
+	}
+}
+
+// TestLoad_InferenceEnabledFromYAML verifies that inference.enabled: true is
+// correctly parsed from a YAML config file.
+func TestLoad_InferenceEnabledFromYAML(t *testing.T) {
+	cfgPath := writeConfig(t, `
+version: 1
+profile: dev
+store:
+  backend: memory
+auth:
+  mode: open
+inference:
+  enabled: true
+`)
+	result, err := Load(LoadOptions{
+		ConfigFile:  cfgPath,
+		EnvOverride: env(),
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if !result.Config.Inference.Enabled {
+		t.Error("inference.enabled: want true (from YAML), got false")
+	}
+	if result.Sources["inference"] != SourceFile {
+		t.Errorf("inference source: want file, got %s", result.Sources["inference"])
+	}
+}
+
+// TestLoad_StructuralModeDefaultIsPermissive verifies that the default structural
+// mode is permissive when no file and no env are present.
+func TestLoad_StructuralModeDefaultIsPermissive(t *testing.T) {
+	result, err := Load(LoadOptions{
+		SearchPaths: noDiscovery,
+		EnvOverride: env(),
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if result.Config.Structural.Mode != StructuralModePermissive {
+		t.Errorf("structural.mode: want %q (default), got %q", StructuralModePermissive, result.Config.Structural.Mode)
+	}
+	if result.Sources["structural"] != SourceDefault {
+		t.Errorf("structural source: want default, got %s", result.Sources["structural"])
+	}
+}
+
+// TestLoad_StructuralModeFromEnv verifies that MIDAS_STRUCTURAL_MODE overrides the default.
+func TestLoad_StructuralModeFromEnv(t *testing.T) {
+	result, err := Load(LoadOptions{
+		SearchPaths: noDiscovery,
+		EnvOverride: env("MIDAS_STRUCTURAL_MODE", "enforced"),
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if result.Config.Structural.Mode != StructuralModeEnforced {
+		t.Errorf("structural.mode: want %q (env override), got %q", StructuralModeEnforced, result.Config.Structural.Mode)
+	}
+	if result.Sources["structural"] != SourceEnv {
+		t.Errorf("structural source: want env, got %s", result.Sources["structural"])
+	}
+}
+
+// TestLoad_StructuralModeFromYAML verifies that structural.mode is parsed from a YAML config file.
+func TestLoad_StructuralModeFromYAML(t *testing.T) {
+	cfgPath := writeConfig(t, `
+version: 1
+profile: dev
+store:
+  backend: memory
+auth:
+  mode: open
+structural:
+  mode: enforced
+`)
+	result, err := Load(LoadOptions{
+		ConfigFile:  cfgPath,
+		EnvOverride: env(),
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if result.Config.Structural.Mode != StructuralModeEnforced {
+		t.Errorf("structural.mode: want %q (from YAML), got %q", StructuralModeEnforced, result.Config.Structural.Mode)
+	}
+	if result.Sources["structural"] != SourceFile {
+		t.Errorf("structural source: want file, got %s", result.Sources["structural"])
+	}
+}
+
 func TestLoad_PlaceholderExpansion(t *testing.T) {
 	cfgPath := writeConfig(t, `
 version: 1
@@ -895,15 +1037,15 @@ func TestLoad_MIDAS_DEV_SEED_DEMO_USER_SetsFlag(t *testing.T) {
 	}
 }
 
-func TestLoad_MIDAS_DEV_SEED_DEMO_USER_DefaultFalse(t *testing.T) {
+func TestLoad_MIDAS_DEV_SEED_DEMO_USER_DefaultTrue(t *testing.T) {
 	result, err := Load(LoadOptions{
 		SearchPaths: noDiscovery,
 	})
 	if err != nil {
 		t.Fatalf("Load failed: %v", err)
 	}
-	if result.Config.Dev.SeedDemoUser {
-		t.Error("dev.seed_demo_user: want false by default, got true")
+	if !result.Config.Dev.SeedDemoUser {
+		t.Error("dev.seed_demo_user: want true by default, got false")
 	}
 }
 

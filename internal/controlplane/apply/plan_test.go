@@ -62,9 +62,10 @@ func validSurface(id string) parser.ParsedDocument {
 				Name: "Valid Surface",
 			},
 			Spec: types.SurfaceSpec{
-				Category: "financial",
-				RiskTier: "high",
-				Status:   "active",
+				Category:  "financial",
+				RiskTier:  "high",
+				Status:    "active",
+				ProcessID: "test.process",
 			},
 		},
 	}
@@ -349,6 +350,9 @@ func (r *controlledSurfaceRepo) ListByDomain(_ context.Context, _ string) ([]*su
 func (r *controlledSurfaceRepo) Search(_ context.Context, _ surface.SearchCriteria) ([]*surface.DecisionSurface, error) {
 	panic("Search called unexpectedly in surface planner test")
 }
+func (r *controlledSurfaceRepo) ListByProcessID(_ context.Context, _ string) ([]*surface.DecisionSurface, error) {
+	panic("ListByProcessID called unexpectedly in surface planner test")
+}
 
 // TestBuildApplyPlan_SurfaceNotFound_ActionCreate verifies that a surface with
 // no persisted version is planned as create.
@@ -358,7 +362,7 @@ func TestBuildApplyPlan_SurfaceNotFound_ActionCreate(t *testing.T) {
 			return nil, nil // no existing version
 		},
 	}
-	svc := NewServiceWithRepo(repo)
+	svc := NewServiceWithRepos(RepositorySet{Surfaces: repo, Processes: processRepoAlwaysExists()})
 
 	plan := svc.buildApplyPlan(context.Background(), []parser.ParsedDocument{validSurface("surf-new")})
 
@@ -416,7 +420,7 @@ func TestBuildApplyPlan_SurfaceActive_ActionCreate(t *testing.T) {
 			}, nil
 		},
 	}
-	svc := NewServiceWithRepo(repo)
+	svc := NewServiceWithRepos(RepositorySet{Surfaces: repo, Processes: processRepoAlwaysExists()})
 
 	plan := svc.buildApplyPlan(context.Background(), []parser.ParsedDocument{validSurface("surf-active")})
 
@@ -568,7 +572,7 @@ func TestApply_NewSurface_WithRepo_ReturnsCreated(t *testing.T) {
 			return nil, nil // no existing version
 		},
 	}
-	svc := NewServiceWithRepo(repo)
+	svc := NewServiceWithRepos(RepositorySet{Surfaces: repo, Processes: processRepoAlwaysExists()})
 
 	result := svc.Apply(context.Background(), []parser.ParsedDocument{validSurface("surf-brand-new")}, "")
 

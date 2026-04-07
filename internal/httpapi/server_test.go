@@ -220,6 +220,7 @@ func TestEvaluate_Success(t *testing.T) {
 		"surface_id": "surf-1",
 		"agent_id":   "agent-1",
 		"confidence": 0.95,
+		"request_id": "req-test-001",
 	})
 
 	rec := performRequest(t, srv, http.MethodPost, "/v1/evaluate", payload)
@@ -241,7 +242,7 @@ func TestEvaluate_Success(t *testing.T) {
 }
 
 func TestEvaluate_RawBodyPassedVerbatim(t *testing.T) {
-	expectedBody := `{"surface_id":"surf-1","agent_id":"agent-1","confidence":0.95}`
+	expectedBody := `{"surface_id":"surf-1","agent_id":"agent-1","confidence":0.95,"request_id":"req-test-verbatim"}`
 	var capturedRaw json.RawMessage
 
 	mock := &mockOrchestrator{
@@ -354,6 +355,7 @@ func TestEvaluate_ZeroConfidenceIsValid(t *testing.T) {
 		"surface_id": "surf-1",
 		"agent_id":   "agent-1",
 		"confidence": 0.0,
+		"request_id": "req-test-zero-conf",
 	})
 
 	rec := performRequest(t, srv, http.MethodPost, "/v1/evaluate", payload)
@@ -519,6 +521,7 @@ func TestEvaluate_DefaultRequestSource(t *testing.T) {
 		"surface_id": "surf-1",
 		"agent_id":   "agent-1",
 		"confidence": 0.9,
+		"request_id": "req-test-default-src",
 	})
 
 	rec := performRequest(t, srv, http.MethodPost, "/v1/evaluate", payload)
@@ -551,6 +554,7 @@ func TestEvaluate_WhitespaceOnlyRequestSourceDefaultsToAPI(t *testing.T) {
 		"agent_id":       "agent-1",
 		"confidence":     0.9,
 		"request_source": "   \t  ",
+		"request_id":     "req-test-ws-src",
 	})
 
 	rec := performRequest(t, srv, http.MethodPost, "/v1/evaluate", payload)
@@ -589,6 +593,7 @@ func TestEvaluate_OrchestratorError(t *testing.T) {
 		"surface_id": "surf-1",
 		"agent_id":   "agent-1",
 		"confidence": 0.9,
+		"request_id": "req-test-orch-err",
 	})
 
 	rec := performRequest(t, srv, http.MethodPost, "/v1/evaluate", payload)
@@ -609,6 +614,7 @@ func TestEvaluate_NilOrchestrator(t *testing.T) {
 		"surface_id": "surf-1",
 		"agent_id":   "agent-1",
 		"confidence": 0.9,
+		"request_id": "req-test-nil-orch",
 	})
 
 	rec := performRequest(t, srv, http.MethodPost, "/v1/evaluate", payload)
@@ -1194,6 +1200,7 @@ func TestDomainErrorMapping_TypedSentinels(t *testing.T) {
 				"surface_id": "surf-1",
 				"agent_id":   "agent-1",
 				"confidence": 0.9,
+				"request_id": "req-domain-error-001",
 			})
 
 			rec := performRequest(t, srv, http.MethodPost, "/v1/evaluate", payload)
@@ -1251,6 +1258,7 @@ func TestDomainErrorMapping_StringMatchFallback(t *testing.T) {
 				"surface_id": "surf-1",
 				"agent_id":   "agent-1",
 				"confidence": 0.9,
+				"request_id": "req-domain-str-001",
 			})
 
 			rec := performRequest(t, srv, http.MethodPost, "/v1/evaluate", payload)
@@ -3198,6 +3206,7 @@ func TestLifecycle_ApplyApproveEvaluateDeprecate(t *testing.T) {
 		"surface_id": "payments.execute",
 		"agent_id":   "agent-001",
 		"confidence": 0.9,
+		"request_id": "req-lifecycle-active-eval-001",
 	})
 	rec = performRequest(t, srv, http.MethodPost, "/v1/evaluate", evalPayload)
 	if rec.Code != http.StatusOK {
@@ -3224,7 +3233,13 @@ func TestLifecycle_ApplyApproveEvaluateDeprecate(t *testing.T) {
 	}
 
 	// Step 4: surface is deprecated; evaluate should reject with SURFACE_INACTIVE.
-	rec = performRequest(t, srv, http.MethodPost, "/v1/evaluate", evalPayload)
+	evalPayloadDeprecated := marshalJSON(t, map[string]any{
+		"surface_id": "payments.execute",
+		"agent_id":   "agent-001",
+		"confidence": 0.9,
+		"request_id": "req-lifecycle-deprecated-eval-001",
+	})
+	rec = performRequest(t, srv, http.MethodPost, "/v1/evaluate", evalPayloadDeprecated)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("evaluate (deprecated) step: expected status 200 (domain reject), got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -3551,6 +3566,7 @@ func TestEscalationWorkflow_EndToEnd(t *testing.T) {
 		"surface_id": "surf-payments",
 		"agent_id":   "agent-proc",
 		"confidence": 0.50,
+		"request_id": "req-escalation-001",
 	})
 	rec := performRequest(t, srv, http.MethodPost, "/v1/evaluate", evalPayload)
 	if rec.Code != http.StatusOK {

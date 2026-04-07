@@ -154,6 +154,44 @@ func TestExplorer_Config_StoreBackend(t *testing.T) {
 	}
 }
 
+func TestExplorer_Config_SeedDemoUser_True(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithSeedDemoUser(true).
+		WithExplorerEnabled(true)
+
+	rec := performRequest(t, srv, http.MethodGet, "/explorer/config", nil)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	var resp map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if got, ok := resp["demoUser"].(bool); !ok || !got {
+		t.Errorf("want demoUser=true, got %v (%T)", resp["demoUser"], resp["demoUser"])
+	}
+}
+
+func TestExplorer_Config_SeedDemoUser_Absent(t *testing.T) {
+	// Server without WithSeedDemoUser — demoUser key must be absent.
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+
+	rec := performRequest(t, srv, http.MethodGet, "/explorer/config", nil)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	var resp map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if _, present := resp["demoUser"]; present {
+		t.Errorf("want demoUser absent when not set, got %v", resp["demoUser"])
+	}
+}
+
 func TestExplorer_Assets_Served(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
@@ -188,8 +226,8 @@ func TestExplorerEvaluate_UsesIsolatedMemoryStore(t *testing.T) {
 		WithExplorerEnabled(true)
 
 	body := []byte(`{
-		"surface_id": "surf-payments-approval",
-		"agent_id":   "agent-payments-bot",
+		"surface_id": "surf-v2-merchant-payment",
+		"agent_id":   "agent-v2-evaluator",
 		"confidence": 0.95,
 		"consequence": {"type": "monetary", "amount": 500, "currency": "GBP"}
 	}`)
@@ -217,7 +255,7 @@ func TestExplorerEvaluate_UnknownSurfaceRejects(t *testing.T) {
 
 	body := []byte(`{
 		"surface_id": "unknown-surface-xyz",
-		"agent_id":   "agent-payments-bot",
+		"agent_id":   "agent-v2-evaluator",
 		"confidence": 0.95
 	}`)
 	rec := performRequest(t, srv, http.MethodPost, "/explorer", body)
@@ -267,7 +305,7 @@ func TestExplorerConfig_IncludesExplorerStore(t *testing.T) {
 func TestExplorerEvaluate_Disabled_Returns404(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil)
 
-	body := []byte(`{"surface_id":"surf-payments-approval","agent_id":"agent-payments-bot","confidence":0.9}`)
+	body := []byte(`{"surface_id":"surf-v2-merchant-payment","agent_id":"agent-v2-evaluator","confidence":0.9}`)
 	rec := performRequest(t, srv, http.MethodPost, "/explorer", body)
 
 	if rec.Code != http.StatusNotFound {
@@ -287,9 +325,10 @@ func TestExplorerGetEnvelope_ReadsFromSandboxStore(t *testing.T) {
 
 	// Run an evaluation in the sandbox to create an envelope.
 	evalBody := []byte(`{
-		"surface_id": "surf-payments-approval",
-		"agent_id":   "agent-payments-bot",
-		"confidence": 0.95
+		"surface_id": "surf-v2-merchant-payment",
+		"agent_id":   "agent-v2-evaluator",
+		"confidence": 0.95,
+		"consequence": {"type": "monetary", "amount": 100, "currency": "GBP"}
 	}`)
 	evalRec := performRequest(t, srv, http.MethodPost, "/explorer", evalBody)
 	if evalRec.Code != http.StatusOK {
@@ -344,6 +383,160 @@ func TestExplorerGetEnvelope_Disabled_Returns404(t *testing.T) {
 	rec := performRequest(t, srv, http.MethodGet, "/explorer/envelopes/some-id", nil)
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("want 404 when explorer disabled, got %d", rec.Code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// V2 sandbox scenario tests — verify alignment between UI scenarios and seed
+// ---------------------------------------------------------------------------
+
+// TestExplorerSandbox_V2_AgentNotFound verifies that chain-unknown-agent
+// scenario (valid V2 surface, unknown agent) returns AGENT_NOT_FOUND, not
+// SURFACE_NOT_FOUND. This confirms the surface exists in the runtime and the
+// authority chain resolves to the correct rejection reason.
+func TestExplorerSandbox_V2_AgentNotFound(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithAuthMode(config.AuthModeOpen).
+		WithExplorerEnabled(true)
+
+	body := []byte(`{
+		"surface_id": "surf-v2-merchant-payment",
+		"agent_id":   "agent-unknown-xyz",
+		"confidence": 0.95
+	}`)
+	rec := performRequest(t, srv, http.MethodPost, "/explorer", body)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if resp["outcome"] != string(eval.OutcomeReject) {
+		t.Errorf("want outcome=%q, got %v", eval.OutcomeReject, resp["outcome"])
+	}
+	if resp["reason"] != string(eval.ReasonAgentNotFound) {
+		t.Errorf("want reason=%q, got %v", eval.ReasonAgentNotFound, resp["reason"])
+	}
+}
+
+// TestExplorerSandbox_V2_BelowConfidenceThreshold verifies that a request
+// with confidence below the authority threshold escalates correctly.
+func TestExplorerSandbox_V2_BelowConfidenceThreshold(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithAuthMode(config.AuthModeOpen).
+		WithExplorerEnabled(true)
+
+	body := []byte(`{
+		"surface_id": "surf-v2-merchant-payment",
+		"agent_id":   "agent-v2-evaluator",
+		"confidence": 0.30,
+		"consequence": {"type": "monetary", "amount": 100, "currency": "GBP"}
+	}`)
+	rec := performRequest(t, srv, http.MethodPost, "/explorer", body)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if resp["outcome"] != string(eval.OutcomeEscalate) {
+		t.Errorf("want outcome=%q, got %v", eval.OutcomeEscalate, resp["outcome"])
+	}
+	if resp["reason"] != string(eval.ReasonConfidenceBelowThreshold) {
+		t.Errorf("want reason=%q, got %v", eval.ReasonConfidenceBelowThreshold, resp["reason"])
+	}
+}
+
+// TestExplorerSandbox_V2_ConsequenceExceedsLimit verifies that a request
+// with consequence above the authority limit escalates correctly.
+func TestExplorerSandbox_V2_ConsequenceExceedsLimit(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithAuthMode(config.AuthModeOpen).
+		WithExplorerEnabled(true)
+
+	body := []byte(`{
+		"surface_id": "surf-v2-merchant-payment",
+		"agent_id":   "agent-v2-evaluator",
+		"confidence": 0.95,
+		"consequence": {"type": "monetary", "amount": 6000, "currency": "GBP"}
+	}`)
+	rec := performRequest(t, srv, http.MethodPost, "/explorer", body)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if resp["outcome"] != string(eval.OutcomeEscalate) {
+		t.Errorf("want outcome=%q, got %v", eval.OutcomeEscalate, resp["outcome"])
+	}
+	if resp["reason"] != string(eval.ReasonConsequenceExceedsLimit) {
+		t.Errorf("want reason=%q, got %v", eval.ReasonConsequenceExceedsLimit, resp["reason"])
+	}
+}
+
+// TestExplorerSandbox_V2_InsufficientContext verifies that submitting a request
+// to surf-v2-id-verify without the required customer_id context key results in
+// a RequestClarification / INSUFFICIENT_CONTEXT outcome.
+func TestExplorerSandbox_V2_InsufficientContext(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithAuthMode(config.AuthModeOpen).
+		WithExplorerEnabled(true)
+
+	body := []byte(`{
+		"surface_id": "surf-v2-id-verify",
+		"agent_id":   "agent-v2-evaluator",
+		"confidence": 0.95,
+		"consequence": {"type": "monetary", "amount": 100, "currency": "GBP"}
+	}`)
+	rec := performRequest(t, srv, http.MethodPost, "/explorer", body)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if resp["outcome"] != string(eval.OutcomeRequestClarification) {
+		t.Errorf("want outcome=%q, got %v", eval.OutcomeRequestClarification, resp["outcome"])
+	}
+	if resp["reason"] != string(eval.ReasonInsufficientContext) {
+		t.Errorf("want reason=%q, got %v", eval.ReasonInsufficientContext, resp["reason"])
+	}
+}
+
+// TestExplorerSandbox_V2_ContextSatisfied verifies that providing the required
+// customer_id key to surf-v2-id-verify results in an accept.
+func TestExplorerSandbox_V2_ContextSatisfied(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithAuthMode(config.AuthModeOpen).
+		WithExplorerEnabled(true)
+
+	body := []byte(`{
+		"surface_id": "surf-v2-id-verify",
+		"agent_id":   "agent-v2-evaluator",
+		"confidence": 0.95,
+		"consequence": {"type": "monetary", "amount": 100, "currency": "GBP"},
+		"context":     {"customer_id": "cust-12345"}
+	}`)
+	rec := performRequest(t, srv, http.MethodPost, "/explorer", body)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if resp["outcome"] != string(eval.OutcomeAccept) {
+		t.Errorf("want outcome=%q, got %v", eval.OutcomeAccept, resp["outcome"])
 	}
 }
 
@@ -466,5 +659,69 @@ func TestExplorer_Config_IAMActive_IncludesLocalIAMFlag(t *testing.T) {
 	}
 	if got, ok := resp["localiam"].(bool); !ok || !got {
 		t.Errorf("want localiam=true, got %v", resp["localiam"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// V2 structural context — HTML source checks
+// ---------------------------------------------------------------------------
+
+// TestExplorer_HTML_ContainsV2StructuralEntityIDs verifies that the Explorer
+// HTML source references the real V2 structural entity IDs from the demo seed.
+// These IDs appear as string literals in the DEMO_RESOURCES JS constant.
+func TestExplorer_HTML_ContainsV2StructuralEntityIDs(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+
+	body := rec.Body.String()
+	wantIDs := []string{
+		"bs-merchant-services",
+		"bs-consumer-lending",
+		"cap-payment-authorization",
+		"cap-identity-verification",
+		"proc-merchant-payment-auth",
+		"proc-consumer-onboarding",
+	}
+	for _, id := range wantIDs {
+		if !strings.Contains(body, id) {
+			t.Errorf("want Explorer HTML to reference V2 structural entity %q", id)
+		}
+	}
+}
+
+// TestExplorer_HTML_ContainsStructuralContextChains verifies that the Explorer
+// HTML source defines STRUCTURAL_CONTEXT chains for both Explorer-evaluable
+// surfaces, mapping each to its Business Service, Capability, and Process.
+func TestExplorer_HTML_ContainsStructuralContextChains(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+
+	body := rec.Body.String()
+	// Both evaluable surfaces must have a full structural chain defined.
+	wantChainEntries := []string{
+		"surf-v2-merchant-payment",
+		"proc-merchant-payment-auth",
+		"bs-merchant-services",
+		"cap-payment-authorization",
+		"surf-v2-id-verify",
+		"proc-consumer-onboarding",
+		"bs-consumer-lending",
+		"cap-identity-verification",
+		"STRUCTURAL_CONTEXT",
+	}
+	for _, entry := range wantChainEntries {
+		if !strings.Contains(body, entry) {
+			t.Errorf("want Explorer HTML structural context to contain %q", entry)
+		}
 	}
 }

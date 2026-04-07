@@ -56,6 +56,7 @@ func TestServiceApply_ValidBundle_ReturnsCreatedResults(t *testing.T) {
 					Category:    "financial",
 					RiskTier:    "high",
 					Status:      "active",
+					ProcessID:   "payment.process",
 				},
 			},
 		},
@@ -302,6 +303,10 @@ func (stubRepo) ListByDomain(ctx context.Context, domain string) ([]*surface.Dec
 }
 
 func (stubRepo) Search(ctx context.Context, criteria surface.SearchCriteria) ([]*surface.DecisionSurface, error) {
+	return nil, nil
+}
+
+func (stubRepo) ListByProcessID(ctx context.Context, processID string) ([]*surface.DecisionSurface, error) {
 	return nil, nil
 }
 

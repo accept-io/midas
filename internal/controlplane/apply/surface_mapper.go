@@ -95,6 +95,8 @@ func mapSurfaceDocumentToDecisionSurface(
 		ds.EffectiveFrom = now
 	}
 
+	ds.ProcessID = strings.TrimSpace(doc.Spec.ProcessID)
+
 	return ds, nil
 }
 

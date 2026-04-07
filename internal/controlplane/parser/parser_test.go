@@ -12,6 +12,24 @@ import (
 // ============================================================================
 
 const (
+	validBusinessServiceYAML = `apiVersion: midas.accept.io/v1
+kind: BusinessService
+metadata:
+  id: bs-consumer-lending
+  name: Consumer Lending
+spec:
+  description: Retail lending products for consumers
+  service_type: customer_facing
+  status: active`
+
+	validProcessCapabilityYAML = `apiVersion: midas.accept.io/v1
+kind: ProcessCapability
+metadata:
+  id: pc-onboarding-fraud
+spec:
+  process_id: proc-consumer-onboarding
+  capability_id: cap-fraud-detection`
+
 	validSurfaceYAML = `apiVersion: midas.accept.io/v1
 kind: Surface
 metadata:
@@ -173,6 +191,45 @@ func TestParseYAML_AllKinds(t *testing.T) {
 				}
 			},
 		},
+		{
+			name:         "ProcessCapability",
+			yaml:         validProcessCapabilityYAML,
+			expectedKind: types.KindProcessCapability,
+			expectedID:   "pc-onboarding-fraud",
+			validateDoc: func(t *testing.T, doc ParsedDocument) {
+				pcDoc, ok := doc.Doc.(types.ProcessCapabilityDocument)
+				if !ok {
+					t.Fatalf("expected doc type ProcessCapabilityDocument, got %T", doc.Doc)
+				}
+				if pcDoc.Spec.ProcessID != "proc-consumer-onboarding" {
+					t.Errorf("expected process_id %q, got %q", "proc-consumer-onboarding", pcDoc.Spec.ProcessID)
+				}
+				if pcDoc.Spec.CapabilityID != "cap-fraud-detection" {
+					t.Errorf("expected capability_id %q, got %q", "cap-fraud-detection", pcDoc.Spec.CapabilityID)
+				}
+			},
+		},
+		{
+			name:         "BusinessService",
+			yaml:         validBusinessServiceYAML,
+			expectedKind: types.KindBusinessService,
+			expectedID:   "bs-consumer-lending",
+			validateDoc: func(t *testing.T, doc ParsedDocument) {
+				bsDoc, ok := doc.Doc.(types.BusinessServiceDocument)
+				if !ok {
+					t.Fatalf("expected doc type BusinessServiceDocument, got %T", doc.Doc)
+				}
+				if bsDoc.Spec.ServiceType != "customer_facing" {
+					t.Errorf("expected service_type %q, got %q", "customer_facing", bsDoc.Spec.ServiceType)
+				}
+				if bsDoc.Spec.Status != "active" {
+					t.Errorf("expected status %q, got %q", "active", bsDoc.Spec.Status)
+				}
+				if bsDoc.Spec.Description != "Retail lending products for consumers" {
+					t.Errorf("unexpected description: %q", bsDoc.Spec.Description)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -211,6 +268,8 @@ func TestParsedDocument_InterfaceContracts(t *testing.T) {
 		{"Agent", validAgentYAML, types.KindAgent, "agent-credit-scoring-prod"},
 		{"Profile", validProfileYAML, types.KindProfile, "payments-tier-1"},
 		{"Grant", validGrantYAML, types.KindGrant, "grant-credit-scoring-tier-1"},
+		{"BusinessService", validBusinessServiceYAML, types.KindBusinessService, "bs-consumer-lending"},
+		{"ProcessCapability", validProcessCapabilityYAML, types.KindProcessCapability, "pc-onboarding-fraud"},
 	}
 
 	for _, tt := range tests {

@@ -96,6 +96,34 @@ A grant is a thin link between an agent and an authority profile. It says "this 
 
 When swapping a model version (e.g. replacing `lending-model-v3` with `lending-model-v4`), you point the new agent at the same profile. When two agents need different authority on the same surface, you create two profiles.
 
+### Capability and process (structural layer)
+
+Capabilities and processes form the structural layer that sits behind decision surfaces.
+
+A **capability** is a logical business domain — for example, "Lending" or "Payments". It groups related processes.
+
+A **process** is a governed action within a capability — for example, "Loan Origination" or "Payment Release". Every decision surface is associated with a process. Every process belongs to a capability.
+
+The structural layer exists independently of the surface/profile/grant authority chain. It provides a classification and lifecycle hierarchy for governed decisions.
+
+### Inferred vs managed structure
+
+Structural entities (capabilities and processes) have two origins:
+
+**Inferred** (`origin=inferred`, `managed=false`) — Created automatically by the inference engine when a caller omits `process_id` from an evaluate request and inference is enabled. Inferred entities use the `auto:` prefix by convention (e.g. `auto:lending`, `auto:lending.origination`). They represent discovered structure: the system has observed this surface being evaluated and created the minimum scaffolding needed.
+
+**Managed** (`origin=manual`, `managed=true`) — Created by the promotion workflow. Managed entities have canonical IDs chosen by the operator. They are the target of explicit governance intent.
+
+The lifecycle of inferred structure is:
+
+```
+evaluate (inferred) → promote → deprecate (old inferred) → cleanup (delete deprecated)
+```
+
+Promotion is transactional: the new managed entity is created, all surfaces attached to the old inferred process have their `process_id` updated in place, and the old inferred entity is set to `status=deprecated`. Lineage is preserved in the `replaces` column.
+
+Cleanup is conservative: only deprecated inferred entities with no remaining references (no surface, no `replaces` chain, no `parent_*` reference) are deleted. The cleanup cutoff (`older_than_days`) guards against premature deletion of recently-deprecated entities.
+
 ### The authority chain
 
 The relationship flows in one direction:
@@ -242,6 +270,9 @@ Go packages use short names following standard library convention. The mapping t
 | `internal/surface/` | Decision Surface Governance |
 | `internal/authority/` | Authority Engine (profiles, grants, evaluation) |
 | `internal/agent/` | Agent Registry |
+| `internal/capability/` | Capability domain type |
+| `internal/process/` | Process domain type |
+| `internal/inference/` | Structure inference, promotion, and cleanup |
 | `internal/envelope/` | Operational Envelope & Decision Runtime |
 | `internal/decision/` | Decision Orchestrator |
 | `internal/policy/` | Policy Evaluation (NoOp default; OPA planned v1.1+) |

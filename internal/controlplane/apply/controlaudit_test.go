@@ -29,6 +29,7 @@ func surfaceDoc(id string) parser.ParsedDocument {
 				Category:    "financial",
 				RiskTier:    "high",
 				Status:      "active",
+				ProcessID:   "test.process",
 			},
 		},
 	}
@@ -108,19 +109,23 @@ func grantDoc(id, agentID, profileID string) parser.ParsedDocument {
 	}
 }
 
-func newAuditServiceWithRepos(repos *store.Repositories) *apply.Service {
+func newAuditServiceWithRepos(t *testing.T, repos *store.Repositories) *apply.Service {
+	t.Helper()
+	// Seed "test.process" so the memory SurfaceRepo's structural integrity check passes.
+	seedTestProcess(t, repos)
 	return apply.NewServiceWithRepos(apply.RepositorySet{
 		Surfaces:     repos.Surfaces,
 		Agents:       repos.Agents,
 		Profiles:     repos.Profiles,
 		Grants:       repos.Grants,
 		ControlAudit: repos.ControlAudit,
+		Processes:    alwaysExistsProcessRepo{},
 	})
 }
 
 func TestApplyAudit_SurfaceCreated(t *testing.T) {
 	repos := memory.NewRepositories()
-	svc := newAuditServiceWithRepos(repos)
+	svc := newAuditServiceWithRepos(t, repos)
 	ctx := context.Background()
 
 	result := svc.Apply(ctx, []parser.ParsedDocument{surfaceDoc("audit-surf-1")}, "alice")
@@ -152,7 +157,7 @@ func TestApplyAudit_SurfaceCreated(t *testing.T) {
 
 func TestApplyAudit_AgentCreated(t *testing.T) {
 	repos := memory.NewRepositories()
-	svc := newAuditServiceWithRepos(repos)
+	svc := newAuditServiceWithRepos(t, repos)
 	ctx := context.Background()
 
 	result := svc.Apply(ctx, []parser.ParsedDocument{agentDoc("audit-agent-1")}, "system")
@@ -178,7 +183,7 @@ func TestApplyAudit_AgentCreated(t *testing.T) {
 
 func TestApplyAudit_ProfileCreatedV1(t *testing.T) {
 	repos := memory.NewRepositories()
-	svc := newAuditServiceWithRepos(repos)
+	svc := newAuditServiceWithRepos(t, repos)
 	ctx := context.Background()
 
 	// Apply surface first so profile ref is satisfied.
@@ -213,7 +218,7 @@ func TestApplyAudit_ProfileCreatedV1(t *testing.T) {
 
 func TestApplyAudit_ProfileVersioned(t *testing.T) {
 	repos := memory.NewRepositories()
-	svc := newAuditServiceWithRepos(repos)
+	svc := newAuditServiceWithRepos(t, repos)
 	ctx := context.Background()
 
 	// First apply: create surface and profile v1.
@@ -247,7 +252,7 @@ func TestApplyAudit_ProfileVersioned(t *testing.T) {
 
 func TestApplyAudit_GrantCreated(t *testing.T) {
 	repos := memory.NewRepositories()
-	svc := newAuditServiceWithRepos(repos)
+	svc := newAuditServiceWithRepos(t, repos)
 	ctx := context.Background()
 
 	docs := []parser.ParsedDocument{
@@ -280,7 +285,7 @@ func TestApplyAudit_GrantCreated(t *testing.T) {
 
 func TestApplyAudit_ActorDefaultsToSystem(t *testing.T) {
 	repos := memory.NewRepositories()
-	svc := newAuditServiceWithRepos(repos)
+	svc := newAuditServiceWithRepos(t, repos)
 	ctx := context.Background()
 
 	// Pass empty actor — should default to "system".
