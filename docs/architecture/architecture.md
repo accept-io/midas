@@ -96,15 +96,22 @@ A grant is a thin link between an agent and an authority profile. It says "this 
 
 When swapping a model version (e.g. replacing `lending-model-v3` with `lending-model-v4`), you point the new agent at the same profile. When two agents need different authority on the same surface, you create two profiles.
 
-### Capability and process (structural layer)
+### Structural layer (capability, process, business service)
 
-Capabilities and processes form the structural layer that sits behind decision surfaces.
+The structural layer sits behind decision surfaces and provides classification, lifecycle hierarchy, and organizational context for governed decisions. It exists independently of the surface/profile/grant authority chain.
 
-A **capability** is a logical business domain — for example, "Lending" or "Payments". It groups related processes.
+A **capability** is a logical business domain — for example, "Lending" or "Payments". Capabilities can be hierarchical via `parent_capability_id`. They group related processes.
 
-A **process** is a governed action within a capability — for example, "Loan Origination" or "Payment Release". Every decision surface is associated with a process. Every process belongs to a capability.
+A **process** is a governed action within a capability — for example, "Loan Origination" or "Payment Release". Every decision surface is associated with a process (via `process_id`). Every process belongs to a capability (via `capability_id`, NOT NULL). Processes can be hierarchical within a capability via `parent_process_id`.
 
-The structural layer exists independently of the surface/profile/grant authority chain. It provides a classification and lifecycle hierarchy for governed decisions.
+A **business service** is an organizational service offering — for example, "Consumer Lending" or "Merchant Services". Processes can reference a primary business service via `business_service_id`.
+
+In addition to the primary N:1 relationships (`process.capability_id`, `process.business_service_id`), the schema includes M:N junction tables:
+
+- `process_capabilities` — records additional capability memberships for a process beyond its primary `capability_id`
+- `process_business_services` — records additional business service memberships beyond the primary `business_service_id`
+
+All structural entities (capabilities, processes, business services) and their junction links are managed through the control plane apply path as first-class resource Kinds.
 
 ### Inferred vs managed structure
 
@@ -272,6 +279,9 @@ Go packages use short names following standard library convention. The mapping t
 | `internal/agent/` | Agent Registry |
 | `internal/capability/` | Capability domain type |
 | `internal/process/` | Process domain type |
+| `internal/businessservice/` | Business Service domain type |
+| `internal/processcapability/` | Process ↔ Capability junction |
+| `internal/processbusinessservice/` | Process ↔ Business Service junction |
 | `internal/inference/` | Structure inference, promotion, and cleanup |
 | `internal/envelope/` | Operational Envelope & Decision Runtime |
 | `internal/decision/` | Decision Orchestrator |
@@ -282,6 +292,7 @@ Go packages use short names following standard library convention. The mapping t
 | `internal/metrics/` | Metrics |
 | `internal/events/` | Event Publishing |
 | `internal/httpapi/` | HTTP API layer |
+| `internal/controlplane/` | Control Plane (apply, plan, validate, promote, cleanup) |
 | `internal/store/postgres/` | Persistence (Postgres) |
 
 All domain packages define repository interfaces. The `store/postgres/` package provides the implementations. The orchestrator depends only on interfaces, never on Postgres directly.

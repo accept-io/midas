@@ -768,6 +768,102 @@ Exactly one of `agent_id` or `profile_id` must be provided. Providing both retur
 
 ---
 
+## Structural entities
+
+These endpoints provide read-only visibility into the structural model (capabilities, processes, business services). They are registered when the structural service is configured via `WithStructural()`. Requires `platform.viewer`, `platform.operator`, or `platform.admin` role.
+
+### GET /v1/capabilities
+
+List all capabilities.
+
+```bash
+curl -s http://localhost:8080/v1/capabilities | jq .
+```
+
+Returns a JSON array. Each item: `id`, `name`, `description`, `status`, `owner`, `created_at`, `updated_at`.
+
+### GET /v1/capabilities/{id}
+
+Retrieve a single capability by ID.
+
+```bash
+curl -s http://localhost:8080/v1/capabilities/cap-lending | jq .
+```
+
+Response fields: `id`, `name`, `description`, `status`, `owner`, `created_at`, `updated_at`.
+
+**Error cases:** `404` if not found.
+
+### GET /v1/capabilities/{id}/processes
+
+List all processes belonging to a capability.
+
+```bash
+curl -s http://localhost:8080/v1/capabilities/cap-lending/processes | jq .
+```
+
+Returns a JSON array of process objects. Each item: `id`, `name`, `capability_id`, `description`, `status`, `owner`, `created_at`, `updated_at`.
+
+**Error cases:** `404` if capability not found.
+
+### GET /v1/processes
+
+List all processes.
+
+```bash
+curl -s http://localhost:8080/v1/processes | jq .
+```
+
+Returns a JSON array. Each item: `id`, `name`, `capability_id`, `description`, `status`, `owner`, `created_at`, `updated_at`.
+
+### GET /v1/processes/{id}
+
+Retrieve a single process by ID.
+
+```bash
+curl -s http://localhost:8080/v1/processes/proc-loan-origination | jq .
+```
+
+Response fields: `id`, `name`, `capability_id`, `description`, `status`, `owner`, `created_at`, `updated_at`.
+
+**Error cases:** `404` if not found.
+
+### GET /v1/processes/{id}/surfaces
+
+List all decision surfaces belonging to a process.
+
+```bash
+curl -s http://localhost:8080/v1/processes/proc-loan-origination/surfaces | jq .
+```
+
+Returns a JSON array of surface objects (latest version of each surface linked to this process).
+
+**Error cases:** `404` if process not found.
+
+### GET /v1/businessservices
+
+List all business services.
+
+```bash
+curl -s http://localhost:8080/v1/businessservices | jq .
+```
+
+Returns a JSON array. Each item: `id`, `name`, `description`, `service_type`, `regulatory_scope`, `status`, `created_at`, `updated_at`.
+
+### GET /v1/businessservices/{id}
+
+Retrieve a single business service by ID.
+
+```bash
+curl -s http://localhost:8080/v1/businessservices/bs-consumer-lending | jq .
+```
+
+Response fields: `id`, `name`, `description`, `service_type`, `regulatory_scope`, `status`, `created_at`, `updated_at`.
+
+**Error cases:** `404` if not found.
+
+---
+
 ## Common error format
 
 All error responses use this shape:

@@ -12,7 +12,7 @@ Every document requires:
 
 ```yaml
 apiVersion: midas.accept.io/v1
-kind: Surface | Agent | Profile | Grant
+kind: Surface | Agent | Profile | Grant | Capability | Process | BusinessService | ProcessCapability | ProcessBusinessService
 metadata:
   id: <identifier>
 ```
@@ -157,6 +157,134 @@ spec:
 ```
 
 Grant statuses: `active`, `suspended`, `revoked`, `expired`.
+
+### Capability
+
+Defines a logical business domain that groups related processes. Capabilities can be hierarchical via `parent_capability_id`.
+
+```yaml
+apiVersion: midas.accept.io/v1
+kind: Capability
+metadata:
+  id: cap-lending
+  name: Lending
+spec:
+  description: Consumer and commercial lending operations
+  status: active
+  owner: lending-team
+  parent_capability_id: ""
+```
+
+Key `spec` fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `status` | string | `active`, `inactive`, or `deprecated`. Required. |
+| `owner` | string | Owning team or system. Optional. |
+| `parent_capability_id` | string | Parent capability for hierarchical grouping. Optional. Must be a valid ID format if provided. |
+
+Capabilities are immutable once created via apply. Applying a Capability with an existing ID returns **conflict**.
+
+### Process
+
+Defines a governed action within a capability. Every process must reference a capability via `capability_id`. Processes can be hierarchical via `parent_process_id` (the parent must share the same `capability_id`).
+
+```yaml
+apiVersion: midas.accept.io/v1
+kind: Process
+metadata:
+  id: proc-loan-origination
+  name: Loan Origination
+spec:
+  capability_id: cap-lending
+  status: active
+  owner: lending-team
+  business_service_id: bs-consumer-lending
+  parent_process_id: ""
+```
+
+Key `spec` fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `capability_id` | string | Parent capability. Required. Must reference a capability that exists in the store or in the same bundle. |
+| `status` | string | `active`, `inactive`, or `deprecated`. Required. |
+| `owner` | string | Owning team or system. Optional. |
+| `business_service_id` | string | Primary business service. Optional. Must reference an existing business service if provided. |
+| `parent_process_id` | string | Parent process. Optional. Must share the same `capability_id` as this process. |
+
+Processes are immutable once created via apply. Applying a Process with an existing ID returns **conflict**.
+
+When a `ProcessCapability` repository is configured, the apply planner also requires that the process's `capability_id` appears as a `ProcessCapability` link in the same bundle.
+
+### BusinessService
+
+Defines an organizational service offering that processes can belong to.
+
+```yaml
+apiVersion: midas.accept.io/v1
+kind: BusinessService
+metadata:
+  id: bs-consumer-lending
+  name: Consumer Lending
+spec:
+  description: Retail lending products for individual consumers
+  service_type: customer_facing
+  status: active
+  owner_id: lending-team
+```
+
+Key `spec` fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `service_type` | string | `customer_facing`, `internal`, or `technical`. Required. |
+| `status` | string | `active` or `deprecated`. Required. |
+| `owner_id` | string | Owning team or system. Optional. |
+
+Business services are immutable once created via apply. Applying a BusinessService with an existing ID returns **conflict**.
+
+### ProcessCapability
+
+Declares an M:N link between a process and a capability. The `metadata.id` is a synthetic control-plane handle used for bundle identity and duplicate detection; it is not stored in the `process_capabilities` table.
+
+```yaml
+apiVersion: midas.accept.io/v1
+kind: ProcessCapability
+metadata:
+  id: pc-loan-origination-lending
+spec:
+  process_id: proc-loan-origination
+  capability_id: cap-lending
+```
+
+Key `spec` fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `process_id` | string | Process ID. Required. Must reference a process that exists in the store or in the same bundle. |
+| `capability_id` | string | Capability ID. Required. Must reference a capability that exists in the store or in the same bundle. |
+
+### ProcessBusinessService
+
+Declares an M:N link between a process and a business service. The `metadata.id` is a synthetic control-plane handle. This represents membership in the `process_business_services` junction table, additive to the `process.business_service_id` N:1 field.
+
+```yaml
+apiVersion: midas.accept.io/v1
+kind: ProcessBusinessService
+metadata:
+  id: pbs-loan-origination-consumer-lending
+spec:
+  process_id: proc-loan-origination
+  business_service_id: bs-consumer-lending
+```
+
+Key `spec` fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `process_id` | string | Process ID. Required. Must reference a process that exists in the store or in the same bundle. |
+| `business_service_id` | string | Business service ID. Required. Must reference a business service that exists in the store or in the same bundle. |
 
 ---
 
@@ -371,6 +499,17 @@ Grants are immutable once created via apply. Applying a Grant with an existing I
 
 To change authority binding: revoke the existing grant (via the revoke endpoint or database operation), then create a new grant with the updated profile reference.
 
+### Structural resources — immutable, create-once
+
+Capabilities, Processes, BusinessServices, ProcessCapability links, and ProcessBusinessService links are immutable once created via apply. Applying any of these with an existing ID returns **conflict**.
+
+| Scenario | Result |
+|----------|--------|
+| New ID | Created |
+| Existing ID | **Conflict** |
+
+Structural resources do not have versioning or lifecycle endpoints. Status changes are made via update operations outside the apply path, or via the promote/cleanup workflow for inferred entities.
+
 ### Summary table
 
 | Kind | Reapply same ID | Version field | State transitions |
@@ -379,6 +518,11 @@ To change authority binding: revoke the existing grant (via the revoke endpoint 
 | Profile | New version | Yes (1, 2, 3…) | Via profile lifecycle |
 | Agent | Conflict | No | Operational state via separate update |
 | Grant | Conflict | No | `active ↔ suspended → revoked` via separate endpoints |
+| Capability | Conflict | No | Via promote/cleanup for inferred entities |
+| Process | Conflict | No | Via promote/cleanup for inferred entities |
+| BusinessService | Conflict | No | — |
+| ProcessCapability | Conflict | No | — |
+| ProcessBusinessService | Conflict | No | — |
 
 ---
 
@@ -404,14 +548,20 @@ The parser rejects any document with:
 - Missing or empty `apiVersion`
 - `apiVersion` other than `midas.accept.io/v1`
 - Missing or empty `kind`
-- `kind` other than `Surface`, `Agent`, `Profile`, or `Grant`
+- `kind` other than `Surface`, `Agent`, `Profile`, `Grant`, `Capability`, `Process`, `BusinessService`, `ProcessCapability`, or `ProcessBusinessService`
 - Missing `metadata.id`
 
 Structural validation also checks:
-- `minimum_confidence` must be in `[0.0, 1.0]`
+- `minimum_confidence` must be in `[0.0, 1.0]` (Surface)
 - Enum fields (`decision_type`, `reversibility_class`, `failure_mode`, etc.) must contain valid values if provided
 - `spec.surface_id` on Profile must reference a known surface (either in the store or within the same bundle)
 - `spec.agent_id` and `spec.profile_id` on Grant must reference known agents and profiles
+- `spec.process_id` on Surface is required and must be a valid ID format; the referenced process must exist in the store or in the same bundle
+- `spec.capability_id` on Process is required and must be a valid ID format; the referenced capability must exist in the store or in the same bundle
+- `spec.status` on Capability and Process must be `active`, `inactive`, or `deprecated`
+- `spec.service_type` on BusinessService must be `customer_facing`, `internal`, or `technical`
+- `spec.process_id` and `spec.capability_id` on ProcessCapability must reference known entities
+- `spec.process_id` and `spec.business_service_id` on ProcessBusinessService must reference known entities
 
 ---
 
