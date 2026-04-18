@@ -114,7 +114,7 @@ platform_oidc:
 
 **Role mapping:** The `role_mappings` list maps external group identifiers (as returned by the identity provider) to MIDAS internal roles. If `deny_if_no_roles: true` (default), users with no matching group are rejected at login.
 
-Available internal roles: `platform.admin`, `platform.operator`, `platform.viewer`, `governance.approver`, `governance.reviewer`.
+Available internal roles: `platform.admin`, `platform.operator`, `platform.viewer`, `governance.approver`, `governance.reviewer`. See [docs/authorization.md](../authorization.md) for the permission bundle each role expands to on control-plane write operations.
 
 ---
 

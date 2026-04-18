@@ -282,6 +282,23 @@ func (s *Service) buildApplyPlan(ctx context.Context, docs []parser.ParsedDocume
 			entry.Action = ApplyActionInvalid
 			entry.DecisionSource = DecisionSourceValidation
 			entry.ValidationErrors = errs
+		} else if denied, missingPerm := authorizeKind(ctx, doc.Kind); denied {
+			// Fine-grained per-document authorization. Callers holding
+			// controlplane:apply may still lack a specific <kind>:write
+			// permission; those documents are marked invalid with the
+			// required permission named in the validation error, so the
+			// rest of the bundle continues to be planned and the operator
+			// sees every denial in one response. No new rejection path is
+			// introduced — the existing invalid-entry channel carries the
+			// signal.
+			entry.Action = ApplyActionInvalid
+			entry.DecisionSource = DecisionSourceValidation
+			entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+				Kind:          doc.Kind,
+				ID:            doc.ID,
+				Message:       fmt.Sprintf("caller lacks permission %q required to write documents of kind %q", missingPerm, doc.Kind),
+				DocumentIndex: entry.DocumentIndex,
+			})
 		} else {
 			switch doc.Kind {
 			case types.KindBusinessService:

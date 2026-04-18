@@ -6,37 +6,66 @@ For detailed discussions, open an issue or join the conversation on GitHub Discu
 
 ---
 
-## Near term (post-1.0)
+## Current baseline
+
+The following areas are now established in the repository and are no longer roadmap items in their own right:
+
+- Structural layer for MIDAS V2:
+  - Capability
+  - Process
+  - Surface → Process linkage
+- Control-plane support for structural entities
+- Structural read APIs
+- Helm chart for Kubernetes deployment
+- External eventing baseline:
+  - canonical external event schema
+  - documented delivery semantics
+  - outbox-backed external event emission
+  - Kafka as the first supported transport
+  - sink configuration model
+
+The roadmap below focuses on what remains to be matured or introduced beyond that baseline.
+
+---
+
+## Near term
 
 **Observability**
 - Prometheus metrics endpoint for evaluation throughput, outcome distribution, and escalation queue depth
 - Structured trace context propagation (OpenTelemetry) through the evaluation pipeline
 
 **Control plane maturity**
-- Profile and grant lifecycle endpoints (approve, deprecate) on par with surface lifecycle
-- Bundle dry-run improvements: referential integrity warnings, diff view against current active state
+- Profile and grant lifecycle endpoints on par with surface lifecycle
+- Bundle dry-run improvements, including referential integrity warnings and clearer diff output against active state
 
-**Operational hardening**
-- Kubernetes deployment reference manifests (Deployment, Service, ConfigMap, readiness/liveness probes)
-- Helm chart (community contribution welcome)
-- Graceful schema migration support for minor version upgrades
+**Authority and runtime clarity**
+- Authority Graph as a first-class runtime artefact
+- Formalised simulation mode as a first-class platform capability, not only an Explorer concern
+
+**Eventing expansion**
+- Broader lifecycle coverage for external events beyond the current minimal baseline
+- Additional transport support beyond Kafka
+- Reference consumer patterns and integration guidance for downstream consumers
 
 ---
 
 ## Medium term
 
+**Execution linkage and journey context**
+- Run-level linkage across related decision evaluations
+- End-to-end decision journey and escalation-path tracing across related evaluations and reviews
+
+**Decision analytics**
+- A first-class analytics model for process-, capability-, actor-, and journey-level analysis
+- Runtime linkage needed to support journey analytics without collapsing everything into isolated envelope views
+
 **External policy integration**
-- OPA/Rego policy evaluation — the `PolicyEvaluator` interface is already defined; OPA integration is the primary planned implementation
+- OPA/Rego policy evaluation as the primary planned implementation of the `PolicyEvaluator` abstraction
 - Policy bundle management via the control plane
 
-**Eventing improvements**
-- At-least-once delivery guarantees documented and tested under failure scenarios
-- Additional publisher backends beyond Kafka (e.g. NATS, AWS SNS/SQS) via the `Publisher` interface
-- Consumer SDK or reference consumer for common event processing patterns
-
 **Access control**
-- Role-based access control on control-plane write operations (currently authenticated users with correct role can apply any bundle)
-- Audit log for platform-level actions (user management, OIDC config changes)
+- Finer-grained control over control-plane write operations
+- Auditability for platform-level administrative actions
 
 ---
 
@@ -47,10 +76,10 @@ For detailed discussions, open an issue or join the conversation on GitHub Discu
 
 **Policy authoring**
 - In-platform policy editor and test harness
-- Policy version management integrated with the governance workflow
+- Policy version management integrated with governance workflows
 
 **Ecosystem integrations**
-- Webhook delivery for governance events (complement to Kafka)
+- Additional governance-event delivery patterns, including webhook-style integrations where appropriate
 - Integration guides for common AI agent frameworks and orchestration platforms
 
 **Enterprise capabilities** *(separate repository)*
