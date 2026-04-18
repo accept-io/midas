@@ -21,6 +21,7 @@ func seedSurface(t *testing.T, r testRepos, id string, status surface.SurfaceSta
 		Name:           "lifecycle test surface",
 		Status:         status,
 		Version:        1,
+		ProcessID:      "proc-test",
 		EffectiveFrom:  now.Add(-time.Hour),
 		CreatedAt:      now,
 		UpdatedAt:      now,

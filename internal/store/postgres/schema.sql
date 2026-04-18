@@ -248,8 +248,12 @@ CREATE TABLE IF NOT EXISTS decision_surfaces (
     approved_by TEXT,
     approved_at TIMESTAMPTZ,
 
-    -- Process link
-    process_id TEXT,
+    -- Process link.
+    -- NOT NULL enforces the Surface → Process invariant (I-1): every surface
+    -- must belong to a Process. The application layer (control-plane validator,
+    -- apply planner, domain validator, and repository layers) enforces the
+    -- same rule, so this constraint acts as the data-integrity backstop.
+    process_id TEXT NOT NULL,
 
     -- Inferred-structure fields (schema v2.3)
     -- origin: 'manual' for operator-applied surfaces, 'inferred' for system-discovered.
@@ -1245,6 +1249,22 @@ END $$;
 CREATE INDEX IF NOT EXISTS idx_processes_business_service_id
     ON processes (business_service_id)
     WHERE business_service_id IS NOT NULL;
+
+-- Idempotent constraint tightening for databases created before schema v2.5
+-- (Issue #33 — Surface → Process invariant).
+--
+-- decision_surfaces.process_id was originally nullable to accommodate legacy
+-- rows during the V2 structural rollout. The application layer has required
+-- a non-empty process_id for all new writes since Issue 1.4; Issue #33 closes
+-- the asymmetry by promoting that rule to a database constraint.
+--
+-- This ALTER runs on every startup. It succeeds as a no-op on DBs where the
+-- column is already NOT NULL (fresh installs from schema v2.5+). It fails
+-- loudly on DBs that still contain surface rows with process_id IS NULL —
+-- which is the correct behaviour per the Issue #33 operating stance
+-- ("no upgrade-path requirement"). Resolve any legacy NULL rows manually
+-- before upgrading.
+ALTER TABLE decision_surfaces ALTER COLUMN process_id SET NOT NULL;
 
 -- Make user_id nullable for OIDC sessions (no-op if already nullable).
 ALTER TABLE platform_sessions ALTER COLUMN user_id DROP NOT NULL;

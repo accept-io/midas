@@ -238,8 +238,15 @@ func matchesCriteria(s *surface.DecisionSurface, criteria surface.SearchCriteria
 // Create appends a new version for the surface's logical ID. The caller
 // (the apply executor) is responsible for assigning a monotonically increasing
 // Version number.
+//
+// Enforces the Surface → Process invariant (I-1): process_id must be
+// non-empty and, when a process repository is wired, must reference an
+// existing process.
 func (r *SurfaceRepo) Create(ctx context.Context, s *surface.DecisionSurface) error {
-	if r.processes != nil && s.ProcessID != "" {
+	if s.ProcessID == "" {
+		return fmt.Errorf("surface process_id must not be empty")
+	}
+	if r.processes != nil {
 		ok, err := r.processes.Exists(ctx, s.ProcessID)
 		if err != nil {
 			return err
@@ -254,7 +261,13 @@ func (r *SurfaceRepo) Create(ctx context.Context, s *surface.DecisionSurface) er
 
 // Update replaces the matching (ID, Version) entry in place.
 // Returns nil without error if the (ID, Version) does not exist (no-op).
+//
+// Enforces the Surface → Process invariant (I-1): process_id must be
+// non-empty. Clearing process_id on an existing surface is not permitted.
 func (r *SurfaceRepo) Update(_ context.Context, s *surface.DecisionSurface) error {
+	if s.ProcessID == "" {
+		return fmt.Errorf("surface process_id must not be empty")
+	}
 	for i, existing := range r.versions[s.ID] {
 		if existing.Version == s.Version {
 			r.versions[s.ID][i] = s

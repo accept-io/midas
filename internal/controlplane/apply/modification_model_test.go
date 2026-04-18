@@ -143,7 +143,8 @@ func TestModification_Profile_Reapply_CreatesNewVersion(t *testing.T) {
 	})
 	ctx := context.Background()
 
-	// Seed the referenced surface so referential integrity passes.
+	// Seed the referenced process and surface so referential integrity passes.
+	seedTestProcess(t, repos)
 	repos.Surfaces.Create(ctx, modActiveSurface("surf-prof-mod"))
 
 	// First apply → v1.
@@ -221,7 +222,8 @@ func TestModification_Grant_Reapply_Conflict(t *testing.T) {
 	})
 	ctx := context.Background()
 
-	// Seed the referenced surface so the profile's referential integrity passes.
+	// Seed the referenced process and surface so the profile's referential integrity passes.
+	seedTestProcess(t, repos)
 	repos.Surfaces.Create(ctx, modActiveSurface("surf-grant-mod"))
 
 	// First apply: agent + profile + grant in a single bundle so cross-references resolve.
@@ -433,6 +435,9 @@ func modGrantDoc(id, agentID, profileID string) parser.ParsedDocument {
 // modActiveSurface builds a minimal active DecisionSurface domain object for
 // directly seeding repositories in tests that need a pre-existing active surface
 // without going through the apply service.
+// modActiveSurface builds an active DecisionSurface that references the
+// canonical test.process seeded by seedTestProcess. Tests using this helper
+// must call seedTestProcess against the same repos before invoking Create.
 func modActiveSurface(id string) *surface.DecisionSurface {
 	return &surface.DecisionSurface{
 		ID:            id,
@@ -440,6 +445,7 @@ func modActiveSurface(id string) *surface.DecisionSurface {
 		Name:          id,
 		Status:        surface.SurfaceStatusActive,
 		Domain:        "test",
+		ProcessID:     "test.process",
 		EffectiveFrom: time.Now().UTC().Add(-time.Hour),
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/accept-io/midas/internal/capability"
 	"github.com/accept-io/midas/internal/config"
 	"github.com/accept-io/midas/internal/controlplane/apply"
 	"github.com/accept-io/midas/internal/controlplane/approval"
@@ -17,6 +18,7 @@ import (
 	"github.com/accept-io/midas/internal/decision"
 	"github.com/accept-io/midas/internal/httpapi"
 	"github.com/accept-io/midas/internal/policy"
+	"github.com/accept-io/midas/internal/process"
 	"github.com/accept-io/midas/internal/surface"
 )
 
@@ -75,6 +77,22 @@ func TestProductionWiring_ApproveSurface_EndpointIsWired(t *testing.T) {
 		nil,
 	)
 
+	// Seed the capability and process referenced by the surface below.
+	// The memory store enforces Surface → Process referential integrity.
+	now := time.Now()
+	if err := repos.Capabilities.Create(ctx, &capability.Capability{
+		ID: "cap-wiring-test", Name: "Wiring Cap", Status: "active",
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed capability: %v", err)
+	}
+	if err := repos.Processes.Create(ctx, &process.Process{
+		ID: "proc-wiring-test", Name: "Wiring Process", CapabilityID: "cap-wiring-test",
+		Status: "active", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed process: %v", err)
+	}
+
 	// Seed a surface in review state. BusinessOwner matches approver_id so
 	// CanApproveSurface returns true for governance.approver role.
 	err = repos.Surfaces.Create(ctx, &surface.DecisionSurface{
@@ -83,6 +101,7 @@ func TestProductionWiring_ApproveSurface_EndpointIsWired(t *testing.T) {
 		Name:           "Wiring Test Surface",
 		Domain:         "test",
 		Status:         surface.SurfaceStatusReview,
+		ProcessID:      "proc-wiring-test",
 		BusinessOwner:  "approver-a",
 		TechnicalOwner: "unassigned",
 		EffectiveFrom:  time.Now().Add(-time.Hour),
