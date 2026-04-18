@@ -317,8 +317,8 @@ func (alwaysExistsProcessRepo) Exists(_ context.Context, _ string) (bool, error)
 	return true, nil
 }
 
-func (alwaysExistsProcessRepo) GetByID(_ context.Context, _ string) (*process.Process, error) {
-	return nil, nil
+func (alwaysExistsProcessRepo) GetByID(_ context.Context, id string) (*process.Process, error) {
+	return &process.Process{ID: id, Status: "active"}, nil
 }
 
 func (alwaysExistsProcessRepo) Create(_ context.Context, _ *process.Process) error {
@@ -333,8 +333,8 @@ func (alwaysExistsCapabilityRepo) Exists(_ context.Context, _ string) (bool, err
 	return true, nil
 }
 
-func (alwaysExistsCapabilityRepo) GetByID(_ context.Context, _ string) (*capability.Capability, error) {
-	return nil, nil
+func (alwaysExistsCapabilityRepo) GetByID(_ context.Context, id string) (*capability.Capability, error) {
+	return &capability.Capability{ID: id, Status: "active"}, nil
 }
 
 func (alwaysExistsCapabilityRepo) Create(_ context.Context, _ *capability.Capability) error {

@@ -56,6 +56,65 @@ type PlanEntry struct {
 	// ValidationErrors holds structured validation errors for this entry.
 	// Populated when Action is invalid.
 	ValidationErrors []ValidationError `json:"validation_errors,omitempty"`
+
+	// CreateKind classifies a create-action entry. Populated only when
+	// Action == "create". Values: "new", "new_version". See Issue #37.
+	CreateKind string `json:"create_kind,omitempty"`
+
+	// Warnings are advisory signals attached to this entry. Warnings never
+	// affect would_apply and do not count toward invalid_count. See Issue
+	// #37.
+	Warnings []PlanWarning `json:"warnings,omitempty"`
+
+	// Diff carries field-level changes between persisted active state and
+	// the proposed new version. Populated only when CreateKind is
+	// "new_version" and Kind is "Surface" or "Profile" in this release.
+	Diff *PlanDiff `json:"diff,omitempty"`
+}
+
+// PlanWarning is an advisory signal attached to a plan entry. Warnings are
+// informational: they do not block apply, do not change entry Action, and do
+// not count toward invalid_count.
+type PlanWarning struct {
+	// Code is a machine-stable warning identifier. See docs/control-plane.md
+	// for the current code set.
+	Code string `json:"code"`
+
+	// Severity is the urgency classification. Currently always "warning".
+	Severity string `json:"severity"`
+
+	// Message is a human-readable explanation.
+	Message string `json:"message"`
+
+	// Field is the optional spec path on this entry that the warning
+	// pertains to, e.g. "spec.surface_id".
+	Field string `json:"field,omitempty"`
+
+	// RelatedKind and RelatedID identify the referenced resource this
+	// warning speaks about.
+	RelatedKind string `json:"related_kind,omitempty"`
+	RelatedID   string `json:"related_id,omitempty"`
+}
+
+// PlanDiff carries the field-level changes between persisted active state
+// and a proposed new version. Emitted only for Surface and Profile
+// new_version entries in this release.
+type PlanDiff struct {
+	// Fields is the ordered list of changed fields between the baseline
+	// and the proposed new version.
+	Fields []PlanFieldDiff `json:"fields"`
+}
+
+// PlanFieldDiff describes a single changed field.
+type PlanFieldDiff struct {
+	// Field is the dotted path of the changed field.
+	Field string `json:"field"`
+
+	// Before is the baseline value (the active-state value).
+	Before any `json:"before"`
+
+	// After is the proposed value.
+	After any `json:"after"`
 }
 
 // PlanResult is the structured response returned by a dry-run plan request.

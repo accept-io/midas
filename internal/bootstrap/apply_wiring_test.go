@@ -31,8 +31,8 @@ func (alwaysExistsProcessRepo) Exists(_ context.Context, _ string) (bool, error)
 	return true, nil
 }
 
-func (alwaysExistsProcessRepo) GetByID(_ context.Context, _ string) (*process.Process, error) {
-	return nil, nil
+func (alwaysExistsProcessRepo) GetByID(_ context.Context, id string) (*process.Process, error) {
+	return &process.Process{ID: id, Status: "active"}, nil
 }
 
 func (alwaysExistsProcessRepo) Create(_ context.Context, _ *process.Process) error {
