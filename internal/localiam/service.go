@@ -13,6 +13,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/accept-io/midas/internal/adminaudit"
 	"github.com/accept-io/midas/internal/identity"
 )
 
@@ -55,9 +56,10 @@ type Config struct {
 // session resolution, and password management. It is the only component that
 // touches the user and session repositories.
 type Service struct {
-	users    UserRepository
-	sessions SessionRepository
-	cfg      Config
+	users      UserRepository
+	sessions   SessionRepository
+	cfg        Config
+	adminAudit adminaudit.Repository // optional; nil-safe
 }
 
 // NewService constructs a Service. sessionTTL defaults to 8 hours when zero.
@@ -66,6 +68,41 @@ func NewService(users UserRepository, sessions SessionRepository, cfg Config) *S
 		cfg.SessionTTL = defaultSessionTTL
 	}
 	return &Service{users: users, sessions: sessions, cfg: cfg}
+}
+
+// WithAdminAudit attaches the platform-administrative audit repository used
+// to record bootstrap admin creation. Nil-safe: if never set or set to nil,
+// Bootstrap emits no record. See Issue #41.
+func (s *Service) WithAdminAudit(repo adminaudit.Repository) *Service {
+	s.adminAudit = repo
+	return s
+}
+
+// emitBootstrapAdminCreated writes a system-initiated audit record for the
+// first-run creation of the default admin account. Only the fact and
+// context are persisted; no password material is recorded.
+func (s *Service) emitBootstrapAdminCreated(ctx context.Context, userID, username string) {
+	if s.adminAudit == nil {
+		return
+	}
+	rec := adminaudit.NewRecord(
+		adminaudit.ActionBootstrapAdminCreated,
+		adminaudit.OutcomeSuccess,
+		adminaudit.ActorTypeSystem,
+	)
+	rec.ActorID = "system:bootstrap"
+	rec.TargetType = adminaudit.TargetTypeUser
+	rec.TargetID = userID
+	// Record the username as the target — it is a public identifier, not a
+	// secret. We deliberately do not record the password or its hash.
+	rec.Details = &adminaudit.Details{}
+	_ = username // intentionally unreferenced in details; TargetID is sufficient
+	if err := s.adminAudit.Append(ctx, rec); err != nil {
+		slog.Warn("admin_audit_append_failed",
+			"action", string(adminaudit.ActionBootstrapAdminCreated),
+			"error", err,
+		)
+	}
 }
 
 // Bootstrap creates the default admin user if no users exist. It is safe to
@@ -105,6 +142,7 @@ func (s *Service) Bootstrap(ctx context.Context) error {
 		"must_change_password", true,
 		"message", "default admin/admin credentials created — change password on first login",
 	)
+	s.emitBootstrapAdminCreated(ctx, u.ID, bootstrapUsername)
 	return nil
 }
 

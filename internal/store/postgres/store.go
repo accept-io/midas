@@ -193,6 +193,11 @@ func newRepositories(db sqltx.DBTX) (*store.Repositories, error) {
 		return nil, err
 	}
 
+	adminAuditRepo, err := NewAdminAuditRepo(db)
+	if err != nil {
+		return nil, err
+	}
+
 	localUsers, err := NewLocalUserRepo(db)
 	if err != nil {
 		return nil, err
@@ -228,6 +233,7 @@ func newRepositories(db sqltx.DBTX) (*store.Repositories, error) {
 		Envelopes:               envelopes,
 		Audit:                   auditRepo,
 		ControlAudit:            controlAuditRepo,
+		AdminAudit:              adminAuditRepo,
 		Outbox:                  outboxRepo,
 		LocalUsers:              localUsers,
 		LocalSessions:           localSessions,

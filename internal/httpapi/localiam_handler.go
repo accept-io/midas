@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/accept-io/midas/internal/adminaudit"
 	"github.com/accept-io/midas/internal/localiam"
 	"github.com/accept-io/midas/internal/platformauth"
 )
@@ -142,6 +143,20 @@ func (s *Server) handleAuthChangePassword(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "password change failed"})
 		return
 	}
+
+	// Issue #41: record the fact of the change. Never record password
+	// material — only identity, request context, and outcome.
+	rec := adminaudit.NewRecord(
+		adminaudit.ActionPasswordChanged,
+		adminaudit.OutcomeSuccess,
+		adminaudit.ActorTypeUser,
+	)
+	rec.ActorID = p.ID
+	rec.TargetType = adminaudit.TargetTypeUser
+	rec.TargetID = p.ID
+	rec.RequestID = strings.TrimSpace(r.Header.Get("X-Request-Id"))
+	rec.ClientIP = clientIPFromRequest(r)
+	s.appendAdminAudit(r.Context(), rec)
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "password_changed"})
 }

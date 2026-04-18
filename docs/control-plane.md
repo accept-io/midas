@@ -434,6 +434,18 @@ Example entry with a `new_version` diff and a terminal-reference warning:
 
 ---
 
+## Audit trails
+
+MIDAS persists three independent audit trails. They are deliberately kept separate and not collapsed into a single model:
+
+- **Runtime decision audit** (`audit_events`) — hash-chained per-envelope event log emitted during decision evaluation. Each envelope has a sequence-ordered trail anchored by SHA-256 `prev_hash`/`event_hash` fields and verified by `VerifyAuditIntegrity`. Not touched by the control-plane admin work.
+- **Control-plane resource audit** (`controlplane_audit_events`, served at `GET /v1/controlplane/audit`) — plain append-only resource-lifecycle log. One row per surface/profile/agent/grant create or lifecycle action (approve, deprecate, suspend, revoke, reinstate).
+- **Platform administrative audit** (`platform_admin_audit_events`, served at `GET /v1/platform/admin-audit`) — append-only log of principal-keyed platform-administrative actions. First-pass coverage: `apply.invoked` (request-level, one record per apply HTTP request, additive to per-resource rows), `promote.executed`, `cleanup.executed`, `password.changed`, `bootstrap.admin_created`.
+
+The administrative audit intentionally does **not** use hash chaining in this release. Records are first-class persisted artifacts, not log output. The repository interface is append-only — there is no update or delete API. The record never contains password material, tokens, or secrets. See `GET /v1/platform/admin-audit` in the HTTP API reference for the record shape and query parameters.
+
+---
+
 ## Surface lifecycle
 
 ### Approve
