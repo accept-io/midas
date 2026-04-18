@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/accept-io/midas/internal/authority"
 	"github.com/accept-io/midas/internal/controlaudit"
 	"github.com/accept-io/midas/internal/controlplane/parser"
 	"github.com/accept-io/midas/internal/controlplane/types"
@@ -105,6 +106,12 @@ func PlanResultFromPlan(plan ApplyPlan) types.PlanResult {
 			Message:          e.Message,
 			DecisionSource:   types.PlanEntryDecisionSource(e.DecisionSource),
 			ValidationErrors: e.ValidationErrors,
+			Warnings:         mapPlanWarnings(e.Warnings),
+		}
+		// create_kind and diff are only meaningful for create entries.
+		if e.Action == ApplyActionCreate {
+			pe.CreateKind = string(e.CreateKind)
+			pe.Diff = mapPlanDiff(e.Diff)
 		}
 		result.Entries = append(result.Entries, pe)
 
@@ -120,6 +127,46 @@ func PlanResultFromPlan(plan ApplyPlan) types.PlanResult {
 
 	result.WouldApply = result.InvalidCount == 0 && result.CreateCount > 0
 	return result
+}
+
+// mapPlanWarnings converts internal PlanWarning values to their wire
+// equivalents. Returns nil when the input is empty so the serialised
+// "warnings" field is omitted entirely.
+func mapPlanWarnings(ws []PlanWarning) []types.PlanWarning {
+	if len(ws) == 0 {
+		return nil
+	}
+	out := make([]types.PlanWarning, 0, len(ws))
+	for _, w := range ws {
+		out = append(out, types.PlanWarning{
+			Code:        string(w.Code),
+			Severity:    string(w.Severity),
+			Message:     w.Message,
+			Field:       w.Field,
+			RelatedKind: w.RelatedKind,
+			RelatedID:   w.RelatedID,
+		})
+	}
+	return out
+}
+
+// mapPlanDiff converts an internal PlanDiff to the wire type. Returns nil
+// when the input is nil so the serialised "diff" field is omitted.
+func mapPlanDiff(d *PlanDiff) *types.PlanDiff {
+	if d == nil {
+		return nil
+	}
+	out := &types.PlanDiff{
+		Fields: make([]types.PlanFieldDiff, 0, len(d.Fields)),
+	}
+	for _, f := range d.Fields {
+		out.Fields = append(out.Fields, types.PlanFieldDiff{
+			Field:  f.Field,
+			Before: f.Before,
+			After:  f.After,
+		})
+	}
+	return out
 }
 
 // Apply validates a parsed bundle and applies it.
@@ -307,6 +354,7 @@ func (s *Service) buildApplyPlan(ctx context.Context, docs []parser.ParsedDocume
 				} else {
 					entry.Action = ApplyActionCreate
 					entry.DecisionSource = DecisionSourceValidation
+					entry.CreateKind = CreateKindNew
 				}
 			case types.KindCapability:
 				if s.capabilityRepo != nil {
@@ -314,6 +362,7 @@ func (s *Service) buildApplyPlan(ctx context.Context, docs []parser.ParsedDocume
 				} else {
 					entry.Action = ApplyActionCreate
 					entry.DecisionSource = DecisionSourceValidation
+					entry.CreateKind = CreateKindNew
 				}
 			case types.KindProcess:
 				if s.processRepo != nil {
@@ -321,6 +370,7 @@ func (s *Service) buildApplyPlan(ctx context.Context, docs []parser.ParsedDocume
 				} else {
 					entry.Action = ApplyActionCreate
 					entry.DecisionSource = DecisionSourceValidation
+					entry.CreateKind = CreateKindNew
 				}
 			case types.KindProcessCapability:
 				if s.processCapabilityRepo != nil {
@@ -328,6 +378,7 @@ func (s *Service) buildApplyPlan(ctx context.Context, docs []parser.ParsedDocume
 				} else {
 					entry.Action = ApplyActionCreate
 					entry.DecisionSource = DecisionSourceValidation
+					entry.CreateKind = CreateKindNew
 				}
 			case types.KindProcessBusinessService:
 				if s.processBusinessServiceRepo != nil {
@@ -335,6 +386,7 @@ func (s *Service) buildApplyPlan(ctx context.Context, docs []parser.ParsedDocume
 				} else {
 					entry.Action = ApplyActionCreate
 					entry.DecisionSource = DecisionSourceValidation
+					entry.CreateKind = CreateKindNew
 				}
 			case types.KindSurface:
 				if s.surfaceRepo != nil {
@@ -342,6 +394,7 @@ func (s *Service) buildApplyPlan(ctx context.Context, docs []parser.ParsedDocume
 				} else {
 					entry.Action = ApplyActionCreate
 					entry.DecisionSource = DecisionSourceValidation
+					entry.CreateKind = CreateKindNew
 				}
 			case types.KindAgent:
 				if s.agentRepo != nil {
@@ -349,6 +402,7 @@ func (s *Service) buildApplyPlan(ctx context.Context, docs []parser.ParsedDocume
 				} else {
 					entry.Action = ApplyActionCreate
 					entry.DecisionSource = DecisionSourceValidation
+					entry.CreateKind = CreateKindNew
 				}
 			case types.KindProfile:
 				if s.profileRepo != nil {
@@ -356,6 +410,7 @@ func (s *Service) buildApplyPlan(ctx context.Context, docs []parser.ParsedDocume
 				} else {
 					entry.Action = ApplyActionCreate
 					entry.DecisionSource = DecisionSourceValidation
+					entry.CreateKind = CreateKindNew
 				}
 			case types.KindGrant:
 				if s.grantRepo != nil {
@@ -363,10 +418,12 @@ func (s *Service) buildApplyPlan(ctx context.Context, docs []parser.ParsedDocume
 				} else {
 					entry.Action = ApplyActionCreate
 					entry.DecisionSource = DecisionSourceValidation
+					entry.CreateKind = CreateKindNew
 				}
 			default:
 				entry.Action = ApplyActionCreate
 				entry.DecisionSource = DecisionSourceValidation
+				entry.CreateKind = CreateKindNew
 			}
 		}
 
@@ -440,9 +497,18 @@ func (s *Service) resolveReferentialIntegrity(ctx context.Context, plan *ApplyPl
 					Message:       fmt.Sprintf("%v: profile %q references surface %q which does not exist in persisted state or in this bundle", ErrReferentialIntegrity, entry.ID, surfaceID),
 					DocumentIndex: entry.DocumentIndex,
 				})
-			} else if refSource == DecisionSourceBundleDependency {
-				// Reference was satisfied by a same-bundle create entry.
-				entry.DecisionSource = DecisionSourceBundleDependency
+			} else {
+				if refSource == DecisionSourceBundleDependency {
+					// Reference was satisfied by a same-bundle create entry.
+					entry.DecisionSource = DecisionSourceBundleDependency
+				}
+				// Terminal-target warning: only applies when the reference
+				// was resolved against persisted state. A same-bundle
+				// provider (bundle_dependency) is a new version created in
+				// the same bundle and is not terminal.
+				if refSource == DecisionSourcePersistedState {
+					s.warnIfSurfaceTerminal(ctx, entry, surfaceID, "spec.surface_id")
+				}
 			}
 
 		case types.KindGrant:
@@ -485,12 +551,69 @@ func (s *Service) resolveReferentialIntegrity(ctx context.Context, plan *ApplyPl
 						Message:       fmt.Sprintf("%v: grant %q references profile %q which does not exist in persisted state or in this bundle", ErrReferentialIntegrity, entry.ID, profileID),
 						DocumentIndex: entry.DocumentIndex,
 					})
-				} else if profileRefSource == DecisionSourceBundleDependency && entry.Action == ApplyActionCreate {
-					entry.DecisionSource = DecisionSourceBundleDependency
+				} else {
+					if profileRefSource == DecisionSourceBundleDependency && entry.Action == ApplyActionCreate {
+						entry.DecisionSource = DecisionSourceBundleDependency
+					}
+					if profileRefSource == DecisionSourcePersistedState {
+						s.warnIfProfileTerminal(ctx, entry, profileID, "spec.profile_id")
+					}
 				}
 			}
 		}
 	}
+}
+
+// warnIfSurfaceTerminal attaches a REF_SURFACE_TERMINAL warning to entry
+// when the referenced Surface exists in persisted state and its latest
+// version is deprecated or retired. No-op when the surface repo is not
+// wired or the lookup fails — an unverifiable reference is already
+// handled by resolveRefSource's permissive path, and the warning is
+// advisory only.
+func (s *Service) warnIfSurfaceTerminal(ctx context.Context, entry *ApplyPlanEntry, surfaceID, field string) {
+	if s.surfaceRepo == nil {
+		return
+	}
+	ds, err := s.surfaceRepo.FindLatestByID(ctx, surfaceID)
+	if err != nil || ds == nil {
+		return
+	}
+	if !isSurfaceStatusTerminal(ds.Status) {
+		return
+	}
+	entry.AddWarning(PlanWarning{
+		Code:        WarningRefSurfaceTerminal,
+		Severity:    WarningSeverityWarning,
+		Message:     fmt.Sprintf("referenced surface %q latest version is %s; referrer will be linked to a terminal-state surface", surfaceID, ds.Status),
+		Field:       field,
+		RelatedKind: types.KindSurface,
+		RelatedID:   surfaceID,
+	})
+}
+
+// warnIfProfileTerminal attaches a REF_PROFILE_TERMINAL warning to entry
+// when the referenced Profile exists in persisted state and its latest
+// version is deprecated or retired. No-op when the profile repo is not
+// wired or the lookup fails.
+func (s *Service) warnIfProfileTerminal(ctx context.Context, entry *ApplyPlanEntry, profileID, field string) {
+	if s.profileRepo == nil {
+		return
+	}
+	p, err := s.profileRepo.FindByID(ctx, profileID)
+	if err != nil || p == nil {
+		return
+	}
+	if !isProfileStatusTerminal(p.Status) {
+		return
+	}
+	entry.AddWarning(PlanWarning{
+		Code:        WarningRefProfileTerminal,
+		Severity:    WarningSeverityWarning,
+		Message:     fmt.Sprintf("referenced profile %q latest version is %s; referrer will be linked to a terminal-state profile", profileID, p.Status),
+		Field:       field,
+		RelatedKind: types.KindProfile,
+		RelatedID:   profileID,
+	})
 }
 
 // refKey is a composite key used to index resources by kind and ID during
@@ -595,6 +718,7 @@ func (s *Service) planSurfaceEntry(ctx context.Context, doc parser.ParsedDocumen
 		}
 		entry.Action = ApplyActionCreate
 		entry.DecisionSource = DecisionSourcePersistedState
+		entry.CreateKind = CreateKindNew
 		return
 	}
 
@@ -619,6 +743,13 @@ func (s *Service) planSurfaceEntry(ctx context.Context, doc parser.ParsedDocumen
 	}
 	entry.Action = ApplyActionCreate
 	entry.DecisionSource = DecisionSourcePersistedState
+	entry.CreateKind = CreateKindNewVersion
+
+	// Field-level diff against the persisted baseline (Issue #37). Diff is
+	// advisory output and never blocks apply.
+	if diff := computeSurfaceDiff(latest, surfaceDoc); diff != nil {
+		entry.Diff = diff
+	}
 }
 
 // checkProcessExists validates that process_id is present and references an
@@ -656,7 +787,11 @@ func (s *Service) checkProcessExists(ctx context.Context, doc parser.ParsedDocum
 		})
 		return false
 	}
-	exists, err := s.processRepo.Exists(ctx, processID)
+	// GetByID (vs Exists) lets us also inspect Status for an advisory
+	// warning when the target exists but is in a terminal lifecycle state.
+	// No new queries are introduced — this replaces one cheap lookup with
+	// another on the same repo.
+	proc, err := s.processRepo.GetByID(ctx, processID)
 	if err != nil {
 		entry.Action = ApplyActionInvalid
 		entry.DecisionSource = DecisionSourcePersistedState
@@ -668,7 +803,7 @@ func (s *Service) checkProcessExists(ctx context.Context, doc parser.ParsedDocum
 		})
 		return false
 	}
-	if !exists {
+	if proc == nil {
 		entry.Action = ApplyActionInvalid
 		entry.DecisionSource = DecisionSourcePersistedState
 		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
@@ -679,7 +814,46 @@ func (s *Service) checkProcessExists(ctx context.Context, doc parser.ParsedDocum
 		})
 		return false
 	}
+	// Advisory: the referenced Process exists but is deprecated. Surface
+	// the signal for reviewer attention without blocking apply.
+	if isProcessStatusTerminal(proc.Status) {
+		entry.AddWarning(PlanWarning{
+			Code:        WarningRefProcessTerminal,
+			Severity:    WarningSeverityWarning,
+			Message:     fmt.Sprintf("referenced process %q is %s; referrer will be linked to a terminal-state process", processID, proc.Status),
+			Field:       "spec.process_id",
+			RelatedKind: types.KindProcess,
+			RelatedID:   processID,
+		})
+	}
 	return true
+}
+
+// isProcessStatusTerminal reports whether the given Process.Status value
+// should raise a terminal-state warning. "Deprecated" is the only terminal
+// state in the Process lifecycle; the Process model has no retired state.
+func isProcessStatusTerminal(status string) bool {
+	return status == "deprecated"
+}
+
+// isCapabilityStatusTerminal reports whether the given Capability.Status
+// value should raise a terminal-state warning. Capabilities share the
+// Process lifecycle.
+func isCapabilityStatusTerminal(status string) bool {
+	return status == "deprecated"
+}
+
+// isSurfaceStatusTerminal reports whether the given Surface.SurfaceStatus
+// value should raise a terminal-state warning. Deprecated and retired
+// surfaces both count as terminal for reference-warning purposes.
+func isSurfaceStatusTerminal(status surface.SurfaceStatus) bool {
+	return status == surface.SurfaceStatusDeprecated || status == surface.SurfaceStatusRetired
+}
+
+// isProfileStatusTerminal reports whether the given ProfileStatus value
+// should raise a terminal-state warning.
+func isProfileStatusTerminal(status authority.ProfileStatus) bool {
+	return status == authority.ProfileStatusDeprecated || status == authority.ProfileStatusRetired
 }
 
 // planBusinessServiceEntry inspects the current persisted state for a BusinessService
@@ -725,6 +899,7 @@ func (s *Service) planBusinessServiceEntry(ctx context.Context, doc parser.Parse
 
 	entry.Action = ApplyActionCreate
 	entry.DecisionSource = DecisionSourcePersistedState
+	entry.CreateKind = CreateKindNew
 }
 
 // planCapabilityEntry inspects the current persisted state for a Capability document
@@ -778,6 +953,7 @@ func (s *Service) planCapabilityEntry(ctx context.Context, doc parser.ParsedDocu
 
 	entry.Action = ApplyActionCreate
 	entry.DecisionSource = DecisionSourcePersistedState
+	entry.CreateKind = CreateKindNew
 }
 
 // planProcessEntry inspects the current persisted state for a Process document
@@ -866,6 +1042,7 @@ func (s *Service) planProcessEntry(ctx context.Context, doc parser.ParsedDocumen
 
 	entry.Action = ApplyActionCreate
 	entry.DecisionSource = DecisionSourcePersistedState
+	entry.CreateKind = CreateKindNew
 }
 
 // checkCapabilityExists validates that capability_id is present and references an
@@ -903,7 +1080,9 @@ func (s *Service) checkCapabilityExists(ctx context.Context, doc parser.ParsedDo
 		})
 		return false
 	}
-	exists, err := s.capabilityRepo.Exists(ctx, capabilityID)
+	// GetByID (vs Exists) lets us also inspect Status for an advisory
+	// warning when the target exists but is in a terminal lifecycle state.
+	cap, err := s.capabilityRepo.GetByID(ctx, capabilityID)
 	if err != nil {
 		entry.Action = ApplyActionInvalid
 		entry.DecisionSource = DecisionSourcePersistedState
@@ -915,7 +1094,7 @@ func (s *Service) checkCapabilityExists(ctx context.Context, doc parser.ParsedDo
 		})
 		return false
 	}
-	if !exists {
+	if cap == nil {
 		entry.Action = ApplyActionInvalid
 		entry.DecisionSource = DecisionSourcePersistedState
 		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
@@ -925,6 +1104,16 @@ func (s *Service) checkCapabilityExists(ctx context.Context, doc parser.ParsedDo
 			Message: fmt.Sprintf("capability_id %q does not exist", capabilityID),
 		})
 		return false
+	}
+	if isCapabilityStatusTerminal(cap.Status) {
+		entry.AddWarning(PlanWarning{
+			Code:        WarningRefCapabilityTerminal,
+			Severity:    WarningSeverityWarning,
+			Message:     fmt.Sprintf("referenced capability %q is %s; referrer will be linked to a terminal-state capability", capabilityID, cap.Status),
+			Field:       "spec.capability_id",
+			RelatedKind: types.KindCapability,
+			RelatedID:   capabilityID,
+		})
 	}
 	return true
 }
@@ -1250,6 +1439,7 @@ func (s *Service) planAgentEntry(ctx context.Context, doc parser.ParsedDocument,
 
 	entry.Action = ApplyActionCreate
 	entry.DecisionSource = DecisionSourcePersistedState
+	entry.CreateKind = CreateKindNew
 }
 
 // planProfileEntry inspects the current persisted state for a Profile document
@@ -1295,12 +1485,19 @@ func (s *Service) planProfileEntry(ctx context.Context, doc parser.ParsedDocumen
 	if existing != nil {
 		// Append a new version to the existing profile lineage.
 		entry.NewVersion = existing.Version + 1
+		entry.CreateKind = CreateKindNewVersion
 		entry.Message = fmt.Sprintf(
 			"profile %q exists at version %d; will create version %d",
 			profileDoc.Metadata.ID, existing.Version, existing.Version+1,
 		)
+		// Field-level diff against the persisted baseline (Issue #37).
+		// Diff is advisory output and never blocks apply.
+		if diff := computeProfileDiff(existing, profileDoc); diff != nil {
+			entry.Diff = diff
+		}
 	} else {
 		entry.NewVersion = 1
+		entry.CreateKind = CreateKindNew
 	}
 }
 
@@ -1348,6 +1545,7 @@ func (s *Service) planGrantEntry(ctx context.Context, doc parser.ParsedDocument,
 
 	entry.Action = ApplyActionCreate
 	entry.DecisionSource = DecisionSourcePersistedState
+	entry.CreateKind = CreateKindNew
 }
 
 // executePlan carries out the actions decided by buildApplyPlan, persisting
@@ -1774,6 +1972,7 @@ func (s *Service) planProcessCapabilityEntry(ctx context.Context, doc parser.Par
 
 	entry.Action = ApplyActionCreate
 	entry.DecisionSource = DecisionSourcePersistedState
+	entry.CreateKind = CreateKindNew
 }
 
 // applyProcessCapability maps a ProcessCapabilityDocument to a ProcessCapability
@@ -1850,6 +2049,7 @@ func (s *Service) planProcessBusinessServiceEntry(ctx context.Context, doc parse
 
 	entry.Action = ApplyActionCreate
 	entry.DecisionSource = DecisionSourcePersistedState
+	entry.CreateKind = CreateKindNew
 }
 
 // applyProcessBusinessService maps a ProcessBusinessServiceDocument to a ProcessBusinessService

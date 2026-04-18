@@ -383,6 +383,55 @@ Entry actions: `create`, `conflict`, `invalid`, `unchanged`.
 
 `would_apply` is `true` only when `invalid_count == 0` and `create_count > 0`.
 
+### Additional per-entry fields
+
+Plan entries carry three optional, additive fields. They are purely informational and never affect apply semantics, `would_apply`, `invalid_count`, or `conflict_count`.
+
+**`create_kind`** — emitted only when `action: "create"`. Values:
+- `new` — the planner found no prior row for this resource
+- `new_version` — an existing versioned lineage was found; a new version will be appended (Surface or Profile)
+
+**`diff`** — emitted only for `create_kind: "new_version"` entries whose `kind` is `Surface` or `Profile`. Carries a `fields` array of changed scalar fields with `before` and `after` values. No diff is emitted for plain `new` creates or for any other resource kind (Agent, Grant, Capability, Process, BusinessService, ProcessCapability, ProcessBusinessService).
+
+**`warnings`** — advisory signals attached to an entry. Warnings never change the entry's `action`, never contribute to `invalid_count` or `conflict_count`, and never affect `would_apply`. They surface reviewer-relevant context that does not rise to the level of a validation failure. Warning codes:
+
+| Code | Trigger |
+|------|---------|
+| `REF_SURFACE_TERMINAL` | Profile references a Surface whose latest persisted version is `deprecated` or `retired` |
+| `REF_PROFILE_TERMINAL` | Grant references a Profile whose latest persisted version is `deprecated` or `retired` |
+| `REF_PROCESS_TERMINAL` | Surface references a Process whose status is `deprecated` |
+| `REF_CAPABILITY_TERMINAL` | Process references a Capability whose status is `deprecated` |
+
+Warnings fire only when the reference is resolved against **persisted state**; a reference satisfied by a same-bundle create (`decision_source: "bundle_dependency"`) does not produce a warning, since the in-bundle resource is new and not terminal.
+
+Example entry with a `new_version` diff and a terminal-reference warning:
+
+```json
+{
+  "kind":            "Surface",
+  "id":              "surf-payment-release",
+  "action":          "create",
+  "document_index":  1,
+  "decision_source": "persisted_state",
+  "create_kind":     "new_version",
+  "diff": {
+    "fields": [
+      {"field": "spec.minimum_confidence", "before": 0.5, "after": 0.8}
+    ]
+  },
+  "warnings": [
+    {
+      "code":         "REF_PROCESS_TERMINAL",
+      "severity":     "warning",
+      "message":      "referenced process \"payments.v1\" is deprecated; referrer will be linked to a terminal-state process",
+      "field":        "spec.process_id",
+      "related_kind": "Process",
+      "related_id":   "payments.v1"
+    }
+  ]
+}
+```
+
 ---
 
 ## Surface lifecycle

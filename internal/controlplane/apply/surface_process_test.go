@@ -11,17 +11,38 @@ import (
 	"github.com/accept-io/midas/internal/surface"
 )
 
-// controlledProcessRepo is a test double for ProcessRepository.
+// controlledProcessRepo is a test double for ProcessRepository. The planner
+// now reads Status through GetByID to emit advisory warnings, so
+// getByIDFn takes precedence when set. For backward-compatibility, tests
+// that only set existsFn still work: GetByID synthesises a default
+// active process from the existsFn result.
 type controlledProcessRepo struct {
-	existsFn func(ctx context.Context, id string) (bool, error)
+	existsFn  func(ctx context.Context, id string) (bool, error)
+	getByIDFn func(ctx context.Context, id string) (*process.Process, error)
 }
 
 func (r *controlledProcessRepo) Exists(ctx context.Context, id string) (bool, error) {
-	return r.existsFn(ctx, id)
+	if r.existsFn != nil {
+		return r.existsFn(ctx, id)
+	}
+	return false, nil
 }
 
-func (r *controlledProcessRepo) GetByID(_ context.Context, _ string) (*process.Process, error) {
-	return nil, nil
+func (r *controlledProcessRepo) GetByID(ctx context.Context, id string) (*process.Process, error) {
+	if r.getByIDFn != nil {
+		return r.getByIDFn(ctx, id)
+	}
+	if r.existsFn == nil {
+		return nil, nil
+	}
+	exists, err := r.existsFn(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, nil
+	}
+	return &process.Process{ID: id, Status: "active"}, nil
 }
 
 func (r *controlledProcessRepo) Create(_ context.Context, _ *process.Process) error {

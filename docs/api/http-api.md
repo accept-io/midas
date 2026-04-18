@@ -350,7 +350,24 @@ Response:
       "id":              "surf-payment-release",
       "action":          "create",
       "document_index":  1,
-      "decision_source": "persisted_state"
+      "decision_source": "persisted_state",
+      "create_kind":     "new_version",
+      "diff": {
+        "fields": [
+          {"field": "spec.name", "before": "Old Name", "after": "Payment Release"},
+          {"field": "spec.minimum_confidence", "before": 0.5, "after": 0.8}
+        ]
+      },
+      "warnings": [
+        {
+          "code":         "REF_PROCESS_TERMINAL",
+          "severity":     "warning",
+          "message":      "referenced process \"payments.v1\" is deprecated; referrer will be linked to a terminal-state process",
+          "field":        "spec.process_id",
+          "related_kind": "Process",
+          "related_id":   "payments.v1"
+        }
+      ]
     }
   ],
   "would_apply":    true,
@@ -361,6 +378,12 @@ Response:
 ```
 
 Entry actions: `create`, `conflict`, `invalid`, `unchanged`.
+
+**Additional per-entry fields (all optional, all advisory):**
+
+- `create_kind` — on `action: "create"` only. Values: `new` (no prior lineage found) or `new_version` (appends a new version to an existing Surface or Profile lineage).
+- `diff` — populated only for `create_kind: "new_version"` entries whose `kind` is `Surface` or `Profile`. Contains a `fields` array of changed scalar fields (`field`, `before`, `after`). Never emitted for plain `new` creates or for other resource kinds.
+- `warnings` — advisory signals attached to the entry. Warnings never change `action`, never contribute to `invalid_count` or `conflict_count`, and never affect `would_apply`. Warning codes: `REF_SURFACE_TERMINAL`, `REF_PROFILE_TERMINAL`, `REF_PROCESS_TERMINAL`, `REF_CAPABILITY_TERMINAL`. Warnings fire when a reference resolves against persisted state whose status is `deprecated` or `retired`.
 
 ### POST /v1/controlplane/promote
 
