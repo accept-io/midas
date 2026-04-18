@@ -197,6 +197,11 @@ func main() {
 	srv.WithPolicyMeta(policyMode, policyEvaluatorName)
 	srv.WithHealthCheck(readyFn)
 	srv.WithAuthMode(cfg.Auth.Mode)
+	// Issue #41: wire the platform admin-audit repository for request-level
+	// emission (apply, promote, cleanup, password change).
+	if repos.AdminAudit != nil {
+		srv.WithAdminAudit(repos.AdminAudit)
+	}
 	srv.WithStructuralMode(cfg.Structural.Mode)
 	if authenticator != nil {
 		srv.WithAuthenticator(authenticator)
@@ -242,6 +247,11 @@ func main() {
 				SessionTTL:    cfg.LocalIAM.SessionTTL.D(),
 				SecureCookies: cfg.LocalIAM.SecureCookies,
 			})
+			// Issue #41: route bootstrap admin creation into the platform
+			// admin-audit trail when the repository is configured.
+			if repos.AdminAudit != nil {
+				iamSvc.WithAdminAudit(repos.AdminAudit)
+			}
 			if err := iamSvc.Bootstrap(context.Background()); err != nil {
 				log.Fatal("local_iam bootstrap failed: ", err)
 			}

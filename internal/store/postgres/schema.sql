@@ -893,6 +893,44 @@ CREATE INDEX IF NOT EXISTS idx_cp_audit_actor          ON controlplane_audit_eve
 CREATE INDEX IF NOT EXISTS idx_cp_audit_action         ON controlplane_audit_events (action);
 
 -- =============================================================================
+-- PLATFORM ADMIN AUDIT (Issue #41)
+-- =============================================================================
+-- platform_admin_audit_events: append-only administrative action audit trail.
+-- Separate from runtime decision audit (audit_events) and from resource-
+-- centric control-plane audit (controlplane_audit_events). Covers the
+-- highest-value platform-administrative actions: apply invocations, promote,
+-- cleanup, local-IAM password changes, and bootstrap admin creation.
+--
+-- Writes are INSERT-only. The application issues no UPDATE or DELETE.
+-- No hash chain or cryptographic signature in this first pass; the record
+-- is a first-class persisted artifact, not log output.
+CREATE TABLE IF NOT EXISTS platform_admin_audit_events (
+    id                  TEXT        NOT NULL PRIMARY KEY,
+    occurred_at         TIMESTAMPTZ NOT NULL,
+    action              TEXT        NOT NULL CHECK (action IN (
+                            'apply.invoked',
+                            'promote.executed',
+                            'cleanup.executed',
+                            'password.changed',
+                            'bootstrap.admin_created'
+                        )),
+    outcome             TEXT        NOT NULL CHECK (outcome IN ('success', 'failure')),
+    actor_type          TEXT        NOT NULL CHECK (actor_type IN ('user', 'system')),
+    actor_id            TEXT        NOT NULL DEFAULT '',
+    target_type         TEXT        NOT NULL DEFAULT '',
+    target_id           TEXT        NOT NULL DEFAULT '',
+    request_id          TEXT        NOT NULL DEFAULT '',
+    client_ip           TEXT        NOT NULL DEFAULT '',
+    required_permission TEXT        NOT NULL DEFAULT '',
+    details             JSONB
+);
+
+CREATE INDEX IF NOT EXISTS idx_admin_audit_occurred_at ON platform_admin_audit_events (occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_admin_audit_action      ON platform_admin_audit_events (action);
+CREATE INDEX IF NOT EXISTS idx_admin_audit_actor_id    ON platform_admin_audit_events (actor_id);
+CREATE INDEX IF NOT EXISTS idx_admin_audit_target      ON platform_admin_audit_events (target_type, target_id);
+
+-- =============================================================================
 -- V2 STRUCTURAL LAYER (BusinessService Model)
 -- =============================================================================
 -- business_services: top-level structural entity for the V2 model.

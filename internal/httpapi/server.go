@@ -7,12 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/accept-io/midas/internal/adminaudit"
 	"github.com/accept-io/midas/internal/agent"
 	"github.com/accept-io/midas/internal/auth"
 	"github.com/accept-io/midas/internal/authority"
@@ -190,6 +192,7 @@ type Server struct {
 	explicitValidator    explicitModeValidator        // nil when explicit-mode validation is not wired
 	promotionSvc         promotionService             // nil when promotion is not wired
 	cleanupSvc           cleanupService               // nil when cleanup is not wired
+	adminAudit           adminaudit.Repository        // nil when admin-audit is not wired (Issue #41)
 }
 
 type approveSurfaceRequest struct {
@@ -1053,6 +1056,51 @@ func (s *Server) WithCleanup(svc cleanupService) *Server {
 	return s
 }
 
+// WithAdminAudit attaches the platform-administrative audit repository used
+// to record apply invocations, promote and cleanup actions, password
+// changes, and bootstrap admin creation. When nil (or not called) the admin
+// audit is a no-op — this is the safe default for tests and dev deployments.
+// See Issue #41.
+func (s *Server) WithAdminAudit(repo adminaudit.Repository) *Server {
+	s.adminAudit = repo
+	return s
+}
+
+// appendAdminAudit persists an administrative audit record. It is a no-op
+// when the repository is not configured. Append errors are logged but never
+// fail the calling action — the audit trail's value here is investigability,
+// not gate semantics.
+func (s *Server) appendAdminAudit(ctx context.Context, rec *adminaudit.AdminAuditRecord) {
+	if s.adminAudit == nil || rec == nil {
+		return
+	}
+	if err := s.adminAudit.Append(ctx, rec); err != nil {
+		slog.Warn("admin_audit_append_failed",
+			"action", string(rec.Action),
+			"outcome", string(rec.Outcome),
+			"actor_id", rec.ActorID,
+			"error", err,
+		)
+	}
+}
+
+// clientIPFromRequest returns a best-effort client IP for admin-audit
+// records. It prefers the first entry in X-Forwarded-For when present
+// (operator-configured proxies set this), falling back to r.RemoteAddr.
+// Never empty on real requests; only empty if both sources are absent.
+func clientIPFromRequest(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
+		if i := strings.IndexByte(xff, ','); i > 0 {
+			return strings.TrimSpace(xff[:i])
+		}
+		return xff
+	}
+	return r.RemoteAddr
+}
+
 func NewServerWithControlPlane(orchestrator orchestrator, controlPlane controlPlaneService) *Server {
 	mux := http.NewServeMux()
 
@@ -1092,6 +1140,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/v1/controlplane/cleanup", s.requireAuth(s.requirePermission(authz.PermControlplaneCleanup)(s.handleCleanup)))
 	// audit read: platform.viewer or above.
 	s.mux.HandleFunc("/v1/controlplane/audit", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleListControlAudit)))
+	// Platform admin-audit read (Issue #41): admin-only because the trail
+	// includes password-change and bootstrap events, which are more
+	// sensitive than the resource-oriented control-plane audit.
+	s.mux.HandleFunc("/v1/platform/admin-audit", s.requireAuth(s.requireRole(identity.RolePlatformAdmin)(s.handleListAdminAudit)))
 	// Resource lifecycle — role enforcement applied per-action inside each dispatcher.
 	s.mux.HandleFunc("/v1/controlplane/surfaces/", s.requireAuth(s.handleSurfaceActions))
 	s.mux.HandleFunc("/v1/controlplane/profiles/", s.requireAuth(s.handleProfileActions))
@@ -1850,6 +1902,7 @@ func (s *Server) handlePromote(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp, err := s.promotionSvc.Promote(r.Context(), promReq)
+	s.emitPromoteAdminAudit(r, promReq, resp, err)
 	if err != nil {
 		var pe inference.PromoteErr
 		if errors.As(err, &pe) {
@@ -1865,6 +1918,47 @@ func (s *Server) handlePromote(w http.ResponseWriter, r *http.Request) {
 		To:               promoteSpec{CapabilityID: resp.ToCapabilityID, ProcessID: resp.ToProcessID},
 		SurfacesMigrated: resp.SurfacesMigrated,
 	})
+}
+
+// emitPromoteAdminAudit writes a request-level audit record for a promote
+// invocation. See Issue #41.
+func (s *Server) emitPromoteAdminAudit(
+	r *http.Request,
+	req inference.PromoteRequest,
+	resp inference.PromoteResponse,
+	promErr error,
+) {
+	if s.adminAudit == nil {
+		return
+	}
+	actor := actorFromContext(r.Context(), strings.TrimSpace(r.Header.Get("X-MIDAS-ACTOR")))
+	rec := adminaudit.NewRecord(
+		adminaudit.ActionPromoteExecuted,
+		adminaudit.OutcomeSuccess,
+		actorType(actor),
+	)
+	rec.ActorID = actor
+	rec.TargetType = adminaudit.TargetTypeProcess
+	rec.TargetID = req.ToProcessID
+	rec.RequestID = strings.TrimSpace(r.Header.Get("X-Request-Id"))
+	rec.ClientIP = clientIPFromRequest(r)
+	rec.RequiredPermission = string(authz.PermControlplanePromote)
+
+	details := &adminaudit.Details{
+		FromCapabilityID: req.FromCapabilityID,
+		FromProcessID:    req.FromProcessID,
+		ToCapabilityID:   req.ToCapabilityID,
+		ToProcessID:      req.ToProcessID,
+	}
+	if promErr != nil {
+		rec.Outcome = adminaudit.OutcomeFailure
+		details.Error = promErr.Error()
+	} else {
+		details.SurfacesMigrated = resp.SurfacesMigrated
+	}
+	rec.Details = details
+
+	s.appendAdminAudit(r.Context(), rec)
 }
 
 // cleanupRequestBody is the JSON body for POST /v1/controlplane/cleanup.
@@ -1923,6 +2017,7 @@ func (s *Server) handleCleanup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := s.cleanupSvc.CleanupInferredEntities(r.Context(), cutoff)
+	s.emitCleanupAdminAudit(r, req.OlderThanDays, result, err)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "cleanup failed"})
 		return
@@ -1932,6 +2027,42 @@ func (s *Server) handleCleanup(w http.ResponseWriter, r *http.Request) {
 		ProcessesDeleted:    result.ProcessesDeleted,
 		CapabilitiesDeleted: result.CapabilitiesDeleted,
 	})
+}
+
+// emitCleanupAdminAudit writes a request-level audit record for a cleanup
+// invocation. See Issue #41.
+func (s *Server) emitCleanupAdminAudit(
+	r *http.Request,
+	olderThanDays int,
+	result inference.CleanupResult,
+	cleanErr error,
+) {
+	if s.adminAudit == nil {
+		return
+	}
+	actor := actorFromContext(r.Context(), strings.TrimSpace(r.Header.Get("X-MIDAS-ACTOR")))
+	rec := adminaudit.NewRecord(
+		adminaudit.ActionCleanupExecuted,
+		adminaudit.OutcomeSuccess,
+		actorType(actor),
+	)
+	rec.ActorID = actor
+	rec.TargetType = adminaudit.TargetTypePlatform
+	rec.RequestID = strings.TrimSpace(r.Header.Get("X-Request-Id"))
+	rec.ClientIP = clientIPFromRequest(r)
+	rec.RequiredPermission = string(authz.PermControlplaneCleanup)
+
+	details := &adminaudit.Details{OlderThanDays: olderThanDays}
+	if cleanErr != nil {
+		rec.Outcome = adminaudit.OutcomeFailure
+		details.Error = cleanErr.Error()
+	} else {
+		details.ProcessesDeleted = append([]string(nil), result.ProcessesDeleted...)
+		details.CapabilitiesDeleted = append([]string(nil), result.CapabilitiesDeleted...)
+	}
+	rec.Details = details
+
+	s.appendAdminAudit(r.Context(), rec)
 }
 
 func (s *Server) handleApplyBundle(w http.ResponseWriter, r *http.Request) {
@@ -1969,6 +2100,7 @@ func (s *Server) handleApplyBundle(w http.ResponseWriter, r *http.Request) {
 	actor := actorFromContext(r.Context(), strings.TrimSpace(r.Header.Get("X-MIDAS-ACTOR")))
 	ctx := s.applyCtxWithKindAuthorizer(r.Context())
 	result, err := s.controlPlane.ApplyBundle(ctx, rawBody, actor)
+	s.emitApplyAdminAudit(r, actor, rawBody, result, err)
 	if err != nil {
 		statusCode, errResp := mapApplyError(err)
 		writeJSON(w, statusCode, errResp)
@@ -1976,6 +2108,64 @@ func (s *Server) handleApplyBundle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, result)
+}
+
+// emitApplyAdminAudit writes one request-level administrative audit record
+// for an apply invocation. This is additive to the per-resource controlaudit
+// rows written by the apply executor — it captures the request itself, not
+// the resources created by it. See Issue #41.
+func (s *Server) emitApplyAdminAudit(
+	r *http.Request,
+	actor string,
+	rawBody []byte,
+	result *cpTypes.ApplyResult,
+	applyErr error,
+) {
+	if s.adminAudit == nil {
+		return
+	}
+	rec := adminaudit.NewRecord(
+		adminaudit.ActionApplyInvoked,
+		adminaudit.OutcomeSuccess,
+		actorType(actor),
+	)
+	rec.ActorID = actor
+	rec.TargetType = adminaudit.TargetTypeBundle
+	rec.RequestID = strings.TrimSpace(r.Header.Get("X-Request-Id"))
+	rec.ClientIP = clientIPFromRequest(r)
+	rec.RequiredPermission = string(authz.PermControlplaneApply)
+
+	details := &adminaudit.Details{BundleBytes: len(rawBody)}
+	if applyErr != nil {
+		rec.Outcome = adminaudit.OutcomeFailure
+		details.Error = applyErr.Error()
+	} else if result != nil {
+		// Treat presence of validation errors or resource errors as a
+		// failure at the admin-audit level even though the HTTP response
+		// may carry a 200 with details. This matches the operator's
+		// notion of "did the apply succeed".
+		if result.HasValidationErrors() || result.ApplyErrorCount() > 0 {
+			rec.Outcome = adminaudit.OutcomeFailure
+		}
+		details.CreatedCount = result.CreatedCount()
+		details.ConflictCount = result.ConflictCount()
+		details.UnchangedCount = result.UnchangedCount()
+		details.ErrorCount = result.ApplyErrorCount()
+	}
+	rec.Details = details
+
+	s.appendAdminAudit(r.Context(), rec)
+}
+
+// actorType classifies the actor string for an administrative audit record.
+// An empty or literal "system" actor is treated as system-initiated;
+// everything else is a user action.
+func actorType(actor string) adminaudit.ActorType {
+	a := strings.TrimSpace(actor)
+	if a == "" || strings.HasPrefix(a, "system") {
+		return adminaudit.ActorTypeSystem
+	}
+	return adminaudit.ActorTypeUser
 }
 
 // applyCtxWithKindAuthorizer returns ctx enriched with an apply.KindAuthorizer
@@ -3255,6 +3445,107 @@ func (s *Server) handleListControlAudit(w http.ResponseWriter, r *http.Request) 
 		resp.Entries = append(resp.Entries, toControlAuditEntryResponse(rec))
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// adminAuditEntryResponse is the wire format for a single admin-audit record.
+type adminAuditEntryResponse struct {
+	ID                 string            `json:"id"`
+	OccurredAt         time.Time         `json:"occurred_at"`
+	Action             string            `json:"action"`
+	Outcome            string            `json:"outcome"`
+	ActorType          string            `json:"actor_type"`
+	ActorID            string            `json:"actor_id,omitempty"`
+	TargetType         string            `json:"target_type,omitempty"`
+	TargetID           string            `json:"target_id,omitempty"`
+	RequestID          string            `json:"request_id,omitempty"`
+	ClientIP           string            `json:"client_ip,omitempty"`
+	RequiredPermission string            `json:"required_permission,omitempty"`
+	Details            *adminaudit.Details `json:"details,omitempty"`
+}
+
+// adminAuditListResponse is the wire format for GET /v1/platform/admin-audit.
+type adminAuditListResponse struct {
+	Entries []adminAuditEntryResponse `json:"entries"`
+}
+
+// handleListAdminAudit serves GET /v1/platform/admin-audit.
+// Supports query parameters: action, outcome, actor_id, target_type,
+// target_id, limit. See Issue #41.
+func (s *Server) handleListAdminAudit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+
+	if s.adminAudit == nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{
+			"error": "admin-audit not configured",
+		})
+		return
+	}
+
+	q := r.URL.Query()
+
+	limitStr := strings.TrimSpace(q.Get("limit"))
+	limit := 0
+	if limitStr != "" {
+		parsed, err := parsePositiveInt(limitStr)
+		if err != nil || parsed <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "limit must be a positive integer",
+			})
+			return
+		}
+		if parsed > adminaudit.MaxListLimit {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "limit exceeds maximum allowed value",
+			})
+			return
+		}
+		limit = parsed
+	}
+
+	f := adminaudit.ListFilter{
+		Action:     adminaudit.Action(strings.TrimSpace(q.Get("action"))),
+		Outcome:    adminaudit.Outcome(strings.TrimSpace(q.Get("outcome"))),
+		ActorID:    strings.TrimSpace(q.Get("actor_id")),
+		TargetType: strings.TrimSpace(q.Get("target_type")),
+		TargetID:   strings.TrimSpace(q.Get("target_id")),
+		Limit:      limit,
+	}
+
+	records, err := s.adminAudit.List(r.Context(), f)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "failed to list admin-audit records",
+		})
+		return
+	}
+
+	resp := adminAuditListResponse{
+		Entries: make([]adminAuditEntryResponse, 0, len(records)),
+	}
+	for _, rec := range records {
+		resp.Entries = append(resp.Entries, toAdminAuditEntryResponse(rec))
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func toAdminAuditEntryResponse(rec *adminaudit.AdminAuditRecord) adminAuditEntryResponse {
+	return adminAuditEntryResponse{
+		ID:                 rec.ID,
+		OccurredAt:         rec.OccurredAt,
+		Action:             string(rec.Action),
+		Outcome:            string(rec.Outcome),
+		ActorType:          string(rec.ActorType),
+		ActorID:            rec.ActorID,
+		TargetType:         rec.TargetType,
+		TargetID:           rec.TargetID,
+		RequestID:          rec.RequestID,
+		ClientIP:           rec.ClientIP,
+		RequiredPermission: rec.RequiredPermission,
+		Details:            rec.Details,
+	}
 }
 
 func toControlAuditEntryResponse(rec *controlaudit.ControlAuditRecord) controlAuditEntryResponse {

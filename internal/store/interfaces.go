@@ -1,6 +1,7 @@
 package store
 
 import (
+	"github.com/accept-io/midas/internal/adminaudit"
 	"github.com/accept-io/midas/internal/agent"
 	"github.com/accept-io/midas/internal/audit"
 	"github.com/accept-io/midas/internal/authority"
@@ -24,6 +25,11 @@ type Repositories struct {
 	Envelopes    envelope.EnvelopeRepository
 	Audit        audit.AuditEventRepository
 	ControlAudit controlaudit.Repository
+	// AdminAudit is the append-only administrative audit trail (Issue #41).
+	// Nil-safe: emission sites must check for nil before appending so that
+	// tests and memory-mode deployments not configured with the repository
+	// continue to function.
+	AdminAudit adminaudit.Repository
 	// Outbox is the transactional outbox repository. It is nil-safe at the
 	// orchestrator level: callers must check for nil before appending events,
 	// which preserves existing behaviour when the outbox is not configured.

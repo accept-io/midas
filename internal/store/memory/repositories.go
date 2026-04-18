@@ -607,6 +607,7 @@ func NewRepositories() *store.Repositories {
 		Envelopes:               NewEnvelopeRepo(),
 		Audit:                   audit.NewMemoryRepository(),
 		ControlAudit:            NewControlAuditRepo(),
+		AdminAudit:              NewAdminAuditRepo(),
 		Outbox:                  outbox.NewMemoryRepository(),
 		LocalUsers:              NewLocalUserRepo(),
 		LocalSessions:           NewLocalSessionRepo(),

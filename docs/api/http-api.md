@@ -479,6 +479,71 @@ Capabilities:
 | `500` | Transaction failure |
 | `501` | Cleanup service not configured (requires Postgres) |
 
+### GET /v1/platform/admin-audit
+
+Read the platform administrative audit trail. This is a **distinct** trail from the runtime decision audit (`audit_events`, envelope-bound, hash-chained) and from the resource-centric control-plane audit (`GET /v1/controlplane/audit`). It captures first-pass coverage of the highest-value platform-administrative actions: apply invocations, promote, cleanup, successful password changes, and bootstrap admin creation. Requires `platform.admin` role.
+
+```bash
+curl -s "http://localhost:8080/v1/platform/admin-audit?action=apply.invoked&limit=10" | jq .
+```
+
+```json
+{
+  "entries": [
+    {
+      "id":                  "d1d6…",
+      "occurred_at":         "2026-04-18T09:12:04.113Z",
+      "action":              "apply.invoked",
+      "outcome":             "success",
+      "actor_type":          "user",
+      "actor_id":            "user-alice",
+      "target_type":         "bundle",
+      "request_id":          "req-abc-123",
+      "client_ip":           "10.0.0.42",
+      "required_permission": "controlplane:apply",
+      "details": {
+        "bundle_bytes":   1247,
+        "created_count": 3
+      }
+    }
+  ]
+}
+```
+
+**Covered actions (first pass)**
+
+| Action | Emitted when |
+|--------|--------------|
+| `apply.invoked` | One record per `POST /v1/controlplane/apply` HTTP request. Additive to the existing per-resource rows written into `GET /v1/controlplane/audit`. |
+| `promote.executed` | One record per `POST /v1/controlplane/promote`. |
+| `cleanup.executed` | One record per `POST /v1/controlplane/cleanup`. |
+| `password.changed` | One record per successful `POST /auth/change-password`. No password material is recorded. |
+| `bootstrap.admin_created` | One record when the default admin account is created on first-run bootstrap. No password material is recorded. `actor_type=system`, `actor_id=system:bootstrap`. |
+
+**Query parameters**
+
+| Field | Description |
+|-------|-------------|
+| `action` | Filter by action enum (see above). |
+| `outcome` | Filter by `success` or `failure`. |
+| `actor_id` | Filter by actor. |
+| `target_type` | Filter by target type (`bundle`, `user`, `platform`, `process`). |
+| `target_id` | Filter by target ID. |
+| `limit` | Positive integer up to 500. Default 50. |
+
+**Out of scope in the first pass**
+
+This release deliberately does not include hash chaining, cryptographic signatures, login/logout records, failed-authn or failed-authz records, demo-seed records, user CRUD or role-change records, or an external SIEM integration. The record is append-only in its repository surface; there is no update or delete API.
+
+**Error cases**
+
+| Status | Condition |
+|--------|-----------|
+| `400` | `limit` is not a positive integer, or exceeds the maximum |
+| `401` | Unauthenticated |
+| `403` | Insufficient role (requires `platform.admin`) |
+| `501` | Admin-audit not configured |
+
 ### POST /v1/controlplane/surfaces/{id}/approve
 
 Promote a surface from `review` to `active`.
