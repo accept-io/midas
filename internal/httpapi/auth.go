@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/accept-io/midas/internal/auth"
+	"github.com/accept-io/midas/internal/authz"
 	"github.com/accept-io/midas/internal/config"
 	"github.com/accept-io/midas/internal/identity"
 	"github.com/accept-io/midas/internal/localiam"
@@ -412,6 +413,67 @@ func (s *Server) requireRole(roles ...string) func(http.HandlerFunc) http.Handle
 					"required_roles", roles,
 				)
 				writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+				return
+			}
+
+			next(w, r)
+		}
+	}
+}
+
+// requirePermission returns middleware that enforces a single scoped
+// permission (see internal/authz) on a control-plane write endpoint. It is
+// the fine-grained replacement for requireRole on write paths.
+//
+// Composition: requirePermission must be wrapped inside requireAuth so that
+// the principal is already in context. In AuthModeOpen the middleware is a
+// no-op: requests are forwarded without inspecting the principal, preserving
+// the dev/memory-store experience in open deployments. This mirrors the
+// short-circuit in requireRole at this file.
+//
+// Denial semantics:
+//   - no principal present (authenticated mode) → 401 with {"error":"unauthorized"}
+//   - principal present but lacking the required permission →
+//     403 with {"error":"forbidden","required_permission":"<perm>"}
+//
+// The 403 body additively carries the required permission string. It does
+// not leak which permissions the caller already holds.
+//
+// Principal → permission resolution goes through authz.HasPermission, which
+// reads the principal's normalised Roles slice. The bootstrap admin user
+// stored with the deprecated alias "admin" (identity.RoleAdmin) is already
+// normalised to "platform.admin" at principal-construction time, so its
+// resolution here is unaffected.
+func (s *Server) requirePermission(perm authz.Permission) func(http.HandlerFunc) http.HandlerFunc {
+	return func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if s.authMode == config.AuthModeOpen {
+				next(w, r)
+				return
+			}
+
+			p := PrincipalFromContext(r.Context())
+			if p == nil {
+				slog.Warn("authz_no_principal",
+					"method", r.Method,
+					"path", r.URL.Path,
+					"required_permission", string(perm),
+				)
+				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+				return
+			}
+
+			if !authz.HasPermission(p, perm) {
+				slog.Warn("authz_forbidden",
+					"method", r.Method,
+					"path", r.URL.Path,
+					"principal_id", p.ID,
+					"required_permission", string(perm),
+				)
+				writeJSON(w, http.StatusForbidden, map[string]any{
+					"error":               "forbidden",
+					"required_permission": string(perm),
+				})
 				return
 			}
 

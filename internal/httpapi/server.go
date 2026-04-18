@@ -16,6 +16,7 @@ import (
 	"github.com/accept-io/midas/internal/agent"
 	"github.com/accept-io/midas/internal/auth"
 	"github.com/accept-io/midas/internal/authority"
+	"github.com/accept-io/midas/internal/authz"
 	"github.com/accept-io/midas/internal/businessservice"
 	"github.com/accept-io/midas/internal/capability"
 	"github.com/accept-io/midas/internal/config"
@@ -451,13 +452,15 @@ func (s *Server) handleSurfaceActions(w http.ResponseWriter, r *http.Request) {
 	action := parts[1]
 	switch action {
 	case "approve":
-		// platform.admin or governance.approver may approve surfaces.
-		s.requireRole(identity.RolePlatformAdmin, identity.RoleGovernanceApprover)(func(w http.ResponseWriter, r *http.Request) {
+		// surface:approve — granted to governance.approver and platform.admin
+		// bundles. Preserves the existing maker–checker split.
+		s.requirePermission(authz.PermSurfaceApprove)(func(w http.ResponseWriter, r *http.Request) {
 			s.handleApproveSurface(w, r, surfaceID)
 		})(w, r)
 	case "deprecate":
-		// platform.admin only may deprecate surfaces (destructive lifecycle change).
-		s.requireRole(identity.RolePlatformAdmin)(func(w http.ResponseWriter, r *http.Request) {
+		// surface:deprecate — admin-only today; the bundle composition keeps
+		// it out of the approver role to preserve the lifecycle boundary.
+		s.requirePermission(authz.PermSurfaceDeprecate)(func(w http.ResponseWriter, r *http.Request) {
 			s.handleDeprecateSurface(w, r, surfaceID)
 		})(w, r)
 	default:
@@ -641,13 +644,13 @@ func (s *Server) handleProfileActions(w http.ResponseWriter, r *http.Request) {
 	action := parts[1]
 	switch action {
 	case "approve":
-		// platform.admin or governance.approver may approve profiles.
-		s.requireRole(identity.RolePlatformAdmin, identity.RoleGovernanceApprover)(func(w http.ResponseWriter, r *http.Request) {
+		// profile:approve — granted to governance.approver and platform.admin.
+		s.requirePermission(authz.PermProfileApprove)(func(w http.ResponseWriter, r *http.Request) {
 			s.handleApproveProfile(w, r, profileID)
 		})(w, r)
 	case "deprecate":
-		// platform.admin only may deprecate profiles (destructive lifecycle change).
-		s.requireRole(identity.RolePlatformAdmin)(func(w http.ResponseWriter, r *http.Request) {
+		// profile:deprecate — admin-only today; deliberate lifecycle boundary.
+		s.requirePermission(authz.PermProfileDeprecate)(func(w http.ResponseWriter, r *http.Request) {
 			s.handleDeprecateProfile(w, r, profileID)
 		})(w, r)
 	default:
@@ -813,19 +816,20 @@ func (s *Server) handleGrantActions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// All grant lifecycle actions (suspend, revoke, reinstate) are platform.admin only —
-	// these are destructive/irreversible operational changes.
+	// Grant lifecycle actions are independently permissioned so they can be
+	// granted separately in future role compositions. Today platform.admin's
+	// bundle holds all three; no other default role holds any.
 	switch action {
 	case "suspend":
-		s.requireRole(identity.RolePlatformAdmin)(func(w http.ResponseWriter, r *http.Request) {
+		s.requirePermission(authz.PermGrantSuspend)(func(w http.ResponseWriter, r *http.Request) {
 			s.handleSuspendGrant(w, r, grantID)
 		})(w, r)
 	case "revoke":
-		s.requireRole(identity.RolePlatformAdmin)(func(w http.ResponseWriter, r *http.Request) {
+		s.requirePermission(authz.PermGrantRevoke)(func(w http.ResponseWriter, r *http.Request) {
 			s.handleRevokeGrant(w, r, grantID)
 		})(w, r)
 	case "reinstate":
-		s.requireRole(identity.RolePlatformAdmin)(func(w http.ResponseWriter, r *http.Request) {
+		s.requirePermission(authz.PermGrantReinstate)(func(w http.ResponseWriter, r *http.Request) {
 			s.handleReinstateGrant(w, r, grantID)
 		})(w, r)
 	default:
@@ -1078,12 +1082,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/v1/escalations", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleListEscalations)))
 	s.mux.HandleFunc("/v1/decisions/request/", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleGetDecisionByRequestID)))
 
-	// Control plane — governed endpoints.
-	// apply/plan: platform.admin only (mutates or previews configuration).
-	s.mux.HandleFunc("/v1/controlplane/apply", s.requireAuth(s.requireRole(identity.RolePlatformAdmin)(s.handleApplyBundle)))
-	s.mux.HandleFunc("/v1/controlplane/plan", s.requireAuth(s.requireRole(identity.RolePlatformAdmin)(s.handlePlanBundle)))
-	s.mux.HandleFunc("/v1/controlplane/promote", s.requireAuth(s.requireRole(identity.RolePlatformAdmin)(s.handlePromote)))
-	s.mux.HandleFunc("/v1/controlplane/cleanup", s.requireAuth(s.requireRole(identity.RolePlatformAdmin)(s.handleCleanup)))
+	// Control plane — governed endpoints. Write paths use scoped permissions
+	// (internal/authz). On /v1/controlplane/apply the middleware gate is the
+	// coarse "may invoke apply" permission; fine-grained per-document Kind
+	// checks are enforced inside the apply planner. See docs/authorization.md.
+	s.mux.HandleFunc("/v1/controlplane/apply", s.requireAuth(s.requirePermission(authz.PermControlplaneApply)(s.handleApplyBundle)))
+	s.mux.HandleFunc("/v1/controlplane/plan", s.requireAuth(s.requirePermission(authz.PermControlplanePlan)(s.handlePlanBundle)))
+	s.mux.HandleFunc("/v1/controlplane/promote", s.requireAuth(s.requirePermission(authz.PermControlplanePromote)(s.handlePromote)))
+	s.mux.HandleFunc("/v1/controlplane/cleanup", s.requireAuth(s.requirePermission(authz.PermControlplaneCleanup)(s.handleCleanup)))
 	// audit read: platform.viewer or above.
 	s.mux.HandleFunc("/v1/controlplane/audit", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleListControlAudit)))
 	// Resource lifecycle — role enforcement applied per-action inside each dispatcher.
@@ -1961,7 +1967,8 @@ func (s *Server) handleApplyBundle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	actor := actorFromContext(r.Context(), strings.TrimSpace(r.Header.Get("X-MIDAS-ACTOR")))
-	result, err := s.controlPlane.ApplyBundle(r.Context(), rawBody, actor)
+	ctx := s.applyCtxWithKindAuthorizer(r.Context())
+	result, err := s.controlPlane.ApplyBundle(ctx, rawBody, actor)
 	if err != nil {
 		statusCode, errResp := mapApplyError(err)
 		writeJSON(w, statusCode, errResp)
@@ -1969,6 +1976,47 @@ func (s *Server) handleApplyBundle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, result)
+}
+
+// applyCtxWithKindAuthorizer returns ctx enriched with an apply.KindAuthorizer
+// constructed from the request principal and the internal/authz permission
+// model. This is the fine-grained, per-document layer of the two-tier
+// authorization on /v1/controlplane/apply: the middleware gate has already
+// enforced controlplane:apply, and the planner will now enforce
+// <kind>:write for each document in the bundle.
+//
+// Behaviour:
+//   - AuthModeOpen: returns a permissive authorizer that allows every Kind,
+//     preserving the open-mode pass-through contract.
+//   - Authenticated mode with principal in context: returns an authorizer
+//     that consults authz.HasPermission against the principal's normalised
+//     roles.
+//   - Authenticated mode with no principal: returns a deny-all authorizer.
+//     In practice this branch is unreachable because the middleware would
+//     have already returned 401; the defensive deny keeps the planner safe
+//     if called outside the middleware chain.
+func (s *Server) applyCtxWithKindAuthorizer(ctx context.Context) context.Context {
+	if s.authMode == config.AuthModeOpen {
+		return apply.WithKindAuthorizer(ctx, func(string) (bool, string) { return true, "" })
+	}
+
+	p := PrincipalFromContext(ctx)
+	return apply.WithKindAuthorizer(ctx, func(kind string) (bool, string) {
+		required := authz.KindToWritePermission(kind)
+		if required == "" {
+			// Unknown Kind — deny by default rather than leak an empty
+			// permission name into the response. Unknown Kinds also fail
+			// parsing earlier, so this branch is defensive.
+			return false, "unknown-kind"
+		}
+		if p == nil {
+			return false, string(required)
+		}
+		if !authz.HasPermission(p, required) {
+			return false, string(required)
+		}
+		return true, ""
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -2012,7 +2060,16 @@ func (s *Server) handlePlanBundle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	plan, err := s.controlPlane.PlanBundle(r.Context(), rawBody)
+	// Plan shares the same planner pipeline as Apply (see buildApplyPlan), so
+	// we inject the same per-document authorizer. Under the default five
+	// roles this is observationally a no-op — only platform.admin holds
+	// controlplane:plan, and platform.admin holds every <kind>:write — but
+	// the injection makes the two-tier model uniform: any custom role
+	// composition that grants controlplane:plan without some <kind>:write
+	// will see that Kind as invalid in the plan response rather than as a
+	// false-positive "create".
+	ctx := s.applyCtxWithKindAuthorizer(r.Context())
+	plan, err := s.controlPlane.PlanBundle(ctx, rawBody)
 	if err != nil {
 		statusCode, errResp := mapApplyError(err)
 		writeJSON(w, statusCode, errResp)
