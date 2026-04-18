@@ -9,6 +9,8 @@ import (
 )
 
 // makeSurface builds a minimal DecisionSurface for versioning tests.
+// ProcessID is required by the Surface → Process invariant (Issue #33);
+// tests that don't care about its exact value supply a stable fixture.
 func makeSurface(id string, version int, status surface.SurfaceStatus) *surface.DecisionSurface {
 	return &surface.DecisionSurface{
 		ID:            id,
@@ -16,6 +18,7 @@ func makeSurface(id string, version int, status surface.SurfaceStatus) *surface.
 		Name:          id + "-v" + string(rune('0'+version)),
 		Status:        status,
 		Domain:        "test",
+		ProcessID:     "proc-test",
 		EffectiveFrom: time.Now().UTC().Add(-time.Hour),
 	}
 }

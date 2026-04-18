@@ -65,6 +65,8 @@ func newOrchestrator(t *testing.T, r testRepos) *decision.Orchestrator {
 }
 
 // seedActiveSurface adds an active surface with the given ID.
+// ProcessID is required by the Surface → Process invariant (Issue #33);
+// tests that don't care about its exact value supply a stable fixture.
 func seedActiveSurface(t *testing.T, r testRepos, id string) {
 	t.Helper()
 
@@ -74,6 +76,7 @@ func seedActiveSurface(t *testing.T, r testRepos, id string) {
 		Name:           "test surface",
 		Status:         surface.SurfaceStatusActive,
 		Version:        1,
+		ProcessID:      "proc-test",
 		EffectiveFrom:  now.Add(-time.Hour),
 		CreatedAt:      now,
 		UpdatedAt:      now,
@@ -431,6 +434,7 @@ func TestEvaluate_SurfaceInactive(t *testing.T) {
 		Name:           "retired surface",
 		Status:         surface.SurfaceStatusRetired,
 		Version:        1,
+		ProcessID:      "proc-test",
 		EffectiveFrom:  now.Add(-time.Hour),
 		CreatedAt:      now,
 		UpdatedAt:      now,

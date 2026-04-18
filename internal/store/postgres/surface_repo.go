@@ -424,7 +424,17 @@ func (r *SurfaceRepo) EnsureInferred(ctx context.Context, db sqltx.DBTX, surface
 	return false, nil
 }
 
+// Create inserts a new surface version.
+//
+// Enforces the Surface → Process invariant (I-1) at the application layer:
+// process_id must be non-empty. This check fires before the DB insert so
+// callers get a clear error message rather than a constraint-violation code
+// from the underlying NOT NULL column.
 func (r *SurfaceRepo) Create(ctx context.Context, s *surface.DecisionSurface) error {
+	if s.ProcessID == "" {
+		return fmt.Errorf("surface process_id must not be empty")
+	}
+
 	const q = `
 		INSERT INTO decision_surfaces (
 			id,
@@ -460,12 +470,19 @@ func (r *SurfaceRepo) Create(ctx context.Context, s *surface.DecisionSurface) er
 		s.UpdatedAt,
 		nullableString(s.ApprovedBy),
 		nullableTime(s.ApprovedAt),
-		nullableString(s.ProcessID),
+		s.ProcessID,
 	)
 	return err
 }
 
+// Update modifies mutable fields on an existing surface version.
+//
+// Enforces the Surface → Process invariant (I-1): process_id must be
+// non-empty. Clearing process_id on an existing surface is not permitted.
 func (r *SurfaceRepo) Update(ctx context.Context, s *surface.DecisionSurface) error {
+	if s.ProcessID == "" {
+		return fmt.Errorf("surface process_id must not be empty")
+	}
 	const q = `
 		UPDATE decision_surfaces
 		SET
@@ -497,7 +514,7 @@ func (r *SurfaceRepo) Update(ctx context.Context, s *surface.DecisionSurface) er
 		s.UpdatedAt,
 		nullableString(s.ApprovedBy),
 		nullableTime(s.ApprovedAt),
-		nullableString(s.ProcessID),
+		s.ProcessID,
 	)
 	if err != nil {
 		return err

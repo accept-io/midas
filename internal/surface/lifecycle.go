@@ -63,8 +63,9 @@ func ValidateLifecycleTransition(from, to SurfaceStatus) error {
 // ---------------------------------------------------------------------------
 
 // DefaultSurfaceValidator is the standard implementation of SurfaceValidator.
-// Structural checks (ValidateSurface, ValidateContext, ValidateConsequence) are
-// left for a future implementation pass; ValidateTransition is fully enforced.
+// ValidateSurface enforces the Surface → Process invariant (I-1) and the
+// structural field rules. ValidateContext and ValidateConsequence are left
+// for a future implementation pass; ValidateTransition is fully enforced.
 type DefaultSurfaceValidator struct{}
 
 // NewDefaultSurfaceValidator returns a ready-to-use DefaultSurfaceValidator.
@@ -85,6 +86,9 @@ func (v *DefaultSurfaceValidator) ValidateSurface(_ context.Context, s *Decision
 	}
 	if s.Domain == "" {
 		return errors.New("surface domain must not be empty")
+	}
+	if s.ProcessID == "" {
+		return errors.New("surface process_id must not be empty")
 	}
 	if s.MinimumConfidence < 0.0 || s.MinimumConfidence > 1.0 {
 		return fmt.Errorf("minimum_confidence must be in [0.0, 1.0], got %f", s.MinimumConfidence)
