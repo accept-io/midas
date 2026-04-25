@@ -9,12 +9,46 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+
+    # Mirrors test.sh:36-37,48,68-83 — same Postgres image, same DSN
+    # (DATABASE_URL + MIDAS_TEST_DATABASE_URL), same schema-apply mechanism
+    # (psql -f internal/store/postgres/schema.sql). Without Postgres, 80+
+    # tests across 18 files silently t.Skip (B-1).
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: midas
+          POSTGRES_USER: midas
+          POSTGRES_PASSWORD: midas
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U midas"
+          --health-interval 5s
+          --health-timeout 2s
+          --health-retries 5
+
+    env:
+      # Both vars are required: most tests read DATABASE_URL; the audit
+      # postgres tests read MIDAS_TEST_DATABASE_URL
+      # (internal/audit/postgres_repository_test.go:16).
+      DATABASE_URL: postgresql://midas:midas@localhost:5432/midas?sslmode=disable
+      MIDAS_TEST_DATABASE_URL: postgresql://midas:midas@localhost:5432/midas?sslmode=disable
+
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+
+      # Apply schema via psql, matching test.sh:76-83. The psql client is
+      # preinstalled on ubuntu-latest runners.
+      - name: Apply schema
+        env:
+          PGPASSWORD: midas
+        run: psql -h localhost -U midas -d midas -f internal/store/postgres/schema.sql
 
       - run: go test ./...
       - run: go vet ./...

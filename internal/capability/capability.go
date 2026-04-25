@@ -10,6 +10,9 @@ type Capability struct {
 	Name              string
 	Description       string
 	Status            string
+	Origin            string
+	Managed           bool
+	Replaces          string
 	Owner             string
 	ParentCapabilityID string
 	CreatedAt         time.Time

@@ -276,6 +276,15 @@ func TestG5G6_ProcessHierarchy_ValidParent_Succeeds(t *testing.T) {
 	if child.ParentProcessID != "proc-d-parent" {
 		t.Errorf("ParentProcessID = %q, want %q", child.ParentProcessID, "proc-d-parent")
 	}
+
+	// Lifecycle alignment: control-plane-applied processes must be
+	// stamped with origin=manual, managed=true.
+	if child.Origin != "manual" {
+		t.Errorf("process origin: want %q, got %q", "manual", child.Origin)
+	}
+	if !child.Managed {
+		t.Error("process managed: want true, got false")
+	}
 }
 
 // ---------------------------------------------------------------------------

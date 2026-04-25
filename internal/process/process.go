@@ -13,6 +13,9 @@ type Process struct {
 	BusinessServiceID  string
 	Description        string
 	Status             string
+	Origin             string
+	Managed            bool
+	Replaces           string
 	Owner              string
 	CreatedAt          time.Time
 	UpdatedAt          time.Time

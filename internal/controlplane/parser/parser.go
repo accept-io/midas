@@ -24,6 +24,21 @@ func wrapDocument(doc types.Document) ParsedDocument {
 	}
 }
 
+// strictUnmarshal decodes YAML into dst, rejecting any field that does not
+// map to a known struct field. The rejection is recursive — an unknown
+// field at any nesting level (top-level, metadata, spec, or deeper) is an
+// error.
+//
+// This is the per-kind typed decoder used by ParseYAML. The lighter-weight
+// apiVersion/kind header decode (yaml.Unmarshal into a two-field struct)
+// remains intentionally non-strict, because that decode sees the whole
+// document and is only extracting discriminators.
+func strictUnmarshal(data []byte, dst any) error {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	return dec.Decode(dst)
+}
+
 // ParseYAML parses a single YAML document into a typed control-plane document.
 func ParseYAML(data []byte) (ParsedDocument, error) {
 	var meta struct {
@@ -48,63 +63,63 @@ func ParseYAML(data []byte) (ParsedDocument, error) {
 	switch meta.Kind {
 	case types.KindSurface:
 		var doc types.SurfaceDocument
-		if err := yaml.Unmarshal(data, &doc); err != nil {
+		if err := strictUnmarshal(data, &doc); err != nil {
 			return ParsedDocument{}, fmt.Errorf("failed to parse Surface document: %w", err)
 		}
 		return wrapDocument(doc), nil
 
 	case types.KindAgent:
 		var doc types.AgentDocument
-		if err := yaml.Unmarshal(data, &doc); err != nil {
+		if err := strictUnmarshal(data, &doc); err != nil {
 			return ParsedDocument{}, fmt.Errorf("failed to parse Agent document: %w", err)
 		}
 		return wrapDocument(doc), nil
 
 	case types.KindProfile:
 		var doc types.ProfileDocument
-		if err := yaml.Unmarshal(data, &doc); err != nil {
+		if err := strictUnmarshal(data, &doc); err != nil {
 			return ParsedDocument{}, fmt.Errorf("failed to parse Profile document: %w", err)
 		}
 		return wrapDocument(doc), nil
 
 	case types.KindGrant:
 		var doc types.GrantDocument
-		if err := yaml.Unmarshal(data, &doc); err != nil {
+		if err := strictUnmarshal(data, &doc); err != nil {
 			return ParsedDocument{}, fmt.Errorf("failed to parse Grant document: %w", err)
 		}
 		return wrapDocument(doc), nil
 
 	case types.KindCapability:
 		var doc types.CapabilityDocument
-		if err := yaml.Unmarshal(data, &doc); err != nil {
+		if err := strictUnmarshal(data, &doc); err != nil {
 			return ParsedDocument{}, fmt.Errorf("failed to parse Capability document: %w", err)
 		}
 		return wrapDocument(doc), nil
 
 	case types.KindProcess:
 		var doc types.ProcessDocument
-		if err := yaml.Unmarshal(data, &doc); err != nil {
+		if err := strictUnmarshal(data, &doc); err != nil {
 			return ParsedDocument{}, fmt.Errorf("failed to parse Process document: %w", err)
 		}
 		return wrapDocument(doc), nil
 
 	case types.KindBusinessService:
 		var doc types.BusinessServiceDocument
-		if err := yaml.Unmarshal(data, &doc); err != nil {
+		if err := strictUnmarshal(data, &doc); err != nil {
 			return ParsedDocument{}, fmt.Errorf("failed to parse BusinessService document: %w", err)
 		}
 		return wrapDocument(doc), nil
 
 	case types.KindProcessCapability:
 		var doc types.ProcessCapabilityDocument
-		if err := yaml.Unmarshal(data, &doc); err != nil {
+		if err := strictUnmarshal(data, &doc); err != nil {
 			return ParsedDocument{}, fmt.Errorf("failed to parse ProcessCapability document: %w", err)
 		}
 		return wrapDocument(doc), nil
 
 	case types.KindProcessBusinessService:
 		var doc types.ProcessBusinessServiceDocument
-		if err := yaml.Unmarshal(data, &doc); err != nil {
+		if err := strictUnmarshal(data, &doc); err != nil {
 			return ParsedDocument{}, fmt.Errorf("failed to parse ProcessBusinessService document: %w", err)
 		}
 		return wrapDocument(doc), nil

@@ -98,6 +98,22 @@ func TestG10_PrimaryCapability_WithMatchingLink_Succeeds(t *testing.T) {
 	if result.CreatedCount() != 3 {
 		t.Fatalf("expected 3 created (cap + process + pc), got %d", result.CreatedCount())
 	}
+
+	// Lifecycle alignment: control-plane-applied capabilities must be
+	// stamped with origin=manual, managed=true.
+	cap, err := repos.Capabilities.GetByID(ctx, "cap-g10-a")
+	if err != nil {
+		t.Fatalf("GetByID capability: %v", err)
+	}
+	if cap == nil {
+		t.Fatal("expected capability to be persisted")
+	}
+	if cap.Origin != "manual" {
+		t.Errorf("capability origin: want %q, got %q", "manual", cap.Origin)
+	}
+	if !cap.Managed {
+		t.Error("capability managed: want true, got false")
+	}
 }
 
 // ---------------------------------------------------------------------------

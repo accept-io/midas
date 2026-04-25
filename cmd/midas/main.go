@@ -136,6 +136,18 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// Transaction runner for the control-plane apply executor. When the
+	// store backend is postgres we adapt *postgres.Store.WithTx into an
+	// apply.TxRunner so that bundle apply runs atomically. Memory mode
+	// leaves this nil: memory repositories have no transaction primitive,
+	// so the apply executor falls back to its abort-on-first-error path
+	// without rollback support. This asymmetry is intentional — the
+	// memory store is a dev/test convenience, not a production backend.
+	var applyTx apply.TxRunner
+	if pgStore, ok := repoStore.(*postgres.Store); ok {
+		applyTx = postgres.NewApplyTxRunner(pgStore)
+	}
+
 	applyService := apply.NewServiceWithRepos(apply.RepositorySet{
 		Surfaces:                repos.Surfaces,
 		Agents:                  repos.Agents,
@@ -147,6 +159,7 @@ func main() {
 		BusinessServices:        repos.BusinessServices,
 		ProcessCapabilities:     repos.ProcessCapabilities,
 		ProcessBusinessServices: repos.ProcessBusinessServices,
+		Tx:                      applyTx,
 	})
 
 	approvalSvc := approval.NewServiceWithProfileAndOutbox(

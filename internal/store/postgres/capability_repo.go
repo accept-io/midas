@@ -40,7 +40,7 @@ func (r *CapabilityRepo) Exists(ctx context.Context, id string) (bool, error) {
 // GetByID returns the capability with the given ID, or nil if not found.
 func (r *CapabilityRepo) GetByID(ctx context.Context, id string) (*capability.Capability, error) {
 	const q = `
-		SELECT capability_id, name, status,
+		SELECT capability_id, name, status, origin, managed, COALESCE(replaces, ''),
 		       COALESCE(description, ''), COALESCE(owner_id, ''),
 		       COALESCE(parent_capability_id, ''),
 		       created_at, updated_at
@@ -51,6 +51,9 @@ func (r *CapabilityRepo) GetByID(ctx context.Context, id string) (*capability.Ca
 		&c.ID,
 		&c.Name,
 		&c.Status,
+		&c.Origin,
+		&c.Managed,
+		&c.Replaces,
 		&c.Description,
 		&c.Owner,
 		&c.ParentCapabilityID,
@@ -70,12 +73,15 @@ func (r *CapabilityRepo) GetByID(ctx context.Context, id string) (*capability.Ca
 func (r *CapabilityRepo) Create(ctx context.Context, c *capability.Capability) error {
 	const q = `
 		INSERT INTO capabilities
-		  (capability_id, name, status, description, owner_id, parent_capability_id, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
+		  (capability_id, name, status, origin, managed, replaces, description, owner_id, parent_capability_id, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`
 	_, err := r.db.ExecContext(ctx, q,
 		c.ID,
 		c.Name,
 		c.Status,
+		c.Origin,
+		c.Managed,
+		sql.NullString{Valid: c.Replaces != "", String: c.Replaces},
 		c.Description,
 		c.Owner,
 		sql.NullString{Valid: c.ParentCapabilityID != "", String: c.ParentCapabilityID},
@@ -277,7 +283,7 @@ func (r *CapabilityRepo) DeleteByIDs(ctx context.Context, db sqltx.DBTX, ids []s
 // List returns all capabilities ordered by capability_id.
 func (r *CapabilityRepo) List(ctx context.Context) ([]*capability.Capability, error) {
 	const q = `
-		SELECT capability_id, name, status,
+		SELECT capability_id, name, status, origin, managed, COALESCE(replaces, ''),
 		       COALESCE(description, ''), COALESCE(owner_id, ''),
 		       COALESCE(parent_capability_id, ''),
 		       created_at, updated_at
@@ -291,7 +297,7 @@ func (r *CapabilityRepo) List(ctx context.Context) ([]*capability.Capability, er
 	var out []*capability.Capability
 	for rows.Next() {
 		var c capability.Capability
-		if err := rows.Scan(&c.ID, &c.Name, &c.Status, &c.Description, &c.Owner, &c.ParentCapabilityID, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.Status, &c.Origin, &c.Managed, &c.Replaces, &c.Description, &c.Owner, &c.ParentCapabilityID, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, &c)
