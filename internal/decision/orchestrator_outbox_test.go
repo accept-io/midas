@@ -37,16 +37,79 @@ import (
 
 	"github.com/accept-io/midas/internal/agent"
 	"github.com/accept-io/midas/internal/authority"
+	"github.com/accept-io/midas/internal/capability"
 	"github.com/accept-io/midas/internal/decision"
 	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/eval"
 	"github.com/accept-io/midas/internal/outbox"
 	"github.com/accept-io/midas/internal/policy"
+	"github.com/accept-io/midas/internal/process"
 	"github.com/accept-io/midas/internal/store"
 	pgstore "github.com/accept-io/midas/internal/store/postgres"
 	"github.com/accept-io/midas/internal/surface"
 	"github.com/accept-io/midas/internal/value"
 )
+
+// Shared identifiers for the Capability and Process that every decision
+// test seeds as parents of the Surfaces it creates. Decision tests don't
+// care about the structural layer — they just need the Surface → Process
+// and Process → Capability FK constraints to be satisfied so the Surface
+// row can persist at all. One shared parent per test is enough; tests
+// that need multiple Surfaces point every Surface at the same parent.
+const (
+	decisionTestCapabilityID = "cap-decision-test"
+	decisionTestProcessID    = "proc-decision-test"
+)
+
+// seedSurfaceParents writes the Capability and Process rows that every
+// Surface in a decision test will reference via process_id. It is
+// idempotent: two tests in the same run that both call it are safe
+// because the second call sees the row already persisted and skips
+// Create. This matters for tests that use targeted (per-id) cleanup
+// rather than the shared cleanupOutboxTestData — those tests
+// deliberately preserve sibling rows so parallel runs don't collide,
+// and therefore leave these shared parents in place.
+func seedSurfaceParents(t *testing.T, repos *store.Repositories) {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Now().UTC().Add(-time.Hour)
+
+	existingCap, err := repos.Capabilities.GetByID(ctx, decisionTestCapabilityID)
+	if err != nil {
+		t.Fatalf("get capability: %v", err)
+	}
+	if existingCap == nil {
+		if err := repos.Capabilities.Create(ctx, &capability.Capability{
+			ID:        decisionTestCapabilityID,
+			Name:      "decision test capability",
+			Status:    "active",
+			Origin:    "manual",
+			Managed:   true,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}); err != nil {
+			t.Fatalf("seed capability: %v", err)
+		}
+	}
+	existingProc, err := repos.Processes.GetByID(ctx, decisionTestProcessID)
+	if err != nil {
+		t.Fatalf("get process: %v", err)
+	}
+	if existingProc == nil {
+		if err := repos.Processes.Create(ctx, &process.Process{
+			ID:           decisionTestProcessID,
+			Name:         "decision test process",
+			CapabilityID: decisionTestCapabilityID,
+			Status:       "active",
+			Origin:       "manual",
+			Managed:      true,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		}); err != nil {
+			t.Fatalf("seed process: %v", err)
+		}
+	}
+}
 
 // ---------------------------------------------------------------------------
 // Helpers shared by outbox tests
@@ -59,6 +122,10 @@ func openOutboxTestDB(t *testing.T) *sql.DB {
 
 func cleanupOutboxTestData(t *testing.T, db *sql.DB) {
 	t.Helper()
+	// FK order: surfaces reference processes reference capabilities, so
+	// deletes walk from leaves to roots. processes also has a FK to
+	// capabilities and decision_surfaces has a FK to processes, so this
+	// order matters.
 	statements := []string{
 		`DELETE FROM outbox_events`,
 		`DELETE FROM audit_events`,
@@ -67,6 +134,8 @@ func cleanupOutboxTestData(t *testing.T, db *sql.DB) {
 		`DELETE FROM authority_profiles`,
 		`DELETE FROM agents`,
 		`DELETE FROM decision_surfaces`,
+		`DELETE FROM processes`,
+		`DELETE FROM capabilities`,
 	}
 	for _, stmt := range statements {
 		if _, err := db.Exec(stmt); err != nil {
@@ -80,17 +149,20 @@ func seedOutboxTestData(t *testing.T, repos *store.Repositories) {
 	ctx := context.Background()
 	now := time.Now().UTC().Add(-time.Hour)
 
+	seedSurfaceParents(t, repos)
+
 	if err := repos.Surfaces.Create(ctx, &surface.DecisionSurface{
-		ID:            "surf-outbox-1",
-		Name:          "outbox test surface",
-		Status:        surface.SurfaceStatusActive,
-		Version:       1,
-		EffectiveFrom: now,
-		Domain:        "test",
-		BusinessOwner: "owner",
+		ID:             "surf-outbox-1",
+		Name:           "outbox test surface",
+		Status:         surface.SurfaceStatusActive,
+		Version:        1,
+		EffectiveFrom:  now,
+		Domain:         "test",
+		BusinessOwner:  "owner",
 		TechnicalOwner: "tech",
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		ProcessID:      decisionTestProcessID,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}); err != nil {
 		t.Fatalf("seed surface: %v", err)
 	}
@@ -530,6 +602,7 @@ func TestOrchestrator_Outbox_RejectEmitsExternalEvents(t *testing.T) {
 	// Seed surface only — no agent seeded, so evaluation rejects AGENT_NOT_FOUND.
 	ctx := context.Background()
 	now := time.Now().UTC().Add(-time.Hour)
+	seedSurfaceParents(t, repos)
 	if err := repos.Surfaces.Create(ctx, &surface.DecisionSurface{
 		ID:             "surf-reject-1",
 		Name:           "reject test surface",
@@ -539,6 +612,7 @@ func TestOrchestrator_Outbox_RejectEmitsExternalEvents(t *testing.T) {
 		Domain:         "test",
 		BusinessOwner:  "owner",
 		TechnicalOwner: "tech",
+		ProcessID:      decisionTestProcessID,
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}); err != nil {
@@ -638,6 +712,7 @@ func TestOrchestrator_Outbox_RequestClarificationEmitsExternalEvents(t *testing.
 	ctx := context.Background()
 	now := time.Now().UTC().Add(-time.Hour)
 
+	seedSurfaceParents(t, repos)
 	if err := repos.Surfaces.Create(ctx, &surface.DecisionSurface{
 		ID:             "surf-clarify-ctx-1",
 		Name:           "clarify test surface",
@@ -647,6 +722,7 @@ func TestOrchestrator_Outbox_RequestClarificationEmitsExternalEvents(t *testing.
 		Domain:         "test",
 		BusinessOwner:  "owner",
 		TechnicalOwner: "tech",
+		ProcessID:      decisionTestProcessID,
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}); err != nil {

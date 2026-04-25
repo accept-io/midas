@@ -12,6 +12,17 @@ MODE="${1:-all}"
 # Prevent Git Bash from mangling paths
 export MSYS_NO_PATHCONV=1
 
+# Fail-fast guard: every mode in this script depends on the 'postgres'
+# compose service being defined. If someone edits docker-compose.yml and
+# drops the service (as happened in commit 4d0f666), `docker compose up -d
+# postgres` would fail with an opaque "no such service" error. Surface the
+# misconfiguration clearly instead.
+if ! docker compose config --services 2>/dev/null | grep -q '^postgres$'; then
+  echo -e "${RED}✗ 'postgres' service is not defined in docker-compose.yml${NC}"
+  echo -e "  test.sh requires a postgres compose service; add one back to docker-compose.yml."
+  exit 1
+fi
+
 GO_TEST_CMD="go test -p 1 -count=1 ./... -v -timeout 120s"
 
 # Helper function to run commands in Docker

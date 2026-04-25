@@ -40,7 +40,7 @@ func (r *ProcessRepo) Exists(ctx context.Context, id string) (bool, error) {
 // GetByID returns the process with the given ID, or nil if not found.
 func (r *ProcessRepo) GetByID(ctx context.Context, id string) (*process.Process, error) {
 	const q = `
-		SELECT process_id, name, capability_id, status,
+		SELECT process_id, name, capability_id, status, origin, managed, COALESCE(replaces, ''),
 		       COALESCE(description, ''), COALESCE(owner_id, ''),
 		       COALESCE(business_service_id, ''),
 		       created_at, updated_at
@@ -52,6 +52,9 @@ func (r *ProcessRepo) GetByID(ctx context.Context, id string) (*process.Process,
 		&p.Name,
 		&p.CapabilityID,
 		&p.Status,
+		&p.Origin,
+		&p.Managed,
+		&p.Replaces,
 		&p.Description,
 		&p.Owner,
 		&p.BusinessServiceID,
@@ -71,15 +74,18 @@ func (r *ProcessRepo) GetByID(ctx context.Context, id string) (*process.Process,
 func (r *ProcessRepo) Create(ctx context.Context, p *process.Process) error {
 	const q = `
 		INSERT INTO processes
-		  (process_id, capability_id, parent_process_id, name, status, description, owner_id,
-		   business_service_id, created_at, updated_at, level)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL)`
+		  (process_id, capability_id, parent_process_id, name, status, origin, managed, replaces,
+		   description, owner_id, business_service_id, created_at, updated_at, level)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NULL)`
 	_, err := r.db.ExecContext(ctx, q,
 		p.ID,
 		p.CapabilityID,
 		sql.NullString{Valid: p.ParentProcessID != "", String: p.ParentProcessID},
 		p.Name,
 		p.Status,
+		p.Origin,
+		p.Managed,
+		sql.NullString{Valid: p.Replaces != "", String: p.Replaces},
 		p.Description,
 		p.Owner,
 		sql.NullString{Valid: p.BusinessServiceID != "", String: p.BusinessServiceID},
@@ -215,7 +221,7 @@ func (r *ProcessRepo) DeprecateInferred(ctx context.Context, db sqltx.DBTX, id s
 // List returns all processes ordered by process_id.
 func (r *ProcessRepo) List(ctx context.Context) ([]*process.Process, error) {
 	const q = `
-		SELECT process_id, name, capability_id, status,
+		SELECT process_id, name, capability_id, status, origin, managed, COALESCE(replaces, ''),
 		       COALESCE(description, ''), COALESCE(owner_id, ''),
 		       COALESCE(business_service_id, ''),
 		       created_at, updated_at
@@ -229,7 +235,7 @@ func (r *ProcessRepo) List(ctx context.Context) ([]*process.Process, error) {
 	var out []*process.Process
 	for rows.Next() {
 		var p process.Process
-		if err := rows.Scan(&p.ID, &p.Name, &p.CapabilityID, &p.Status, &p.Description, &p.Owner, &p.BusinessServiceID, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.CapabilityID, &p.Status, &p.Origin, &p.Managed, &p.Replaces, &p.Description, &p.Owner, &p.BusinessServiceID, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, &p)
@@ -308,7 +314,7 @@ func (r *ProcessRepo) DeleteByIDs(ctx context.Context, db sqltx.DBTX, ids []stri
 // ListByCapabilityID returns processes belonging to the given capability, ordered by process_id.
 func (r *ProcessRepo) ListByCapabilityID(ctx context.Context, capabilityID string) ([]*process.Process, error) {
 	const q = `
-		SELECT process_id, name, capability_id, status,
+		SELECT process_id, name, capability_id, status, origin, managed, COALESCE(replaces, ''),
 		       COALESCE(description, ''), COALESCE(owner_id, ''),
 		       COALESCE(business_service_id, ''),
 		       created_at, updated_at
@@ -323,7 +329,7 @@ func (r *ProcessRepo) ListByCapabilityID(ctx context.Context, capabilityID strin
 	var out []*process.Process
 	for rows.Next() {
 		var p process.Process
-		if err := rows.Scan(&p.ID, &p.Name, &p.CapabilityID, &p.Status, &p.Description, &p.Owner, &p.BusinessServiceID, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.CapabilityID, &p.Status, &p.Origin, &p.Managed, &p.Replaces, &p.Description, &p.Owner, &p.BusinessServiceID, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, &p)

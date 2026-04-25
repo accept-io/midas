@@ -526,6 +526,131 @@ components:
           type: string
           format: date-time
 
+    BusinessService:
+      type: object
+      description: >
+        A business service grouping for processes (V2 structural layer).
+        Mirrors the businessServiceResponse wire format.
+      properties:
+        id:
+          type: string
+          description: Unique business service identifier.
+        name:
+          type: string
+          description: Human-readable business service name.
+        description:
+          type: string
+          description: Optional description. Omitted when empty.
+        service_type:
+          type: string
+          description: Service classification (e.g. customer_facing, internal).
+        regulatory_scope:
+          type: string
+          description: Regulatory scope marker. Omitted when empty.
+        status:
+          type: string
+          enum: [active, inactive, deprecated]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    AdminAuditDetails:
+      type: object
+      description: >
+        Action-specific structured context. All fields are optional and present
+        only when the emitting action populated them. Never carries secret
+        material.
+      properties:
+        bundle_bytes:
+          type: integer
+        created_count:
+          type: integer
+        conflict_count:
+          type: integer
+        unchanged_count:
+          type: integer
+        error_count:
+          type: integer
+        from_capability_id:
+          type: string
+        from_process_id:
+          type: string
+        to_capability_id:
+          type: string
+        to_process_id:
+          type: string
+        surfaces_migrated:
+          type: integer
+        older_than_days:
+          type: integer
+        processes_deleted:
+          type: array
+          items:
+            type: string
+        capabilities_deleted:
+          type: array
+          items:
+            type: string
+        error:
+          type: string
+          description: Human-readable failure message; never secret.
+
+    AdminAuditEntry:
+      type: object
+      required: [id, occurred_at, action, outcome, actor_type]
+      properties:
+        id:
+          type: string
+        occurred_at:
+          type: string
+          format: date-time
+        action:
+          type: string
+          enum:
+            - apply.invoked
+            - promote.executed
+            - cleanup.executed
+            - password.changed
+            - bootstrap.admin_created
+        outcome:
+          type: string
+          enum: [success, failure]
+        actor_type:
+          type: string
+          enum: [user, system]
+        actor_id:
+          type: string
+          description: Principal ID or system identifier. Omitted when unknown.
+        target_type:
+          type: string
+          description: Open-set target kind (e.g. bundle, user, platform, process). Omitted when unset.
+        target_id:
+          type: string
+          description: Resource identifier. Omitted when unset.
+        request_id:
+          type: string
+          description: HTTP request correlation ID. Omitted for non-HTTP events.
+        client_ip:
+          type: string
+          description: Best-effort client IP. Omitted for non-HTTP events.
+        required_permission:
+          type: string
+          description: Authz permission the request was gated on. Omitted for non-permission-gated events.
+        details:
+          $ref: "#/components/schemas/AdminAuditDetails"
+
+    AdminAuditListResponse:
+      type: object
+      required: [entries]
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminAuditEntry"
+
     SurfaceVersionItem:
       type: object
       description: A single entry in the surface version history list.
@@ -2427,3 +2552,183 @@ paths:
                 $ref: "#/components/schemas/Error"
               example:
                 error: process not found
+
+  /v1/businessservices:
+    get:
+      operationId: listBusinessServices
+      summary: List all business services
+      description: >
+        Returns all registered business services. No pagination — returns the
+        full list. Requires platform.viewer or above.
+      responses:
+        "200":
+          description: Business service list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/BusinessService"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: Structural service not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: structural service not configured
+
+  /v1/businessservices/{id}:
+    get:
+      operationId: getBusinessServiceById
+      summary: Get a business service by ID
+      description: >
+        Returns a single business service by its unique identifier.
+        Requires platform.viewer or above.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Unique business service identifier.
+      responses:
+        "200":
+          description: Business service found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessService"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Business service not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: business service not found
+        "501":
+          description: Structural service not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: structural service not configured
+
+  /v1/platform/admin-audit:
+    get:
+      operationId: listAdminAudit
+      summary: List platform-administrative audit events
+      description: >
+        Returns the append-only platform-administrative audit trail covering
+        apply invocations, promote and cleanup actions, password changes, and
+        bootstrap admin creation. Records are returned in descending
+        occurred_at order (newest first). Requires platform.admin role —
+        more restrictive than /v1/controlplane/audit because the trail
+        includes password and bootstrap events. See Issue #41.
+      parameters:
+        - name: action
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - apply.invoked
+              - promote.executed
+              - cleanup.executed
+              - password.changed
+              - bootstrap.admin_created
+          description: Constrain results to a single action enum value.
+        - name: outcome
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [success, failure]
+          description: Constrain results to success or failure.
+        - name: actor_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Constrain results to records emitted for a specific actor.
+        - name: target_type
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Constrain results to a specific target type.
+        - name: target_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Constrain results to a specific target ID.
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+          description: Cap the number of records returned. Values outside [1, 500] yield 400.
+      responses:
+        "200":
+          description: Admin-audit entries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminAuditListResponse"
+        "400":
+          description: Invalid query parameter (e.g. non-positive or out-of-range limit)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: limit must be a positive integer
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.admin)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: Admin-audit not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: admin-audit not configured

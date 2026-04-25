@@ -90,4 +90,29 @@ type RepositorySet struct {
 	ProcessCapabilities     ProcessCapabilityRepository
 	ProcessBusinessServices ProcessBusinessServiceRepository
 	ControlAudit            controlaudit.Repository
+	// Tx, when non-nil, wraps the executor's mutation loop in an
+	// atomic transaction. The callback receives a scoped *RepositorySet
+	// whose repositories are bound to the transaction; on callback-
+	// returned error the transaction is rolled back and no mutations
+	// from the bundle remain persisted. When Tx is nil the executor
+	// still aborts on the first persistence error, but cannot roll
+	// prior writes back — this is the dev/memory-store posture.
+	Tx TxRunner
+}
+
+// TxRunner executes a callback inside a storage transaction. The callback
+// receives a *RepositorySet whose repositories write through the transaction
+// rather than against auto-commit connections. Implementations must:
+//
+//   - commit when fn returns nil
+//   - roll back when fn returns a non-nil error, and propagate that error
+//   - roll back and re-panic when fn panics, not swallow the panic
+//
+// ControlAudit on the scoped set may be nil or may be a no-op. By the
+// control-plane audit policy (ADR-041b) audit writes do not participate in
+// this transaction: the executor buffers audit records during the loop and
+// flushes them only after the transaction commits. Implementations should
+// therefore feel free to leave the scoped ControlAudit unset.
+type TxRunner interface {
+	WithTx(ctx context.Context, operation string, fn func(*RepositorySet) error) error
 }

@@ -16,6 +16,32 @@ import (
 )
 
 // Service coordinates control-plane apply operations.
+//
+// Safety model — enforced collectively by the pipeline below, not by any
+// single method:
+//
+//   - Parse runs before anything else (ApplyBundle). A parse failure
+//     returns ErrInvalidBundle and cannot produce persistence.
+//   - Validation runs before execute (Plan → buildApplyPlan →
+//     validate.ValidateBundle). A bundle with any ApplyActionInvalid
+//     entry short-circuits executePlan: no resource is persisted.
+//   - Execution runs last (executePlan → runApplyLoop). It aborts on the
+//     first runtime persistence error; when tx is wired, prior writes in
+//     the same bundle are rolled back.
+//
+// The tx field controls the atomicity posture:
+//
+//   - tx != nil (postgres-backed production): the mutation loop runs
+//     inside a transaction and atomic rollback is guaranteed.
+//   - tx == nil (memory-mode dev/test, or any caller that did not wire a
+//     TxRunner): the loop still aborts on the first error, but prior
+//     writes remain because the repositories auto-commit. This is the
+//     best guarantee available without transactional storage and is
+//     documented at RepositorySet.Tx.
+//
+// Control audit is deliberately NOT part of the state-change transaction
+// (see ADR-041b). The executor buffers audit records during the loop and
+// flushes them via appendControlAudit after the transaction commits.
 type Service struct {
 	surfaceRepo             SurfaceRepository
 	agentRepo               AgentRepository
@@ -27,6 +53,7 @@ type Service struct {
 	processCapabilityRepo         ProcessCapabilityRepository
 	processBusinessServiceRepo    ProcessBusinessServiceRepository
 	controlAuditRepo        controlaudit.Repository
+	tx                      TxRunner
 }
 
 // NewService constructs a new apply service with no repositories configured.
@@ -60,6 +87,7 @@ func NewServiceWithRepos(repos RepositorySet) *Service {
 		processCapabilityRepo:      repos.ProcessCapabilities,
 		processBusinessServiceRepo: repos.ProcessBusinessServices,
 		controlAuditRepo:      repos.ControlAudit,
+		tx:                    repos.Tx,
 	}
 }
 
@@ -174,6 +202,11 @@ func mapPlanDiff(d *PlanDiff) *types.PlanDiff {
 // Apply builds the plan via Plan and then executes it. No planning logic is
 // duplicated here.
 //
+// Invariant: validation runs first. Any ApplyActionInvalid entry in the
+// plan causes executePlan to short-circuit with no persistence — the
+// pipeline is strictly plan-then-execute, not interleaved. See the
+// Service type doc for the full safety model.
+//
 // Behavior:
 //   - if validation fails, return validation errors only; no resources are persisted
 //   - if a surface repository is configured, the planner inspects persisted state to
@@ -194,6 +227,11 @@ func (s *Service) Apply(ctx context.Context, docs []parser.ParsedDocument, actor
 
 // ApplyBundle parses a raw YAML bundle and applies it through the validation
 // and apply pipeline.
+//
+// Invariant: parse runs before anything else. A parse failure returns
+// an error wrapping ErrInvalidBundle and cannot produce any persistence —
+// the executor is never invoked. This is the first safety boundary of
+// the pipeline described on the Service type.
 //
 // actor identifies who initiated the apply (e.g. from the X-MIDAS-ACTOR header).
 // If empty, "system" is used as a fallback actor in audit entries.
@@ -1606,8 +1644,67 @@ func (s *Service) executePlan(ctx context.Context, plan ApplyPlan, actor string)
 		return result
 	}
 
+	// Atomicity (see issue: Atomic control-plane apply):
+	//
+	// The execution loop either completes in full or leaves no persisted
+	// mutations behind. On the first persistence error it aborts, discards
+	// any in-memory state accumulated for this bundle, and — when a
+	// TxRunner is wired — rolls back every write that occurred so far in
+	// the same bundle.
+	//
+	// Audit records are buffered INSIDE the loop and flushed AFTER the
+	// transaction commits. This preserves the ADR-041b posture that
+	// control audit sits outside the state-change transaction boundary
+	// while avoiding ghost audit rows for mutations that were rolled
+	// back.
+	//
+	// When s.tx is nil (e.g. the memory store in dev mode) the loop still
+	// aborts on the first error, but prior writes cannot be rolled back
+	// because the underlying repositories auto-commit. This is the best
+	// guarantee available without transactional storage.
 	now := time.Now().UTC()
+	var pendingAudit []*controlaudit.ControlAuditRecord
 
+	loop := func(scoped *RepositorySet) error {
+		return s.runApplyLoop(ctx, plan, actor, now, scoped, &pendingAudit, &result)
+	}
+
+	if s.tx != nil {
+		if err := s.tx.WithTx(ctx, "control_plane_apply", loop); err != nil {
+			// The transaction has rolled back. runApplyLoop has already
+			// recorded the triggering error into result.Results; any
+			// buffered audit records correspond to mutations that did not
+			// persist and must be discarded. Deliberately do not surface
+			// the raw tx error separately — the per-resource error entry
+			// already names the failing operation.
+			pendingAudit = nil
+		}
+	} else {
+		ownRepos := s.ownRepositorySet()
+		_ = loop(ownRepos)
+	}
+
+	for _, rec := range pendingAudit {
+		s.appendControlAudit(ctx, rec)
+	}
+
+	return result
+}
+
+// runApplyLoop is the iteration body shared by the transactional and non-
+// transactional execution paths. It aborts on the first persistence error
+// and, when aborting, records the error into result before returning it to
+// the caller (so the caller — and, in the transactional case, the TxRunner
+// — can surface the rollback to the user via result.Results).
+func (s *Service) runApplyLoop(
+	ctx context.Context,
+	plan ApplyPlan,
+	actor string,
+	now time.Time,
+	repos *RepositorySet,
+	pendingAudit *[]*controlaudit.ControlAuditRecord,
+	result *types.ApplyResult,
+) error {
 	for _, entry := range orderedEntries(plan.Entries) {
 		switch entry.Action {
 		case ApplyActionConflict:
@@ -1619,100 +1716,133 @@ func (s *Service) executePlan(ctx context.Context, plan ApplyPlan, actor string)
 			result.AddUnchanged(entry.Kind, entry.ID)
 
 		case ApplyActionCreate:
-			switch entry.Kind {
-			case types.KindBusinessService:
-				if s.businessServiceRepo != nil {
-					if err := s.applyBusinessService(ctx, entry.Doc, now, &result); err != nil {
-						result.AddError(entry.Kind, entry.ID, err.Error())
-					}
-				} else {
-					result.AddCreated(entry.Kind, entry.ID)
-				}
-			case types.KindCapability:
-				if s.capabilityRepo != nil {
-					if err := s.applyCapability(ctx, entry.Doc, now, actor, &result); err != nil {
-						result.AddError(entry.Kind, entry.ID, err.Error())
-					}
-				} else {
-					result.AddCreated(entry.Kind, entry.ID)
-				}
-			case types.KindProcess:
-				if s.processRepo != nil {
-					if err := s.applyProcess(ctx, entry.Doc, now, actor, &result); err != nil {
-						result.AddError(entry.Kind, entry.ID, err.Error())
-					}
-				} else {
-					result.AddCreated(entry.Kind, entry.ID)
-				}
-			case types.KindProcessCapability:
-				if s.processCapabilityRepo != nil {
-					if err := s.applyProcessCapability(ctx, entry.Doc, now, &result); err != nil {
-						result.AddError(entry.Kind, entry.ID, err.Error())
-					}
-				} else {
-					result.AddCreated(entry.Kind, entry.ID)
-				}
-			case types.KindProcessBusinessService:
-				if s.processBusinessServiceRepo != nil {
-					if err := s.applyProcessBusinessService(ctx, entry.Doc, now, &result); err != nil {
-						result.AddError(entry.Kind, entry.ID, err.Error())
-					}
-				} else {
-					result.AddCreated(entry.Kind, entry.ID)
-				}
-			case types.KindSurface:
-				if s.surfaceRepo != nil {
-					if err := s.applySurface(ctx, entry.Doc, now, actor, &result); err != nil {
-						result.AddError(entry.Kind, entry.ID, err.Error())
-					}
-				} else {
-					result.AddCreated(entry.Kind, entry.ID)
-				}
-			case types.KindAgent:
-				if s.agentRepo != nil {
-					if err := s.applyAgent(ctx, entry.Doc, now, actor, &result); err != nil {
-						result.AddError(entry.Kind, entry.ID, err.Error())
-					}
-				} else {
-					result.AddCreated(entry.Kind, entry.ID)
-				}
-			case types.KindProfile:
-				if s.profileRepo != nil {
-					if err := s.applyProfile(ctx, entry.Doc, now, actor, entry.NewVersion, &result); err != nil {
-						result.AddError(entry.Kind, entry.ID, err.Error())
-					}
-				} else {
-					result.AddCreated(entry.Kind, entry.ID)
-				}
-			case types.KindGrant:
-				if s.grantRepo != nil {
-					if err := s.applyGrant(ctx, entry.Doc, now, actor, &result); err != nil {
-						result.AddError(entry.Kind, entry.ID, err.Error())
-					}
-				} else {
-					result.AddCreated(entry.Kind, entry.ID)
-				}
-			default:
-				result.AddCreated(entry.Kind, entry.ID)
+			if err := s.applyCreateEntry(ctx, repos, pendingAudit, entry, now, actor, result); err != nil {
+				// Abort: the caller either owns a transaction that will
+				// roll back, or is running without transactional
+				// storage. Either way, no further entries are attempted.
+				result.AddError(entry.Kind, entry.ID, err.Error())
+				return err
 			}
 
 		default:
-			// Unknown action — record as an error to surface the planning gap.
-			result.AddError(entry.Kind, entry.ID, "unexpected plan action: "+string(entry.Action))
+			// Unknown action — record as an error and abort to surface
+			// the planning gap without leaving the bundle half-applied.
+			err := fmt.Errorf("unexpected plan action: %s", entry.Action)
+			result.AddError(entry.Kind, entry.ID, err.Error())
+			return err
 		}
 	}
+	return nil
+}
 
-	return result
+// applyCreateEntry dispatches a single create entry to the kind-specific
+// helper. Returns the first error unmodified so the caller can abort the
+// bundle.
+func (s *Service) applyCreateEntry(
+	ctx context.Context,
+	repos *RepositorySet,
+	pendingAudit *[]*controlaudit.ControlAuditRecord,
+	entry ApplyPlanEntry,
+	now time.Time,
+	actor string,
+	result *types.ApplyResult,
+) error {
+	switch entry.Kind {
+	case types.KindBusinessService:
+		if repos.BusinessServices == nil {
+			result.AddCreated(entry.Kind, entry.ID)
+			return nil
+		}
+		return s.applyBusinessService(ctx, repos, entry.Doc, now, result)
+	case types.KindCapability:
+		if repos.Capabilities == nil {
+			result.AddCreated(entry.Kind, entry.ID)
+			return nil
+		}
+		return s.applyCapability(ctx, repos, entry.Doc, now, actor, result)
+	case types.KindProcess:
+		if repos.Processes == nil {
+			result.AddCreated(entry.Kind, entry.ID)
+			return nil
+		}
+		return s.applyProcess(ctx, repos, entry.Doc, now, actor, result)
+	case types.KindProcessCapability:
+		if repos.ProcessCapabilities == nil {
+			result.AddCreated(entry.Kind, entry.ID)
+			return nil
+		}
+		return s.applyProcessCapability(ctx, repos, entry.Doc, now, result)
+	case types.KindProcessBusinessService:
+		if repos.ProcessBusinessServices == nil {
+			result.AddCreated(entry.Kind, entry.ID)
+			return nil
+		}
+		return s.applyProcessBusinessService(ctx, repos, entry.Doc, now, result)
+	case types.KindSurface:
+		if repos.Surfaces == nil {
+			result.AddCreated(entry.Kind, entry.ID)
+			return nil
+		}
+		return s.applySurface(ctx, repos, pendingAudit, entry.Doc, now, actor, result)
+	case types.KindAgent:
+		if repos.Agents == nil {
+			result.AddCreated(entry.Kind, entry.ID)
+			return nil
+		}
+		return s.applyAgent(ctx, repos, pendingAudit, entry.Doc, now, actor, result)
+	case types.KindProfile:
+		if repos.Profiles == nil {
+			result.AddCreated(entry.Kind, entry.ID)
+			return nil
+		}
+		return s.applyProfile(ctx, repos, pendingAudit, entry.Doc, now, actor, entry.NewVersion, result)
+	case types.KindGrant:
+		if repos.Grants == nil {
+			result.AddCreated(entry.Kind, entry.ID)
+			return nil
+		}
+		return s.applyGrant(ctx, repos, pendingAudit, entry.Doc, now, actor, result)
+	default:
+		result.AddCreated(entry.Kind, entry.ID)
+		return nil
+	}
+}
+
+// ownRepositorySet returns a RepositorySet view of the Service's own
+// configured repositories. It is used by the non-transactional execution
+// path so that runApplyLoop can read through a uniform *RepositorySet
+// regardless of whether a TxRunner is wired.
+func (s *Service) ownRepositorySet() *RepositorySet {
+	return &RepositorySet{
+		Surfaces:                s.surfaceRepo,
+		Agents:                  s.agentRepo,
+		Profiles:                s.profileRepo,
+		Grants:                  s.grantRepo,
+		Processes:               s.processRepo,
+		Capabilities:            s.capabilityRepo,
+		BusinessServices:        s.businessServiceRepo,
+		ProcessCapabilities:     s.processCapabilityRepo,
+		ProcessBusinessServices: s.processBusinessServiceRepo,
+	}
 }
 
 // appendControlAudit appends a control-plane audit record. It is a no-op when
 // the controlAuditRepo is nil, preserving existing behaviour for callers that
 // do not configure the control audit repository.
+//
+// Per ADR-041b, control audit is best-effort and sits outside the
+// state-change transaction. Append errors are deliberately swallowed:
+// a failed audit write must not fail the control-plane action, because
+// the action has already committed (or would be rolled back for unrelated
+// reasons). Structured logging of the swallow is a named follow-up in
+// ADR-041b and is not implemented in this issue.
+//
+// Called only from the post-commit flush path in executePlan: records
+// for a rolled-back bundle are discarded before this is reached.
 func (s *Service) appendControlAudit(ctx context.Context, rec *controlaudit.ControlAuditRecord) {
 	if s.controlAuditRepo == nil {
 		return
 	}
-	// Audit failures are logged but do not fail the apply operation itself.
 	_ = s.controlAuditRepo.Append(ctx, rec)
 }
 
@@ -1772,8 +1902,15 @@ func orderedEntries(entries []ApplyPlanEntry) []ApplyPlanEntry {
 
 // applySurface creates a governed surface version in review state.
 // New applies always create a new versioned record; they do not update in place.
+//
+// The scoped repos and pendingAudit buffer are threaded from executePlan so
+// that mutations participate in the caller's transaction and audit records
+// are deferred until after commit (see executePlan for the audit-boundary
+// rationale).
 func (s *Service) applySurface(
 	ctx context.Context,
+	repos *RepositorySet,
+	pendingAudit *[]*controlaudit.ControlAuditRecord,
 	doc parser.ParsedDocument,
 	now time.Time,
 	actor string,
@@ -1784,7 +1921,7 @@ func (s *Service) applySurface(
 		return fmt.Errorf("%w: invalid document payload for kind %q", ErrInvalidBundle, types.KindSurface)
 	}
 
-	latest, err := s.surfaceRepo.FindLatestByID(ctx, surfaceDoc.Metadata.ID)
+	latest, err := repos.Surfaces.FindLatestByID(ctx, surfaceDoc.Metadata.ID)
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return fmt.Errorf("find latest surface by id: %w", err)
 	}
@@ -1799,18 +1936,20 @@ func (s *Service) applySurface(
 		return fmt.Errorf("map surface document: %w", err)
 	}
 
-	if err := s.surfaceRepo.Create(ctx, ds); err != nil {
+	if err := repos.Surfaces.Create(ctx, ds); err != nil {
 		return fmt.Errorf("create surface version: %w", err)
 	}
 
 	result.AddCreated(doc.Kind, doc.ID)
-	s.appendControlAudit(ctx, controlaudit.NewSurfaceCreatedRecord(actor, ds.ID, ds.Version))
+	*pendingAudit = append(*pendingAudit, controlaudit.NewSurfaceCreatedRecord(actor, ds.ID, ds.Version))
 	return nil
 }
 
 // applyAgent maps an AgentDocument to an Agent domain model and persists it.
 func (s *Service) applyAgent(
 	ctx context.Context,
+	repos *RepositorySet,
+	pendingAudit *[]*controlaudit.ControlAuditRecord,
 	doc parser.ParsedDocument,
 	now time.Time,
 	actor string,
@@ -1826,12 +1965,12 @@ func (s *Service) applyAgent(
 		return fmt.Errorf("map agent document: %w", err)
 	}
 
-	if err := s.agentRepo.Create(ctx, a); err != nil {
+	if err := repos.Agents.Create(ctx, a); err != nil {
 		return fmt.Errorf("create agent: %w", err)
 	}
 
 	result.AddCreated(doc.Kind, doc.ID)
-	s.appendControlAudit(ctx, controlaudit.NewAgentCreatedRecord(actor, a.ID))
+	*pendingAudit = append(*pendingAudit, controlaudit.NewAgentCreatedRecord(actor, a.ID))
 	return nil
 }
 
@@ -1840,6 +1979,8 @@ func (s *Service) applyAgent(
 // first-time create, N+1 when appending to an existing profile lineage.
 func (s *Service) applyProfile(
 	ctx context.Context,
+	repos *RepositorySet,
+	pendingAudit *[]*controlaudit.ControlAuditRecord,
 	doc parser.ParsedDocument,
 	now time.Time,
 	actor string,
@@ -1856,16 +1997,16 @@ func (s *Service) applyProfile(
 		return fmt.Errorf("map profile document: %w", err)
 	}
 
-	if err := s.profileRepo.Create(ctx, p); err != nil {
+	if err := repos.Profiles.Create(ctx, p); err != nil {
 		return fmt.Errorf("create profile: %w", err)
 	}
 
 	result.AddCreated(doc.Kind, doc.ID)
 
 	if version == 1 {
-		s.appendControlAudit(ctx, controlaudit.NewProfileCreatedRecord(actor, p.ID, p.SurfaceID, version))
+		*pendingAudit = append(*pendingAudit, controlaudit.NewProfileCreatedRecord(actor, p.ID, p.SurfaceID, version))
 	} else {
-		s.appendControlAudit(ctx, controlaudit.NewProfileVersionedRecord(actor, p.ID, p.SurfaceID, version))
+		*pendingAudit = append(*pendingAudit, controlaudit.NewProfileVersionedRecord(actor, p.ID, p.SurfaceID, version))
 	}
 	return nil
 }
@@ -1873,6 +2014,8 @@ func (s *Service) applyProfile(
 // applyGrant maps a GrantDocument to an AuthorityGrant domain model and persists it.
 func (s *Service) applyGrant(
 	ctx context.Context,
+	repos *RepositorySet,
+	pendingAudit *[]*controlaudit.ControlAuditRecord,
 	doc parser.ParsedDocument,
 	now time.Time,
 	actor string,
@@ -1888,18 +2031,19 @@ func (s *Service) applyGrant(
 		return fmt.Errorf("map grant document: %w", err)
 	}
 
-	if err := s.grantRepo.Create(ctx, g); err != nil {
+	if err := repos.Grants.Create(ctx, g); err != nil {
 		return fmt.Errorf("create grant: %w", err)
 	}
 
 	result.AddCreated(doc.Kind, doc.ID)
-	s.appendControlAudit(ctx, controlaudit.NewGrantCreatedRecord(actor, g.ID))
+	*pendingAudit = append(*pendingAudit, controlaudit.NewGrantCreatedRecord(actor, g.ID))
 	return nil
 }
 
 // applyCapability maps a CapabilityDocument to a Capability domain model and persists it.
 func (s *Service) applyCapability(
 	ctx context.Context,
+	repos *RepositorySet,
 	doc parser.ParsedDocument,
 	now time.Time,
 	actor string,
@@ -1912,7 +2056,7 @@ func (s *Service) applyCapability(
 
 	c := mapCapabilityDocumentToCapability(capDoc, now, actor)
 
-	if err := s.capabilityRepo.Create(ctx, c); err != nil {
+	if err := repos.Capabilities.Create(ctx, c); err != nil {
 		return fmt.Errorf("create capability: %w", err)
 	}
 
@@ -1979,6 +2123,7 @@ func (s *Service) planProcessCapabilityEntry(ctx context.Context, doc parser.Par
 // domain model and persists it.
 func (s *Service) applyProcessCapability(
 	ctx context.Context,
+	repos *RepositorySet,
 	doc parser.ParsedDocument,
 	now time.Time,
 	result *types.ApplyResult,
@@ -1989,7 +2134,7 @@ func (s *Service) applyProcessCapability(
 	}
 
 	pc := mapProcessCapabilityDocumentToProcessCapability(pcDoc, now)
-	if err := s.processCapabilityRepo.Create(ctx, pc); err != nil {
+	if err := repos.ProcessCapabilities.Create(ctx, pc); err != nil {
 		return fmt.Errorf("create process capability: %w", err)
 	}
 
@@ -2056,6 +2201,7 @@ func (s *Service) planProcessBusinessServiceEntry(ctx context.Context, doc parse
 // domain model and persists it.
 func (s *Service) applyProcessBusinessService(
 	ctx context.Context,
+	repos *RepositorySet,
 	doc parser.ParsedDocument,
 	now time.Time,
 	result *types.ApplyResult,
@@ -2066,7 +2212,7 @@ func (s *Service) applyProcessBusinessService(
 	}
 
 	pbs := mapProcessBusinessServiceDocumentToProcessBusinessService(pbsDoc, now)
-	if err := s.processBusinessServiceRepo.Create(ctx, pbs); err != nil {
+	if err := repos.ProcessBusinessServices.Create(ctx, pbs); err != nil {
 		return fmt.Errorf("create process business service: %w", err)
 	}
 
@@ -2077,6 +2223,7 @@ func (s *Service) applyProcessBusinessService(
 // applyBusinessService maps a BusinessServiceDocument to a BusinessService domain model and persists it.
 func (s *Service) applyBusinessService(
 	ctx context.Context,
+	repos *RepositorySet,
 	doc parser.ParsedDocument,
 	now time.Time,
 	result *types.ApplyResult,
@@ -2088,7 +2235,7 @@ func (s *Service) applyBusinessService(
 
 	bs := mapBusinessServiceDocumentToBusinessService(bsDoc, now)
 
-	if err := s.businessServiceRepo.Create(ctx, bs); err != nil {
+	if err := repos.BusinessServices.Create(ctx, bs); err != nil {
 		return fmt.Errorf("create business service: %w", err)
 	}
 
@@ -2099,6 +2246,7 @@ func (s *Service) applyBusinessService(
 // applyProcess maps a ProcessDocument to a Process domain model and persists it.
 func (s *Service) applyProcess(
 	ctx context.Context,
+	repos *RepositorySet,
 	doc parser.ParsedDocument,
 	now time.Time,
 	actor string,
@@ -2111,7 +2259,7 @@ func (s *Service) applyProcess(
 
 	p := mapProcessDocumentToProcess(procDoc, now, actor)
 
-	if err := s.processRepo.Create(ctx, p); err != nil {
+	if err := repos.Processes.Create(ctx, p); err != nil {
 		return fmt.Errorf("create process: %w", err)
 	}
 

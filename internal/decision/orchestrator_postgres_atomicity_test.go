@@ -104,6 +104,9 @@ func openAtomicityTestDB(t *testing.T) *sql.DB {
 func cleanupAtomicityTestData(t *testing.T, db *sql.DB) {
 	t.Helper()
 
+	// FK order: decision_surfaces → processes → capabilities. See
+	// seedSurfaceParents (orchestrator_outbox_test.go) for why the
+	// parent rows are seeded by every decision test.
 	statements := []string{
 		`DELETE FROM outbox_events`,
 		`DELETE FROM audit_events`,
@@ -112,6 +115,8 @@ func cleanupAtomicityTestData(t *testing.T, db *sql.DB) {
 		`DELETE FROM authority_profiles`,
 		`DELETE FROM agents`,
 		`DELETE FROM decision_surfaces`,
+		`DELETE FROM processes`,
+		`DELETE FROM capabilities`,
 	}
 
 	for _, stmt := range statements {
@@ -127,12 +132,15 @@ func seedAtomicityHappyPathData(t *testing.T, repos *store.Repositories) {
 	ctx := context.Background()
 	now := time.Now().UTC().Add(-time.Hour)
 
+	seedSurfaceParents(t, repos)
+
 	if err := repos.Surfaces.Create(ctx, &surface.DecisionSurface{
 		ID:            "surf-atomic-1",
 		Name:          "atomic test surface",
 		Status:        surface.SurfaceStatusActive,
 		Version:       1,
 		EffectiveFrom: now,
+		ProcessID:     decisionTestProcessID,
 	}); err != nil {
 		t.Fatalf("seed surface: %v", err)
 	}

@@ -49,7 +49,10 @@ func openPostgresTestDB(t *testing.T) *sql.DB {
 func cleanupPostgresTestData(t *testing.T, db *sql.DB) {
 	t.Helper()
 
-	// Child tables first, then parents.
+	// Child tables first, then parents. decision_surfaces → processes →
+	// capabilities FK chain: drop surfaces before processes, processes
+	// before capabilities. See seedSurfaceParents for why the parent
+	// rows exist at all.
 	statements := []string{
 		`DELETE FROM outbox_events`,
 		`DELETE FROM audit_events`,
@@ -58,6 +61,8 @@ func cleanupPostgresTestData(t *testing.T, db *sql.DB) {
 		`DELETE FROM authority_profiles`,
 		`DELETE FROM agents`,
 		`DELETE FROM decision_surfaces`,
+		`DELETE FROM processes`,
+		`DELETE FROM capabilities`,
 	}
 
 	for _, stmt := range statements {
@@ -93,12 +98,15 @@ func seedPostgresHappyPathData(t *testing.T, repos *store.Repositories) {
 	ctx := context.Background()
 	now := time.Now().UTC().Add(-time.Hour)
 
+	seedSurfaceParents(t, repos)
+
 	if err := repos.Surfaces.Create(ctx, &surface.DecisionSurface{
 		ID:            "surf-1",
 		Name:          "test surface",
 		Status:        surface.SurfaceStatusActive,
 		Version:       1,
 		EffectiveFrom: now,
+		ProcessID:     decisionTestProcessID,
 	}); err != nil {
 		t.Fatalf("seed surface: %v", err)
 	}

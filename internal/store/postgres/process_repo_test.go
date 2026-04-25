@@ -52,6 +52,9 @@ func TestProcessRepo_CreateAndGetByID_WithBusinessServiceID(t *testing.T) {
 		BusinessServiceID: svcID,
 		Description:       "Approves loan applications",
 		Status:            "active",
+		Origin:            "manual",
+		Managed:           true,
+		Replaces:          "",
 		Owner:             "team-lending",
 		CreatedAt:         now,
 		UpdatedAt:         now,
@@ -76,12 +79,17 @@ func TestProcessRepo_CreateAndGetByID_WithBusinessServiceID(t *testing.T) {
 		{"BusinessServiceID", p.BusinessServiceID, got.BusinessServiceID},
 		{"Description", p.Description, got.Description},
 		{"Status", p.Status, got.Status},
+		{"Origin", p.Origin, got.Origin},
+		{"Replaces", p.Replaces, got.Replaces},
 		{"Owner", p.Owner, got.Owner},
 	}
 	for _, c := range checks {
 		if c.want != c.got {
 			t.Errorf("%s: want %q, got %q", c.field, c.want, c.got)
 		}
+	}
+	if got.Managed != p.Managed {
+		t.Errorf("Managed: want %v, got %v", p.Managed, got.Managed)
 	}
 	if !got.CreatedAt.Equal(p.CreatedAt) {
 		t.Errorf("CreatedAt: want %v, got %v", p.CreatedAt, got.CreatedAt)
@@ -124,6 +132,8 @@ func TestProcessRepo_CreateAndGetByID_NullBusinessServiceID(t *testing.T) {
 		CapabilityID:      capID,
 		BusinessServiceID: "",
 		Status:            "active",
+		Origin:            "manual",
+		Managed:           true,
 		CreatedAt:         now,
 		UpdatedAt:         now,
 	}
@@ -186,6 +196,8 @@ func TestProcessRepo_Update_BusinessServiceID(t *testing.T) {
 		Name:         "Original Name",
 		CapabilityID: capID,
 		Status:       "active",
+		Origin:       "manual",
+		Managed:      true,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
@@ -224,6 +236,13 @@ func TestProcessRepo_Update_BusinessServiceID(t *testing.T) {
 	// capability_id is immutable — confirmed unchanged
 	if got.CapabilityID != capID {
 		t.Errorf("CapabilityID: want %q, got %q", capID, got.CapabilityID)
+	}
+	// origin and managed are immutable via Update
+	if got.Origin != "manual" {
+		t.Errorf("Origin: want manual, got %s", got.Origin)
+	}
+	if !got.Managed {
+		t.Error("Managed: want true, got false")
 	}
 }
 
@@ -270,6 +289,8 @@ func TestProcessRepo_Update_ClearBusinessServiceID(t *testing.T) {
 		CapabilityID:      capID,
 		BusinessServiceID: svcID,
 		Status:            "active",
+		Origin:            "manual",
+		Managed:           true,
 		CreatedAt:         now,
 		UpdatedAt:         now,
 	}
@@ -333,8 +354,8 @@ func TestProcessRepo_List_IncludesBusinessServiceID(t *testing.T) {
 
 	// One process with BusinessServiceID, one without
 	procs := []*process.Process{
-		{ID: "tst-proc-lst-001", Name: "P1", CapabilityID: capID, BusinessServiceID: svcID, Status: "active", CreatedAt: now, UpdatedAt: now},
-		{ID: "tst-proc-lst-002", Name: "P2", CapabilityID: capID, BusinessServiceID: "", Status: "active", CreatedAt: now, UpdatedAt: now},
+		{ID: "tst-proc-lst-001", Name: "P1", CapabilityID: capID, BusinessServiceID: svcID, Status: "active", Origin: "manual", Managed: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "tst-proc-lst-002", Name: "P2", CapabilityID: capID, BusinessServiceID: "", Status: "active", Origin: "manual", Managed: true, CreatedAt: now, UpdatedAt: now},
 	}
 	for _, p := range procs {
 		if err := repo.Create(ctx, p); err != nil {
@@ -407,6 +428,8 @@ func TestProcessRepo_ListByCapabilityID_IncludesBusinessServiceID(t *testing.T) 
 		CapabilityID:      capID,
 		BusinessServiceID: svcID,
 		Status:            "active",
+		Origin:            "manual",
+		Managed:           true,
 		CreatedAt:         now,
 		UpdatedAt:         now,
 	}
