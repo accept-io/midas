@@ -31,10 +31,6 @@ func NewStore(db *sql.DB, metrics store.TransactionRecorder) (*Store, error) {
 	}, nil
 }
 
-// DB returns the underlying *sql.DB. Used by inference.Service which requires
-// direct transaction management via db.BeginTx.
-func (s *Store) DB() *sql.DB { return s.db }
-
 // Repositories returns repositories bound to the base DB connection.
 // Use this for read operations that do not require a transaction.
 func (s *Store) Repositories() (*store.Repositories, error) {
@@ -213,33 +209,27 @@ func newRepositories(db sqltx.DBTX) (*store.Repositories, error) {
 		return nil, err
 	}
 
-	procCaps, err := NewProcessCapabilityRepo(db)
-	if err != nil {
-		return nil, err
-	}
-
-	procBizSvcs, err := NewProcessBusinessServiceRepo(db)
+	bsCaps, err := NewBusinessServiceCapabilityRepo(db)
 	if err != nil {
 		return nil, err
 	}
 
 	return &store.Repositories{
-		Capabilities:            caps,
-		Processes:               procs,
-		Surfaces:                surfaces,
-		Agents:                  agents,
-		Profiles:                profiles,
-		Grants:                  grants,
-		Envelopes:               envelopes,
-		Audit:                   auditRepo,
-		ControlAudit:            controlAuditRepo,
-		AdminAudit:              adminAuditRepo,
-		Outbox:                  outboxRepo,
-		LocalUsers:              localUsers,
-		LocalSessions:           localSessions,
-		BusinessServices:        businessServices,
-		ProcessCapabilities:     procCaps,
-		ProcessBusinessServices: procBizSvcs,
+		Capabilities:                caps,
+		Processes:                   procs,
+		Surfaces:                    surfaces,
+		Agents:                      agents,
+		Profiles:                    profiles,
+		Grants:                      grants,
+		Envelopes:                   envelopes,
+		Audit:                       auditRepo,
+		ControlAudit:                controlAuditRepo,
+		AdminAudit:                  adminAuditRepo,
+		Outbox:                      outboxRepo,
+		LocalUsers:                  localUsers,
+		LocalSessions:               localSessions,
+		BusinessServices:            businessServices,
+		BusinessServiceCapabilities: bsCaps,
 	}, nil
 }
 

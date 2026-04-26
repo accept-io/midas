@@ -1,5 +1,12 @@
 # 033 — Step 0 decision note
 
+> **Historical document.** This audit predates the v1 inference retirement
+> (ADR-XXX). References to `internal/inference/`, `EnsureInferred`,
+> `MigrateProcess`, and the inferred-structure ensure path describe a
+> subsystem that no longer exists in v1. Source-line links into
+> `internal/inference/` are stale. The analytical content is preserved
+> as-is for historical accuracy.
+
 **Purpose:** final decision gate before the Issue #33 remediation PR.
 **Operating stance:** no upgrade-path requirement; no historical-compatibility obligation. Only current in-repo flows matter.
 

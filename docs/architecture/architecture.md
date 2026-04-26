@@ -113,23 +113,16 @@ In addition to the primary N:1 relationships (`process.capability_id`, `process.
 
 All structural entities (capabilities, processes, business services) and their junction links are managed through the control plane apply path as first-class resource Kinds.
 
-### Inferred vs managed structure
+### Structural origin
 
-Structural entities (capabilities and processes) have two origins:
-
-**Inferred** (`origin=inferred`, `managed=false`) — Created automatically by the inference engine when a caller omits `process_id` from an evaluate request and inference is enabled. Inferred entities use the `auto:` prefix by convention (e.g. `auto:lending`, `auto:lending.origination`). They represent discovered structure: the system has observed this surface being evaluated and created the minimum scaffolding needed.
-
-**Managed** (`origin=manual`, `managed=true`) — Created by the promotion workflow. Managed entities have canonical IDs chosen by the operator. They are the target of explicit governance intent.
-
-The lifecycle of inferred structure is:
-
-```
-evaluate (inferred) → promote → deprecate (old inferred) → cleanup (delete deprecated)
-```
-
-Promotion is transactional: the new managed entity is created, all surfaces attached to the old inferred process have their `process_id` updated in place, and the old inferred entity is set to `status=deprecated`. Lineage is preserved in the `replaces` column.
-
-Cleanup is conservative: only deprecated inferred entities with no remaining references (no surface, no `replaces` chain, no `parent_*` reference) are deleted. The cleanup cutoff (`older_than_days`) guards against premature deletion of recently-deprecated entities.
+Structural entities (BusinessServices, Capabilities, Processes,
+BusinessServiceCapability links) are always operator-declared in v1
+(`origin=manual`, `managed=true`). They are created via
+`POST /v1/controlplane/apply` and are immutable in the apply path —
+re-applying the same ID returns conflict. To replace a structural
+entity, declare a new record with a different ID and update consumers
+explicitly. The `replaces` column records lineage when one record
+supersedes another.
 
 ### The authority chain
 
@@ -280,9 +273,7 @@ Go packages use short names following standard library convention. The mapping t
 | `internal/capability/` | Capability domain type |
 | `internal/process/` | Process domain type |
 | `internal/businessservice/` | Business Service domain type |
-| `internal/processcapability/` | Process ↔ Capability junction |
-| `internal/processbusinessservice/` | Process ↔ Business Service junction |
-| `internal/inference/` | Structure inference, promotion, and cleanup |
+| `internal/businessservicecapability/` | BusinessService ↔ Capability junction (M:N) |
 | `internal/envelope/` | Operational Envelope & Decision Runtime |
 | `internal/decision/` | Decision Orchestrator |
 | `internal/policy/` | Policy Evaluation (NoOp default; OPA planned v1.1+) |

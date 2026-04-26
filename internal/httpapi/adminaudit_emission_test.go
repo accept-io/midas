@@ -13,11 +13,9 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/accept-io/midas/internal/adminaudit"
 	cpTypes "github.com/accept-io/midas/internal/controlplane/types"
-	"github.com/accept-io/midas/internal/inference"
 	"github.com/accept-io/midas/internal/store/memory"
 )
 
@@ -134,106 +132,6 @@ func TestAdminAudit_ApplyInvocation_FailureRecordsOutcomeFailure(t *testing.T) {
 	if records[0].Details == nil || records[0].Details.Error == "" {
 		t.Error("expected failure details.error to be populated")
 	}
-}
-
-// ---------------------------------------------------------------------------
-// Promote
-// ---------------------------------------------------------------------------
-
-func TestAdminAudit_Promote_EmitsRecord(t *testing.T) {
-	repo := memory.NewAdminAuditRepo()
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithPromotion(successMock(2)).
-		WithAdminAudit(repo)
-
-	req := mustJSONRequest(t, http.MethodPost, "/v1/controlplane/promote", validPromoteBody)
-	req.Header.Set("X-MIDAS-ACTOR", "operator-1")
-	req.Header.Set("X-Request-Id", "req-prom")
-	rec := performWithRequest(t, srv, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-
-	records, _ := repo.List(context.Background(), adminaudit.ListFilter{})
-	if len(records) != 1 {
-		t.Fatalf("expected 1 record, got %d", len(records))
-	}
-	r := records[0]
-	if r.Action != adminaudit.ActionPromoteExecuted {
-		t.Errorf("action = %q", r.Action)
-	}
-	if r.Outcome != adminaudit.OutcomeSuccess {
-		t.Errorf("outcome = %q", r.Outcome)
-	}
-	if r.ActorID != "operator-1" {
-		t.Errorf("actor_id = %q", r.ActorID)
-	}
-	if r.TargetType != adminaudit.TargetTypeProcess {
-		t.Errorf("target_type = %q", r.TargetType)
-	}
-	if r.RequiredPermission != "controlplane:promote" {
-		t.Errorf("required_permission = %q", r.RequiredPermission)
-	}
-	if r.Details == nil || r.Details.SurfacesMigrated != 2 {
-		t.Errorf("details wrong: %+v", r.Details)
-	}
-	assertNoSecretMaterial(t, r)
-}
-
-// ---------------------------------------------------------------------------
-// Cleanup
-// ---------------------------------------------------------------------------
-
-type fixedCleanupSvc struct {
-	result inference.CleanupResult
-	err    error
-}
-
-func (f *fixedCleanupSvc) CleanupInferredEntities(_ context.Context, _ time.Time) (inference.CleanupResult, error) {
-	return f.result, f.err
-}
-
-func TestAdminAudit_Cleanup_EmitsRecord(t *testing.T) {
-	repo := memory.NewAdminAuditRepo()
-	svc := &fixedCleanupSvc{result: inference.CleanupResult{
-		ProcessesDeleted:    []string{"auto:p1"},
-		CapabilitiesDeleted: []string{"auto:c1"},
-	}}
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithCleanup(svc).
-		WithAdminAudit(repo)
-
-	req := mustJSONRequest(t, http.MethodPost, "/v1/controlplane/cleanup", []byte(`{"older_than_days":7}`))
-	req.Header.Set("X-MIDAS-ACTOR", "ops-1")
-	rec := performWithRequest(t, srv, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-
-	records, _ := repo.List(context.Background(), adminaudit.ListFilter{})
-	if len(records) != 1 {
-		t.Fatalf("expected 1, got %d", len(records))
-	}
-	r := records[0]
-	if r.Action != adminaudit.ActionCleanupExecuted {
-		t.Errorf("action = %q", r.Action)
-	}
-	if r.Outcome != adminaudit.OutcomeSuccess {
-		t.Errorf("outcome = %q", r.Outcome)
-	}
-	if r.TargetType != adminaudit.TargetTypePlatform {
-		t.Errorf("target_type = %q", r.TargetType)
-	}
-	if r.RequiredPermission != "controlplane:cleanup" {
-		t.Errorf("required_permission = %q", r.RequiredPermission)
-	}
-	if r.Details == nil || r.Details.OlderThanDays != 7 {
-		t.Errorf("details wrong: %+v", r.Details)
-	}
-	if len(r.Details.ProcessesDeleted) != 1 || len(r.Details.CapabilitiesDeleted) != 1 {
-		t.Errorf("deletion lists wrong: %+v", r.Details)
-	}
-	assertNoSecretMaterial(t, r)
 }
 
 // ---------------------------------------------------------------------------

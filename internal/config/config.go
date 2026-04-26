@@ -66,7 +66,6 @@ type Config struct {
 	Dev           DevConfig           `yaml:"dev"`
 	Dispatcher    DispatcherConfig    `yaml:"dispatcher"`
 	Kafka         KafkaConfig         `yaml:"kafka"`
-	Inference     InferenceConfig     `yaml:"inference"`
 	Structural    StructuralConfig    `yaml:"structural"`
 }
 
@@ -271,13 +270,6 @@ type StructuralConfig struct {
 	// "permissive" (default): structural fields are optional; platform works immediately.
 	// "enforced": structural links are required (reserved for future use).
 	Mode StructuralMode `yaml:"mode"`
-}
-
-// InferenceConfig controls automatic structure inference on the /v1/evaluate path.
-type InferenceConfig struct {
-	// Enabled activates automatic capability/process/surface inference when
-	// process_id is absent from an evaluate request. Default: false.
-	Enabled bool `yaml:"enabled"`
 }
 
 // KafkaConfig holds Kafka broker settings for the Kafka publisher.

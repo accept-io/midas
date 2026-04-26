@@ -63,9 +63,6 @@ func DefaultConfig() Config {
 			ClientID:     "midas",
 			RequiredAcks: -1,
 		},
-		Inference: InferenceConfig{
-			Enabled: false,
-		},
 		Structural: StructuralConfig{
 			Mode: StructuralModePermissive,
 		},

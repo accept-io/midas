@@ -10,15 +10,18 @@ This document describes the `POST /v1/evaluate` endpoint in full — request sha
 
 Maximum request body: 1 MiB.
 
-### Evaluation modes
+### Evaluation
 
-MIDAS supports two modes on the governed `/v1/evaluate` path, selected by whether `process_id` is present in the request.
+MIDAS v1 evaluates against explicitly declared structure on the governed
+`/v1/evaluate` path. Pre-create the structural entities (BusinessService,
+Capability, Process, Surface, Profile, Grant, Agent, BusinessServiceCapability)
+via `POST /v1/controlplane/apply`, then provide the `process_id` on every
+evaluate request. MIDAS validates that the process exists and that the
+surface belongs to it before proceeding to authority evaluation.
 
-**Explicit mode** — `process_id` provided. MIDAS validates that the process exists and belongs to the given `surface_id`, then proceeds to authority evaluation. This is the default mode and is recommended for production.
-
-**Inferred mode** — `process_id` omitted, `inference.enabled: true` in config. MIDAS automatically creates the capability, process, and surface entities (under the `auto:` prefix) if they do not already exist, then proceeds to authority evaluation. The response includes an `inference` object describing what was created. Requires Postgres.
-
-When `process_id` is omitted and inference is **not** enabled, the request is rejected with HTTP 400.
+In **enforced** structural mode (`structural.mode: enforced` in config),
+omitting `process_id` returns HTTP 400. In **permissive** mode (the default),
+`process_id` is optional; the orchestrator's empty-`process_id` path runs.
 
 ### Request fields
 
@@ -27,7 +30,7 @@ When `process_id` is omitted and inference is **not** enabled, the request is re
 | `surface_id` | string | Yes | ID of the decision surface. |
 | `agent_id` | string | Yes | ID of the agent requesting authority. |
 | `confidence` | float64 | Yes | Caller's confidence score in the decision, in `[0.0, 1.0]`. |
-| `process_id` | string | No | ID of the governed process. Required in explicit mode; omit for inference mode. |
+| `process_id` | string | No | ID of the governed process. Required in enforced structural mode. |
 | `consequence` | object | No | Consequence value for this action. |
 | `consequence.type` | string | — | `monetary` or `risk_rating`. |
 | `consequence.amount` | float64 | — | Amount (monetary type only). |
@@ -37,7 +40,7 @@ When `process_id` is omitted and inference is **not** enabled, the request is re
 | `request_id` | string | No | Caller-supplied idempotency key. If omitted, a UUID is generated. |
 | `request_source` | string | No | Source system identifier. Defaults to `"api"`. Scopes the `request_id` idempotency key. |
 
-### Example request (explicit mode)
+### Example request
 
 ```bash
 curl -s -X POST http://localhost:8080/v1/evaluate \
@@ -61,20 +64,6 @@ curl -s -X POST http://localhost:8080/v1/evaluate \
   }'
 ```
 
-### Example request (inference mode)
-
-```bash
-curl -s -X POST http://localhost:8080/v1/evaluate \
-  -H "Content-Type: application/json" \
-  -d '{
-    "surface_id":     "loan.approve",
-    "agent_id":       "agent-credit-001",
-    "confidence":     0.91,
-    "request_id":     "req-loan-00512",
-    "request_source": "lending-service"
-  }'
-```
-
 ### Response fields
 
 | Field | Type | Description |
@@ -83,49 +72,16 @@ curl -s -X POST http://localhost:8080/v1/evaluate \
 | `reason` | string | Typed reason code explaining the outcome. |
 | `envelope_id` | string | UUID of the evaluation envelope. |
 | `explanation` | string | Optional narrative explaining the outcome driver. |
-| `inference` | object | Present when inference was triggered. Describes what structural entities were used or created. |
-| `inference.capability_id` | string | Capability ID resolved or created by inference. |
-| `inference.process_id` | string | Process ID resolved or created by inference. |
-| `inference.surface_id` | string | Surface ID resolved or created by inference. |
-| `inference.capability_created` | bool | `true` if the capability was created on this call. |
-| `inference.process_created` | bool | `true` if the process was created on this call. |
-| `inference.surface_created` | bool | `true` if the surface was created on this call. |
-
-The response also carries three HTTP headers when inference was triggered:
-
-| Header | Value |
-|--------|-------|
-| `X-MIDAS-Inference-Used` | `"true"` |
-| `X-MIDAS-Inferred-Capability` | Resolved capability ID |
-| `X-MIDAS-Inferred-Process` | Resolved process ID |
 
 ### Example responses
 
-Accept (explicit mode):
+Accept:
 
 ```json
 {
   "outcome":     "accept",
   "reason":      "WITHIN_AUTHORITY",
   "envelope_id": "01927f3c-8e21-7a4b-b9d0-2c4f6e8a1d3e"
-}
-```
-
-Accept (inference mode, first call):
-
-```json
-{
-  "outcome":     "accept",
-  "reason":      "WITHIN_AUTHORITY",
-  "envelope_id": "01927f3c-8e21-7a4b-b9d0-2c4f6e8a1d3e",
-  "inference": {
-    "capability_id":      "auto:loan",
-    "process_id":         "auto:loan.approve",
-    "surface_id":         "loan.approve",
-    "capability_created": true,
-    "process_created":    true,
-    "surface_created":    true
-  }
 }
 ```
 
@@ -154,17 +110,20 @@ Reject:
 
 Every evaluation runs inside a single database transaction. The steps execute in order. The first step that produces a non-accept outcome short-circuits the remaining steps.
 
-### Step 0 (inferred mode only): Structure inference
+### Step 0: Structural validation
 
-When `process_id` is absent and inference is enabled, the orchestrator calls `EnsureInferredStructure` before the authority evaluation steps. This creates the capability, process, and surface records transactionally if they do not already exist, then injects the resolved `surface_id` into the evaluation context. Inference is skipped entirely in explicit mode.
+When `process_id` is provided, the orchestrator validates that the process
+exists and that the surface belongs to it before any authority steps run.
+In enforced structural mode, omitting `process_id` short-circuits with
+`400 Bad Request` — `process_id is required`.
 
 | Condition | Result |
 |-----------|--------|
-| Structure already exists | Reuse existing records; no-op |
-| Structure does not exist | Create capability (`auto:<domain>`), process (`auto:<surface_id>`), and surface records |
-| Inference disabled and `process_id` absent | `400 Bad Request` — `process_id is required when inference is not enabled` |
-| Explicit-mode: `process_id` present but process not found | `400 Bad Request` |
-| Explicit-mode: `process_id` present but process belongs to different surface | `400 Bad Request` |
+| `process_id` present, valid | Proceed to authority evaluation |
+| `process_id` present but process not found | `400 Bad Request` |
+| `process_id` present but process belongs to different surface | `400 Bad Request` |
+| `process_id` absent, structural mode enforced | `400 Bad Request` — `process_id is required` |
+| `process_id` absent, structural mode permissive | Proceed to authority evaluation |
 
 ### Step 1: Surface and profile resolution
 
@@ -316,7 +275,7 @@ All audit events are emitted synchronously inside the evaluation transaction —
 
 | Status | Condition |
 |--------|-----------|
-| `400` | Missing `surface_id` or `agent_id`; `confidence` outside `[0.0, 1.0]`; invalid `request_id`; malformed JSON; `process_id` absent with inference disabled; `process_id` present but process not found or belongs to wrong surface |
+| `400` | Missing `surface_id` or `agent_id`; `confidence` outside `[0.0, 1.0]`; invalid `request_id`; malformed JSON; `process_id` absent in enforced structural mode; `process_id` present but process not found or belongs to wrong surface |
 | `404` | Agent, surface, or grant not found (returns in body as `reject` outcome) |
 | `409` | Duplicate `(request_source, request_id)` with different payload |
 | `413` | Request body exceeds 1 MiB |

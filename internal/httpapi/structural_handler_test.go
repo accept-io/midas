@@ -92,98 +92,11 @@ func TestGetCapability_Success(t *testing.T) {
 	if out.ID != "cap-abc" {
 		t.Errorf("expected id=cap-abc, got %s", out.ID)
 	}
-	if out.Name != "My Capability" {
-		t.Errorf("expected name=My Capability, got %s", out.Name)
-	}
 }
 
 func TestGetCapability_NotFound(t *testing.T) {
 	srv := newStructuralServer(memory.NewCapabilityRepo(), memory.NewProcessRepo(), memory.NewSurfaceRepo())
 	rec := performRequest(t, srv, http.MethodGet, "/v1/capabilities/nonexistent", nil)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("expected 404, got %d: %s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestGetCapabilityProcesses_CapabilityExists_NoProcesses(t *testing.T) {
-	capRepo := memory.NewCapabilityRepo()
-	now := time.Now()
-	_ = capRepo.Create(context.Background(), &capability.Capability{
-		ID:        "cap-empty",
-		Name:      "Empty Cap",
-		Status:    "active",
-		CreatedAt: now,
-		UpdatedAt: now,
-	})
-
-	srv := newStructuralServer(capRepo, memory.NewProcessRepo(), memory.NewSurfaceRepo())
-	rec := performRequest(t, srv, http.MethodGet, "/v1/capabilities/cap-empty/processes", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-	var out []processResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if len(out) != 0 {
-		t.Errorf("expected empty list, got %d", len(out))
-	}
-}
-
-func TestGetCapabilityProcesses_WithProcesses(t *testing.T) {
-	capRepo := memory.NewCapabilityRepo()
-	procRepo := memory.NewProcessRepo()
-	now := time.Now()
-	_ = capRepo.Create(context.Background(), &capability.Capability{
-		ID:        "cap-with-procs",
-		Name:      "Cap with Processes",
-		Status:    "active",
-		CreatedAt: now,
-		UpdatedAt: now,
-	})
-	_ = procRepo.Create(context.Background(), &process.Process{
-		ID:           "proc-1",
-		Name:         "Process One",
-		CapabilityID: "cap-with-procs",
-		Status:       "active",
-		CreatedAt:    now,
-		UpdatedAt:    now,
-	})
-	_ = procRepo.Create(context.Background(), &process.Process{
-		ID:           "proc-2",
-		Name:         "Process Two",
-		CapabilityID: "cap-with-procs",
-		Status:       "draft",
-		CreatedAt:    now,
-		UpdatedAt:    now,
-	})
-	// Process belonging to a different capability — should not appear.
-	_ = procRepo.Create(context.Background(), &process.Process{
-		ID:           "proc-other",
-		Name:         "Other Process",
-		CapabilityID: "cap-other",
-		Status:       "active",
-		CreatedAt:    now,
-		UpdatedAt:    now,
-	})
-
-	srv := newStructuralServer(capRepo, procRepo, memory.NewSurfaceRepo())
-	rec := performRequest(t, srv, http.MethodGet, "/v1/capabilities/cap-with-procs/processes", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-	var out []processResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if len(out) != 2 {
-		t.Errorf("expected 2 processes, got %d", len(out))
-	}
-}
-
-func TestGetCapabilityProcesses_CapabilityNotFound(t *testing.T) {
-	srv := newStructuralServer(memory.NewCapabilityRepo(), memory.NewProcessRepo(), memory.NewSurfaceRepo())
-	rec := performRequest(t, srv, http.MethodGet, "/v1/capabilities/no-such-cap/processes", nil)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -208,20 +121,20 @@ func TestListProcesses_WithItems(t *testing.T) {
 	procRepo := memory.NewProcessRepo()
 	now := time.Now()
 	_ = procRepo.Create(context.Background(), &process.Process{
-		ID:           "proc-a",
-		Name:         "Process A",
-		CapabilityID: "cap-x",
-		Status:       "active",
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:                "proc-a",
+		Name:              "Process A",
+		BusinessServiceID: "bs-x",
+		Status:            "active",
+		CreatedAt:         now,
+		UpdatedAt:         now,
 	})
 	_ = procRepo.Create(context.Background(), &process.Process{
-		ID:           "proc-b",
-		Name:         "Process B",
-		CapabilityID: "cap-x",
-		Status:       "draft",
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:                "proc-b",
+		Name:              "Process B",
+		BusinessServiceID: "bs-x",
+		Status:            "draft",
+		CreatedAt:         now,
+		UpdatedAt:         now,
 	})
 
 	srv := newStructuralServer(memory.NewCapabilityRepo(), procRepo, memory.NewSurfaceRepo())
@@ -242,14 +155,14 @@ func TestGetProcess_Success(t *testing.T) {
 	procRepo := memory.NewProcessRepo()
 	now := time.Now()
 	_ = procRepo.Create(context.Background(), &process.Process{
-		ID:           "proc-xyz",
-		Name:         "My Process",
-		CapabilityID: "cap-abc",
-		Description:  "A test process",
-		Status:       "active",
-		Owner:        "team-b",
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:                "proc-xyz",
+		Name:              "My Process",
+		BusinessServiceID: "bs-abc",
+		Description:       "A test process",
+		Status:            "active",
+		Owner:             "team-b",
+		CreatedAt:         now,
+		UpdatedAt:         now,
 	})
 
 	srv := newStructuralServer(memory.NewCapabilityRepo(), procRepo, memory.NewSurfaceRepo())
@@ -264,8 +177,8 @@ func TestGetProcess_Success(t *testing.T) {
 	if out.ID != "proc-xyz" {
 		t.Errorf("expected id=proc-xyz, got %s", out.ID)
 	}
-	if out.CapabilityID != "cap-abc" {
-		t.Errorf("expected capability_id=cap-abc, got %s", out.CapabilityID)
+	if out.BusinessServiceID != "bs-abc" {
+		t.Errorf("expected business_service_id=bs-abc, got %s", out.BusinessServiceID)
 	}
 }
 
@@ -281,12 +194,12 @@ func TestGetProcessSurfaces_ProcessExists_NoSurfaces(t *testing.T) {
 	procRepo := memory.NewProcessRepo()
 	now := time.Now()
 	_ = procRepo.Create(context.Background(), &process.Process{
-		ID:           "proc-nosurfs",
-		Name:         "Process No Surfaces",
-		CapabilityID: "cap-x",
-		Status:       "active",
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:                "proc-nosurfs",
+		Name:              "Process No Surfaces",
+		BusinessServiceID: "bs-x",
+		Status:            "active",
+		CreatedAt:         now,
+		UpdatedAt:         now,
 	})
 
 	srv := newStructuralServer(memory.NewCapabilityRepo(), procRepo, memory.NewSurfaceRepo())
@@ -309,52 +222,52 @@ func TestGetProcessSurfaces_WithSurfaces(t *testing.T) {
 	now := time.Now()
 
 	_ = procRepo.Create(context.Background(), &process.Process{
-		ID:           "proc-with-surfs",
-		Name:         "Process With Surfaces",
-		CapabilityID: "cap-x",
-		Status:       "active",
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:                "proc-with-surfs",
+		Name:              "Process With Surfaces",
+		BusinessServiceID: "bs-x",
+		Status:            "active",
+		CreatedAt:         now,
+		UpdatedAt:         now,
 	})
 	_ = surfRepo.Create(context.Background(), &surface.DecisionSurface{
-		ID:            "surf-1",
-		Version:       1,
-		Name:          "Surface One",
-		Domain:        "finance",
-		ProcessID:     "proc-with-surfs",
-		Status:        surface.SurfaceStatusActive,
-		BusinessOwner: "owner-a",
+		ID:             "surf-1",
+		Version:        1,
+		Name:           "Surface One",
+		Domain:         "finance",
+		ProcessID:      "proc-with-surfs",
+		Status:         surface.SurfaceStatusActive,
+		BusinessOwner:  "owner-a",
 		TechnicalOwner: "tech-a",
-		EffectiveFrom: now,
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		EffectiveFrom:  now,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	})
 	_ = surfRepo.Create(context.Background(), &surface.DecisionSurface{
-		ID:            "surf-2",
-		Version:       1,
-		Name:          "Surface Two",
-		Domain:        "finance",
-		ProcessID:     "proc-with-surfs",
-		Status:        surface.SurfaceStatusDraft,
-		BusinessOwner: "owner-b",
+		ID:             "surf-2",
+		Version:        1,
+		Name:           "Surface Two",
+		Domain:         "finance",
+		ProcessID:      "proc-with-surfs",
+		Status:         surface.SurfaceStatusDraft,
+		BusinessOwner:  "owner-b",
 		TechnicalOwner: "tech-b",
-		EffectiveFrom: now,
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		EffectiveFrom:  now,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	})
 	// Surface belonging to a different process — should not appear.
 	_ = surfRepo.Create(context.Background(), &surface.DecisionSurface{
-		ID:            "surf-other",
-		Version:       1,
-		Name:          "Other Surface",
-		Domain:        "finance",
-		ProcessID:     "proc-other",
-		Status:        surface.SurfaceStatusActive,
-		BusinessOwner: "owner-c",
+		ID:             "surf-other",
+		Version:        1,
+		Name:           "Other Surface",
+		Domain:         "finance",
+		ProcessID:      "proc-other",
+		Status:         surface.SurfaceStatusActive,
+		BusinessOwner:  "owner-c",
 		TechnicalOwner: "tech-c",
-		EffectiveFrom: now,
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		EffectiveFrom:  now,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	})
 
 	srv := newStructuralServer(memory.NewCapabilityRepo(), procRepo, surfRepo)
@@ -386,7 +299,6 @@ func TestStructural_NotConfigured(t *testing.T) {
 	paths := []string{
 		"/v1/capabilities",
 		"/v1/capabilities/some-id",
-		"/v1/capabilities/some-id/processes",
 		"/v1/processes",
 		"/v1/processes/some-id",
 		"/v1/processes/some-id/surfaces",

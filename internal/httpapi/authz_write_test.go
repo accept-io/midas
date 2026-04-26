@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/accept-io/midas/internal/auth"
 	"github.com/accept-io/midas/internal/authority"
@@ -15,7 +14,6 @@ import (
 	"github.com/accept-io/midas/internal/config"
 	cpTypes "github.com/accept-io/midas/internal/controlplane/types"
 	"github.com/accept-io/midas/internal/identity"
-	"github.com/accept-io/midas/internal/inference"
 	"github.com/accept-io/midas/internal/surface"
 )
 
@@ -49,8 +47,7 @@ func authnForTests() auth.Authenticator {
 // writeTestServer returns a server wired with:
 //   - a mock control-plane that always succeeds for apply/plan,
 //   - a mock approval service that always succeeds,
-//   - a mock grant-lifecycle service that always succeeds,
-//   - a mock promotion/cleanup service for promote/cleanup.
+//   - a mock grant-lifecycle service that always succeeds.
 //
 // The wiring matters only to prove the 200 branch is reachable when
 // authorization passes; the authz layer runs before any of these.
@@ -86,31 +83,10 @@ func writeTestServer(t *testing.T) *Server {
 			return &authority.AuthorityGrant{ID: id, Status: authority.GrantStatusActive}, nil
 		},
 	}
-	promoteSvc := &fakePromotionService{}
-	cleanupSvc := &fakeCleanupService{}
 
 	return NewServerFull(&mockOrchestrator{}, mockCP, mockApproval, nil, nil, mockGrants).
 		WithAuthMode(config.AuthModeRequired).
-		WithAuthenticator(authnForTests()).
-		WithPromotion(promoteSvc).
-		WithCleanup(cleanupSvc)
-}
-
-type fakePromotionService struct{}
-
-func (fakePromotionService) Promote(_ context.Context, req inference.PromoteRequest) (inference.PromoteResponse, error) {
-	return inference.PromoteResponse{
-		FromCapabilityID: req.FromCapabilityID,
-		FromProcessID:    req.FromProcessID,
-		ToCapabilityID:   req.ToCapabilityID,
-		ToProcessID:      req.ToProcessID,
-	}, nil
-}
-
-type fakeCleanupService struct{}
-
-func (fakeCleanupService) CleanupInferredEntities(_ context.Context, _ time.Time) (inference.CleanupResult, error) {
-	return inference.CleanupResult{}, nil
+		WithAuthenticator(authnForTests())
 }
 
 // writeEndpoint describes one of the 11 in-scope control-plane write
@@ -154,11 +130,6 @@ spec:
   status: review
   process_id: proc-1
 `, authz.PermControlplanePlan},
-		{"promote", http.MethodPost, "/v1/controlplane/promote", "application/json",
-			`{"from":{"capability_id":"auto:a","process_id":"auto:b"},"to":{"capability_id":"a","process_id":"b"}}`,
-			authz.PermControlplanePromote},
-		{"cleanup", http.MethodPost, "/v1/controlplane/cleanup", "application/json",
-			`{"older_than_days":1}`, authz.PermControlplaneCleanup},
 		{"surface-approve", http.MethodPost, "/v1/controlplane/surfaces/surf-1/approve", "application/json",
 			`{"submitted_by":"user:x","approver_id":"user:y"}`, authz.PermSurfaceApprove},
 		{"surface-deprecate", http.MethodPost, "/v1/controlplane/surfaces/surf-1/deprecate", "application/json",
@@ -357,9 +328,7 @@ func TestWriteEndpoints_OpenMode_BypassesPermission(t *testing.T) {
 		reinstateGrantFn: func(_ context.Context, id, _ string) (*authority.AuthorityGrant, error) { return &authority.AuthorityGrant{ID: id, Status: authority.GrantStatusActive}, nil },
 	}
 	srv := NewServerFull(&mockOrchestrator{}, mockCP, mockApproval, nil, nil, mockGrants).
-		WithAuthMode(config.AuthModeOpen).
-		WithPromotion(&fakePromotionService{}).
-		WithCleanup(&fakeCleanupService{})
+		WithAuthMode(config.AuthModeOpen)
 
 	for _, ep := range writeEndpoints() {
 		ep := ep
@@ -686,7 +655,5 @@ func writeTestServerWithAuthenticator(t *testing.T, authn auth.Authenticator) *S
 	}
 	return NewServerFull(&mockOrchestrator{}, mockCP, mockApproval, nil, nil, mockGrants).
 		WithAuthMode(config.AuthModeRequired).
-		WithAuthenticator(authn).
-		WithPromotion(&fakePromotionService{}).
-		WithCleanup(&fakeCleanupService{})
+		WithAuthenticator(authn)
 }

@@ -32,11 +32,20 @@ func TestSurfaceRepo_ProcessID_Persistence(t *testing.T) {
 		t.Fatalf("insert capability: %v", err)
 	}
 
+	// Insert prerequisite business service row (processes FK to business_services).
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO business_services (business_service_id, name, service_type, status, created_at, updated_at)
+		VALUES ('bs-surf-test-001', 'Test Business Service', 'internal', 'active', NOW(), NOW())
+		ON CONFLICT (business_service_id) DO NOTHING
+	`); err != nil {
+		t.Fatalf("insert business service: %v", err)
+	}
+
 	// Insert prerequisite process row.
 	const processID = "loan-origination-surf-test"
 	if _, err := db.ExecContext(ctx, `
-		INSERT INTO processes (process_id, capability_id, name, status, created_at, updated_at)
-		VALUES ($1, 'cap-surf-test-001', 'Loan Origination', 'active', NOW(), NOW())
+		INSERT INTO processes (process_id, business_service_id, name, status, created_at, updated_at)
+		VALUES ($1, 'bs-surf-test-001', 'Loan Origination', 'active', NOW(), NOW())
 		ON CONFLICT (process_id) DO NOTHING
 	`, processID); err != nil {
 		t.Fatalf("insert process: %v", err)
@@ -45,6 +54,7 @@ func TestSurfaceRepo_ProcessID_Persistence(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = db.ExecContext(ctx, `DELETE FROM decision_surfaces WHERE id IN ('surf-proc-rt-001', 'surf-proc-rt-002')`)
 		_, _ = db.ExecContext(ctx, `DELETE FROM processes WHERE process_id = $1`, processID)
+		_, _ = db.ExecContext(ctx, `DELETE FROM business_services WHERE business_service_id = 'bs-surf-test-001'`)
 		_, _ = db.ExecContext(ctx, `DELETE FROM capabilities WHERE capability_id = 'cap-surf-test-001'`)
 	})
 
@@ -129,14 +139,22 @@ func TestSurfaceRepo_ProcessID_UpdateRoundTrip(t *testing.T) {
 		t.Fatalf("insert capability: %v", err)
 	}
 
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO business_services (business_service_id, name, service_type, status, created_at, updated_at)
+		VALUES ('bs-surf-upd-001', 'Test Business Service Update', 'internal', 'active', NOW(), NOW())
+		ON CONFLICT (business_service_id) DO NOTHING
+	`); err != nil {
+		t.Fatalf("insert business service: %v", err)
+	}
+
 	const (
 		processID1 = "loan-update-surf-test-1"
 		processID2 = "loan-update-surf-test-2"
 	)
 	for _, pid := range []string{processID1, processID2} {
 		if _, err := db.ExecContext(ctx, `
-			INSERT INTO processes (process_id, capability_id, name, status, created_at, updated_at)
-			VALUES ($1, 'cap-surf-upd-001', 'Loan Update', 'active', NOW(), NOW())
+			INSERT INTO processes (process_id, business_service_id, name, status, created_at, updated_at)
+			VALUES ($1, 'bs-surf-upd-001', 'Loan Update', 'active', NOW(), NOW())
 			ON CONFLICT (process_id) DO NOTHING
 		`, pid); err != nil {
 			t.Fatalf("insert process %q: %v", pid, err)
@@ -147,6 +165,7 @@ func TestSurfaceRepo_ProcessID_UpdateRoundTrip(t *testing.T) {
 		_, _ = db.ExecContext(ctx, `DELETE FROM decision_surfaces WHERE id = 'surf-upd-proc-rt-001'`)
 		_, _ = db.ExecContext(ctx, `DELETE FROM processes WHERE process_id = $1`, processID1)
 		_, _ = db.ExecContext(ctx, `DELETE FROM processes WHERE process_id = $1`, processID2)
+		_, _ = db.ExecContext(ctx, `DELETE FROM business_services WHERE business_service_id = 'bs-surf-upd-001'`)
 		_, _ = db.ExecContext(ctx, `DELETE FROM capabilities WHERE capability_id = 'cap-surf-upd-001'`)
 	})
 

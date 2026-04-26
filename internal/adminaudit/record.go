@@ -33,14 +33,6 @@ const (
 	// untouched.
 	ActionApplyInvoked Action = "apply.invoked"
 
-	// ActionPromoteExecuted records a promote operation (inference promote
-	// flow). One entry per invocation.
-	ActionPromoteExecuted Action = "promote.executed"
-
-	// ActionCleanupExecuted records a cleanup operation (inference cleanup
-	// flow). One entry per invocation.
-	ActionCleanupExecuted Action = "cleanup.executed"
-
 	// ActionPasswordChanged records a successful local-IAM password change.
 	// Never carries password material.
 	ActionPasswordChanged Action = "password.changed"

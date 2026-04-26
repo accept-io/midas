@@ -39,10 +39,8 @@ type Permission string
 // The per-document write permissions below are checked in addition to
 // PermControlplaneApply for bundle contents on POST /v1/controlplane/apply.
 const (
-	PermControlplaneApply   Permission = "controlplane:apply"
-	PermControlplanePlan    Permission = "controlplane:plan"
-	PermControlplanePromote Permission = "controlplane:promote"
-	PermControlplaneCleanup Permission = "controlplane:cleanup"
+	PermControlplaneApply Permission = "controlplane:apply"
+	PermControlplanePlan  Permission = "controlplane:plan"
 )
 
 // Per-Kind bundle-scoped write permissions. These are checked per document
@@ -50,15 +48,14 @@ const (
 // missing the required *:write for a document Kind will have that document
 // marked invalid in the returned plan (and therefore never persisted).
 const (
-	PermCapabilityWrite             Permission = "capability:write"
-	PermProcessWrite                Permission = "process:write"
-	PermBusinessServiceWrite        Permission = "businessservice:write"
-	PermSurfaceWrite                Permission = "surface:write"
-	PermProfileWrite                Permission = "profile:write"
-	PermAgentWrite                  Permission = "agent:write"
-	PermGrantWrite                  Permission = "grant:write"
-	PermProcessCapabilityWrite      Permission = "processcapability:write"
-	PermProcessBusinessServiceWrite Permission = "processbusinessservice:write"
+	PermCapabilityWrite                Permission = "capability:write"
+	PermProcessWrite                   Permission = "process:write"
+	PermBusinessServiceWrite           Permission = "businessservice:write"
+	PermBusinessServiceCapabilityWrite Permission = "businessservicecapability:write"
+	PermSurfaceWrite                   Permission = "surface:write"
+	PermProfileWrite                   Permission = "profile:write"
+	PermAgentWrite                     Permission = "agent:write"
+	PermGrantWrite                     Permission = "grant:write"
 )
 
 // Lifecycle-action permissions. Each sub-action of surface/profile/grant
@@ -75,7 +72,7 @@ const (
 	PermGrantReinstate   Permission = "grant:reinstate"
 )
 
-// allControlPlaneWritePermissions is the canonical 20-permission set that
+// allControlPlaneWritePermissions is the canonical 17-permission set that
 // platform.admin expands to. Declared as a slice so tests can iterate the
 // full matrix; exposed as a copy via AllControlPlaneWritePermissions.
 //
@@ -85,18 +82,15 @@ const (
 var allControlPlaneWritePermissions = []Permission{
 	PermControlplaneApply,
 	PermControlplanePlan,
-	PermControlplanePromote,
-	PermControlplaneCleanup,
 
 	PermCapabilityWrite,
 	PermProcessWrite,
 	PermBusinessServiceWrite,
+	PermBusinessServiceCapabilityWrite,
 	PermSurfaceWrite,
 	PermProfileWrite,
 	PermAgentWrite,
 	PermGrantWrite,
-	PermProcessCapabilityWrite,
-	PermProcessBusinessServiceWrite,
 
 	PermSurfaceApprove,
 	PermSurfaceDeprecate,
@@ -205,7 +199,7 @@ func bundleForRole(role string) []Permission {
 // in internal/controlplane/types.Kind* constants) to the per-Kind write
 // permission required to create that document via a bundle apply.
 //
-// Returns the empty string for unknown Kinds. This mirrors the nine
+// Returns the empty string for unknown Kinds. This mirrors the eight
 // apply-eligible Kinds currently supported by the control plane.
 //
 // The string-based lookup is intentional: authz must not import the
@@ -218,6 +212,8 @@ func KindToWritePermission(kind string) Permission {
 		return PermProcessWrite
 	case "BusinessService":
 		return PermBusinessServiceWrite
+	case "BusinessServiceCapability":
+		return PermBusinessServiceCapabilityWrite
 	case "Surface":
 		return PermSurfaceWrite
 	case "Profile":
@@ -226,10 +222,6 @@ func KindToWritePermission(kind string) Permission {
 		return PermAgentWrite
 	case "Grant":
 		return PermGrantWrite
-	case "ProcessCapability":
-		return PermProcessCapabilityWrite
-	case "ProcessBusinessService":
-		return PermProcessBusinessServiceWrite
 	default:
 		return ""
 	}

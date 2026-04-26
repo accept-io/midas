@@ -53,19 +53,6 @@ func (r *stubCapabilityRepo) Create(_ context.Context, _ *capability.Capability)
 	return nil
 }
 
-// processDocWithCapability builds a minimal valid Process document.
-func processDocWithCapability(id, capabilityID string) parser.ParsedDocument {
-	return parser.ParsedDocument{
-		Kind: types.KindProcess,
-		ID:   id,
-		Doc: types.ProcessDocument{
-			APIVersion: types.APIVersionV1,
-			Kind:       types.KindProcess,
-			Metadata:   types.DocumentMetadata{ID: id, Name: "Test Process"},
-			Spec:       types.ProcessSpec{CapabilityID: capabilityID, Status: "active"},
-		},
-	}
-}
 
 // findEntry returns the plan entry for (kind, id) or fails.
 func findEntry(t *testing.T, plan ApplyPlan, kind, id string) ApplyPlanEntry {
@@ -252,46 +239,6 @@ func TestPlan_SurfaceReferencesDeprecatedProcess_EmitsWarning(t *testing.T) {
 // Warning case 4 — Process → Capability (deprecated)
 // ---------------------------------------------------------------------------
 
-func TestPlan_ProcessReferencesDeprecatedCapability_EmitsWarning(t *testing.T) {
-	procRepo := &controlledProcessRepo{
-		getByIDFn: func(_ context.Context, _ string) (*process.Process, error) {
-			return nil, nil // new process
-		},
-	}
-	capRepo := &stubCapabilityRepo{
-		getByIDFn: func(_ context.Context, id string) (*capability.Capability, error) {
-			return &capability.Capability{ID: id, Status: "deprecated"}, nil
-		},
-	}
-	svc := NewServiceWithRepos(RepositorySet{
-		Processes:    procRepo,
-		Capabilities: capRepo,
-	})
-
-	plan := svc.Plan(context.Background(), []parser.ParsedDocument{
-		processDocWithCapability("proc-x", "cap-deprecated"),
-	})
-
-	entry := findEntry(t, plan, types.KindProcess, "proc-x")
-	if entry.Action != ApplyActionCreate {
-		t.Fatalf("warning must not change action; want create, got %s; errors=%+v", entry.Action, entry.ValidationErrors)
-	}
-	w := findWarning(entry, WarningRefCapabilityTerminal)
-	if w == nil {
-		t.Fatalf("expected %s warning, got warnings=%+v", WarningRefCapabilityTerminal, entry.Warnings)
-	}
-	if w.Field != "spec.capability_id" {
-		t.Errorf("field = %q, want %q", w.Field, "spec.capability_id")
-	}
-	if w.RelatedKind != types.KindCapability || w.RelatedID != "cap-deprecated" {
-		t.Errorf("related = %s/%s, want Capability/cap-deprecated", w.RelatedKind, w.RelatedID)
-	}
-
-	result := PlanResultFromPlan(plan)
-	if result.InvalidCount != 0 || result.ConflictCount != 0 {
-		t.Errorf("warning must not change counts: invalid=%d conflict=%d", result.InvalidCount, result.ConflictCount)
-	}
-}
 
 // ---------------------------------------------------------------------------
 // Warning regression — non-terminal targets do not emit warnings

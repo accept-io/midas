@@ -37,6 +37,7 @@ import (
 
 	"github.com/accept-io/midas/internal/agent"
 	"github.com/accept-io/midas/internal/authority"
+	"github.com/accept-io/midas/internal/businessservice"
 	"github.com/accept-io/midas/internal/capability"
 	"github.com/accept-io/midas/internal/decision"
 	"github.com/accept-io/midas/internal/envelope"
@@ -50,20 +51,28 @@ import (
 	"github.com/accept-io/midas/internal/value"
 )
 
-// Shared identifiers for the Capability and Process that every decision
-// test seeds as parents of the Surfaces it creates. Decision tests don't
-// care about the structural layer — they just need the Surface → Process
-// and Process → Capability FK constraints to be satisfied so the Surface
-// row can persist at all. One shared parent per test is enough; tests
-// that need multiple Surfaces point every Surface at the same parent.
+// Shared identifiers for the BusinessService, Capability, and Process that
+// every decision test seeds as parents of the Surfaces it creates. Decision
+// tests don't care about the structural layer — they just need the
+// Surface → Process and Process → BusinessService FK constraints to be
+// satisfied so the Surface row can persist at all. One shared parent per
+// test is enough; tests that need multiple Surfaces point every Surface at
+// the same parent.
+//
+// The Capability is kept in the seed because Capability remains a valid
+// entity in the v1 service-led model; only its relationship to Process has
+// changed (it no longer owns Process). Tests don't reference it directly
+// but seeding it costs nothing and documents that Capability is still part
+// of the structural model.
 const (
-	decisionTestCapabilityID = "cap-decision-test"
-	decisionTestProcessID    = "proc-decision-test"
+	decisionTestCapabilityID      = "cap-decision-test"
+	decisionTestProcessID         = "proc-decision-test"
+	decisionTestBusinessServiceID = "bs-decision-test"
 )
 
-// seedSurfaceParents writes the Capability and Process rows that every
-// Surface in a decision test will reference via process_id. It is
-// idempotent: two tests in the same run that both call it are safe
+// seedSurfaceParents writes the BusinessService, Capability, and Process
+// rows that every Surface in a decision test will reference via process_id.
+// It is idempotent: two tests in the same run that both call it are safe
 // because the second call sees the row already persisted and skips
 // Create. This matters for tests that use targeted (per-id) cleanup
 // rather than the shared cleanupOutboxTestData — those tests
@@ -73,6 +82,25 @@ func seedSurfaceParents(t *testing.T, repos *store.Repositories) {
 	t.Helper()
 	ctx := context.Background()
 	now := time.Now().UTC().Add(-time.Hour)
+
+	existingBS, err := repos.BusinessServices.GetByID(ctx, decisionTestBusinessServiceID)
+	if err != nil {
+		t.Fatalf("get business service: %v", err)
+	}
+	if existingBS == nil {
+		if err := repos.BusinessServices.Create(ctx, &businessservice.BusinessService{
+			ID:          decisionTestBusinessServiceID,
+			Name:        "decision test business service",
+			ServiceType: businessservice.ServiceTypeInternal,
+			Status:      "active",
+			Origin:      "manual",
+			Managed:     true,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}); err != nil {
+			t.Fatalf("seed business service: %v", err)
+		}
+	}
 
 	existingCap, err := repos.Capabilities.GetByID(ctx, decisionTestCapabilityID)
 	if err != nil {
@@ -97,14 +125,14 @@ func seedSurfaceParents(t *testing.T, repos *store.Repositories) {
 	}
 	if existingProc == nil {
 		if err := repos.Processes.Create(ctx, &process.Process{
-			ID:           decisionTestProcessID,
-			Name:         "decision test process",
-			CapabilityID: decisionTestCapabilityID,
-			Status:       "active",
-			Origin:       "manual",
-			Managed:      true,
-			CreatedAt:    now,
-			UpdatedAt:    now,
+			ID:                decisionTestProcessID,
+			Name:              "decision test process",
+			BusinessServiceID: decisionTestBusinessServiceID,
+			Status:            "active",
+			Origin:            "manual",
+			Managed:           true,
+			CreatedAt:         now,
+			UpdatedAt:         now,
 		}); err != nil {
 			t.Fatalf("seed process: %v", err)
 		}
@@ -135,6 +163,8 @@ func cleanupOutboxTestData(t *testing.T, db *sql.DB) {
 		`DELETE FROM agents`,
 		`DELETE FROM decision_surfaces`,
 		`DELETE FROM processes`,
+		`DELETE FROM business_service_capabilities`,
+		`DELETE FROM business_services`,
 		`DELETE FROM capabilities`,
 	}
 	for _, stmt := range statements {

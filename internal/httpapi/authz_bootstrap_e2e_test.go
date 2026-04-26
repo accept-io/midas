@@ -101,9 +101,7 @@ func TestBootstrapAdmin_BundleFlow(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, mockCP, mockApproval, nil, nil, mockGrants).
 		WithLocalIAM(iamSvc).
 		WithAuthenticator(localiam.NewSessionAuthenticator(iamSvc)).
-		WithAuthMode(config.AuthModeRequired).
-		WithPromotion(&fakePromotionService{}).
-		WithCleanup(&fakeCleanupService{})
+		WithAuthMode(config.AuthModeRequired)
 
 	// --- Step 2: login as admin/admin ---
 	loginRec := doLogin(t, srv, "admin", "admin")
@@ -194,8 +192,6 @@ func everyApplyKind() []string {
 		cpTypes.KindAgent,
 		cpTypes.KindProfile,
 		cpTypes.KindGrant,
-		cpTypes.KindProcessCapability,
-		cpTypes.KindProcessBusinessService,
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/accept-io/midas/internal/businessservice"
 	"github.com/accept-io/midas/internal/capability"
 	"github.com/accept-io/midas/internal/controlplane/apply"
 	"github.com/accept-io/midas/internal/controlplane/parser"
@@ -48,16 +49,24 @@ func TestApplyServiceWiring_WithRepos_PersistsAllKinds(t *testing.T) {
 	repos := memory.NewRepositories()
 
 	// Seed the process referenced by the surface fixture so the memory-store
-	// structural integrity check (G-12) passes.
+	// structural integrity check (G-12) passes. In the v1 service-led model
+	// Process belongs to a BusinessService (required), so we seed that too.
 	seedCtx := context.Background()
 	now := time.Now().UTC()
+	if err := repos.BusinessServices.Create(seedCtx, &businessservice.BusinessService{
+		ID: "test.bs", Name: "Test BS", ServiceType: businessservice.ServiceTypeInternal,
+		Status: "active", Origin: "manual", Managed: true,
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed business service: %v", err)
+	}
 	if err := repos.Capabilities.Create(seedCtx, &capability.Capability{
 		ID: "test.cap", Name: "Test Cap", Status: "active", CreatedAt: now, UpdatedAt: now,
 	}); err != nil {
 		t.Fatalf("seed capability: %v", err)
 	}
 	if err := repos.Processes.Create(seedCtx, &process.Process{
-		ID: "test.process", Name: "Test Process", CapabilityID: "test.cap",
+		ID: "test.process", Name: "Test Process", BusinessServiceID: "test.bs",
 		Status: "active", CreatedAt: now, UpdatedAt: now,
 	}); err != nil {
 		t.Fatalf("seed process: %v", err)

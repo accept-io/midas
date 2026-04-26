@@ -44,9 +44,9 @@ Stores logical business domains that group related processes. Capabilities and p
 | capability_id | text | Capability identifier |
 | name | text | Human-readable name |
 | status | text | `active` or `deprecated` |
-| origin | text | How this record was created: `manual` or `inferred` |
-| managed | boolean | Whether this is a user-managed entity |
-| replaces | text | ID of the inferred capability this record promoted from (nullable) |
+| origin | text | Always `manual` in v1 (the `inferred` enum value is reserved). |
+| managed | boolean | Always `true` in v1 (the `false` value is reserved). |
+| replaces | text | ID of a previously-superseded capability, when a new record replaces an old one (nullable). |
 | description | text | Optional description |
 | owner_id | text | Owning team or system (nullable) |
 | parent_capability_id | text | Parent capability for hierarchical grouping (nullable) |
@@ -61,14 +61,11 @@ capability_id
 
 ## Origin and managed semantics
 
-The `origin` and `managed` columns describe how a capability came to exist:
-
-| origin | managed | Meaning |
-|--------|---------|---------|
-| `inferred` | `false` | System-created by the inference engine. Uses `auto:` prefix convention. |
-| `manual` | `true` | User-created via the promotion workflow. Canonical, governed entity. |
-
-The `replaces` column tracks lineage: when an inferred capability is promoted to a managed one, the new managed record sets `replaces = <old inferred capability_id>`. The old inferred capability is then set to `status = deprecated`.
+In v1, capabilities are always operator-declared via control-plane apply
+(`origin=manual`, `managed=true`). The `inferred`/`false` enum values
+remain in the schema for forward compatibility but are unreachable from
+v1 code paths. The `replaces` column tracks lineage when one capability
+supersedes another.
 
 ---
 
@@ -81,16 +78,15 @@ Stores governed actions within a capability. Each decision surface is associated
 | Column | Type | Description |
 |------|------|-------------|
 | process_id | text | Process identifier |
-| capability_id | text | Parent capability (NOT NULL) |
+| business_service_id | text | Parent business service (NOT NULL, FK to `business_services`) |
 | name | text | Human-readable name |
 | status | text | `active` or `deprecated` |
-| origin | text | `manual` or `inferred` |
-| managed | boolean | Whether this is a user-managed entity |
-| replaces | text | ID of the inferred process this record promoted from (nullable) |
+| origin | text | Always `manual` in v1. |
+| managed | boolean | Always `true` in v1. |
+| replaces | text | ID of a previously-superseded process (nullable). |
 | description | text | Optional description |
 | owner_id | text | Owning team or system (nullable) |
 | parent_process_id | text | Parent process for sub-process hierarchies (nullable) |
-| business_service_id | text | Primary business service this process belongs to (nullable, FK to `business_services`) |
 | level | integer | Depth in the process hierarchy (nullable) |
 | created_at | timestamp | Record creation time |
 | updated_at | timestamp | Last update time |
@@ -103,12 +99,9 @@ process_id
 
 ## Notes
 
-- `capability_id` is a NOT NULL foreign key to `capabilities.capability_id`
-- `business_service_id` is an optional foreign key to `business_services.business_service_id`
-- A database trigger (`enforce_process_parent_capability_match`) enforces that a child process shares its parent's `capability_id`
-- The `origin` and `managed` columns follow the same semantics as capabilities (see table above)
-- When a process is promoted, `decision_surfaces.process_id` is updated in place to point to the new managed process
-- In addition to the N:1 `capability_id` column, processes participate in a separate M:N relationship via the `process_capabilities` junction table. The `capability_id` column is the structural foreign key (NOT NULL, enforced); the junction table records additional capability memberships. See [process_capabilities](#process_capabilities) and [Ambiguity note](#ambiguity-capability_id-vs-process_capabilities).
+- `business_service_id` is a NOT NULL foreign key to `business_services.business_service_id` (v1 service-led model).
+- The `origin` and `managed` columns follow the same v1 semantics as capabilities (see above).
+- The Capability ↔ BusinessService relationship is M:N via the `business_service_capabilities` junction; processes inherit their capability set indirectly through the parent business service's links.
 
 ---
 
@@ -300,9 +293,9 @@ Stores organizational service offerings. Processes can reference a business serv
 | service_type | text | `customer_facing`, `internal`, or `technical` |
 | regulatory_scope | text | Regulatory scope (nullable) |
 | status | text | `active` or `deprecated` |
-| origin | text | `manual` or `inferred` |
-| managed | boolean | Whether this is a user-managed entity |
-| replaces | text | ID of the inferred business service this record promoted from (nullable) |
+| origin | text | Always `manual` in v1. |
+| managed | boolean | Always `true` in v1. |
+| replaces | text | ID of a previously-superseded business service (nullable). |
 | owner_id | text | Owning team or system (nullable) |
 | created_at | timestamp | Record creation time |
 | updated_at | timestamp | Last update time |

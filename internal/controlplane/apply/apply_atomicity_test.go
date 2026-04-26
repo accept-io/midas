@@ -55,7 +55,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/accept-io/midas/internal/capability"
+	"github.com/accept-io/midas/internal/businessservice"
 	"github.com/accept-io/midas/internal/controlplane/parser"
 	"github.com/accept-io/midas/internal/controlplane/types"
 	"github.com/accept-io/midas/internal/process"
@@ -97,28 +97,28 @@ type stagingRepo interface {
 	rollback()
 }
 
-type recordingCapabilityRepo struct {
+type recordingBusinessServiceRepo struct {
 	createCalls int
-	provisional []*capability.Capability
-	created     []*capability.Capability
+	provisional []*businessservice.BusinessService
+	created     []*businessservice.BusinessService
 }
 
-func (r *recordingCapabilityRepo) Exists(_ context.Context, _ string) (bool, error) {
+func (r *recordingBusinessServiceRepo) Exists(_ context.Context, _ string) (bool, error) {
 	return false, nil
 }
-func (r *recordingCapabilityRepo) GetByID(_ context.Context, _ string) (*capability.Capability, error) {
+func (r *recordingBusinessServiceRepo) GetByID(_ context.Context, _ string) (*businessservice.BusinessService, error) {
 	return nil, nil
 }
-func (r *recordingCapabilityRepo) Create(_ context.Context, c *capability.Capability) error {
+func (r *recordingBusinessServiceRepo) Create(_ context.Context, s *businessservice.BusinessService) error {
 	r.createCalls++
-	r.provisional = append(r.provisional, c)
+	r.provisional = append(r.provisional, s)
 	return nil
 }
-func (r *recordingCapabilityRepo) commit() {
+func (r *recordingBusinessServiceRepo) commit() {
 	r.created = append(r.created, r.provisional...)
 	r.provisional = nil
 }
-func (r *recordingCapabilityRepo) rollback() {
+func (r *recordingBusinessServiceRepo) rollback() {
 	r.provisional = nil
 }
 
@@ -212,11 +212,11 @@ func (r *fakeTxRunner) WithTx(_ context.Context, _ string, fn func(*RepositorySe
 // ---------------------------------------------------------------------------
 // Bundle fixture — three documents, two kinds crossed, well-formed.
 //
-//   doc 1: Capability "cap-atomic-test"        (tier 1 — executes first)
-//   doc 2: Process    "proc-atomic-test"       (tier 2 — executes second)
-//   doc 3: Surface    "surf-atomic-test"       (tier 4 — executes third)
+//   doc 1: BusinessService "bs-atomic-test"  (tier 0 — executes first)
+//   doc 2: Process         "proc-atomic-test" (tier 2 — executes second)
+//   doc 3: Surface         "surf-atomic-test" (tier 3 — executes third)
 //
-// The Process references the Capability and the Surface references the
+// The Process references the BusinessService and the Surface references the
 // Process, so referential integrity passes at plan time via same-bundle
 // resolution (no repository lookups required for the references). Every
 // document is structurally valid; none of these cases would have been
@@ -226,13 +226,13 @@ func (r *fakeTxRunner) WithTx(_ context.Context, _ string, fn func(*RepositorySe
 func atomicityBundle() []parser.ParsedDocument {
 	return []parser.ParsedDocument{
 		{
-			Kind: types.KindCapability,
-			ID:   "cap-atomic-test",
-			Doc: types.CapabilityDocument{
+			Kind: types.KindBusinessService,
+			ID:   "bs-atomic-test",
+			Doc: types.BusinessServiceDocument{
 				APIVersion: types.APIVersionV1,
-				Kind:       types.KindCapability,
-				Metadata:   types.DocumentMetadata{ID: "cap-atomic-test", Name: "Atomicity Test Capability"},
-				Spec:       types.CapabilitySpec{Status: "active", Description: "test"},
+				Kind:       types.KindBusinessService,
+				Metadata:   types.DocumentMetadata{ID: "bs-atomic-test", Name: "Atomicity Test Service"},
+				Spec:       types.BusinessServiceSpec{ServiceType: "internal", Status: "active"},
 			},
 		},
 		{
@@ -242,7 +242,7 @@ func atomicityBundle() []parser.ParsedDocument {
 				APIVersion: types.APIVersionV1,
 				Kind:       types.KindProcess,
 				Metadata:   types.DocumentMetadata{ID: "proc-atomic-test", Name: "Atomicity Test Process"},
-				Spec:       types.ProcessSpec{CapabilityID: "cap-atomic-test", Status: "active"},
+				Spec:       types.ProcessSpec{BusinessServiceID: "bs-atomic-test", Status: "active"},
 			},
 		},
 		{
@@ -273,7 +273,7 @@ func atomicityBundle() []parser.ParsedDocument {
 // ---------------------------------------------------------------------------
 
 func TestApplyExecution_Atomic_NoResidueOnMidBundleFailure(t *testing.T) {
-	capRepo := &recordingCapabilityRepo{}
+	bsRepo := &recordingBusinessServiceRepo{}
 	procRepo := &recordingProcessRepoWithFailure{
 		failID:  "proc-atomic-test",
 		failErr: errors.New("simulated repository failure during Process.Create"),
@@ -281,11 +281,11 @@ func TestApplyExecution_Atomic_NoResidueOnMidBundleFailure(t *testing.T) {
 	surfRepo := &recordingSurfaceRepo{}
 
 	set := RepositorySet{
-		Capabilities: capRepo,
-		Processes:    procRepo,
-		Surfaces:     surfRepo,
+		BusinessServices: bsRepo,
+		Processes:        procRepo,
+		Surfaces:         surfRepo,
 	}
-	set.Tx = newFakeTxRunner(&set, capRepo, procRepo, surfRepo)
+	set.Tx = newFakeTxRunner(&set, bsRepo, procRepo, surfRepo)
 	svc := NewServiceWithRepos(set)
 
 	result := svc.Apply(context.Background(), atomicityBundle(), "tester")
@@ -300,13 +300,13 @@ func TestApplyExecution_Atomic_NoResidueOnMidBundleFailure(t *testing.T) {
 	// Contract (a): earlier writes must not remain persisted.
 	//
 	// Phrased against observable persisted state: after the failure, the
-	// Capability must not be visible to any reader of the repository.
-	// Whether the executor reached Capability.Create is beside the point —
+	// BusinessService must not be visible to any reader of the repository.
+	// Whether the executor reached BusinessService.Create is beside the point —
 	// what matters is that no trace of it remains.
-	if len(capRepo.created) != 0 {
-		t.Errorf("atomic-apply contract violated: Capability persisted before the failure remained in the repo "+
-			"(want 0 records, got %d). Issue 1 must wrap executePlan in a transaction so prior Create "+
-			"calls roll back when a later Create fails.", len(capRepo.created))
+	if len(bsRepo.created) != 0 {
+		t.Errorf("atomic-apply contract violated: BusinessService persisted before the failure remained in the repo "+
+			"(want 0 records, got %d). The executor must wrap state changes in a transaction so prior Create "+
+			"calls roll back when a later Create fails.", len(bsRepo.created))
 	}
 
 	// Contract (b): later operations must not execute.
@@ -346,16 +346,16 @@ func TestApplyExecution_Atomic_NoResidueOnMidBundleFailure(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestApplyExecution_Atomic_PositiveControl_AllPersistSansFailure(t *testing.T) {
-	capRepo := &recordingCapabilityRepo{}
+	bsRepo := &recordingBusinessServiceRepo{}
 	procRepo := &recordingProcessRepoWithFailure{} // no failID → never fails
 	surfRepo := &recordingSurfaceRepo{}
 
 	set := RepositorySet{
-		Capabilities: capRepo,
-		Processes:    procRepo,
-		Surfaces:     surfRepo,
+		BusinessServices: bsRepo,
+		Processes:        procRepo,
+		Surfaces:         surfRepo,
 	}
-	set.Tx = newFakeTxRunner(&set, capRepo, procRepo, surfRepo)
+	set.Tx = newFakeTxRunner(&set, bsRepo, procRepo, surfRepo)
 	svc := NewServiceWithRepos(set)
 
 	result := svc.Apply(context.Background(), atomicityBundle(), "tester")
@@ -374,8 +374,8 @@ func TestApplyExecution_Atomic_PositiveControl_AllPersistSansFailure(t *testing.
 	// (attempts vs. persisted state) agree on the happy path — so that
 	// any disagreement surfaced by the failure test above is a real
 	// signal about the SUT, not an artefact of the harness.
-	if capRepo.createCalls != 1 {
-		t.Errorf("positive control: want 1 Capability Create attempt, got %d", capRepo.createCalls)
+	if bsRepo.createCalls != 1 {
+		t.Errorf("positive control: want 1 BusinessService Create attempt, got %d", bsRepo.createCalls)
 	}
 	if procRepo.createCalls != 1 {
 		t.Errorf("positive control: want 1 Process Create attempt, got %d", procRepo.createCalls)
@@ -386,8 +386,8 @@ func TestApplyExecution_Atomic_PositiveControl_AllPersistSansFailure(t *testing.
 
 	// Persisted-state assertions: every attempt resulted in a stored
 	// record. No skips, no silent drops.
-	if len(capRepo.created) != 1 {
-		t.Errorf("positive control: want 1 Capability persisted, got %d", len(capRepo.created))
+	if len(bsRepo.created) != 1 {
+		t.Errorf("positive control: want 1 BusinessService persisted, got %d", len(bsRepo.created))
 	}
 	if len(procRepo.created) != 1 {
 		t.Errorf("positive control: want 1 Process persisted, got %d", len(procRepo.created))
