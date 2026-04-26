@@ -9,6 +9,10 @@ Versioned releases will follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Removed
+
+- Inference subsystem removed. If you previously enabled `MIDAS_INFERENCE_ENABLED`, remove it. MIDAS v1 requires explicit structural configuration via control-plane apply, and `process_id` is required on evaluation requests.
+
 ---
 
 ## [1.0.0] — 2026-03-28

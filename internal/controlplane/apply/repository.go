@@ -6,11 +6,10 @@ import (
 	"github.com/accept-io/midas/internal/agent"
 	"github.com/accept-io/midas/internal/authority"
 	"github.com/accept-io/midas/internal/businessservice"
+	"github.com/accept-io/midas/internal/businessservicecapability"
 	"github.com/accept-io/midas/internal/capability"
 	"github.com/accept-io/midas/internal/controlaudit"
 	"github.com/accept-io/midas/internal/process"
-	"github.com/accept-io/midas/internal/processbusinessservice"
-	"github.com/accept-io/midas/internal/processcapability"
 	"github.com/accept-io/midas/internal/surface"
 )
 
@@ -61,35 +60,25 @@ type BusinessServiceRepository interface {
 	Create(ctx context.Context, s *businessservice.BusinessService) error
 }
 
-// ProcessCapabilityRepository is the persistence interface for the apply service's
-// process capability operations. ListByProcessID is used to check whether a
-// (process_id, capability_id) link already exists during planning. Create persists
-// a new link.
-type ProcessCapabilityRepository interface {
-	Create(ctx context.Context, pc *processcapability.ProcessCapability) error
-	ListByProcessID(ctx context.Context, processID string) ([]*processcapability.ProcessCapability, error)
-}
-
-// ProcessBusinessServiceRepository is the persistence interface for the apply service's
-// process business service operations. ListByProcessID is used to check whether a
-// (process_id, business_service_id) link already exists during planning. Create persists
-// a new link.
-type ProcessBusinessServiceRepository interface {
-	Create(ctx context.Context, pbs *processbusinessservice.ProcessBusinessService) error
-	ListByProcessID(ctx context.Context, processID string) ([]*processbusinessservice.ProcessBusinessService, error)
+// BusinessServiceCapabilityRepository is the persistence interface for the
+// apply service's M:N junction operations between BusinessService and
+// Capability. Exists is used by the planner to detect already-linked pairs;
+// Create persists a new link.
+type BusinessServiceCapabilityRepository interface {
+	Exists(ctx context.Context, businessServiceID, capabilityID string) (bool, error)
+	Create(ctx context.Context, bsc *businessservicecapability.BusinessServiceCapability) error
 }
 
 type RepositorySet struct {
-	Surfaces                SurfaceRepository
-	Agents                  AgentRepository
-	Profiles                ProfileRepository
-	Grants                  GrantRepository
-	Processes               ProcessRepository
-	Capabilities            CapabilityRepository
-	BusinessServices        BusinessServiceRepository
-	ProcessCapabilities     ProcessCapabilityRepository
-	ProcessBusinessServices ProcessBusinessServiceRepository
-	ControlAudit            controlaudit.Repository
+	Surfaces                   SurfaceRepository
+	Agents                     AgentRepository
+	Profiles                   ProfileRepository
+	Grants                     GrantRepository
+	Processes                  ProcessRepository
+	Capabilities               CapabilityRepository
+	BusinessServices           BusinessServiceRepository
+	BusinessServiceCapabilities BusinessServiceCapabilityRepository
+	ControlAudit               controlaudit.Repository
 	// Tx, when non-nil, wraps the executor's mutation loop in an
 	// atomic transaction. The callback receives a scoped *RepositorySet
 	// whose repositories are bound to the transaction; on callback-

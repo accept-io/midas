@@ -22,12 +22,12 @@ spec:
   service_type: customer_facing
   status: active`
 
-	validProcessCapabilityYAML = `apiVersion: midas.accept.io/v1
-kind: ProcessCapability
+	validBusinessServiceCapabilityYAML = `apiVersion: midas.accept.io/v1
+kind: BusinessServiceCapability
 metadata:
-  id: pc-onboarding-fraud
+  id: bsc-lending-fraud
 spec:
-  process_id: proc-consumer-onboarding
+  business_service_id: bs-consumer-lending
   capability_id: cap-fraud-detection`
 
 	validSurfaceYAML = `apiVersion: midas.accept.io/v1
@@ -192,24 +192,6 @@ func TestParseYAML_AllKinds(t *testing.T) {
 			},
 		},
 		{
-			name:         "ProcessCapability",
-			yaml:         validProcessCapabilityYAML,
-			expectedKind: types.KindProcessCapability,
-			expectedID:   "pc-onboarding-fraud",
-			validateDoc: func(t *testing.T, doc ParsedDocument) {
-				pcDoc, ok := doc.Doc.(types.ProcessCapabilityDocument)
-				if !ok {
-					t.Fatalf("expected doc type ProcessCapabilityDocument, got %T", doc.Doc)
-				}
-				if pcDoc.Spec.ProcessID != "proc-consumer-onboarding" {
-					t.Errorf("expected process_id %q, got %q", "proc-consumer-onboarding", pcDoc.Spec.ProcessID)
-				}
-				if pcDoc.Spec.CapabilityID != "cap-fraud-detection" {
-					t.Errorf("expected capability_id %q, got %q", "cap-fraud-detection", pcDoc.Spec.CapabilityID)
-				}
-			},
-		},
-		{
 			name:         "BusinessService",
 			yaml:         validBusinessServiceYAML,
 			expectedKind: types.KindBusinessService,
@@ -227,6 +209,24 @@ func TestParseYAML_AllKinds(t *testing.T) {
 				}
 				if bsDoc.Spec.Description != "Retail lending products for consumers" {
 					t.Errorf("unexpected description: %q", bsDoc.Spec.Description)
+				}
+			},
+		},
+		{
+			name:         "BusinessServiceCapability",
+			yaml:         validBusinessServiceCapabilityYAML,
+			expectedKind: types.KindBusinessServiceCapability,
+			expectedID:   "bsc-lending-fraud",
+			validateDoc: func(t *testing.T, doc ParsedDocument) {
+				bscDoc, ok := doc.Doc.(types.BusinessServiceCapabilityDocument)
+				if !ok {
+					t.Fatalf("expected doc type BusinessServiceCapabilityDocument, got %T", doc.Doc)
+				}
+				if bscDoc.Spec.BusinessServiceID != "bs-consumer-lending" {
+					t.Errorf("expected business_service_id %q, got %q", "bs-consumer-lending", bscDoc.Spec.BusinessServiceID)
+				}
+				if bscDoc.Spec.CapabilityID != "cap-fraud-detection" {
+					t.Errorf("expected capability_id %q, got %q", "cap-fraud-detection", bscDoc.Spec.CapabilityID)
 				}
 			},
 		},
@@ -269,7 +269,7 @@ func TestParsedDocument_InterfaceContracts(t *testing.T) {
 		{"Profile", validProfileYAML, types.KindProfile, "payments-tier-1"},
 		{"Grant", validGrantYAML, types.KindGrant, "grant-credit-scoring-tier-1"},
 		{"BusinessService", validBusinessServiceYAML, types.KindBusinessService, "bs-consumer-lending"},
-		{"ProcessCapability", validProcessCapabilityYAML, types.KindProcessCapability, "pc-onboarding-fraud"},
+		{"BusinessServiceCapability", validBusinessServiceCapabilityYAML, types.KindBusinessServiceCapability, "bsc-lending-fraud"},
 	}
 
 	for _, tt := range tests {
@@ -714,6 +714,29 @@ spec:
 	}
 	if !strings.Contains(err.Error(), "failed to parse Agent document") {
 		t.Errorf("expected Agent parse context in error, got %v", err)
+	}
+}
+
+// TestParseYAML_BusinessServiceCapability_UnknownField verifies that
+// strictUnmarshal rejects an unknown field in a BusinessServiceCapability spec
+// — the strict-field guard must apply to the new Kind exactly as it does to
+// every other Kind.
+func TestParseYAML_BusinessServiceCapability_UnknownField(t *testing.T) {
+	data := []byte(`apiVersion: midas.accept.io/v1
+kind: BusinessServiceCapability
+metadata:
+  id: bsc-bad
+spec:
+  business_service_id: bs-x
+  capability_id: cap-x
+  unknown_field: should-be-rejected`)
+
+	_, err := ParseYAML(data)
+	if err == nil {
+		t.Fatal("expected error for unknown field, got nil")
+	}
+	if !strings.Contains(err.Error(), "failed to parse BusinessServiceCapability document") {
+		t.Errorf("expected BusinessServiceCapability parse context in error, got %v", err)
 	}
 }
 

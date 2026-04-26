@@ -78,100 +78,12 @@ components:
         process_id:
           type: string
           description: |
-            Process ID for evaluation. Optional when inference is enabled.
+            Process ID for evaluation. Required in enforced structural mode;
+            optional in permissive mode (the default).
 
-            When provided (explicit mode):
-            - MIDAS validates that the process exists
-            - MIDAS validates that the surface exists (latest version)
-            - MIDAS validates that the surface belongs to this process
-            - The request fails with 400 if any validation fails
-            - Inference is not invoked regardless of global inference settings
-
-            When omitted:
-            - If inference is enabled, MIDAS infers the process from surface_id
-            - If inference is disabled, the request fails with 400
-
-    InferenceMeta:
-      type: object
-      description: Structural inference result attached to evaluate responses when automatic inference was triggered.
-      properties:
-        capability_id:
-          type: string
-        process_id:
-          type: string
-        surface_id:
-          type: string
-        capability_created:
-          type: boolean
-          description: True when the capability was newly created by inference.
-        process_created:
-          type: boolean
-          description: True when the process was newly created by inference.
-        surface_created:
-          type: boolean
-          description: True when the decision surface was newly created by inference.
-
-    PromoteSpec:
-      type: object
-      required: [capability_id, process_id]
-      properties:
-        capability_id:
-          type: string
-          description: Logical capability identifier.
-        process_id:
-          type: string
-          description: Logical process identifier.
-
-    PromoteRequest:
-      type: object
-      required: [from, to]
-      properties:
-        from:
-          $ref: "#/components/schemas/PromoteSpec"
-          description: The inferred capability/process pair to promote from.
-        to:
-          $ref: "#/components/schemas/PromoteSpec"
-          description: The managed capability/process IDs to create.
-
-    PromoteResponse:
-      type: object
-      required: [from, to, surfaces_migrated]
-      properties:
-        from:
-          $ref: "#/components/schemas/PromoteSpec"
-          description: The inferred entities that were promoted.
-        to:
-          $ref: "#/components/schemas/PromoteSpec"
-          description: The managed entities that were created.
-        surfaces_migrated:
-          type: integer
-          description: Number of decision surfaces migrated to the new managed process.
-
-    CleanupRequest:
-      type: object
-      required: [older_than_days]
-      properties:
-        older_than_days:
-          type: integer
-          description: >
-            Minimum age in days for an entity to be eligible for deletion.
-            0 means all otherwise-eligible entities regardless of age.
-            Must be >= 0; negative values are rejected with 400.
-
-    CleanupResponse:
-      type: object
-      required: [processes_deleted, capabilities_deleted]
-      properties:
-        processes_deleted:
-          type: array
-          items:
-            type: string
-          description: IDs of deprecated inferred processes that were deleted.
-        capabilities_deleted:
-          type: array
-          items:
-            type: string
-          description: IDs of deprecated inferred capabilities that were deleted.
+            MIDAS validates that the process exists, that the surface exists
+            (latest version), and that the surface belongs to this process.
+            The request fails with 400 if any validation fails.
 
     EvaluateResponse:
       type: object
@@ -201,11 +113,6 @@ components:
         simulated:
           type: boolean
           description: True when the result was produced by the non-persistent simulate path.
-        inference:
-          $ref: "#/components/schemas/InferenceMeta"
-          description: >
-            Populated when structural inference was triggered automatically.
-            Omitted when process_id was supplied explicitly or when inference is disabled.
 
     ReviewRequest:
       type: object
@@ -611,8 +518,6 @@ components:
           type: string
           enum:
             - apply.invoked
-            - promote.executed
-            - cleanup.executed
             - password.changed
             - bootstrap.admin_created
         outcome:
@@ -1285,143 +1190,6 @@ paths:
                 $ref: "#/components/schemas/Error"
         "403":
           description: Insufficient role (requires platform.admin)
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-
-  /v1/controlplane/promote:
-    post:
-      operationId: promoteInferredStructure
-      summary: Promote inferred capability/process to managed
-      description: >
-        Atomically promotes an inferred capability/process pair to managed equivalents.
-        Creates new managed entities with origin=manual and managed=true, migrates all
-        surfaces attached to the old inferred process to the new managed process, and
-        deprecates the old inferred entities. Requires platform.admin role.
-
-
-        Pre-conditions:
-          - from.capability_id must exist with origin=inferred
-          - from.process_id must exist with origin=inferred and belong to from.capability_id
-          - to.capability_id must not already exist
-          - to.process_id must not already exist
-
-
-        Post-conditions:
-          - New managed capability created (origin=manual, managed=true, replaces=from.capability_id)
-          - New managed process created (origin=manual, managed=true, replaces=from.process_id)
-          - All surfaces migrated from from.process_id to to.process_id (process_id updated in place)
-          - Old inferred capability and process marked status=deprecated
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/PromoteRequest"
-      responses:
-        "200":
-          description: Promotion successful
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PromoteResponse"
-        "400":
-          description: Validation failure (missing IDs, entity not found, not inferred, target already exists, cycle detected)
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "401":
-          description: Unauthenticated
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "403":
-          description: Insufficient role (requires platform.admin)
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "500":
-          description: Internal error (e.g. transaction failure, concurrent modification)
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "501":
-          description: Promotion service not configured
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-
-  /v1/controlplane/cleanup:
-    post:
-      operationId: cleanupInferredEntities
-      summary: Delete deprecated inferred capabilities and processes
-      description: >
-        Deletes deprecated inferred capabilities and processes that are no longer
-        referenced by any surface, other process, or other capability. All deletions
-        occur within a single transaction. Processes are deleted before capabilities
-        so that a deprecated capability held only by a now-deleted process becomes
-        eligible within the same transaction. Requires platform.admin role.
-
-
-        Eligibility rules for processes (all must hold):
-          - origin=inferred, managed=false, status=deprecated
-          - updated_at < cutoff (skipped when older_than_days=0)
-          - no decision_surface references this process
-          - no other process has replaces=this process_id
-          - no other process has parent_process_id=this process_id
-
-
-        Eligibility rules for capabilities (all must hold):
-          - origin=inferred, managed=false, status=deprecated
-          - updated_at < cutoff (skipped when older_than_days=0)
-          - no process references this capability via capability_id
-          - no other capability has replaces=this capability_id
-          - no other capability has parent_capability_id=this capability_id
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/CleanupRequest"
-      responses:
-        "200":
-          description: Cleanup successful (may have deleted zero entities)
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/CleanupResponse"
-        "400":
-          description: Validation failure (e.g. older_than_days is negative)
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "401":
-          description: Unauthenticated
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "403":
-          description: Insufficient role (requires platform.admin)
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "500":
-          description: Internal error (e.g. transaction failure)
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "501":
-          description: Cleanup service not configured
           content:
             application/json:
               schema:
@@ -2390,52 +2158,6 @@ paths:
               example:
                 error: capability not found
 
-  /v1/capabilities/{id}/processes:
-    get:
-      operationId: listProcessesByCapability
-      summary: List processes belonging to a capability
-      description: >
-        Returns all processes belonging to the given capability.
-        Returns 404 when the parent capability does not exist.
-        Returns an empty array when the capability exists but has no processes.
-        Requires platform.viewer or above.
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-          description: Unique capability identifier.
-      responses:
-        "200":
-          description: Process list (may be empty)
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Process"
-        "401":
-          description: Unauthenticated
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "403":
-          description: Insufficient role (requires platform.viewer or above)
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "404":
-          description: Capability not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-              example:
-                error: capability not found
-
   /v1/processes:
     get:
       operationId: listProcesses
@@ -2646,11 +2368,11 @@ paths:
       summary: List platform-administrative audit events
       description: >
         Returns the append-only platform-administrative audit trail covering
-        apply invocations, promote and cleanup actions, password changes, and
-        bootstrap admin creation. Records are returned in descending
-        occurred_at order (newest first). Requires platform.admin role —
-        more restrictive than /v1/controlplane/audit because the trail
-        includes password and bootstrap events. See Issue #41.
+        apply invocations, password changes, and bootstrap admin creation.
+        Records are returned in descending occurred_at order (newest first).
+        Requires platform.admin role — more restrictive than
+        /v1/controlplane/audit because the trail includes password and
+        bootstrap events. See Issue #41.
       parameters:
         - name: action
           in: query
@@ -2659,8 +2381,6 @@ paths:
             type: string
             enum:
               - apply.invoked
-              - promote.executed
-              - cleanup.executed
               - password.changed
               - bootstrap.admin_created
           description: Constrain results to a single action enum value.

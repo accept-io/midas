@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/accept-io/midas/internal/capability"
+	"github.com/accept-io/midas/internal/businessservice"
 	"github.com/accept-io/midas/internal/config"
 	"github.com/accept-io/midas/internal/controlplane/apply"
 	"github.com/accept-io/midas/internal/controlplane/approval"
@@ -48,15 +48,15 @@ func TestProductionWiring_ApproveSurface_EndpointIsWired(t *testing.T) {
 	}
 
 	applyService := apply.NewServiceWithRepos(apply.RepositorySet{
-		Surfaces:            repos.Surfaces,
-		Agents:              repos.Agents,
-		Profiles:            repos.Profiles,
-		Grants:              repos.Grants,
-		ControlAudit:        repos.ControlAudit,
-		Processes:           repos.Processes,
-		Capabilities:        repos.Capabilities,
-		BusinessServices:    repos.BusinessServices,
-		ProcessCapabilities: repos.ProcessCapabilities,
+		Surfaces:                    repos.Surfaces,
+		Agents:                      repos.Agents,
+		Profiles:                    repos.Profiles,
+		Grants:                      repos.Grants,
+		ControlAudit:                repos.ControlAudit,
+		Processes:                   repos.Processes,
+		Capabilities:                repos.Capabilities,
+		BusinessServices:            repos.BusinessServices,
+		BusinessServiceCapabilities: repos.BusinessServiceCapabilities,
 	})
 
 	// This is the service that was previously nil in main.go.
@@ -77,17 +77,19 @@ func TestProductionWiring_ApproveSurface_EndpointIsWired(t *testing.T) {
 		nil,
 	)
 
-	// Seed the capability and process referenced by the surface below.
-	// The memory store enforces Surface → Process referential integrity.
+	// Seed the business service and process referenced by the surface below.
+	// The memory store enforces Surface → Process and Process → BusinessService
+	// referential integrity in the v1 service-led model.
 	now := time.Now()
-	if err := repos.Capabilities.Create(ctx, &capability.Capability{
-		ID: "cap-wiring-test", Name: "Wiring Cap", Status: "active",
+	if err := repos.BusinessServices.Create(ctx, &businessservice.BusinessService{
+		ID: "bs-wiring-test", Name: "Wiring BS", ServiceType: businessservice.ServiceTypeInternal,
+		Status: "active", Origin: "manual", Managed: true,
 		CreatedAt: now, UpdatedAt: now,
 	}); err != nil {
-		t.Fatalf("seed capability: %v", err)
+		t.Fatalf("seed business service: %v", err)
 	}
 	if err := repos.Processes.Create(ctx, &process.Process{
-		ID: "proc-wiring-test", Name: "Wiring Process", CapabilityID: "cap-wiring-test",
+		ID: "proc-wiring-test", Name: "Wiring Process", BusinessServiceID: "bs-wiring-test",
 		Status: "active", CreatedAt: now, UpdatedAt: now,
 	}); err != nil {
 		t.Fatalf("seed process: %v", err)
@@ -176,20 +178,20 @@ func TestProductionWiring_StructuralApply_ReposAreWired(t *testing.T) {
 	if repos.BusinessServices == nil {
 		t.Fatal("repos.BusinessServices is nil in memory mode")
 	}
-	if repos.ProcessCapabilities == nil {
-		t.Fatal("repos.ProcessCapabilities is nil in memory mode")
+	if repos.BusinessServiceCapabilities == nil {
+		t.Fatal("repos.BusinessServiceCapabilities is nil in memory mode")
 	}
 
 	applyService := apply.NewServiceWithRepos(apply.RepositorySet{
-		Surfaces:            repos.Surfaces,
-		Agents:              repos.Agents,
-		Profiles:            repos.Profiles,
-		Grants:              repos.Grants,
-		ControlAudit:        repos.ControlAudit,
-		Processes:           repos.Processes,
-		Capabilities:        repos.Capabilities,
-		BusinessServices:    repos.BusinessServices,
-		ProcessCapabilities: repos.ProcessCapabilities,
+		Surfaces:                    repos.Surfaces,
+		Agents:                      repos.Agents,
+		Profiles:                    repos.Profiles,
+		Grants:                      repos.Grants,
+		ControlAudit:                repos.ControlAudit,
+		Processes:                   repos.Processes,
+		Capabilities:                repos.Capabilities,
+		BusinessServices:            repos.BusinessServices,
+		BusinessServiceCapabilities: repos.BusinessServiceCapabilities,
 	})
 
 	// Apply a Capability document and verify it is persisted — not just planned.

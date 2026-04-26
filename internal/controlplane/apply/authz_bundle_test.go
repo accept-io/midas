@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/accept-io/midas/internal/controlplane/apply"
+	"github.com/accept-io/midas/internal/controlplane/parser"
 	"github.com/accept-io/midas/internal/controlplane/types"
 	"github.com/accept-io/midas/internal/store/memory"
 )
@@ -51,22 +52,23 @@ func denyAllAuthorizer(kind string) (bool, string) {
 func TestBundleAuthz_AllowedKindsPersistDeniedMarkedInvalid(t *testing.T) {
 	repos := memory.NewRepositories()
 	svc := apply.NewServiceWithRepos(apply.RepositorySet{
-		Capabilities:     repos.Capabilities,
-		Processes:        repos.Processes,
-		Surfaces:         repos.Surfaces,
-		Agents:           repos.Agents,
-		Profiles:         repos.Profiles,
-		Grants:           repos.Grants,
-		BusinessServices: repos.BusinessServices,
+		Capabilities:                repos.Capabilities,
+		Processes:                   repos.Processes,
+		Surfaces:                    repos.Surfaces,
+		Agents:                      repos.Agents,
+		Profiles:                    repos.Profiles,
+		Grants:                      repos.Grants,
+		BusinessServices:            repos.BusinessServices,
+		BusinessServiceCapabilities: repos.BusinessServiceCapabilities,
 	})
 
 	// Caller authorized for Capability+Process+Surface but NOT Agent.
 	ctx := apply.WithKindAuthorizer(
 		context.Background(),
-		allowKindsAuthorizer(types.KindCapability, types.KindProcess, types.KindSurface, types.KindProfile, types.KindGrant),
+		allowKindsAuthorizer(types.KindCapability, types.KindBusinessServiceCapability, types.KindProcess, types.KindSurface, types.KindProfile, types.KindGrant),
 	)
 
-	plan := svc.Plan(ctx, sixKindBundle())
+	plan := svc.Plan(ctx, eightKindBundle())
 
 	foundInvalidAgent := false
 	for _, e := range plan.Entries {
@@ -87,7 +89,7 @@ func TestBundleAuthz_AllowedKindsPersistDeniedMarkedInvalid(t *testing.T) {
 
 	// Execute the plan — nothing should persist because one invalid entry
 	// blocks the whole apply (existing ApplyPlan semantics).
-	result := svc.Apply(ctx, sixKindBundle(), "test-actor")
+	result := svc.Apply(ctx, eightKindBundle(), "test-actor")
 	if result.CreatedCount() != 0 {
 		t.Errorf("expected 0 created (one invalid doc blocks bundle), got %d", result.CreatedCount())
 	}
@@ -107,19 +109,21 @@ func TestBundleAuthz_AllowedKindsPersistDeniedMarkedInvalid(t *testing.T) {
 func TestBundleAuthz_DenyAll_EveryEntryInvalid(t *testing.T) {
 	repos := memory.NewRepositories()
 	svc := apply.NewServiceWithRepos(apply.RepositorySet{
-		Capabilities: repos.Capabilities,
-		Processes:    repos.Processes,
-		Surfaces:     repos.Surfaces,
-		Agents:       repos.Agents,
-		Profiles:     repos.Profiles,
-		Grants:       repos.Grants,
+		Capabilities:                repos.Capabilities,
+		Processes:                   repos.Processes,
+		Surfaces:                    repos.Surfaces,
+		Agents:                      repos.Agents,
+		Profiles:                    repos.Profiles,
+		Grants:                      repos.Grants,
+		BusinessServices:            repos.BusinessServices,
+		BusinessServiceCapabilities: repos.BusinessServiceCapabilities,
 	})
 
 	ctx := apply.WithKindAuthorizer(context.Background(), apply.KindAuthorizer(denyAllAuthorizer))
-	plan := svc.Plan(ctx, sixKindBundle())
+	plan := svc.Plan(ctx, eightKindBundle())
 
-	if len(plan.Entries) != 6 {
-		t.Fatalf("expected 6 entries, got %d", len(plan.Entries))
+	if len(plan.Entries) != 8 {
+		t.Fatalf("expected 8 entries, got %d", len(plan.Entries))
 	}
 	for _, e := range plan.Entries {
 		if e.Action != apply.ApplyActionInvalid {
@@ -127,7 +131,7 @@ func TestBundleAuthz_DenyAll_EveryEntryInvalid(t *testing.T) {
 		}
 	}
 
-	result := svc.Apply(ctx, sixKindBundle(), "test-actor")
+	result := svc.Apply(ctx, eightKindBundle(), "test-actor")
 	if result.CreatedCount() != 0 {
 		t.Errorf("deny-all must create nothing; got %d", result.CreatedCount())
 	}
@@ -140,24 +144,26 @@ func TestBundleAuthz_DenyAll_EveryEntryInvalid(t *testing.T) {
 func TestBundleAuthz_AllowAll_BehavesAsBefore(t *testing.T) {
 	repos := memory.NewRepositories()
 	svc := apply.NewServiceWithRepos(apply.RepositorySet{
-		Capabilities: repos.Capabilities,
-		Processes:    repos.Processes,
-		Surfaces:     repos.Surfaces,
-		Agents:       repos.Agents,
-		Profiles:     repos.Profiles,
-		Grants:       repos.Grants,
+		Capabilities:                repos.Capabilities,
+		Processes:                   repos.Processes,
+		Surfaces:                    repos.Surfaces,
+		Agents:                      repos.Agents,
+		Profiles:                    repos.Profiles,
+		Grants:                      repos.Grants,
+		BusinessServices:            repos.BusinessServices,
+		BusinessServiceCapabilities: repos.BusinessServiceCapabilities,
 	})
 
 	ctx := apply.WithKindAuthorizer(
 		context.Background(),
 		apply.KindAuthorizer(func(string) (bool, string) { return true, "" }),
 	)
-	result := svc.Apply(ctx, sixKindBundle(), "test-actor")
+	result := svc.Apply(ctx, eightKindBundle(), "test-actor")
 	if result.ValidationErrorCount() != 0 {
 		t.Fatalf("expected no validation errors, got: %+v", result.ValidationErrors)
 	}
-	if result.CreatedCount() != 6 {
-		t.Fatalf("expected 6 created, got %d", result.CreatedCount())
+	if result.CreatedCount() != 8 {
+		t.Fatalf("expected 8 created, got %d", result.CreatedCount())
 	}
 }
 
@@ -168,18 +174,20 @@ func TestBundleAuthz_AllowAll_BehavesAsBefore(t *testing.T) {
 func TestBundleAuthz_NoAuthorizer_Unenforced(t *testing.T) {
 	repos := memory.NewRepositories()
 	svc := apply.NewServiceWithRepos(apply.RepositorySet{
-		Capabilities: repos.Capabilities,
-		Processes:    repos.Processes,
-		Surfaces:     repos.Surfaces,
-		Agents:       repos.Agents,
-		Profiles:     repos.Profiles,
-		Grants:       repos.Grants,
+		Capabilities:                repos.Capabilities,
+		Processes:                   repos.Processes,
+		Surfaces:                    repos.Surfaces,
+		Agents:                      repos.Agents,
+		Profiles:                    repos.Profiles,
+		Grants:                      repos.Grants,
+		BusinessServices:            repos.BusinessServices,
+		BusinessServiceCapabilities: repos.BusinessServiceCapabilities,
 	})
 
 	// No WithKindAuthorizer call on the context.
-	result := svc.Apply(context.Background(), sixKindBundle(), "test-actor")
-	if result.CreatedCount() != 6 {
-		t.Fatalf("expected 6 created when no authorizer is set, got %d", result.CreatedCount())
+	result := svc.Apply(context.Background(), eightKindBundle(), "test-actor")
+	if result.CreatedCount() != 8 {
+		t.Fatalf("expected 8 created when no authorizer is set, got %d", result.CreatedCount())
 	}
 }
 
@@ -190,24 +198,28 @@ func TestBundleAuthz_NoAuthorizer_Unenforced(t *testing.T) {
 func TestBundleAuthz_DeniedMessagesName_EachKind_SeparatePermission(t *testing.T) {
 	repos := memory.NewRepositories()
 	svc := apply.NewServiceWithRepos(apply.RepositorySet{
-		Capabilities: repos.Capabilities,
-		Processes:    repos.Processes,
-		Surfaces:     repos.Surfaces,
-		Agents:       repos.Agents,
-		Profiles:     repos.Profiles,
-		Grants:       repos.Grants,
+		Capabilities:                repos.Capabilities,
+		Processes:                   repos.Processes,
+		Surfaces:                    repos.Surfaces,
+		Agents:                      repos.Agents,
+		Profiles:                    repos.Profiles,
+		Grants:                      repos.Grants,
+		BusinessServices:            repos.BusinessServices,
+		BusinessServiceCapabilities: repos.BusinessServiceCapabilities,
 	})
 
 	ctx := apply.WithKindAuthorizer(context.Background(), apply.KindAuthorizer(denyAllAuthorizer))
-	plan := svc.Plan(ctx, sixKindBundle())
+	plan := svc.Plan(ctx, eightKindBundle())
 
 	wantByKind := map[string]string{
-		types.KindCapability: "capability:write",
-		types.KindProcess:    "process:write",
-		types.KindSurface:    "surface:write",
-		types.KindAgent:      "agent:write",
-		types.KindProfile:    "profile:write",
-		types.KindGrant:      "grant:write",
+		types.KindBusinessService:           "businessservice:write",
+		types.KindCapability:                "capability:write",
+		types.KindBusinessServiceCapability: "businessservicecapability:write",
+		types.KindProcess:                   "process:write",
+		types.KindSurface:                   "surface:write",
+		types.KindAgent:                     "agent:write",
+		types.KindProfile:                   "profile:write",
+		types.KindGrant:                     "grant:write",
 	}
 	for _, e := range plan.Entries {
 		want := wantByKind[e.Kind]
@@ -231,4 +243,116 @@ func anyErrContains(errs []types.ValidationError, sub string) bool {
 		}
 	}
 	return false
+}
+
+// eightKindBundle builds a structurally-valid bundle covering the eight
+// apply-eligible kinds in the v1 service-led model: BusinessService,
+// Capability, BusinessServiceCapability, Process, Surface, Agent, Profile,
+// Grant. Used by per-Kind authorization tests in this file.
+func eightKindBundle() []parser.ParsedDocument {
+	return []parser.ParsedDocument{
+		{
+			Kind: types.KindBusinessService,
+			ID:   "bs-struct-test",
+			Doc: types.BusinessServiceDocument{
+				APIVersion: types.APIVersionV1,
+				Kind:       types.KindBusinessService,
+				Metadata:   types.DocumentMetadata{ID: "bs-struct-test", Name: "Struct Test BS"},
+				Spec:       types.BusinessServiceSpec{ServiceType: "internal", Status: "active"},
+			},
+		},
+		{
+			Kind: types.KindCapability,
+			ID:   "cap-struct-test",
+			Doc: types.CapabilityDocument{
+				APIVersion: types.APIVersionV1,
+				Kind:       types.KindCapability,
+				Metadata:   types.DocumentMetadata{ID: "cap-struct-test", Name: "Struct Test Cap"},
+				Spec:       types.CapabilitySpec{Status: "active"},
+			},
+		},
+		{
+			Kind: types.KindBusinessServiceCapability,
+			ID:   "bsc-struct-test",
+			Doc: types.BusinessServiceCapabilityDocument{
+				APIVersion: types.APIVersionV1,
+				Kind:       types.KindBusinessServiceCapability,
+				Metadata:   types.DocumentMetadata{ID: "bsc-struct-test"},
+				Spec: types.BusinessServiceCapabilitySpec{
+					BusinessServiceID: "bs-struct-test",
+					CapabilityID:      "cap-struct-test",
+				},
+			},
+		},
+		{
+			Kind: types.KindProcess,
+			ID:   "proc-struct-test",
+			Doc: types.ProcessDocument{
+				APIVersion: types.APIVersionV1,
+				Kind:       types.KindProcess,
+				Metadata:   types.DocumentMetadata{ID: "proc-struct-test", Name: "Struct Test Process"},
+				Spec:       types.ProcessSpec{BusinessServiceID: "bs-struct-test", Status: "active"},
+			},
+		},
+		{
+			Kind: types.KindSurface,
+			ID:   "surf-struct-test",
+			Doc: types.SurfaceDocument{
+				APIVersion: types.APIVersionV1,
+				Kind:       types.KindSurface,
+				Metadata:   types.DocumentMetadata{ID: "surf-struct-test", Name: "Struct Test Surface"},
+				Spec: types.SurfaceSpec{
+					Category:  "test",
+					RiskTier:  "low",
+					Status:    "active",
+					ProcessID: "proc-struct-test",
+				},
+			},
+		},
+		{
+			Kind: types.KindAgent,
+			ID:   "agent-struct-test",
+			Doc: types.AgentDocument{
+				APIVersion: types.APIVersionV1,
+				Kind:       types.KindAgent,
+				Metadata:   types.DocumentMetadata{ID: "agent-struct-test", Name: "Struct Test Agent"},
+				Spec:       types.AgentSpec{Type: "automation", Status: "active"},
+			},
+		},
+		{
+			Kind: types.KindProfile,
+			ID:   "prof-struct-test",
+			Doc: types.ProfileDocument{
+				APIVersion: types.APIVersionV1,
+				Kind:       types.KindProfile,
+				Metadata:   types.DocumentMetadata{ID: "prof-struct-test", Name: "Struct Test Profile"},
+				Spec: types.ProfileSpec{
+					SurfaceID: "surf-struct-test",
+					Authority: types.ProfileAuthority{
+						DecisionConfidenceThreshold: 0.5,
+						ConsequenceThreshold:        types.ConsequenceThreshold{Type: "monetary", Amount: 100, Currency: "USD"},
+					},
+					Policy:    types.ProfilePolicy{Reference: "rego://test/struct_v1", FailMode: "open"},
+					Lifecycle: types.ProfileLifecycle{Status: "active"},
+				},
+			},
+		},
+		{
+			Kind: types.KindGrant,
+			ID:   "grant-struct-test",
+			Doc: types.GrantDocument{
+				APIVersion: types.APIVersionV1,
+				Kind:       types.KindGrant,
+				Metadata:   types.DocumentMetadata{ID: "grant-struct-test", Name: "Struct Test Grant"},
+				Spec: types.GrantSpec{
+					AgentID:       "agent-struct-test",
+					ProfileID:     "prof-struct-test",
+					Status:        "active",
+					GrantedBy:     "team-struct",
+					GrantedAt:     "2026-01-01T00:00:00Z",
+					EffectiveFrom: "2026-01-01T00:00:00Z",
+				},
+			},
+		},
+	}
 }

@@ -59,44 +59,12 @@ Then open [http://localhost:8080/explorer](http://localhost:8080/explorer) and s
 
 ### First API evaluation
 
-MIDAS supports two evaluation modes. Choose evaluation mode based on your governance requirements.
-
-**Inferred mode** — no setup required. Enable inference and evaluate immediately. MIDAS creates the structural entities (capability, process, surface) automatically on first call.
-
-```bash
-# Enable inference (Postgres required)
-export MIDAS_INFERENCE_ENABLED=true
-
-curl -s -X POST http://localhost:8080/v1/evaluate \
-  -H "Content-Type: application/json" \
-  -d '{
-    "surface_id":  "loan.approve",
-    "agent_id":    "agent-credit-001",
-    "confidence":  0.91,
-    "request_id":  "req-demo-001",
-    "request_source": "lending-service"
-  }' | jq .
-```
-
-Expected response (inference creates structure on first call):
-
-```json
-{
-  "outcome":     "accept",
-  "reason":      "WITHIN_AUTHORITY",
-  "envelope_id": "...",
-  "inference": {
-    "capability_id":       "auto:loan",
-    "process_id":          "auto:loan.approve",
-    "surface_id":          "loan.approve",
-    "capability_created":  true,
-    "process_created":     true,
-    "surface_created":     true
-  }
-}
-```
-
-**Explicit mode** — requires pre-created structure (via control plane apply). Provides strict governance validation: `process_id` must exist and must belong to the given `surface_id`. This is the default and is recommended for production.
+MIDAS v1 evaluates against explicitly declared structure. Pre-create the
+structural entities (BusinessService, Capability, Process, Surface, Profile,
+Grant, Agent) with `POST /v1/controlplane/apply`, then call `/v1/evaluate`
+with an explicit `process_id`. MIDAS validates that the process exists, the
+surface exists, and the surface belongs to the process; the request fails
+with 400 if any check fails.
 
 ```bash
 curl -s -X POST http://localhost:8080/v1/evaluate \
@@ -182,14 +150,6 @@ Roles: `platform.admin`, `platform.operator`, `platform.viewer`, `governance.app
 | `required` | Set | Bearer token auth enforced |
 | `required` | Unset | **Fatal** — no tokens configured |
 | `open` | — | No auth — `UNSAFE FOR PRODUCTION` logged |
-
-### Inference
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `MIDAS_INFERENCE_ENABLED` | `false` | `true` enables automatic structure inference on `POST /v1/evaluate`. Requires Postgres. |
-
-When `false` (the default), `process_id` is required on every evaluate call. When `true`, omitting `process_id` causes MIDAS to infer and create the structural entities automatically.
 
 ### Key environment variables
 

@@ -8,18 +8,17 @@ import (
 	"github.com/accept-io/midas/internal/agent"
 	"github.com/accept-io/midas/internal/authority"
 	"github.com/accept-io/midas/internal/businessservice"
+	"github.com/accept-io/midas/internal/businessservicecapability"
 	"github.com/accept-io/midas/internal/capability"
 	"github.com/accept-io/midas/internal/process"
-	"github.com/accept-io/midas/internal/processbusinessservice"
-	"github.com/accept-io/midas/internal/processcapability"
 	"github.com/accept-io/midas/internal/store"
 	"github.com/accept-io/midas/internal/surface"
 	"github.com/accept-io/midas/internal/value"
 )
 
-// SeedDemo inserts the canonical demonstration dataset that exercises the full
-// BusinessService → Process → Surface structural model with many-to-many
-// Process ↔ Capability relationships.
+// SeedDemo inserts the canonical demonstration dataset for the v1 service-led
+// structural model: BusinessService → Process → Surface, with Capability
+// realisation through the business_service_capabilities M:N junction.
 //
 // The seed is idempotent: if the bs-consumer-lending business service already
 // exists the function returns nil without modifying any data.
@@ -33,21 +32,21 @@ import (
 //	Capabilities:
 //	  cap-identity-verification  Identity Verification
 //	  cap-credit-scoring         Credit Scoring
-//	  cap-fraud-detection        Fraud Detection (shared — used by both services)
+//	  cap-fraud-detection        Fraud Detection (shared — realised by both services)
 //	  cap-payment-authorization  Payment Authorization
 //
-//	Processes (→ BusinessService):
+//	BusinessServiceCapabilities (canonical Capability ↔ BusinessService):
+//	  bs-consumer-lending   ↔ cap-identity-verification
+//	  bs-consumer-lending   ↔ cap-credit-scoring
+//	  bs-consumer-lending   ↔ cap-fraud-detection
+//	  bs-merchant-services  ↔ cap-fraud-detection
+//	  bs-merchant-services  ↔ cap-payment-authorization
+//
+//	Processes (→ BusinessService, required N:1):
 //	  proc-consumer-onboarding   → bs-consumer-lending
 //	  proc-credit-assessment     → bs-consumer-lending
 //	  proc-merchant-risk-screen  → bs-merchant-services
 //	  proc-merchant-payment-auth → bs-merchant-services
-//
-//	ProcessCapabilities (proving cap-fraud-detection is shared):
-//	  proc-consumer-onboarding  ↔ cap-identity-verification
-//	  proc-consumer-onboarding  ↔ cap-fraud-detection
-//	  proc-credit-assessment    ↔ cap-credit-scoring
-//	  proc-merchant-risk-screen ↔ cap-fraud-detection
-//	  proc-merchant-payment-auth ↔ cap-payment-authorization
 //
 //	Surfaces (→ Process):
 //	  surf-v2-id-verify        → proc-consumer-onboarding
@@ -160,7 +159,6 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 		{
 			ID:                "proc-consumer-onboarding",
 			Name:              "Consumer Onboarding",
-			CapabilityID:      "cap-identity-verification",
 			BusinessServiceID: "bs-consumer-lending",
 			Status:            "active",
 			Origin:            "manual",
@@ -171,7 +169,6 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 		{
 			ID:                "proc-credit-assessment",
 			Name:              "Credit Assessment",
-			CapabilityID:      "cap-credit-scoring",
 			BusinessServiceID: "bs-consumer-lending",
 			Status:            "active",
 			Origin:            "manual",
@@ -182,7 +179,6 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 		{
 			ID:                "proc-merchant-risk-screen",
 			Name:              "Merchant Risk Screening",
-			CapabilityID:      "cap-fraud-detection",
 			BusinessServiceID: "bs-merchant-services",
 			Status:            "active",
 			Origin:            "manual",
@@ -193,7 +189,6 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 		{
 			ID:                "proc-merchant-payment-auth",
 			Name:              "Merchant Payment Authorization",
-			CapabilityID:      "cap-payment-authorization",
 			BusinessServiceID: "bs-merchant-services",
 			Status:            "active",
 			Origin:            "manual",
@@ -208,38 +203,20 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 		}
 	}
 
-	// --- Process ↔ Capability mappings ---
-	// cap-fraud-detection is shared: it appears in both consumer-onboarding
-	// and merchant-risk-screen, demonstrating cross-service capability reuse.
+	// --- BusinessService ↔ Capability realisations ---
+	// cap-fraud-detection is shared: realised by both consumer-lending and
+	// merchant-services, demonstrating cross-service capability reuse.
 
-	pcLinks := []*processcapability.ProcessCapability{
-		{ProcessID: "proc-consumer-onboarding", CapabilityID: "cap-identity-verification", CreatedAt: now},
-		{ProcessID: "proc-consumer-onboarding", CapabilityID: "cap-fraud-detection", CreatedAt: now},
-		{ProcessID: "proc-credit-assessment", CapabilityID: "cap-credit-scoring", CreatedAt: now},
-		{ProcessID: "proc-merchant-risk-screen", CapabilityID: "cap-fraud-detection", CreatedAt: now},
-		{ProcessID: "proc-merchant-payment-auth", CapabilityID: "cap-payment-authorization", CreatedAt: now},
+	bscLinks := []*businessservicecapability.BusinessServiceCapability{
+		{BusinessServiceID: "bs-consumer-lending", CapabilityID: "cap-identity-verification", CreatedAt: now},
+		{BusinessServiceID: "bs-consumer-lending", CapabilityID: "cap-credit-scoring", CreatedAt: now},
+		{BusinessServiceID: "bs-consumer-lending", CapabilityID: "cap-fraud-detection", CreatedAt: now},
+		{BusinessServiceID: "bs-merchant-services", CapabilityID: "cap-fraud-detection", CreatedAt: now},
+		{BusinessServiceID: "bs-merchant-services", CapabilityID: "cap-payment-authorization", CreatedAt: now},
 	}
-	for _, pc := range pcLinks {
-		if err := repos.ProcessCapabilities.Create(ctx, pc); err != nil {
-			return fmt.Errorf("create process_capability %s↔%s: %w", pc.ProcessID, pc.CapabilityID, err)
-		}
-	}
-
-	// --- Process ↔ BusinessService N:M mappings ---
-	// Mirrors the N:1 business_service_id field but via the link table, enabling
-	// the N:M traversal path. proc-consumer-onboarding also links to bs-merchant-services
-	// to demonstrate a process that legitimately spans two business services.
-
-	pbsLinks := []*processbusinessservice.ProcessBusinessService{
-		{ProcessID: "proc-consumer-onboarding", BusinessServiceID: "bs-consumer-lending", CreatedAt: now},
-		{ProcessID: "proc-consumer-onboarding", BusinessServiceID: "bs-merchant-services", CreatedAt: now},
-		{ProcessID: "proc-credit-assessment", BusinessServiceID: "bs-consumer-lending", CreatedAt: now},
-		{ProcessID: "proc-merchant-risk-screen", BusinessServiceID: "bs-merchant-services", CreatedAt: now},
-		{ProcessID: "proc-merchant-payment-auth", BusinessServiceID: "bs-merchant-services", CreatedAt: now},
-	}
-	for _, pbs := range pbsLinks {
-		if err := repos.ProcessBusinessServices.Create(ctx, pbs); err != nil {
-			return fmt.Errorf("create process_business_service %s↔%s: %w", pbs.ProcessID, pbs.BusinessServiceID, err)
+	for _, bsc := range bscLinks {
+		if err := repos.BusinessServiceCapabilities.Create(ctx, bsc); err != nil {
+			return fmt.Errorf("create business_service_capability %s↔%s: %w", bsc.BusinessServiceID, bsc.CapabilityID, err)
 		}
 	}
 

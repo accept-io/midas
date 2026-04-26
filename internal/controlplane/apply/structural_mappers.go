@@ -5,11 +5,10 @@ import (
 	"time"
 
 	"github.com/accept-io/midas/internal/businessservice"
+	"github.com/accept-io/midas/internal/businessservicecapability"
 	"github.com/accept-io/midas/internal/capability"
 	"github.com/accept-io/midas/internal/controlplane/types"
 	"github.com/accept-io/midas/internal/process"
-	"github.com/accept-io/midas/internal/processbusinessservice"
-	"github.com/accept-io/midas/internal/processcapability"
 )
 
 func mapCapabilityDocumentToCapability(doc types.CapabilityDocument, now time.Time, createdBy string) *capability.Capability {
@@ -34,7 +33,6 @@ func mapProcessDocumentToProcess(doc types.ProcessDocument, now time.Time, creat
 	return &process.Process{
 		ID:                strings.TrimSpace(doc.Metadata.ID),
 		Name:              strings.TrimSpace(doc.Metadata.Name),
-		CapabilityID:      strings.TrimSpace(doc.Spec.CapabilityID),
 		ParentProcessID:   strings.TrimSpace(doc.Spec.ParentProcessID),
 		BusinessServiceID: strings.TrimSpace(doc.Spec.BusinessServiceID),
 		Description:       strings.TrimSpace(doc.Spec.Description),
@@ -45,22 +43,6 @@ func mapProcessDocumentToProcess(doc types.ProcessDocument, now time.Time, creat
 		CreatedAt:         now,
 		UpdatedAt:         now,
 		CreatedBy:         strings.TrimSpace(createdBy),
-	}
-}
-
-func mapProcessCapabilityDocumentToProcessCapability(doc types.ProcessCapabilityDocument, now time.Time) *processcapability.ProcessCapability {
-	return &processcapability.ProcessCapability{
-		ProcessID:    strings.TrimSpace(doc.Spec.ProcessID),
-		CapabilityID: strings.TrimSpace(doc.Spec.CapabilityID),
-		CreatedAt:    now.UTC(),
-	}
-}
-
-func mapProcessBusinessServiceDocumentToProcessBusinessService(doc types.ProcessBusinessServiceDocument, now time.Time) *processbusinessservice.ProcessBusinessService {
-	return &processbusinessservice.ProcessBusinessService{
-		ProcessID:         strings.TrimSpace(doc.Spec.ProcessID),
-		BusinessServiceID: strings.TrimSpace(doc.Spec.BusinessServiceID),
-		CreatedAt:         now.UTC(),
 	}
 }
 
@@ -78,5 +60,13 @@ func mapBusinessServiceDocumentToBusinessService(doc types.BusinessServiceDocume
 		Managed:         true,
 		CreatedAt:       now,
 		UpdatedAt:       now,
+	}
+}
+
+func mapBusinessServiceCapabilityDocumentToBusinessServiceCapability(doc types.BusinessServiceCapabilityDocument, now time.Time) *businessservicecapability.BusinessServiceCapability {
+	return &businessservicecapability.BusinessServiceCapability{
+		BusinessServiceID: strings.TrimSpace(doc.Spec.BusinessServiceID),
+		CapabilityID:      strings.TrimSpace(doc.Spec.CapabilityID),
+		CreatedAt:         now.UTC(),
 	}
 }

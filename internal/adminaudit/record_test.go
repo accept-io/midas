@@ -28,13 +28,11 @@ func TestNewRecord_AssignsIDAndTimestamp(t *testing.T) {
 }
 
 // TestActionsEnumerated asserts that the action vocabulary is fixed at
-// exactly the five first-pass actions documented in Issue #41. Adding a new
-// action must be an intentional change to this test.
+// exactly the three first-pass actions retained after inference retirement.
+// Adding a new action must be an intentional change to this test.
 func TestActionsEnumerated(t *testing.T) {
 	want := map[Action]bool{
 		ActionApplyInvoked:          true,
-		ActionPromoteExecuted:       true,
-		ActionCleanupExecuted:       true,
 		ActionPasswordChanged:       true,
 		ActionBootstrapAdminCreated: true,
 	}
@@ -43,7 +41,7 @@ func TestActionsEnumerated(t *testing.T) {
 			t.Errorf("action constant resolves to empty string: %v", a)
 		}
 	}
-	if len(want) != 5 {
-		t.Fatalf("expected 5 actions, got %d", len(want))
+	if len(want) != 3 {
+		t.Fatalf("expected 3 actions, got %d", len(want))
 	}
 }

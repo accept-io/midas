@@ -28,14 +28,10 @@ package httpapi
 // loudly if it silently changes.
 
 import (
-	"context"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"github.com/accept-io/midas/internal/inference"
 )
 
 // ---------------------------------------------------------------------------
@@ -262,95 +258,3 @@ func TestReadRequestBody_Valid_ReturnsBytes(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// HTTP handler surface — representative end-to-end check.
-//
-// /v1/controlplane/promote uses both readRequestBody and decodeStrictJSON
-// on a strict JSON body. It is a good proxy for the full handler chain
-// without dragging in authentication or lifecycle wiring. The assertions
-// below encode the HTTP status and body shape that POST handlers using
-// these helpers must produce.
-// ---------------------------------------------------------------------------
-
-func newDecoderContractServer() *Server {
-	// Promote service that returns a successful response regardless of
-	// input — this test only cares about the decoder layer, not about
-	// promotion semantics. If we ever reach the service, the test has
-	// skipped the decoder path entirely and should fail loudly.
-	return NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithPromotion(&unexpectedPromotionSvc{})
-}
-
-type unexpectedPromotionSvc struct{}
-
-func (u *unexpectedPromotionSvc) Promote(_ context.Context, _ inference.PromoteRequest) (inference.PromoteResponse, error) {
-	// Reaching the service means the handler accepted a body it should
-	// have rejected at decode time. Return an identifiable error so the
-	// assertion message points at the SUT, not at the fake.
-	return inference.PromoteResponse{}, fmt.Errorf("UNEXPECTED: decoder allowed bad input through to service")
-}
-
-func TestHandlerDecodeFailure_ReturnsBadRequestWithStableErrorMessage(t *testing.T) {
-	// Each of these shapes should be caught by decodeStrictJSON and
-	// surface as HTTP 400 with the stable error body.
-	cases := []struct {
-		name string
-		body string
-	}{
-		{"malformed_syntax_unclosed", `{"from":{`},
-		{"wrong_type_number_in_object_field", `{"from":42,"to":{"capability_id":"c","process_id":"p"}}`},
-		{"unknown_field", `{"from":{"capability_id":"c","process_id":"p"},"to":{"capability_id":"c","process_id":"p"},"unknown":"x"}`},
-		{"trailing_object", `{"from":{"capability_id":"c","process_id":"p"},"to":{"capability_id":"c","process_id":"p"}}{"extra":1}`},
-		{"trailing_garbage", `{"from":{"capability_id":"c","process_id":"p"},"to":{"capability_id":"c","process_id":"p"}}xyz`},
-	}
-	srv := newDecoderContractServer()
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			rec := performRequest(t, srv, http.MethodPost, "/v1/controlplane/promote", []byte(tc.body))
-			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("want 400 for %s, got %d: %s", tc.name, rec.Code, rec.Body.String())
-			}
-			resp := decodeError(t, rec)
-			if resp["error"] != "invalid JSON payload" {
-				t.Errorf("contract: decode-fail body must be {\"error\":\"invalid JSON payload\"}; got %v", resp)
-			}
-		})
-	}
-}
-
-func TestHandlerEmptyBody_ReturnsBadRequestWithStableErrorMessage(t *testing.T) {
-	cases := []struct {
-		name string
-		body string
-	}{
-		{"empty", ""},
-		{"whitespace_only", "   \n\n   "},
-	}
-	srv := newDecoderContractServer()
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			rec := performRequest(t, srv, http.MethodPost, "/v1/controlplane/promote", []byte(tc.body))
-			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("want 400 for empty/whitespace body, got %d: %s", rec.Code, rec.Body.String())
-			}
-			resp := decodeError(t, rec)
-			if resp["error"] != "request body must not be empty" {
-				t.Errorf("contract: empty-body error must be \"request body must not be empty\"; got %v", resp)
-			}
-		})
-	}
-}
-
-func TestHandlerOversizeBody_Returns413(t *testing.T) {
-	// Write a body larger than maxRequestBodyBytes (1 MiB). The exact
-	// status for oversize is 413; the body does not carry a stable
-	// message (it reflects the MaxBytesReader error) so we only pin the
-	// status code.
-	body := strings.Repeat("x", (1<<20)+128)
-	srv := newDecoderContractServer()
-
-	rec := performRequest(t, srv, http.MethodPost, "/v1/controlplane/promote", []byte(body))
-	if rec.Code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("want 413 for oversize body, got %d: %s", rec.Code, rec.Body.String())
-	}
-}

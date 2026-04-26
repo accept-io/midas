@@ -107,9 +107,10 @@ Expected:
 
 ## Your first evaluation
 
-### Option A: Explicit mode (pre-created structure, memory mode)
-
-The in-memory store seeds demo surfaces, profiles, and agents. Use these IDs for your first request. This is the **explicit mode**: `process_id` is provided and the surface must already exist.
+MIDAS v1 evaluates against pre-declared structural entities. The in-memory
+store seeds demo surfaces, profiles, processes, and agents on startup. Use
+these IDs for your first request. The `process_id` is required (in enforced
+structural mode) and the surface must already exist.
 
 ```bash
 curl -s -X POST http://localhost:8080/v1/evaluate \
@@ -142,53 +143,23 @@ Expected response:
 }
 ```
 
-### Option B: Inference mode (no setup required, Postgres mode)
+### Postgres mode
 
-With inference enabled, you can evaluate immediately without pre-creating surfaces, profiles, or processes. MIDAS creates the structural scaffolding automatically on first call.
-
-Start MIDAS with Postgres and inference enabled:
+In production-style deployments, declare structural entities via
+`POST /v1/controlplane/apply` (BusinessService → Capability → Process →
+Surface, plus Agent, Profile, Grant, and BusinessServiceCapability links),
+then evaluate against the resulting IDs. The evaluation flow is identical
+to the memory-mode example above.
 
 ```bash
 export MIDAS_STORE_BACKEND=postgres
 export MIDAS_DATABASE_URL="postgresql://user:pass@host:5432/midas?sslmode=disable"
-export MIDAS_INFERENCE_ENABLED=true
 export MIDAS_AUTH_MODE=open  # dev only
 go run ./cmd/midas
 ```
 
-Evaluate with no prior setup:
-
-```bash
-curl -s -X POST http://localhost:8080/v1/evaluate \
-  -H "Content-Type: application/json" \
-  -d '{
-    "surface_id":     "loan.approve",
-    "agent_id":       "agent-credit-001",
-    "confidence":     0.91,
-    "request_id":     "req-gs-001",
-    "request_source": "getting-started"
-  }' | jq .
-```
-
-Expected response (structure created on first call):
-
-```json
-{
-  "outcome":     "accept",
-  "reason":      "WITHIN_AUTHORITY",
-  "envelope_id": "<uuid>",
-  "inference": {
-    "capability_id":      "auto:loan",
-    "process_id":         "auto:loan.approve",
-    "surface_id":         "loan.approve",
-    "capability_created": true,
-    "process_created":    true,
-    "surface_created":    true
-  }
-}
-```
-
-Subsequent calls with the same `surface_id` return `capability_created: false`, `process_created: false`, `surface_created: false` — the existing structure is reused.
+Apply a bundle, then evaluate against its IDs (see
+[docs/control-plane.md](control-plane.md) for bundle authoring).
 
 Retrieve the full governance envelope:
 

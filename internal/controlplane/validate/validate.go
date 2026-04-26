@@ -50,12 +50,10 @@ func ValidateDocument(doc parser.ParsedDocument) []types.ValidationError {
 	errs = append(errs, validateIdentity(doc)...)
 
 	switch d := doc.Doc.(type) {
-	case types.ProcessCapabilityDocument:
-		errs = append(errs, validateProcessCapability(d)...)
-	case types.ProcessBusinessServiceDocument:
-		errs = append(errs, validateProcessBusinessService(d)...)
 	case types.BusinessServiceDocument:
 		errs = append(errs, validateBusinessService(d)...)
+	case types.BusinessServiceCapabilityDocument:
+		errs = append(errs, validateBusinessServiceCapability(d)...)
 	case types.CapabilityDocument:
 		errs = append(errs, validateCapability(d)...)
 	case types.ProcessDocument:
@@ -171,36 +169,6 @@ func validateIDFormat(id string) error {
 	return nil
 }
 
-func validateProcessCapability(doc types.ProcessCapabilityDocument) []types.ValidationError {
-	var errs []types.ValidationError
-	if strings.TrimSpace(doc.Spec.ProcessID) == "" {
-		errs = append(errs, requiredFieldErr(doc, "spec.process_id"))
-	} else if err := validateIDFormat(doc.Spec.ProcessID); err != nil {
-		errs = append(errs, fieldErr(doc, "spec.process_id", err.Error()))
-	}
-	if strings.TrimSpace(doc.Spec.CapabilityID) == "" {
-		errs = append(errs, requiredFieldErr(doc, "spec.capability_id"))
-	} else if err := validateIDFormat(doc.Spec.CapabilityID); err != nil {
-		errs = append(errs, fieldErr(doc, "spec.capability_id", err.Error()))
-	}
-	return errs
-}
-
-func validateProcessBusinessService(doc types.ProcessBusinessServiceDocument) []types.ValidationError {
-	var errs []types.ValidationError
-	if strings.TrimSpace(doc.Spec.ProcessID) == "" {
-		errs = append(errs, requiredFieldErr(doc, "spec.process_id"))
-	} else if err := validateIDFormat(doc.Spec.ProcessID); err != nil {
-		errs = append(errs, fieldErr(doc, "spec.process_id", err.Error()))
-	}
-	if strings.TrimSpace(doc.Spec.BusinessServiceID) == "" {
-		errs = append(errs, requiredFieldErr(doc, "spec.business_service_id"))
-	} else if err := validateIDFormat(doc.Spec.BusinessServiceID); err != nil {
-		errs = append(errs, fieldErr(doc, "spec.business_service_id", err.Error()))
-	}
-	return errs
-}
-
 func validateBusinessService(doc types.BusinessServiceDocument) []types.ValidationError {
 	var errs []types.ValidationError
 	if strings.TrimSpace(doc.Metadata.Name) == "" {
@@ -217,6 +185,30 @@ func validateBusinessService(doc types.BusinessServiceDocument) []types.Validati
 		errs = append(errs, requiredFieldErr(doc, "spec.status"))
 	} else if !contains(ValidBusinessServiceStatuses, doc.Spec.Status) {
 		errs = append(errs, enumErr(doc, "spec.status", doc.Spec.Status, ValidBusinessServiceStatuses))
+	}
+	return errs
+}
+
+// validateBusinessServiceCapability validates a BusinessServiceCapability
+// document — the M:N junction between BusinessService and Capability in the
+// v1 service-led structural model.
+//
+// Per ADR-XXX, junction rows have no lifecycle. The spec carries only
+// business_service_id and capability_id; both are required, both are checked
+// for non-empty (after whitespace trim) and ID-format conformance. Cross-
+// document referential integrity (do the referenced entities exist?) and
+// duplicate detection are concerns of the apply planner, not this validator.
+func validateBusinessServiceCapability(doc types.BusinessServiceCapabilityDocument) []types.ValidationError {
+	var errs []types.ValidationError
+	if strings.TrimSpace(doc.Spec.BusinessServiceID) == "" {
+		errs = append(errs, requiredFieldErr(doc, "spec.business_service_id"))
+	} else if err := validateIDFormat(doc.Spec.BusinessServiceID); err != nil {
+		errs = append(errs, fieldErr(doc, "spec.business_service_id", err.Error()))
+	}
+	if strings.TrimSpace(doc.Spec.CapabilityID) == "" {
+		errs = append(errs, requiredFieldErr(doc, "spec.capability_id"))
+	} else if err := validateIDFormat(doc.Spec.CapabilityID); err != nil {
+		errs = append(errs, fieldErr(doc, "spec.capability_id", err.Error()))
 	}
 	return errs
 }
@@ -248,10 +240,10 @@ func validateProcess(doc types.ProcessDocument) []types.ValidationError {
 	} else if len(doc.Metadata.Name) > MaxNameLength {
 		errs = append(errs, fieldErr(doc, "metadata.name", fmt.Sprintf("exceeds maximum length of %d characters", MaxNameLength)))
 	}
-	if strings.TrimSpace(doc.Spec.CapabilityID) == "" {
-		errs = append(errs, requiredFieldErr(doc, "spec.capability_id"))
-	} else if err := validateIDFormat(doc.Spec.CapabilityID); err != nil {
-		errs = append(errs, fieldErr(doc, "spec.capability_id", err.Error()))
+	if strings.TrimSpace(doc.Spec.BusinessServiceID) == "" {
+		errs = append(errs, requiredFieldErr(doc, "spec.business_service_id"))
+	} else if err := validateIDFormat(doc.Spec.BusinessServiceID); err != nil {
+		errs = append(errs, fieldErr(doc, "spec.business_service_id", err.Error()))
 	}
 	if strings.TrimSpace(doc.Spec.Status) == "" {
 		errs = append(errs, requiredFieldErr(doc, "spec.status"))
