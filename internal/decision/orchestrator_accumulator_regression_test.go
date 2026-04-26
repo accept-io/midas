@@ -80,12 +80,16 @@ func (c *countingEnvelopeRepo) ListByState(ctx context.Context, state envelope.E
 // spyStore is a RepositoryStore that exposes a countingEnvelopeRepo.
 // WithTx provides snapshot-based rollback semantics matching fakeStore.
 type spyStore struct {
-	envelopes *countingEnvelopeRepo
-	audit     *fakeAuditRepo
-	surfaces  *fakeSurfaceRepo
-	agents    *fakeAgentRepo
-	grants    *fakeGrantRepo
-	profiles  *fakeProfileRepo
+	envelopes        *countingEnvelopeRepo
+	audit            *fakeAuditRepo
+	surfaces         *fakeSurfaceRepo
+	agents           *fakeAgentRepo
+	grants           *fakeGrantRepo
+	profiles         *fakeProfileRepo
+	processes        *fakeProcessRepo
+	businessServices *fakeBusinessServiceRepo
+	bscLinks         *fakeBSCRepo
+	capabilities     *fakeCapabilityRepo
 }
 
 func newSpyStore() *spyStore {
@@ -93,11 +97,15 @@ func newSpyStore() *spyStore {
 		envelopes: &countingEnvelopeRepo{
 			inner: &fakeEnvelopeRepo{data: map[string]*envelope.Envelope{}},
 		},
-		audit:    &fakeAuditRepo{},
-		surfaces: &fakeSurfaceRepo{},
-		agents:   &fakeAgentRepo{},
-		grants:   &fakeGrantRepo{},
-		profiles: &fakeProfileRepo{},
+		audit:            &fakeAuditRepo{},
+		surfaces:         &fakeSurfaceRepo{},
+		agents:           &fakeAgentRepo{},
+		grants:           &fakeGrantRepo{},
+		profiles:         &fakeProfileRepo{},
+		processes:        &fakeProcessRepo{},
+		businessServices: &fakeBusinessServiceRepo{},
+		bscLinks:         &fakeBSCRepo{},
+		capabilities:     &fakeCapabilityRepo{},
 	}
 }
 
@@ -107,12 +115,16 @@ func (s *spyStore) Repositories() (*store.Repositories, error) {
 
 func (s *spyStore) repos() *store.Repositories {
 	return &store.Repositories{
-		Envelopes: s.envelopes,
-		Audit:     s.audit,
-		Surfaces:  s.surfaces,
-		Agents:    s.agents,
-		Grants:    s.grants,
-		Profiles:  s.profiles,
+		Envelopes:                   s.envelopes,
+		Audit:                       s.audit,
+		Surfaces:                    s.surfaces,
+		Agents:                      s.agents,
+		Grants:                      s.grants,
+		Profiles:                    s.profiles,
+		Processes:                   s.processes,
+		BusinessServices:            s.businessServices,
+		BusinessServiceCapabilities: s.bscLinks,
+		Capabilities:                s.capabilities,
 	}
 }
 
@@ -128,16 +140,30 @@ func (s *spyStore) WithTx(_ context.Context, _ string, fn func(*store.Repositori
 	return err
 }
 
-// seedSpyStore populates a spyStore with a valid authority chain so that the
-// full resolution path completes. Mirrors seedStore from orchestrator_lifecycle_test.go.
+// testProcessID and testBusinessServiceID anchor the v1 service-led
+// structural chain that orchestrator evaluations now resolve as part of
+// envelope structural denormalisation (ADR-0001).
+const (
+	testProcessID         = "proc-test-spy"
+	testBusinessServiceID = "bs-test-spy"
+)
+
+// seedSpyStore populates a spyStore with a valid authority chain plus the
+// minimum service-led structural chain (Process + BusinessService, empty
+// capability set) so that the full resolution path completes. The empty
+// capability set is a valid v1 state per ADR-0001 PR-3 and keeps the seed
+// minimal for tests that don't otherwise care about capabilities.
 func seedSpyStore(s *spyStore) {
 	s.surfaces.surfaces = map[string]*surface.DecisionSurface{
 		testSurfaceID: {
-			ID:      testSurfaceID,
-			Version: 1,
-			Status:  surface.SurfaceStatusActive,
+			ID:        testSurfaceID,
+			Version:   1,
+			Status:    surface.SurfaceStatusActive,
+			ProcessID: testProcessID,
 		},
 	}
+	seedStructuralChain(s.processes, s.businessServices, s.bscLinks, s.capabilities,
+		testProcessID, testBusinessServiceID, nil)
 	s.agents.agents = map[string]*agent.Agent{
 		testAgentID: {ID: testAgentID},
 	}

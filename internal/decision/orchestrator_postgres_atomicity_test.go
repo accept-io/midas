@@ -66,6 +66,12 @@ func (s *wrappedTxStore) WithTx(ctx context.Context, operation string, fn func(*
 				inner:     repos.Audit,
 				failAfter: s.failAfter,
 			},
+			// Structural repos required by the orchestrator's structural
+			// resolution step (ADR-0001) — forward through unchanged.
+			Processes:                   repos.Processes,
+			BusinessServices:            repos.BusinessServices,
+			BusinessServiceCapabilities: repos.BusinessServiceCapabilities,
+			Capabilities:                repos.Capabilities,
 		}
 		return fn(wrapped)
 	})

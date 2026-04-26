@@ -19,12 +19,16 @@ import (
 func newOrchestratorWithPolicy(t *testing.T, r testRepos, pe policy.PolicyEvaluator) *decision.Orchestrator {
 	t.Helper()
 	memStore := memory.NewStoreWithRepositories(&store.Repositories{
-		Surfaces:  r.surfaces,
-		Agents:    r.agents,
-		Profiles:  r.profiles,
-		Grants:    r.grants,
-		Envelopes: r.envelopes,
-		Audit:     r.audit,
+		Surfaces:                    r.surfaces,
+		Agents:                      r.agents,
+		Profiles:                    r.profiles,
+		Grants:                      r.grants,
+		Envelopes:                   r.envelopes,
+		Audit:                       r.audit,
+		Processes:                   r.processes,
+		BusinessServices:            r.businessServices,
+		BusinessServiceCapabilities: r.bscLinks,
+		Capabilities:                r.capabilities,
 	})
 	orch, err := decision.NewOrchestrator(memStore, pe, nil)
 	if err != nil {

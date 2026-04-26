@@ -694,9 +694,14 @@ func TestExplorer_HTML_ContainsV2StructuralEntityIDs(t *testing.T) {
 	}
 }
 
-// TestExplorer_HTML_ContainsStructuralContextChains verifies that the Explorer
-// HTML source defines STRUCTURAL_CONTEXT chains for both Explorer-evaluable
-// surfaces, mapping each to its Business Service, Capability, and Process.
+// TestExplorer_HTML_ContainsStructuralContextChains verifies that the
+// Explorer HTML source defines a STRUCTURAL_CONTEXT array and that the
+// renderer emits the service-led labels — Business Service header,
+// "Enabled by capabilities" capability section, "Process" rows, and
+// "Decision Surface" rows. The array shape is asserted via the presence
+// of the variable and one representative label per layer rather than by
+// hardcoding individual demo IDs (those are tested separately in
+// TestExplorer_HTML_ContainsV2StructuralEntityIDs).
 func TestExplorer_HTML_ContainsStructuralContextChains(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
@@ -707,21 +712,43 @@ func TestExplorer_HTML_ContainsStructuralContextChains(t *testing.T) {
 	}
 
 	body := rec.Body.String()
-	// Both evaluable surfaces must have a full structural chain defined.
-	wantChainEntries := []string{
-		"surf-v2-merchant-payment",
-		"proc-merchant-payment-auth",
-		"bs-merchant-services",
-		"cap-payment-authorization",
-		"surf-v2-id-verify",
-		"proc-consumer-onboarding",
-		"bs-consumer-lending",
-		"cap-identity-verification",
+	wantLabels := []string{
 		"STRUCTURAL_CONTEXT",
+		"Business Service",
+		"Enabled by capabilities",
+		"Process",
+		"Decision Surface",
 	}
-	for _, entry := range wantChainEntries {
-		if !strings.Contains(body, entry) {
-			t.Errorf("want Explorer HTML structural context to contain %q", entry)
+	for _, lbl := range wantLabels {
+		if !strings.Contains(body, lbl) {
+			t.Errorf("want Explorer HTML structural rendering to contain %q", lbl)
 		}
+	}
+}
+
+// TestExplorer_HTML_RendersEmptyCapabilitiesIndicator verifies that the
+// Explorer's structural renderer emits an explicit "No capabilities mapped"
+// indicator for the empty-capabilities branch. Per the v1 service-led
+// model, a BusinessService may exist with zero enabling Capabilities; the
+// audit-context requirement is to surface that state explicitly rather
+// than silently omit the section.
+//
+// The current demo seed has no zero-capability BusinessService (per the
+// PR scope, edge cases must not be added to demo data), so this test
+// asserts the rendering code path exists in the embedded HTML/JS source.
+// If the empty-state branch is removed in a future change, this test
+// fails and forces a deliberate decision.
+func TestExplorer_HTML_RendersEmptyCapabilitiesIndicator(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "No capabilities mapped") {
+		t.Error("want Explorer HTML to define the empty-capabilities indicator " +
+			"\"No capabilities mapped\" — the renderer must surface zero-capability " +
+			"BusinessServices explicitly per the v1 service-led model")
 	}
 }

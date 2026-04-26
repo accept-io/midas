@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/lib/pq"
@@ -17,6 +18,20 @@ import (
 
 // ErrEnvelopeNotFound is returned by Update when no row matches the given ID.
 var ErrEnvelopeNotFound = errors.New("envelope not found")
+
+// nullableBool returns SQL NULL when the snapshot is absent (signalled by
+// presenceID == ""), otherwise the bool value. The presence indicator is
+// needed because `false` is a meaningful value and cannot be distinguished
+// from "absent" by the bool alone — we use the snapshot's own ID field as
+// the presence sentinel. Used for envelope structural-snapshot columns
+// where an unresolved Process or BusinessService leaves all five columns
+// (id, origin, managed, replaces, status) NULL.
+func nullableBool(presenceID string, value bool) any {
+	if presenceID == "" {
+		return nil
+	}
+	return value
+}
 
 // EnvelopeRepo implements envelope.EnvelopeRepository against Postgres.
 //
@@ -35,6 +50,19 @@ var ErrEnvelopeNotFound = errors.New("envelope not found")
 //	resolved_surface_id, resolved_surface_version
 //	resolved_profile_id, resolved_profile_version
 //	resolved_grant_id, resolved_agent_id, resolved_subject_id
+//
+// ADR-0001 service-led structural denormalization:
+//
+//	resolved_process_id, resolved_process_origin, resolved_process_managed,
+//	resolved_process_replaces, resolved_process_status
+//	resolved_business_service_id, resolved_business_service_origin,
+//	resolved_business_service_managed, resolved_business_service_replaces,
+//	resolved_business_service_status
+//	resolved_enabling_capabilities_json (JSONB, sorted by id ascending)
+//
+// The Go envelope holds these only as Resolved.Structure; this repo is the
+// sole place where the structural fields are decomposed into columns and
+// reassembled on read.
 type EnvelopeRepo struct {
 	db sqltx.DBTX
 }
@@ -66,6 +94,17 @@ const selectCols = `
 	resolved_grant_id,
 	resolved_agent_id,
 	resolved_subject_id,
+	resolved_process_id,
+	resolved_process_origin,
+	resolved_process_managed,
+	resolved_process_replaces,
+	resolved_process_status,
+	resolved_business_service_id,
+	resolved_business_service_origin,
+	resolved_business_service_managed,
+	resolved_business_service_replaces,
+	resolved_business_service_status,
+	resolved_enabling_capabilities_json,
 	state,
 	outcome,
 	reason_code,
@@ -203,6 +242,17 @@ func (r *EnvelopeRepo) Create(ctx context.Context, e *envelope.Envelope) error {
 			resolved_grant_id,
 			resolved_agent_id,
 			resolved_subject_id,
+			resolved_process_id,
+			resolved_process_origin,
+			resolved_process_managed,
+			resolved_process_replaces,
+			resolved_process_status,
+			resolved_business_service_id,
+			resolved_business_service_origin,
+			resolved_business_service_managed,
+			resolved_business_service_replaces,
+			resolved_business_service_status,
+			resolved_enabling_capabilities_json,
 			state,
 			outcome,
 			reason_code,
@@ -214,7 +264,12 @@ func (r *EnvelopeRepo) Create(ctx context.Context, e *envelope.Envelope) error {
 			updated_at,
 			closed_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+			$11, $12, $13, $14, $15,
+			$16, $17, $18, $19, $20,
+			$21, $22, $23, $24, $25,
+			$26,
+			$27, $28, $29, $30, $31, $32, $33, $34, $35, $36
 		)
 	`
 
@@ -222,6 +277,9 @@ func (r *EnvelopeRepo) Create(ctx context.Context, e *envelope.Envelope) error {
 	if err != nil {
 		return err
 	}
+
+	proc := e.Resolved.Structure.Process
+	bs := e.Resolved.Structure.BusinessService
 
 	_, err = r.db.ExecContext(ctx, q,
 		e.ID(),
@@ -239,6 +297,17 @@ func (r *EnvelopeRepo) Create(ctx context.Context, e *envelope.Envelope) error {
 		nullableString(e.ResolvedGrantID),
 		nullableString(e.ResolvedAgentID),
 		nullableString(e.ResolvedSubjectID),
+		nullableString(proc.ID),
+		nullableString(proc.Origin),
+		nullableBool(proc.ID, proc.Managed),
+		nullableString(proc.Replaces),
+		nullableString(proc.Status),
+		nullableString(bs.ID),
+		nullableString(bs.Origin),
+		nullableBool(bs.ID, bs.Managed),
+		nullableString(bs.Replaces),
+		nullableString(bs.Status),
+		cols.enablingCapsJSON,
 		string(e.State),
 		nullableOutcome(e.Evaluation.Outcome),
 		nullableReasonCode(e.Evaluation.ReasonCode),
@@ -271,28 +340,39 @@ func (r *EnvelopeRepo) Update(ctx context.Context, e *envelope.Envelope) error {
 	const q = `
 		UPDATE operational_envelopes
 		SET
-			request_source       = $2,
-			schema_version       = $3,
-			submitted_raw        = $4,
-			submitted_hash       = $5,
-			received_at          = $6,
-			resolved_json        = $7,
-			resolved_surface_id  = $8,
-			resolved_surface_version = $9,
-			resolved_profile_id  = $10,
-			resolved_profile_version = $11,
-			resolved_grant_id    = $12,
-			resolved_agent_id    = $13,
-			resolved_subject_id  = $14,
-			state                = $15,
-			outcome              = $16,
-			reason_code          = $17,
-			explanation_json     = $18,
-			evaluated_at         = $19,
-			integrity_json       = $20,
-			review_json          = $21,
-			updated_at           = $22,
-			closed_at            = $23
+			request_source                   = $2,
+			schema_version                   = $3,
+			submitted_raw                    = $4,
+			submitted_hash                   = $5,
+			received_at                      = $6,
+			resolved_json                    = $7,
+			resolved_surface_id              = $8,
+			resolved_surface_version         = $9,
+			resolved_profile_id              = $10,
+			resolved_profile_version         = $11,
+			resolved_grant_id                = $12,
+			resolved_agent_id                = $13,
+			resolved_subject_id              = $14,
+			resolved_process_id              = $15,
+			resolved_process_origin          = $16,
+			resolved_process_managed         = $17,
+			resolved_process_replaces        = $18,
+			resolved_process_status          = $19,
+			resolved_business_service_id     = $20,
+			resolved_business_service_origin = $21,
+			resolved_business_service_managed = $22,
+			resolved_business_service_replaces = $23,
+			resolved_business_service_status = $24,
+			resolved_enabling_capabilities_json = $25,
+			state                            = $26,
+			outcome                          = $27,
+			reason_code                      = $28,
+			explanation_json                 = $29,
+			evaluated_at                     = $30,
+			integrity_json                   = $31,
+			review_json                      = $32,
+			updated_at                       = $33,
+			closed_at                        = $34
 		WHERE id = $1
 	`
 
@@ -300,6 +380,9 @@ func (r *EnvelopeRepo) Update(ctx context.Context, e *envelope.Envelope) error {
 	if err != nil {
 		return err
 	}
+
+	proc := e.Resolved.Structure.Process
+	bs := e.Resolved.Structure.BusinessService
 
 	res, err := r.db.ExecContext(ctx, q,
 		e.ID(),
@@ -316,6 +399,17 @@ func (r *EnvelopeRepo) Update(ctx context.Context, e *envelope.Envelope) error {
 		nullableString(e.ResolvedGrantID),
 		nullableString(e.ResolvedAgentID),
 		nullableString(e.ResolvedSubjectID),
+		nullableString(proc.ID),
+		nullableString(proc.Origin),
+		nullableBool(proc.ID, proc.Managed),
+		nullableString(proc.Replaces),
+		nullableString(proc.Status),
+		nullableString(bs.ID),
+		nullableString(bs.Origin),
+		nullableBool(bs.ID, bs.Managed),
+		nullableString(bs.Replaces),
+		nullableString(bs.Status),
+		cols.enablingCapsJSON,
 		string(e.State),
 		nullableOutcome(e.Evaluation.Outcome),
 		nullableReasonCode(e.Evaluation.ReasonCode),
@@ -345,12 +439,13 @@ func (r *EnvelopeRepo) Update(ctx context.Context, e *envelope.Envelope) error {
 // ---------------------------------------------------------------------------
 
 type envelopeCols struct {
-	submittedRaw    []byte
-	resolvedJSON    []byte
-	explanationJSON []byte
-	evaluatedAt     *time.Time
-	integrityJSON   []byte
-	reviewJSON      []byte
+	submittedRaw          []byte
+	resolvedJSON          []byte
+	enablingCapsJSON      []byte
+	explanationJSON       []byte
+	evaluatedAt           *time.Time
+	integrityJSON         []byte
+	reviewJSON            []byte
 }
 
 func marshalEnvelopeCols(e *envelope.Envelope) (envelopeCols, error) {
@@ -366,10 +461,34 @@ func marshalEnvelopeCols(e *envelope.Envelope) (envelopeCols, error) {
 		copy(cols.submittedRaw, e.Submitted.Raw)
 	}
 
+	// Section 3 (structural): normalise and sort the capability snapshot in
+	// place before marshalling either the full Resolved blob or the
+	// dedicated JSONB column. Sorting in place ensures the embedded copy
+	// inside resolved_json and the standalone resolved_enabling_capabilities_json
+	// are byte-identical with respect to ordering. A nil slice is replaced
+	// with an empty slice so JSON serialisation produces `[]` rather than
+	// `null` — the empty-set must be a meaningful audit fact, not a missing
+	// value (ADR-0001).
+	if e.Resolved.Structure.EnablingCapabilities == nil {
+		e.Resolved.Structure.EnablingCapabilities = []envelope.CapabilitySnapshot{}
+	}
+	sort.Slice(e.Resolved.Structure.EnablingCapabilities, func(i, j int) bool {
+		return e.Resolved.Structure.EnablingCapabilities[i].ID < e.Resolved.Structure.EnablingCapabilities[j].ID
+	})
+
 	// Section 3: serialise full Resolved struct.
 	cols.resolvedJSON, err = json.Marshal(e.Resolved)
 	if err != nil {
 		return envelopeCols{}, fmt.Errorf("marshal resolved: %w", err)
+	}
+
+	// Section 3 (structural JSONB): the enabling capability set is also
+	// stored on a dedicated JSONB column for column-level visibility. The
+	// schema declares NOT NULL DEFAULT '[]'; we always send a concrete
+	// JSON array, never nil bytes.
+	cols.enablingCapsJSON, err = json.Marshal(e.Resolved.Structure.EnablingCapabilities)
+	if err != nil {
+		return envelopeCols{}, fmt.Errorf("marshal enabling capabilities: %w", err)
 	}
 
 	// Section 4: Explanation is nil until evaluation begins.
@@ -408,25 +527,36 @@ type envelopeScanner interface {
 
 func scanEnvelopeRow(row envelopeScanner) (*envelope.Envelope, error) {
 	var (
-		e                      envelope.Envelope
-		schemaVersion          int
-		submittedRaw           []byte
-		submittedHash          sql.NullString
-		resolvedJSON           []byte
-		resolvedSurfaceID      sql.NullString
-		resolvedSurfaceVersion sql.NullInt64
-		resolvedProfileID      sql.NullString
-		resolvedProfileVersion sql.NullInt64
-		resolvedGrantID        sql.NullString
-		resolvedAgentID        sql.NullString
-		resolvedSubjectID      sql.NullString
-		outcome                sql.NullString
-		reasonCode             sql.NullString
-		explanationJSON        []byte
-		evaluatedAt            sql.NullTime
-		integrityJSON          []byte
-		reviewJSON             []byte
-		closedAt               sql.NullTime
+		e                              envelope.Envelope
+		schemaVersion                  int
+		submittedRaw                   []byte
+		submittedHash                  sql.NullString
+		resolvedJSON                   []byte
+		resolvedSurfaceID              sql.NullString
+		resolvedSurfaceVersion         sql.NullInt64
+		resolvedProfileID              sql.NullString
+		resolvedProfileVersion         sql.NullInt64
+		resolvedGrantID                sql.NullString
+		resolvedAgentID                sql.NullString
+		resolvedSubjectID              sql.NullString
+		resolvedProcessID              sql.NullString
+		resolvedProcessOrigin          sql.NullString
+		resolvedProcessManaged         sql.NullBool
+		resolvedProcessReplaces        sql.NullString
+		resolvedProcessStatus          sql.NullString
+		resolvedBusinessServiceID      sql.NullString
+		resolvedBusinessServiceOrigin  sql.NullString
+		resolvedBusinessServiceManaged sql.NullBool
+		resolvedBusinessServiceReplaces sql.NullString
+		resolvedBusinessServiceStatus  sql.NullString
+		enablingCapsJSON               []byte
+		outcome                        sql.NullString
+		reasonCode                     sql.NullString
+		explanationJSON                []byte
+		evaluatedAt                    sql.NullTime
+		integrityJSON                  []byte
+		reviewJSON                     []byte
+		closedAt                       sql.NullTime
 	)
 
 	err := row.Scan(
@@ -445,6 +575,17 @@ func scanEnvelopeRow(row envelopeScanner) (*envelope.Envelope, error) {
 		&resolvedGrantID,
 		&resolvedAgentID,
 		&resolvedSubjectID,
+		&resolvedProcessID,
+		&resolvedProcessOrigin,
+		&resolvedProcessManaged,
+		&resolvedProcessReplaces,
+		&resolvedProcessStatus,
+		&resolvedBusinessServiceID,
+		&resolvedBusinessServiceOrigin,
+		&resolvedBusinessServiceManaged,
+		&resolvedBusinessServiceReplaces,
+		&resolvedBusinessServiceStatus,
+		&enablingCapsJSON,
 		&e.State,
 		&outcome,
 		&reasonCode,
@@ -495,6 +636,61 @@ func scanEnvelopeRow(row envelopeScanner) (*envelope.Envelope, error) {
 	}
 	if resolvedSubjectID.Valid {
 		e.ResolvedSubjectID = resolvedSubjectID.String
+	}
+
+	// Section 3 (structural): reassemble Process and BusinessService snapshots
+	// from dedicated columns. The dedicated columns are the authoritative
+	// source — they are written explicitly and atomically with the envelope
+	// row. Any value present in resolved_json (which was unmarshalled above)
+	// is overwritten here so a partial-write or schema-evolution scenario
+	// cannot produce divergent values.
+	if resolvedProcessID.Valid {
+		e.Resolved.Structure.Process.ID = resolvedProcessID.String
+	}
+	if resolvedProcessOrigin.Valid {
+		e.Resolved.Structure.Process.Origin = resolvedProcessOrigin.String
+	}
+	if resolvedProcessManaged.Valid {
+		e.Resolved.Structure.Process.Managed = resolvedProcessManaged.Bool
+	}
+	if resolvedProcessReplaces.Valid {
+		e.Resolved.Structure.Process.Replaces = resolvedProcessReplaces.String
+	}
+	if resolvedProcessStatus.Valid {
+		e.Resolved.Structure.Process.Status = resolvedProcessStatus.String
+	}
+	if resolvedBusinessServiceID.Valid {
+		e.Resolved.Structure.BusinessService.ID = resolvedBusinessServiceID.String
+	}
+	if resolvedBusinessServiceOrigin.Valid {
+		e.Resolved.Structure.BusinessService.Origin = resolvedBusinessServiceOrigin.String
+	}
+	if resolvedBusinessServiceManaged.Valid {
+		e.Resolved.Structure.BusinessService.Managed = resolvedBusinessServiceManaged.Bool
+	}
+	if resolvedBusinessServiceReplaces.Valid {
+		e.Resolved.Structure.BusinessService.Replaces = resolvedBusinessServiceReplaces.String
+	}
+	if resolvedBusinessServiceStatus.Valid {
+		e.Resolved.Structure.BusinessService.Status = resolvedBusinessServiceStatus.String
+	}
+
+	// Section 3 (structural JSONB): reassemble enabling capabilities from
+	// the dedicated JSONB column. The schema NOT NULL DEFAULT '[]' means
+	// this column is always non-empty; a defensive guard keeps the path
+	// safe if a hand-written test fixture or future migration violates that.
+	if len(enablingCapsJSON) > 0 {
+		var caps []envelope.CapabilitySnapshot
+		if err := json.Unmarshal(enablingCapsJSON, &caps); err != nil {
+			return nil, fmt.Errorf("unmarshal enabling capabilities: %w", err)
+		}
+		e.Resolved.Structure.EnablingCapabilities = caps
+	}
+	// Empty-set normalisation: ensure the in-memory representation is
+	// always a non-nil slice so subsequent JSON marshalling produces `[]`,
+	// never `null`.
+	if e.Resolved.Structure.EnablingCapabilities == nil {
+		e.Resolved.Structure.EnablingCapabilities = []envelope.CapabilitySnapshot{}
 	}
 
 	// Section 4

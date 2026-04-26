@@ -21,22 +21,30 @@ import (
 
 // testRepos bundles all in-memory repos for a single test.
 type testRepos struct {
-	surfaces  *memory.SurfaceRepo
-	profiles  *memory.ProfileRepo
-	grants    *memory.GrantRepo
-	agents    *memory.AgentRepo
-	envelopes *memory.EnvelopeRepo
-	audit     *audit.MemoryRepository
+	surfaces         *memory.SurfaceRepo
+	profiles         *memory.ProfileRepo
+	grants           *memory.GrantRepo
+	agents           *memory.AgentRepo
+	envelopes        *memory.EnvelopeRepo
+	audit            *audit.MemoryRepository
+	processes        *fakeProcessRepo
+	businessServices *fakeBusinessServiceRepo
+	bscLinks         *fakeBSCRepo
+	capabilities     *fakeCapabilityRepo
 }
 
 func newRepos() testRepos {
 	return testRepos{
-		surfaces:  memory.NewSurfaceRepo(),
-		profiles:  memory.NewProfileRepo(),
-		grants:    memory.NewGrantRepo(),
-		agents:    memory.NewAgentRepo(),
-		envelopes: memory.NewEnvelopeRepo(),
-		audit:     audit.NewMemoryRepository(),
+		surfaces:         memory.NewSurfaceRepo(),
+		profiles:         memory.NewProfileRepo(),
+		grants:           memory.NewGrantRepo(),
+		agents:           memory.NewAgentRepo(),
+		envelopes:        memory.NewEnvelopeRepo(),
+		audit:            audit.NewMemoryRepository(),
+		processes:        &fakeProcessRepo{},
+		businessServices: &fakeBusinessServiceRepo{},
+		bscLinks:         &fakeBSCRepo{},
+		capabilities:     &fakeCapabilityRepo{},
 	}
 }
 
@@ -44,12 +52,16 @@ func newOrchestrator(t *testing.T, r testRepos) *decision.Orchestrator {
 	t.Helper()
 
 	memStore := memory.NewStoreWithRepositories(&store.Repositories{
-		Surfaces:  r.surfaces,
-		Agents:    r.agents,
-		Profiles:  r.profiles,
-		Grants:    r.grants,
-		Envelopes: r.envelopes,
-		Audit:     r.audit,
+		Surfaces:                    r.surfaces,
+		Agents:                      r.agents,
+		Profiles:                    r.profiles,
+		Grants:                      r.grants,
+		Envelopes:                   r.envelopes,
+		Audit:                       r.audit,
+		Processes:                   r.processes,
+		BusinessServices:            r.businessServices,
+		BusinessServiceCapabilities: r.bscLinks,
+		Capabilities:                r.capabilities,
 	})
 
 	orch, err := decision.NewOrchestrator(
@@ -64,9 +76,11 @@ func newOrchestrator(t *testing.T, r testRepos) *decision.Orchestrator {
 	return orch
 }
 
-// seedActiveSurface adds an active surface with the given ID.
-// ProcessID is required by the Surface → Process invariant (Issue #33);
-// tests that don't care about its exact value supply a stable fixture.
+// seedActiveSurface adds an active surface with the given ID, plus the
+// minimum service-led structural chain (Process + BusinessService, empty
+// capability set) the orchestrator's resolveStructure step needs to
+// succeed (ADR-0001). The structural fixture uses stable shared IDs so
+// multiple test surfaces can share the same Process if desired.
 func seedActiveSurface(t *testing.T, r testRepos, id string) {
 	t.Helper()
 
@@ -87,6 +101,8 @@ func seedActiveSurface(t *testing.T, r testRepos, id string) {
 	if err != nil {
 		t.Fatalf("seed surface %q: %v", id, err)
 	}
+	seedStructuralChain(r.processes, r.businessServices, r.bscLinks, r.capabilities,
+		"proc-test", "bs-test", nil)
 }
 
 // seedAgent adds an agent with the given ID.

@@ -17,11 +17,20 @@ import (
 )
 
 // SeedDemo inserts the canonical demonstration dataset for the v1 service-led
-// structural model: BusinessService → Process → Surface, with Capability
-// realisation through the business_service_capabilities M:N junction.
+// structural model: Capabilities enable BusinessServices through the
+// business_service_capabilities M:N junction; BusinessServices deliver
+// Processes (1:N); Processes contain DecisionSurfaces (1:N).
 //
 // The seed is idempotent: if the bs-consumer-lending business service already
 // exists the function returns nil without modifying any data.
+//
+// Seeding order mirrors the apply path's kindOrder dependency tiers:
+// BusinessService → Capability → BusinessServiceCapability → Process →
+// Surface, then auxiliary Agent/Profile/Grant. Reading the seed top-to-
+// bottom therefore narrates the model: the service offerings come first,
+// then the abilities that enable them, then the links between the two,
+// then the processes each service delivers, and finally the decision
+// surfaces inside each process.
 //
 // Dataset overview:
 //
@@ -75,7 +84,46 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 	now := time.Now().UTC()
 	effective := now.Add(-time.Hour)
 
+	// --- Business Services ---
+	// The service offerings the organisation delivers and governs. Each
+	// BusinessService later owns one or more Processes (1:N) and is enabled
+	// by zero or more Capabilities through the BSC junction.
+
+	bsvcs := []*businessservice.BusinessService{
+		{
+			ID:          "bs-consumer-lending",
+			Name:        "Consumer Lending",
+			Description: "Retail lending products for individual consumers",
+			ServiceType: businessservice.ServiceTypeCustomerFacing,
+			Status:      "active",
+			Origin:      "manual",
+			Managed:     true,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		},
+		{
+			ID:          "bs-merchant-services",
+			Name:        "Merchant Services",
+			Description: "Payment processing and fraud prevention for merchants",
+			ServiceType: businessservice.ServiceTypeCustomerFacing,
+			Status:      "active",
+			Origin:      "manual",
+			Managed:     true,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		},
+	}
+	for _, s := range bsvcs {
+		if err := repos.BusinessServices.Create(ctx, s); err != nil {
+			return fmt.Errorf("create business service %s: %w", s.ID, err)
+		}
+	}
+
 	// --- Capabilities ---
+	// The enabling abilities that BusinessServices draw on. A Capability
+	// can enable any number of BusinessServices via the BSC junction
+	// (M:N); cap-fraud-detection demonstrates this by enabling both
+	// consumer-lending and merchant-services below.
 
 	caps := []*capability.Capability{
 		{
@@ -121,39 +169,28 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 		}
 	}
 
-	// --- Business Services ---
+	// --- BusinessService ↔ Capability links ---
+	// The enabling relationships: each row says "this Capability enables
+	// this BusinessService". cap-fraud-detection enables both services,
+	// demonstrating cross-service capability reuse under M:N.
 
-	bsvcs := []*businessservice.BusinessService{
-		{
-			ID:          "bs-consumer-lending",
-			Name:        "Consumer Lending",
-			Description: "Retail lending products for individual consumers",
-			ServiceType: businessservice.ServiceTypeCustomerFacing,
-			Status:      "active",
-			Origin:      "manual",
-			Managed:     true,
-			CreatedAt:   now,
-			UpdatedAt:   now,
-		},
-		{
-			ID:          "bs-merchant-services",
-			Name:        "Merchant Services",
-			Description: "Payment processing and fraud prevention for merchants",
-			ServiceType: businessservice.ServiceTypeCustomerFacing,
-			Status:      "active",
-			Origin:      "manual",
-			Managed:     true,
-			CreatedAt:   now,
-			UpdatedAt:   now,
-		},
+	bscLinks := []*businessservicecapability.BusinessServiceCapability{
+		{BusinessServiceID: "bs-consumer-lending", CapabilityID: "cap-identity-verification", CreatedAt: now},
+		{BusinessServiceID: "bs-consumer-lending", CapabilityID: "cap-credit-scoring", CreatedAt: now},
+		{BusinessServiceID: "bs-consumer-lending", CapabilityID: "cap-fraud-detection", CreatedAt: now},
+		{BusinessServiceID: "bs-merchant-services", CapabilityID: "cap-fraud-detection", CreatedAt: now},
+		{BusinessServiceID: "bs-merchant-services", CapabilityID: "cap-payment-authorization", CreatedAt: now},
 	}
-	for _, s := range bsvcs {
-		if err := repos.BusinessServices.Create(ctx, s); err != nil {
-			return fmt.Errorf("create business service %s: %w", s.ID, err)
+	for _, bsc := range bscLinks {
+		if err := repos.BusinessServiceCapabilities.Create(ctx, bsc); err != nil {
+			return fmt.Errorf("create business_service_capability %s↔%s: %w", bsc.BusinessServiceID, bsc.CapabilityID, err)
 		}
 	}
 
 	// --- Processes ---
+	// Each Process belongs to exactly one BusinessService (N:1, NOT NULL).
+	// Each BusinessService delivers one or more Processes; both demo
+	// services have two processes here, exercising the multi-Process case.
 
 	procs := []*process.Process{
 		{
@@ -203,24 +240,10 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 		}
 	}
 
-	// --- BusinessService ↔ Capability realisations ---
-	// cap-fraud-detection is shared: realised by both consumer-lending and
-	// merchant-services, demonstrating cross-service capability reuse.
-
-	bscLinks := []*businessservicecapability.BusinessServiceCapability{
-		{BusinessServiceID: "bs-consumer-lending", CapabilityID: "cap-identity-verification", CreatedAt: now},
-		{BusinessServiceID: "bs-consumer-lending", CapabilityID: "cap-credit-scoring", CreatedAt: now},
-		{BusinessServiceID: "bs-consumer-lending", CapabilityID: "cap-fraud-detection", CreatedAt: now},
-		{BusinessServiceID: "bs-merchant-services", CapabilityID: "cap-fraud-detection", CreatedAt: now},
-		{BusinessServiceID: "bs-merchant-services", CapabilityID: "cap-payment-authorization", CreatedAt: now},
-	}
-	for _, bsc := range bscLinks {
-		if err := repos.BusinessServiceCapabilities.Create(ctx, bsc); err != nil {
-			return fmt.Errorf("create business_service_capability %s↔%s: %w", bsc.BusinessServiceID, bsc.CapabilityID, err)
-		}
-	}
-
 	// --- Surfaces ---
+	// Decision surfaces inside processes (1:N). proc-consumer-onboarding
+	// and proc-merchant-payment-auth each carry two surfaces, exercising
+	// the multi-Surface-per-Process case.
 
 	surfs := []*surface.DecisionSurface{
 		{

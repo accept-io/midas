@@ -528,6 +528,24 @@ func (o *Orchestrator) evaluate(
 		return EvaluationResult{}, err
 	}
 
+	// Step 1.5: Structural chain (ADR-0001).
+	// Resolve Process → BusinessService → BSC links → Capabilities to capture
+	// point-in-time evidence of the service-led structural context that
+	// governed this decision. Failures here are referential-integrity bugs
+	// (the structural FKs in schema make these states impossible under
+	// healthy data) — wrap as authority-resolution failures so they surface
+	// as system errors, not request-clarification outcomes.
+	procSnap, bsSnap, capSnaps, err := o.resolveStructure(ctx, repos, s.ProcessID)
+	if err != nil {
+		return EvaluationResult{}, wrapFailure(FailureCategoryAuthorityResolution, err)
+	}
+	slog.Debug("structure_resolved",
+		"request_id", req.RequestID,
+		"process_id", procSnap.ID,
+		"business_service_id", bsSnap.ID,
+		"enabling_capability_count", len(capSnaps),
+	)
+
 	// Step 2: Agent
 	a, outcome, reason, err := o.resolveAgent(ctx, repos.Agents, req.AgentID)
 	if err != nil {
@@ -584,6 +602,11 @@ func (o *Orchestrator) evaluate(
 			ProfileVersion: p.Version,
 			AgentID:        a.ID,
 			GrantID:        g.ID,
+		},
+		Structure: envelope.ResolvedStructure{
+			Process:              procSnap,
+			BusinessService:      bsSnap,
+			EnablingCapabilities: capSnaps,
 		},
 		Metadata: envelope.RequestMetadata{
 			ActionType:        req.ActionType,
@@ -1374,6 +1397,99 @@ func (o *Orchestrator) resolveAgent(
 		return nil, eval.OutcomeReject, eval.ReasonAgentNotFound, nil
 	}
 	return a, "", "", nil
+}
+
+// resolveStructure captures point-in-time evidence of the service-led
+// structural chain Surface → Process → BusinessService → BSC links →
+// Capabilities (per ADR-0001). It runs after Surface resolution and before
+// Agent/Authority resolution.
+//
+// All four lookups (Process, BusinessService, BSC list, each Capability)
+// are required to succeed under healthy data: the schema enforces
+// processes.business_service_id NOT NULL, decision_surfaces.process_id
+// NOT NULL, business_service_capabilities references capabilities via FK,
+// and the BSC junction PK guarantees referential integrity. A nil result
+// from any lookup therefore represents referential-integrity drift the
+// orchestrator must surface, not silently mask.
+//
+// The empty BSC list is the one valid empty path: a BusinessService may
+// have zero enabling Capabilities (PR-3 in ADR-0001). Empty list returns
+// an empty (non-nil) capability slice.
+//
+// Capability lookup is N+1 by design (one GetByID per BSC link). The
+// CapabilityRepository interface does not currently expose a batch
+// ListByIDs method; introducing one is out of scope for this PR. Typical
+// cardinality is small (≤ 10 capabilities per BusinessService).
+//
+// Sorting is the repository's responsibility; this function returns the
+// capability slice in repository-enumeration order.
+func (o *Orchestrator) resolveStructure(
+	ctx context.Context,
+	repos *store.Repositories,
+	processID string,
+) (envelope.ProcessSnapshot, envelope.BusinessServiceSnapshot, []envelope.CapabilitySnapshot, error) {
+	proc, err := repos.Processes.GetByID(ctx, processID)
+	if err != nil {
+		return envelope.ProcessSnapshot{}, envelope.BusinessServiceSnapshot{}, nil,
+			fmt.Errorf("resolve process %q: %w", processID, err)
+	}
+	if proc == nil {
+		return envelope.ProcessSnapshot{}, envelope.BusinessServiceSnapshot{}, nil,
+			fmt.Errorf("resolve process %q: not found (referential integrity drift)", processID)
+	}
+
+	bs, err := repos.BusinessServices.GetByID(ctx, proc.BusinessServiceID)
+	if err != nil {
+		return envelope.ProcessSnapshot{}, envelope.BusinessServiceSnapshot{}, nil,
+			fmt.Errorf("resolve business service %q: %w", proc.BusinessServiceID, err)
+	}
+	if bs == nil {
+		return envelope.ProcessSnapshot{}, envelope.BusinessServiceSnapshot{}, nil,
+			fmt.Errorf("resolve business service %q: not found (referential integrity drift)", proc.BusinessServiceID)
+	}
+
+	links, err := repos.BusinessServiceCapabilities.ListByBusinessServiceID(ctx, bs.ID)
+	if err != nil {
+		return envelope.ProcessSnapshot{}, envelope.BusinessServiceSnapshot{}, nil,
+			fmt.Errorf("list enabling capabilities for business service %q: %w", bs.ID, err)
+	}
+
+	caps := make([]envelope.CapabilitySnapshot, 0, len(links))
+	for _, link := range links {
+		c, err := repos.Capabilities.GetByID(ctx, link.CapabilityID)
+		if err != nil {
+			return envelope.ProcessSnapshot{}, envelope.BusinessServiceSnapshot{}, nil,
+				fmt.Errorf("resolve capability %q for business service %q: %w", link.CapabilityID, bs.ID, err)
+		}
+		if c == nil {
+			return envelope.ProcessSnapshot{}, envelope.BusinessServiceSnapshot{}, nil,
+				fmt.Errorf("resolve capability %q for business service %q: not found (referential integrity drift)", link.CapabilityID, bs.ID)
+		}
+		caps = append(caps, envelope.CapabilitySnapshot{
+			ID:       c.ID,
+			Name:     c.Name,
+			Origin:   c.Origin,
+			Managed:  c.Managed,
+			Replaces: c.Replaces,
+			Status:   c.Status,
+		})
+	}
+
+	procSnap := envelope.ProcessSnapshot{
+		ID:       proc.ID,
+		Origin:   proc.Origin,
+		Managed:  proc.Managed,
+		Replaces: proc.Replaces,
+		Status:   proc.Status,
+	}
+	bsSnap := envelope.BusinessServiceSnapshot{
+		ID:       bs.ID,
+		Origin:   bs.Origin,
+		Managed:  bs.Managed,
+		Replaces: bs.Replaces,
+		Status:   bs.Status,
+	}
+	return procSnap, bsSnap, caps, nil
 }
 
 // resolveAuthorityChain finds the active grant and profile for an agent
