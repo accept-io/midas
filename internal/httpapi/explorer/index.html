@@ -748,60 +748,139 @@
     font-size: 10px;
   }
 
-  /* ── Structural context chain display ─────────────────────────────────── */
-  .structural-chain-block {
+  /* ── Structural context: BusinessService-grouped display ──────────────── */
+  .structural-svc-block {
     background: #f0f7ff;
     border: 1px solid #bfdbfe;
     border-radius: 6px;
-    padding: 8px 10px;
-    margin-bottom: 6px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
   }
-  .structural-chain-surface {
-    font-size: 10px;
+  .structural-svc-header {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+  .structural-svc-header-label {
+    font-size: 9px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.5px;
     color: #1e40af;
-    margin-bottom: 5px;
   }
-  .structural-chain-steps {
-    display: flex;
-    align-items: flex-start;
-    flex-wrap: wrap;
-    gap: 4px;
+  .structural-svc-header-name {
+    font-size: 13px;
+    font-weight: 700;
+    color: #1e3a8a;
   }
-  .structural-chain-node {
-    background: #fff;
-    border: 1px solid #bfdbfe;
-    border-radius: 4px;
-    padding: 3px 7px;
+  .structural-svc-header-id {
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 10px;
+    color: #64748b;
   }
-  .structural-chain-node-type {
+  .structural-svc-section-label {
     font-size: 9px;
+    font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.4px;
     color: #64748b;
-    display: block;
-    margin-bottom: 1px;
+    margin-top: 6px;
+    margin-bottom: 3px;
   }
-  .structural-chain-node-name {
+  .structural-svc-caps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 4px;
+  }
+  .structural-svc-cap-pill {
+    background: #fff;
+    border: 1px solid #bfdbfe;
+    border-radius: 999px;
+    padding: 2px 8px;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+  .structural-svc-cap-pill-name {
     font-size: 11px;
     font-weight: 600;
     color: #1e3a8a;
   }
-  .structural-chain-node-id {
+  .structural-svc-cap-pill-id {
     font-family: "SF Mono", "Fira Code", monospace;
     font-size: 9px;
     color: #64748b;
-    display: block;
-    margin-top: 1px;
   }
-  .structural-chain-arrow {
-    color: #93c5fd;
-    font-size: 14px;
-    line-height: 1;
-    align-self: center;
-    padding-top: 2px;
+  .structural-svc-empty-caps {
+    font-size: 11px;
+    font-style: italic;
+    color: #92400e;
+    background: #fef3c7;
+    border: 1px solid #fcd34d;
+    border-radius: 4px;
+    padding: 3px 8px;
+    display: inline-block;
+  }
+  .structural-svc-processes {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .structural-svc-process {
+    background: #fff;
+    border: 1px solid #bfdbfe;
+    border-radius: 4px;
+    padding: 5px 8px;
+  }
+  .structural-svc-process-header {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 3px;
+  }
+  .structural-svc-process-label {
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: #64748b;
+  }
+  .structural-svc-process-name {
+    font-size: 11px;
+    font-weight: 600;
+    color: #1e3a8a;
+  }
+  .structural-svc-process-id {
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 9px;
+    color: #64748b;
+  }
+  .structural-svc-surface {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding-left: 12px;
+    margin-top: 2px;
+    font-size: 11px;
+  }
+  .structural-svc-surface-label {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: #64748b;
+  }
+  .structural-svc-surface-name {
+    color: #1e3a8a;
+  }
+  .structural-svc-surface-id {
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 9px;
+    color: #64748b;
   }
   .resource-card-detail { color: #9ca3af; margin-top: 2px; font-size: 10px; }
 </style>
@@ -2296,28 +2375,72 @@
     // Structural entities — source of truth: internal/bootstrap/demo.go
     { type: 'Business Service', name: 'Merchant Services',            id: 'bs-merchant-services',         detail: 'type: customer-facing' },
     { type: 'Business Service', name: 'Consumer Lending',             id: 'bs-consumer-lending',          detail: 'type: customer-facing' },
-    { type: 'Capability',       name: 'Payment Authorization',        id: 'cap-payment-authorization',    detail: 'process: merchant-payment-auth' },
-    { type: 'Capability',       name: 'Identity Verification',        id: 'cap-identity-verification',    detail: 'process: consumer-onboarding' },
+    { type: 'Capability',       name: 'Payment Authorization',        id: 'cap-payment-authorization',    detail: 'enables: merchant-services' },
+    { type: 'Capability',       name: 'Identity Verification',        id: 'cap-identity-verification',    detail: 'enables: consumer-lending' },
     { type: 'Process',          name: 'Merchant Payment Auth',        id: 'proc-merchant-payment-auth',   detail: 'service: merchant-services' },
     { type: 'Process',          name: 'Consumer Onboarding',          id: 'proc-consumer-onboarding',     detail: 'service: consumer-lending' },
   ];
 
-  // STRUCTURAL_CONTEXT maps each Explorer-evaluable surface to its full V2 structural chain.
-  // Source of truth: internal/bootstrap/demo.go.
+  // STRUCTURAL_CONTEXT mirrors the demo seed (internal/bootstrap/demo.go).
+  // It groups by BusinessService — the v1 service-led model has Capabilities
+  // as an attached set (M:N via business_service_capabilities), Processes as
+  // children (1:N), and Surfaces as grandchildren (1:N).
+  //
+  // This array and the demo seed are coupled by convention: any change to the
+  // seed must update this array in the same PR. The shape supports zero
+  // capabilities (renders the empty-state indicator), multiple Processes per
+  // BusinessService, and multiple Surfaces per Process — none of which the
+  // current demo data triggers in extreme form, but all of which are valid
+  // v1 shapes.
   const STRUCTURAL_CONTEXT = [
     {
-      surfaceId:       'surf-v2-merchant-payment',
-      surfaceName:     'Merchant Payment Authorization',
-      businessService: { id: 'bs-merchant-services',      name: 'Merchant Services' },
-      capability:      { id: 'cap-payment-authorization',  name: 'Payment Authorization' },
-      process:         { id: 'proc-merchant-payment-auth', name: 'Merchant Payment Auth' },
+      businessService: { id: 'bs-consumer-lending', name: 'Consumer Lending' },
+      capabilities: [
+        { id: 'cap-identity-verification', name: 'Identity Verification' },
+        { id: 'cap-credit-scoring',        name: 'Credit Scoring' },
+        { id: 'cap-fraud-detection',       name: 'Fraud Detection' },
+      ],
+      processes: [
+        {
+          id: 'proc-consumer-onboarding',
+          name: 'Consumer Onboarding',
+          surfaces: [
+            { id: 'surf-v2-id-verify',      name: 'Identity Verification' },
+            { id: 'surf-v2-consumer-fraud', name: 'Consumer Fraud Check' },
+          ],
+        },
+        {
+          id: 'proc-credit-assessment',
+          name: 'Credit Assessment',
+          surfaces: [
+            { id: 'surf-v2-credit-assess', name: 'Credit Assessment' },
+          ],
+        },
+      ],
     },
     {
-      surfaceId:       'surf-v2-id-verify',
-      surfaceName:     'Identity Verification',
-      businessService: { id: 'bs-consumer-lending',        name: 'Consumer Lending' },
-      capability:      { id: 'cap-identity-verification',  name: 'Identity Verification' },
-      process:         { id: 'proc-consumer-onboarding',   name: 'Consumer Onboarding' },
+      businessService: { id: 'bs-merchant-services', name: 'Merchant Services' },
+      capabilities: [
+        { id: 'cap-fraud-detection',       name: 'Fraud Detection' },
+        { id: 'cap-payment-authorization', name: 'Payment Authorization' },
+      ],
+      processes: [
+        {
+          id: 'proc-merchant-risk-screen',
+          name: 'Merchant Risk Screening',
+          surfaces: [
+            { id: 'surf-v2-merchant-risk', name: 'Merchant Risk Screening' },
+          ],
+        },
+        {
+          id: 'proc-merchant-payment-auth',
+          name: 'Merchant Payment Authorization',
+          surfaces: [
+            { id: 'surf-v2-merchant-payment', name: 'Merchant Payment Authorization' },
+            { id: 'surf-v2-merchant-hv-pay',  name: 'Merchant High-Value Payment Authorization' },
+          ],
+        },
+      ],
     },
   ];
 
@@ -2335,26 +2458,52 @@
       `</div>`
     ).join('');
 
-    // Structural context chains — one block per evaluable surface.
+    // Structural context — one block per BusinessService. Capabilities render
+    // as an attached set (pills) reflecting the M:N relationship; Processes
+    // render as child rows reflecting the 1:N relationship; Surfaces render
+    // beneath each Process. An empty capabilities array produces an explicit
+    // "No capabilities mapped" indicator rather than silent omission.
     const ctxEl = document.getElementById('structural-context-cards');
     if (ctxEl) {
-      const node = (type, name, id) =>
-        `<div class="structural-chain-node">` +
-        `<span class="structural-chain-node-type">${escHtml(type)}</span>` +
-        `<span class="structural-chain-node-name">${escHtml(name)}</span>` +
-        `<span class="structural-chain-node-id">${escHtml(id)}</span>` +
-        `</div>`;
-      const arrow = `<span class="structural-chain-arrow">\u2192</span>`;
+      const capPill = (cap) =>
+        `<span class="structural-svc-cap-pill">` +
+          `<span class="structural-svc-cap-pill-name">${escHtml(cap.name)}</span>` +
+          `<span class="structural-svc-cap-pill-id">${escHtml(cap.id)}</span>` +
+        `</span>`;
 
-      ctxEl.innerHTML = STRUCTURAL_CONTEXT.map(ctx =>
-        `<div class="structural-chain-block">` +
-        `<div class="structural-chain-surface">${escHtml(ctx.surfaceName)}</div>` +
-        `<div class="structural-chain-steps">` +
-        node('Business Service', ctx.businessService.name, ctx.businessService.id) + arrow +
-        node('Capability',       ctx.capability.name,      ctx.capability.id)      + arrow +
-        node('Process',          ctx.process.name,         ctx.process.id)         + arrow +
-        node('Surface',          ctx.surfaceName,          ctx.surfaceId) +
-        `</div>` +
+      const surfaceRow = (s) =>
+        `<div class="structural-svc-surface">` +
+          `<span class="structural-svc-surface-label">Decision Surface</span>` +
+          `<span class="structural-svc-surface-name">${escHtml(s.name)}</span>` +
+          `<span class="structural-svc-surface-id">${escHtml(s.id)}</span>` +
+        `</div>`;
+
+      const processBlock = (p) =>
+        `<div class="structural-svc-process">` +
+          `<div class="structural-svc-process-header">` +
+            `<span class="structural-svc-process-label">Process</span>` +
+            `<span class="structural-svc-process-name">${escHtml(p.name)}</span>` +
+            `<span class="structural-svc-process-id">${escHtml(p.id)}</span>` +
+          `</div>` +
+          p.surfaces.map(surfaceRow).join('') +
+        `</div>`;
+
+      const capsSection = (caps) =>
+        caps.length === 0
+          ? `<div class="structural-svc-empty-caps">No capabilities mapped</div>`
+          : `<div class="structural-svc-caps">` + caps.map(capPill).join('') + `</div>`;
+
+      ctxEl.innerHTML = STRUCTURAL_CONTEXT.map(svc =>
+        `<div class="structural-svc-block">` +
+          `<div class="structural-svc-header">` +
+            `<span class="structural-svc-header-label">Business Service</span>` +
+            `<span class="structural-svc-header-name">${escHtml(svc.businessService.name)}</span>` +
+            `<span class="structural-svc-header-id">${escHtml(svc.businessService.id)}</span>` +
+          `</div>` +
+          `<div class="structural-svc-section-label">Enabled by capabilities</div>` +
+          capsSection(svc.capabilities) +
+          `<div class="structural-svc-section-label">Processes</div>` +
+          `<div class="structural-svc-processes">` + svc.processes.map(processBlock).join('') + `</div>` +
         `</div>`
       ).join('');
     }

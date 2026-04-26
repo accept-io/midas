@@ -42,22 +42,30 @@ var testNow = time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 // WithTx snapshots both the envelope and audit repos before the operation
 // and restores both on failure, providing atomic rollback semantics.
 type fakeStore struct {
-	envelopes *fakeEnvelopeRepo
-	audit     *fakeAuditRepo
-	surfaces  *fakeSurfaceRepo
-	agents    *fakeAgentRepo
-	grants    *fakeGrantRepo
-	profiles  *fakeProfileRepo
+	envelopes        *fakeEnvelopeRepo
+	audit            *fakeAuditRepo
+	surfaces         *fakeSurfaceRepo
+	agents           *fakeAgentRepo
+	grants           *fakeGrantRepo
+	profiles         *fakeProfileRepo
+	processes        *fakeProcessRepo
+	businessServices *fakeBusinessServiceRepo
+	bscLinks         *fakeBSCRepo
+	capabilities     *fakeCapabilityRepo
 }
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{
-		envelopes: &fakeEnvelopeRepo{data: map[string]*envelope.Envelope{}},
-		audit:     &fakeAuditRepo{},
-		surfaces:  &fakeSurfaceRepo{},
-		agents:    &fakeAgentRepo{},
-		grants:    &fakeGrantRepo{},
-		profiles:  &fakeProfileRepo{},
+		envelopes:        &fakeEnvelopeRepo{data: map[string]*envelope.Envelope{}},
+		audit:            &fakeAuditRepo{},
+		surfaces:         &fakeSurfaceRepo{},
+		agents:           &fakeAgentRepo{},
+		grants:           &fakeGrantRepo{},
+		profiles:         &fakeProfileRepo{},
+		processes:        &fakeProcessRepo{},
+		businessServices: &fakeBusinessServiceRepo{},
+		bscLinks:         &fakeBSCRepo{},
+		capabilities:     &fakeCapabilityRepo{},
 	}
 }
 
@@ -67,12 +75,16 @@ func (f *fakeStore) Repositories() (*store.Repositories, error) {
 
 func (f *fakeStore) repos() *store.Repositories {
 	return &store.Repositories{
-		Envelopes: f.envelopes,
-		Audit:     f.audit,
-		Surfaces:  f.surfaces,
-		Agents:    f.agents,
-		Grants:    f.grants,
-		Profiles:  f.profiles,
+		Envelopes:                   f.envelopes,
+		Audit:                       f.audit,
+		Surfaces:                    f.surfaces,
+		Agents:                      f.agents,
+		Grants:                      f.grants,
+		Profiles:                    f.profiles,
+		Processes:                   f.processes,
+		BusinessServices:            f.businessServices,
+		BusinessServiceCapabilities: f.bscLinks,
+		Capabilities:                f.capabilities,
 	}
 }
 
@@ -637,11 +649,14 @@ func (p *denyAllPolicies) Evaluate(_ context.Context, _ policy.PolicyInput) (pol
 func seedStore(st *fakeStore) {
 	st.surfaces.surfaces = map[string]*surface.DecisionSurface{
 		testSurfaceID: {
-			ID:      testSurfaceID,
-			Version: 1,
-			Status:  surface.SurfaceStatusActive,
+			ID:        testSurfaceID,
+			Version:   1,
+			Status:    surface.SurfaceStatusActive,
+			ProcessID: testProcessID,
 		},
 	}
+	seedStructuralChain(st.processes, st.businessServices, st.bscLinks, st.capabilities,
+		testProcessID, testBusinessServiceID, nil)
 	st.agents.agents = map[string]*agent.Agent{
 		testAgentID: {ID: testAgentID},
 	}

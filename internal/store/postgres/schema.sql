@@ -613,6 +613,32 @@ CREATE TABLE IF NOT EXISTS operational_envelopes (
     resolved_agent_id TEXT,
     resolved_subject_id TEXT,
 
+    -- SECTION 2: RESOLVED (denormalized service-led structural context)
+    -- Per ADR-0001, these columns capture point-in-time evidence of the
+    -- structural chain that governed the decision. They deliberately have
+    -- no foreign keys: the envelope is append-only governance evidence and
+    -- must survive subsequent structural changes (deprecations, replaces,
+    -- BSC link revisions). The same data is also serialised inside
+    -- resolved_json; the duplication mirrors the existing authority-chain
+    -- pattern and exists for column-level indexability.
+    resolved_process_id TEXT,
+    resolved_process_origin TEXT,
+    resolved_process_managed BOOLEAN,
+    resolved_process_replaces TEXT,
+    resolved_process_status TEXT,
+
+    resolved_business_service_id TEXT,
+    resolved_business_service_origin TEXT,
+    resolved_business_service_managed BOOLEAN,
+    resolved_business_service_replaces TEXT,
+    resolved_business_service_status TEXT,
+
+    -- Enabling-Capability set snapshot. Sorted by capability id ascending
+    -- on write for deterministic on-disk bytes. Empty set is the JSON
+    -- literal '[]' — never NULL. See ADR-0001 for the JSONB-vs-junction
+    -- decision and the deliberate absence of FK to capabilities.
+    resolved_enabling_capabilities_json JSONB NOT NULL DEFAULT '[]',
+
     resolved_json JSONB NOT NULL DEFAULT '{}',
 
     -- SECTION 3: EVALUATION

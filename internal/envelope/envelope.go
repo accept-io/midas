@@ -98,6 +98,56 @@ type ResolvedAuthority struct {
 	GrantID        string `json:"grant_id"`
 }
 
+// ProcessSnapshot captures the point-in-time identity and lifecycle
+// provenance of the Process the resolved Surface belonged to at evaluation
+// time. The snapshot is evidence — it must not be derived from live joins
+// after the envelope is written. See ADR-0001.
+type ProcessSnapshot struct {
+	ID       string `json:"id"`
+	Origin   string `json:"origin"`
+	Managed  bool   `json:"managed"`
+	Replaces string `json:"replaces"`
+	Status   string `json:"status"`
+}
+
+// BusinessServiceSnapshot captures the point-in-time identity and lifecycle
+// provenance of the BusinessService that owned the resolved Process at
+// evaluation time. See ADR-0001.
+type BusinessServiceSnapshot struct {
+	ID       string `json:"id"`
+	Origin   string `json:"origin"`
+	Managed  bool   `json:"managed"`
+	Replaces string `json:"replaces"`
+	Status   string `json:"status"`
+}
+
+// CapabilitySnapshot captures one Capability's identity and lifecycle
+// provenance at evaluation time, as part of the BusinessService's enabling
+// set. The set as a whole is point-in-time evidence; individual entries
+// retain historical IDs even if the live Capability row is later renamed
+// or deleted.
+type CapabilitySnapshot struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Origin   string `json:"origin"`
+	Managed  bool   `json:"managed"`
+	Replaces string `json:"replaces"`
+	Status   string `json:"status"`
+}
+
+// ResolvedStructure holds the service-led structural context resolved at
+// evaluation time: the Process the surface belongs to, the BusinessService
+// that owns the Process, and the set of Capabilities enabling that
+// BusinessService via business_service_capabilities at the moment the
+// decision was recorded. EnablingCapabilities is sorted by ID ascending
+// for deterministic on-disk bytes; an empty set serialises as [], never
+// null. See ADR-0001.
+type ResolvedStructure struct {
+	Process              ProcessSnapshot         `json:"process"`
+	BusinessService      BusinessServiceSnapshot `json:"business_service"`
+	EnablingCapabilities []CapabilitySnapshot    `json:"enabling_capabilities"`
+}
+
 // RequestMetadata holds governance fields extracted from the submitted
 // envelope for convenience. These are caller-supplied claims — present
 // for readability and audit enrichment, but their authority derives from
@@ -144,6 +194,7 @@ type DecisionSubject struct {
 // Resolved groups all facts determined by MIDAS during evaluation.
 type Resolved struct {
 	Authority  ResolvedAuthority   `json:"authority"`
+	Structure  ResolvedStructure   `json:"structure"`
 	Metadata   RequestMetadata     `json:"metadata,omitempty"`
 	Delegation *DelegationEvidence `json:"delegation,omitempty"`
 	Subject    *DecisionSubject    `json:"subject,omitempty"`

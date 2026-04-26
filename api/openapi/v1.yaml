@@ -138,6 +138,90 @@ components:
         status:
           type: string
 
+    ResolvedProcessSnapshot:
+      type: object
+      description: >
+        Point-in-time snapshot of the Process the resolved Surface belonged
+        to at evaluation time. Captured as evidence on the envelope per
+        ADR-0001; not derived from live joins after the envelope is written.
+      properties:
+        id:
+          type: string
+        origin:
+          type: string
+          description: Always "manual" in v1.
+        managed:
+          type: boolean
+        replaces:
+          type: string
+          description: ID of a previously-superseded Process; empty string when none.
+        status:
+          type: string
+          enum: [active, deprecated]
+
+    ResolvedBusinessServiceSnapshot:
+      type: object
+      description: >
+        Point-in-time snapshot of the BusinessService that owned the
+        resolved Process at evaluation time. See ADR-0001.
+      properties:
+        id:
+          type: string
+        origin:
+          type: string
+        managed:
+          type: boolean
+        replaces:
+          type: string
+        status:
+          type: string
+          enum: [active, deprecated]
+
+    ResolvedCapabilitySnapshot:
+      type: object
+      description: >
+        Point-in-time snapshot of one Capability in the BusinessService's
+        enabling set at evaluation time. The set as a whole is captured
+        as a JSONB array on the envelope; individual entries retain the
+        historical Capability ID even if the live row is later renamed
+        or deleted.
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        origin:
+          type: string
+        managed:
+          type: boolean
+        replaces:
+          type: string
+        status:
+          type: string
+          enum: [active, deprecated]
+
+    ResolvedStructure:
+      type: object
+      description: >
+        Service-led structural context resolved at evaluation time:
+        the Process the Surface belongs to, the BusinessService that owns
+        the Process, and the set of Capabilities enabling the
+        BusinessService at the moment the decision was recorded.
+        Empty enabling_capabilities arrays are valid and are serialised
+        as `[]` (never `null`). Per ADR-0001.
+      properties:
+        process:
+          $ref: "#/components/schemas/ResolvedProcessSnapshot"
+        business_service:
+          $ref: "#/components/schemas/ResolvedBusinessServiceSnapshot"
+        enabling_capabilities:
+          type: array
+          items:
+            $ref: "#/components/schemas/ResolvedCapabilitySnapshot"
+          description: >
+            Capabilities enabling this BusinessService at evaluation time,
+            sorted by id ascending for deterministic byte-level evidence.
+
     Envelope:
       type: object
       description: Tamper-evident governance record for a single evaluation.
@@ -173,6 +257,16 @@ components:
           type: string
         final_event_hash:
           type: string
+        resolved:
+          type: object
+          description: >
+            Resolved facts captured at evaluation time. Currently exposes
+            the service-led structural context added by ADR-0001; existing
+            authority-chain fields remain at the top level for backwards
+            compatibility.
+          properties:
+            structure:
+              $ref: "#/components/schemas/ResolvedStructure"
         created_at:
           type: string
           format: date-time
