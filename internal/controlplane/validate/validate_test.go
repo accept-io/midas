@@ -1224,15 +1224,18 @@ func TestValidateDocument_AllTypes(t *testing.T) {
 			},
 		},
 		{
-			name: "ProcessCapability",
+			name: "BusinessServiceCapability",
 			doc: parser.ParsedDocument{
-				Kind: types.KindProcessCapability,
-				ID:   "pc-onboarding-fraud",
-				Doc: types.ProcessCapabilityDocument{
+				Kind: types.KindBusinessServiceCapability,
+				ID:   "bsc-lending-fraud",
+				Doc: types.BusinessServiceCapabilityDocument{
 					APIVersion: types.APIVersionV1,
-					Kind:       types.KindProcessCapability,
-					Metadata:   types.DocumentMetadata{ID: "pc-onboarding-fraud"},
-					Spec:       types.ProcessCapabilitySpec{ProcessID: "proc-onboarding", CapabilityID: "cap-fraud"},
+					Kind:       types.KindBusinessServiceCapability,
+					Metadata:   types.DocumentMetadata{ID: "bsc-lending-fraud"},
+					Spec: types.BusinessServiceCapabilitySpec{
+						BusinessServiceID: "bs-consumer-lending",
+						CapabilityID:      "cap-fraud-detection",
+					},
 				},
 			},
 		},
@@ -1411,6 +1414,135 @@ func TestValidateBusinessService_ValidStatuses(t *testing.T) {
 	}
 }
 
+// ============================================================================
+// BusinessServiceCapability Validation Tests
+// ============================================================================
+
+// validBSCDoc is the canonical valid BusinessServiceCapability used as the
+// base for negative-case mutations. Both ID fields conform to validateIDFormat.
+var validBSCDoc = types.BusinessServiceCapabilityDocument{
+	APIVersion: types.APIVersionV1,
+	Kind:       types.KindBusinessServiceCapability,
+	Metadata:   types.DocumentMetadata{ID: "bsc-test"},
+	Spec: types.BusinessServiceCapabilitySpec{
+		BusinessServiceID: "bs-test",
+		CapabilityID:      "cap-test",
+	},
+}
+
+func TestValidateBusinessServiceCapability_Valid(t *testing.T) {
+	errs := validateBusinessServiceCapability(validBSCDoc)
+	if len(errs) != 0 {
+		t.Errorf("expected no errors for valid BSC, got: %+v", errs)
+	}
+}
+
+func TestValidateBusinessServiceCapability_MissingRequiredFields(t *testing.T) {
+	tests := []struct {
+		name          string
+		modify        func(types.BusinessServiceCapabilityDocument) types.BusinessServiceCapabilityDocument
+		expectedField string
+	}{
+		{
+			name: "missing business_service_id",
+			modify: func(d types.BusinessServiceCapabilityDocument) types.BusinessServiceCapabilityDocument {
+				d.Spec.BusinessServiceID = ""
+				return d
+			},
+			expectedField: "spec.business_service_id",
+		},
+		{
+			name: "whitespace-only business_service_id",
+			modify: func(d types.BusinessServiceCapabilityDocument) types.BusinessServiceCapabilityDocument {
+				d.Spec.BusinessServiceID = "   "
+				return d
+			},
+			expectedField: "spec.business_service_id",
+		},
+		{
+			name: "missing capability_id",
+			modify: func(d types.BusinessServiceCapabilityDocument) types.BusinessServiceCapabilityDocument {
+				d.Spec.CapabilityID = ""
+				return d
+			},
+			expectedField: "spec.capability_id",
+		},
+		{
+			name: "whitespace-only capability_id",
+			modify: func(d types.BusinessServiceCapabilityDocument) types.BusinessServiceCapabilityDocument {
+				d.Spec.CapabilityID = "   "
+				return d
+			},
+			expectedField: "spec.capability_id",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			doc := tt.modify(validBSCDoc)
+			errs := validateBusinessServiceCapability(doc)
+			if len(errs) == 0 {
+				t.Fatalf("expected validation error for %s, got none", tt.name)
+			}
+			found := false
+			for _, e := range errs {
+				if e.Field == tt.expectedField {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("expected error on %q, got: %+v", tt.expectedField, errs)
+			}
+		})
+	}
+}
+
+func TestValidateBusinessServiceCapability_InvalidIDFormat(t *testing.T) {
+	tests := []struct {
+		name          string
+		modify        func(types.BusinessServiceCapabilityDocument) types.BusinessServiceCapabilityDocument
+		expectedField string
+	}{
+		{
+			name: "business_service_id with uppercase",
+			modify: func(d types.BusinessServiceCapabilityDocument) types.BusinessServiceCapabilityDocument {
+				d.Spec.BusinessServiceID = "BS-Bad"
+				return d
+			},
+			expectedField: "spec.business_service_id",
+		},
+		{
+			name: "capability_id with space",
+			modify: func(d types.BusinessServiceCapabilityDocument) types.BusinessServiceCapabilityDocument {
+				d.Spec.CapabilityID = "cap bad"
+				return d
+			},
+			expectedField: "spec.capability_id",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			doc := tt.modify(validBSCDoc)
+			errs := validateBusinessServiceCapability(doc)
+			if len(errs) == 0 {
+				t.Fatalf("expected validation error for %s, got none", tt.name)
+			}
+			found := false
+			for _, e := range errs {
+				if e.Field == tt.expectedField {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("expected ID-format error on %q, got: %+v", tt.expectedField, errs)
+			}
+		})
+	}
+}
+
 func TestValidateDocument_UnsupportedType(t *testing.T) {
 	doc := parser.ParsedDocument{
 		Kind: "Unsupported",
@@ -1432,114 +1564,6 @@ func TestValidateDocument_UnsupportedType(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected unsupported type error, got: %v", errs)
-	}
-}
-
-// ============================================================================
-// ProcessCapability Validation Tests
-// ============================================================================
-
-func TestValidateProcessCapability_MissingRequiredFields(t *testing.T) {
-	base := types.ProcessCapabilityDocument{
-		APIVersion: types.APIVersionV1,
-		Kind:       types.KindProcessCapability,
-		Metadata:   types.DocumentMetadata{ID: "pc-test"},
-		Spec:       types.ProcessCapabilitySpec{ProcessID: "proc-one", CapabilityID: "cap-one"},
-	}
-
-	tests := []struct {
-		name          string
-		modify        func(types.ProcessCapabilityDocument) types.ProcessCapabilityDocument
-		expectedField string
-	}{
-		{
-			name: "missing process_id",
-			modify: func(d types.ProcessCapabilityDocument) types.ProcessCapabilityDocument {
-				d.Spec.ProcessID = ""
-				return d
-			},
-			expectedField: "spec.process_id",
-		},
-		{
-			name: "missing capability_id",
-			modify: func(d types.ProcessCapabilityDocument) types.ProcessCapabilityDocument {
-				d.Spec.CapabilityID = ""
-				return d
-			},
-			expectedField: "spec.capability_id",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			doc := tt.modify(base)
-			errs := validateProcessCapability(doc)
-			if len(errs) == 0 {
-				t.Fatalf("expected validation error for %s, got none", tt.name)
-			}
-			found := false
-			for _, e := range errs {
-				if e.Field == tt.expectedField {
-					found = true
-					break
-				}
-			}
-			if !found {
-				t.Errorf("expected error on %q, got: %v", tt.expectedField, errs)
-			}
-		})
-	}
-}
-
-func TestValidateProcessCapability_InvalidIDFormat(t *testing.T) {
-	base := types.ProcessCapabilityDocument{
-		APIVersion: types.APIVersionV1,
-		Kind:       types.KindProcessCapability,
-		Metadata:   types.DocumentMetadata{ID: "pc-test"},
-		Spec:       types.ProcessCapabilitySpec{ProcessID: "proc-one", CapabilityID: "cap-one"},
-	}
-
-	tests := []struct {
-		name          string
-		modify        func(types.ProcessCapabilityDocument) types.ProcessCapabilityDocument
-		expectedField string
-	}{
-		{
-			name: "invalid process_id format",
-			modify: func(d types.ProcessCapabilityDocument) types.ProcessCapabilityDocument {
-				d.Spec.ProcessID = "Invalid ID"
-				return d
-			},
-			expectedField: "spec.process_id",
-		},
-		{
-			name: "invalid capability_id format",
-			modify: func(d types.ProcessCapabilityDocument) types.ProcessCapabilityDocument {
-				d.Spec.CapabilityID = "Invalid ID"
-				return d
-			},
-			expectedField: "spec.capability_id",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			doc := tt.modify(base)
-			errs := validateProcessCapability(doc)
-			if len(errs) == 0 {
-				t.Fatalf("expected validation error for %s, got none", tt.name)
-			}
-			found := false
-			for _, e := range errs {
-				if e.Field == tt.expectedField {
-					found = true
-					break
-				}
-			}
-			if !found {
-				t.Errorf("expected format error on %q, got: %v", tt.expectedField, errs)
-			}
-		})
 	}
 }
 

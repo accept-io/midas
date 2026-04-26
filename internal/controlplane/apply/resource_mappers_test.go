@@ -113,8 +113,9 @@ func TestMapAgentDocumentToAgent_InvalidType(t *testing.T) {
 }
 
 // TestMapProcessDocument_BusinessServiceID verifies that the mapper correctly
-// carries spec.business_service_id into the domain model, and that an absent
-// business_service_id leaves BusinessServiceID empty (backward compatibility).
+// carries spec.business_service_id into the domain model. In the v1 service-led
+// model business_service_id is required at apply-time (validated upstream); the
+// mapper itself simply propagates whatever value the spec carries.
 func TestMapProcessDocument_BusinessServiceID(t *testing.T) {
 	now := time.Now()
 
@@ -124,7 +125,6 @@ func TestMapProcessDocument_BusinessServiceID(t *testing.T) {
 			Kind:       types.KindProcess,
 			Metadata:   types.DocumentMetadata{ID: "proc-mapper-test", Name: "Mapper Test Process"},
 			Spec: types.ProcessSpec{
-				CapabilityID:      "cap-mapper-test",
 				Status:            "active",
 				BusinessServiceID: bsID,
 			},
@@ -135,13 +135,6 @@ func TestMapProcessDocument_BusinessServiceID(t *testing.T) {
 		p := mapProcessDocumentToProcess(makeDoc("bs-payments"), now, "tester")
 		if p.BusinessServiceID != "bs-payments" {
 			t.Errorf("BusinessServiceID = %q, want %q", p.BusinessServiceID, "bs-payments")
-		}
-	})
-
-	t.Run("absent business_service_id maps to empty string", func(t *testing.T) {
-		p := mapProcessDocumentToProcess(makeDoc(""), now, "tester")
-		if p.BusinessServiceID != "" {
-			t.Errorf("BusinessServiceID = %q, want empty string", p.BusinessServiceID)
 		}
 	})
 }

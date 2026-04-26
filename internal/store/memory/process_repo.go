@@ -5,13 +5,11 @@ import (
 	"fmt"
 
 	"github.com/accept-io/midas/internal/businessservice"
-	"github.com/accept-io/midas/internal/capability"
 	"github.com/accept-io/midas/internal/process"
 )
 
 type ProcessRepo struct {
 	items        map[string]*process.Process
-	capabilities capability.CapabilityRepository
 	businessSvcs businessservice.BusinessServiceRepository
 }
 
@@ -29,16 +27,10 @@ func (r *ProcessRepo) GetByID(_ context.Context, id string) (*process.Process, e
 }
 
 func (r *ProcessRepo) Create(ctx context.Context, p *process.Process) error {
-	if r.capabilities != nil {
-		ok, err := r.capabilities.Exists(ctx, p.CapabilityID)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return fmt.Errorf("capability %q does not exist", p.CapabilityID)
-		}
+	if p.BusinessServiceID == "" {
+		return fmt.Errorf("process %q: business_service_id is required", p.ID)
 	}
-	if r.businessSvcs != nil && p.BusinessServiceID != "" {
+	if r.businessSvcs != nil {
 		ok, err := r.businessSvcs.Exists(ctx, p.BusinessServiceID)
 		if err != nil {
 			return err
@@ -48,13 +40,8 @@ func (r *ProcessRepo) Create(ctx context.Context, p *process.Process) error {
 		}
 	}
 	if p.ParentProcessID != "" {
-		parent, ok := r.items[p.ParentProcessID]
-		if !ok {
+		if _, ok := r.items[p.ParentProcessID]; !ok {
 			return fmt.Errorf("parent process %q does not exist", p.ParentProcessID)
-		}
-		if parent.CapabilityID != p.CapabilityID {
-			return fmt.Errorf("parent process %q belongs to capability %q, but child process belongs to %q",
-				p.ParentProcessID, parent.CapabilityID, p.CapabilityID)
 		}
 	}
 	r.items[p.ID] = p
@@ -70,16 +57,6 @@ func (r *ProcessRepo) List(_ context.Context) ([]*process.Process, error) {
 	out := make([]*process.Process, 0, len(r.items))
 	for _, p := range r.items {
 		out = append(out, p)
-	}
-	return out, nil
-}
-
-func (r *ProcessRepo) ListByCapabilityID(_ context.Context, capabilityID string) ([]*process.Process, error) {
-	var out []*process.Process
-	for _, p := range r.items {
-		if p.CapabilityID == capabilityID {
-			out = append(out, p)
-		}
 	}
 	return out, nil
 }

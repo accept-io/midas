@@ -10,12 +10,11 @@ import (
 	"github.com/accept-io/midas/internal/audit"
 	"github.com/accept-io/midas/internal/authority"
 	"github.com/accept-io/midas/internal/businessservice"
+	"github.com/accept-io/midas/internal/businessservicecapability"
 	"github.com/accept-io/midas/internal/capability"
 	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/outbox"
 	"github.com/accept-io/midas/internal/process"
-	"github.com/accept-io/midas/internal/processbusinessservice"
-	"github.com/accept-io/midas/internal/processcapability"
 	"github.com/accept-io/midas/internal/store"
 	"github.com/accept-io/midas/internal/surface"
 )
@@ -585,37 +584,31 @@ func NewRepositories() *store.Repositories {
 	caps := NewCapabilityRepo()
 	bsvcs := NewBusinessServiceRepo()
 	procs := NewProcessRepo()
-	procs.capabilities = caps
 	procs.businessSvcs = bsvcs
 
-	pcRepo := NewProcessCapabilityRepo()
-	pcRepo.processes = procs
-	pcRepo.capabilities = caps
-
-	pbsRepo := NewProcessBusinessServiceRepo()
-	pbsRepo.processes = procs
-	pbsRepo.businessSvcs = bsvcs
+	bscRepo := NewBusinessServiceCapabilityRepo()
+	bscRepo.businessSvcs = bsvcs
+	bscRepo.capabilities = caps
 
 	surfRepo := NewSurfaceRepo()
 	surfRepo.processes = procs
 
 	return &store.Repositories{
-		Surfaces:                surfRepo,
-		Agents:                  NewAgentRepo(),
-		Profiles:                NewProfileRepo(),
-		Grants:                  NewGrantRepo(),
-		Envelopes:               NewEnvelopeRepo(),
-		Audit:                   audit.NewMemoryRepository(),
-		ControlAudit:            NewControlAuditRepo(),
-		AdminAudit:              NewAdminAuditRepo(),
-		Outbox:                  outbox.NewMemoryRepository(),
-		LocalUsers:              NewLocalUserRepo(),
-		LocalSessions:           NewLocalSessionRepo(),
-		Capabilities:            caps,
-		Processes:               procs,
-		BusinessServices:        bsvcs,
-		ProcessCapabilities:     pcRepo,
-		ProcessBusinessServices: pbsRepo,
+		Surfaces:                    surfRepo,
+		Agents:                      NewAgentRepo(),
+		Profiles:                    NewProfileRepo(),
+		Grants:                      NewGrantRepo(),
+		Envelopes:                   NewEnvelopeRepo(),
+		Audit:                       audit.NewMemoryRepository(),
+		ControlAudit:                NewControlAuditRepo(),
+		AdminAudit:                  NewAdminAuditRepo(),
+		Outbox:                      outbox.NewMemoryRepository(),
+		LocalUsers:                  NewLocalUserRepo(),
+		LocalSessions:               NewLocalSessionRepo(),
+		Capabilities:                caps,
+		Processes:                   procs,
+		BusinessServices:            bsvcs,
+		BusinessServiceCapabilities: bscRepo,
 	}
 }
 
@@ -627,5 +620,4 @@ var _ envelope.EnvelopeRepository = (*EnvelopeRepo)(nil)
 var _ capability.CapabilityRepository = (*CapabilityRepo)(nil)
 var _ process.ProcessRepository = (*ProcessRepo)(nil)
 var _ businessservice.BusinessServiceRepository = (*BusinessServiceRepo)(nil)
-var _ processcapability.ProcessCapabilityRepository = (*ProcessCapabilityRepo)(nil)
-var _ processbusinessservice.ProcessBusinessServiceRepository = (*ProcessBusinessServiceRepo)(nil)
+var _ businessservicecapability.BusinessServiceCapabilityRepository = (*BusinessServiceCapabilityRepo)(nil)

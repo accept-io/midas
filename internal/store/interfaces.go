@@ -6,14 +6,13 @@ import (
 	"github.com/accept-io/midas/internal/audit"
 	"github.com/accept-io/midas/internal/authority"
 	"github.com/accept-io/midas/internal/businessservice"
+	"github.com/accept-io/midas/internal/businessservicecapability"
 	"github.com/accept-io/midas/internal/capability"
 	"github.com/accept-io/midas/internal/controlaudit"
 	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/localiam"
 	"github.com/accept-io/midas/internal/outbox"
 	"github.com/accept-io/midas/internal/process"
-	"github.com/accept-io/midas/internal/processbusinessservice"
-	"github.com/accept-io/midas/internal/processcapability"
 	"github.com/accept-io/midas/internal/surface"
 )
 
@@ -37,9 +36,9 @@ type Repositories struct {
 	// LocalUsers and LocalSessions are nil when local platform IAM is disabled.
 	LocalUsers    localiam.UserRepository
 	LocalSessions localiam.SessionRepository
-	Capabilities        capability.CapabilityRepository
-	Processes           process.ProcessRepository
-	BusinessServices    businessservice.BusinessServiceRepository
-	ProcessCapabilities     processcapability.ProcessCapabilityRepository
-	ProcessBusinessServices processbusinessservice.ProcessBusinessServiceRepository
+
+	Capabilities                capability.CapabilityRepository
+	Processes                   process.ProcessRepository
+	BusinessServices            businessservice.BusinessServiceRepository
+	BusinessServiceCapabilities businessservicecapability.BusinessServiceCapabilityRepository
 }

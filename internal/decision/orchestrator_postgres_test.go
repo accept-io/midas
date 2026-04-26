@@ -62,6 +62,8 @@ func cleanupPostgresTestData(t *testing.T, db *sql.DB) {
 		`DELETE FROM agents`,
 		`DELETE FROM decision_surfaces`,
 		`DELETE FROM processes`,
+		`DELETE FROM business_service_capabilities`,
+		`DELETE FROM business_services`,
 		`DELETE FROM capabilities`,
 	}
 

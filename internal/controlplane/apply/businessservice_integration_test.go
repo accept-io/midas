@@ -148,9 +148,15 @@ func TestBusinessServiceApply_NoRepo_ValidationOnly(t *testing.T) {
 // TestBusinessServiceApply_WithCapabilityAndProcess verifies that a bundle
 // containing BusinessService, Capability, and Process applies in the correct
 // dependency order — BusinessService first, then Capability, then Process.
+//
+// Uses the full memory.NewRepositories() set so that the cross-repo
+// validators (Process → BusinessService) see the BusinessService that the
+// bundle persists; the previous test-double approach left the validator
+// pointed at a different BusinessService repo and silently rejected Process
+// creates with "business service does not exist".
 func TestBusinessServiceApply_WithCapabilityAndProcess(t *testing.T) {
-	bsRepo := newMemBusinessServiceRepo()
 	repos := memory.NewRepositories()
+	bsRepo := repos.BusinessServices
 
 	svc := apply.NewServiceWithRepos(apply.RepositorySet{
 		BusinessServices: bsRepo,
@@ -178,7 +184,7 @@ func TestBusinessServiceApply_WithCapabilityAndProcess(t *testing.T) {
 				APIVersion: types.APIVersionV1,
 				Kind:       types.KindProcess,
 				Metadata:   types.DocumentMetadata{ID: "proc-order-test", Name: "Order Test Process"},
-				Spec:       types.ProcessSpec{CapabilityID: "cap-order-test", Status: "active"},
+				Spec:       types.ProcessSpec{BusinessServiceID: "bs-order-test", Status: "active"},
 			},
 		},
 	}

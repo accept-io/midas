@@ -19,7 +19,6 @@ type CapabilityReader interface {
 type ProcessReader interface {
 	GetByID(ctx context.Context, id string) (*process.Process, error)
 	List(ctx context.Context) ([]*process.Process, error)
-	ListByCapabilityID(ctx context.Context, capabilityID string) ([]*process.Process, error)
 }
 
 // ProcessSurfaceReader is the surface repository subset needed for process traversal.
@@ -77,27 +76,6 @@ func (s *StructuralService) GetProcess(ctx context.Context, id string) (*process
 // ListProcesses returns all processes.
 func (s *StructuralService) ListProcesses(ctx context.Context) ([]*process.Process, error) {
 	return s.processes.List(ctx)
-}
-
-// ListProcessesByCapability returns processes belonging to the given capability.
-// Returns (nil, false, nil) when the capability does not exist.
-// Returns (procs, true, nil) including empty slice when found.
-func (s *StructuralService) ListProcessesByCapability(ctx context.Context, capabilityID string) ([]*process.Process, bool, error) {
-	cap, err := s.capabilities.GetByID(ctx, capabilityID)
-	if err != nil {
-		return nil, false, err
-	}
-	if cap == nil {
-		return nil, false, nil
-	}
-	procs, err := s.processes.ListByCapabilityID(ctx, capabilityID)
-	if err != nil {
-		return nil, true, err
-	}
-	if procs == nil {
-		procs = []*process.Process{}
-	}
-	return procs, true, nil
 }
 
 // GetBusinessService returns a business service by ID. Returns nil, nil when not found

@@ -1,5 +1,14 @@
 # 033 — Surface → Process Enforcement Audit
 
+> **Historical document.** This audit predates the v1 inference retirement
+> (ADR-XXX). Sections referencing `internal/inference/`,
+> `inference.EnsureInferredStructure`, `SurfaceRepo.EnsureInferred`,
+> `MigrateProcess`, and `FindEligibleForCleanup` describe a subsystem that
+> no longer exists in v1. Source-line links into `internal/inference/`
+> and into now-removed methods on `internal/store/postgres/surface_repo.go`
+> are stale. The analytical content is preserved as-is for historical
+> accuracy.
+
 **Status:** Analysis only. No code, schema, test, config, fixture, or seed changes in this audit.
 **Tracking issue:** #33
 **Scope:** Invariant-enforcement behaviour for the `Surface → Process` invariant.

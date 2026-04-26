@@ -375,55 +375,6 @@ func (r *SurfaceRepo) Search(ctx context.Context, criteria surface.SearchCriteri
 	return out, nil
 }
 
-// EnsureInferred inserts the inferred decision surface (always version 1) if it does
-// not exist, or validates that the existing version-1 row has compatible inferred
-// semantics.
-//
-// Returns (true, nil) when a new row was created, (false, nil) when an existing row
-// already has origin=inferred, managed=false, and the correct processID, or an error
-// if a conflicting row exists (e.g. wrong origin, managed=true, or wrong process link).
-//
-// db must be a transaction when called from EnsureInferredStructure. The processID must
-// already exist in the processes table within the same transaction before this is called.
-func (r *SurfaceRepo) EnsureInferred(ctx context.Context, db sqltx.DBTX, surfaceID, processID string) (bool, error) {
-	now := time.Now().UTC()
-	const insert = `
-		INSERT INTO decision_surfaces
-			(id, version, name, domain, business_owner, technical_owner, status,
-			 effective_date, created_at, updated_at, origin, managed, process_id)
-		VALUES ($1, 1, $1, 'inferred', '', '', 'active', $2, $2, $2, 'inferred', false, $3)
-		ON CONFLICT (id, version) DO NOTHING`
-	res, err := db.ExecContext(ctx, insert, surfaceID, now, processID)
-	if err != nil {
-		return false, err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-	if n > 0 {
-		return true, nil
-	}
-	// Row already exists; validate that it has compatible inferred semantics.
-	const sel = `
-		SELECT origin, managed, COALESCE(process_id, '')
-		FROM decision_surfaces
-		WHERE id = $1 AND version = 1`
-	var origin string
-	var managed bool
-	var existingProcID string
-	if err := db.QueryRowContext(ctx, sel, surfaceID).Scan(&origin, &managed, &existingProcID); err != nil {
-		return false, err
-	}
-	if origin != "inferred" || managed || existingProcID != processID {
-		return false, fmt.Errorf(
-			"decision surface %s (version 1) already exists with origin=%s managed=%v process_id=%s, cannot ensure as inferred entity linked to %s",
-			surfaceID, origin, managed, existingProcID, processID,
-		)
-	}
-	return false, nil
-}
-
 // Create inserts a new surface version.
 //
 // Enforces the Surface → Process invariant (I-1) at the application layer:
@@ -529,26 +480,6 @@ func (r *SurfaceRepo) Update(ctx context.Context, s *surface.DecisionSurface) er
 	}
 
 	return nil
-}
-
-// CountByProcessID returns the number of decision surfaces attached to the given process.
-func (r *SurfaceRepo) CountByProcessID(ctx context.Context, processID string) (int, error) {
-	const q = `SELECT COUNT(*) FROM decision_surfaces WHERE process_id = $1`
-	var n int
-	err := r.db.QueryRowContext(ctx, q, processID).Scan(&n)
-	return n, err
-}
-
-// MigrateProcess updates all surfaces from fromProcessID to toProcessID within the
-// given transaction. Returns the number of rows updated.
-func (r *SurfaceRepo) MigrateProcess(ctx context.Context, db sqltx.DBTX, fromProcessID, toProcessID string) (int64, error) {
-	now := time.Now().UTC()
-	const q = `UPDATE decision_surfaces SET process_id = $2, updated_at = $3 WHERE process_id = $1`
-	res, err := db.ExecContext(ctx, q, fromProcessID, toProcessID, now)
-	if err != nil {
-		return 0, err
-	}
-	return res.RowsAffected()
 }
 
 // compile-time check

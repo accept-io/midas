@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/accept-io/midas/internal/capability"
+	"github.com/accept-io/midas/internal/businessservice"
 	"github.com/accept-io/midas/internal/process"
 )
 
@@ -15,15 +15,15 @@ func TestProcessRepo_CreateAndGetByID(t *testing.T) {
 
 	now := time.Now().UTC()
 	p := &process.Process{
-		ID:           "proc-create-001",
-		Name:         "Loan Approval",
-		CapabilityID: "cap-create-001",
-		Status:       "active",
-		Origin:       "manual",
-		Managed:      true,
-		Owner:        "team-lending",
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:                "proc-create-001",
+		Name:              "Loan Approval",
+		BusinessServiceID: "bs-create-001",
+		Status:            "active",
+		Origin:            "manual",
+		Managed:           true,
+		Owner:             "team-lending",
+		CreatedAt:         now,
+		UpdatedAt:         now,
 	}
 
 	if err := procRepo.Create(ctx, p); err != nil {
@@ -41,7 +41,7 @@ func TestProcessRepo_CreateAndGetByID(t *testing.T) {
 	checks := []struct{ field, want, got string }{
 		{"ID", p.ID, got.ID},
 		{"Name", p.Name, got.Name},
-		{"CapabilityID", p.CapabilityID, got.CapabilityID},
+		{"BusinessServiceID", p.BusinessServiceID, got.BusinessServiceID},
 		{"Status", p.Status, got.Status},
 		{"Origin", p.Origin, got.Origin},
 		{"Owner", p.Owner, got.Owner},
@@ -56,78 +56,67 @@ func TestProcessRepo_CreateAndGetByID(t *testing.T) {
 	}
 }
 
-// TestProcessRepo_Create_CapabilityValidation guards the existing
-// capability-existence check in the memory store: when a capabilities
-// repo is wired in, Create must fail for unknown capability_id.
-func TestProcessRepo_Create_CapabilityValidation(t *testing.T) {
+// TestProcessRepo_Create_BusinessServiceValidation guards the v1 service-led
+// invariant: when a business-service repo is wired in, Create must fail for
+// an unknown business_service_id and for a missing one.
+func TestProcessRepo_Create_BusinessServiceValidation(t *testing.T) {
 	ctx := context.Background()
-	capRepo := NewCapabilityRepo()
+	bsRepo := NewBusinessServiceRepo()
 	procRepo := NewProcessRepo()
-	procRepo.capabilities = capRepo
+	procRepo.businessSvcs = bsRepo
 
 	now := time.Now().UTC()
-	if err := capRepo.Create(ctx, &capability.Capability{
-		ID:        "cap-proc-val",
-		Name:      "Cap",
+	if err := bsRepo.Create(ctx, &businessservice.BusinessService{
+		ID:          "bs-proc-val",
+		Name:        "BS",
+		ServiceType: businessservice.ServiceTypeInternal,
+		Status:      "active",
+		Origin:      "manual",
+		Managed:     true,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}); err != nil {
+		t.Fatalf("seed business service: %v", err)
+	}
+
+	// Process with known business service succeeds.
+	if err := procRepo.Create(ctx, &process.Process{
+		ID:                "proc-val-001",
+		Name:              "OK",
+		BusinessServiceID: "bs-proc-val",
+		Status:            "active",
+		Origin:            "manual",
+		Managed:           true,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}); err != nil {
+		t.Fatalf("Create with known business service: %v", err)
+	}
+
+	// Process with unknown business service fails.
+	if err := procRepo.Create(ctx, &process.Process{
+		ID:                "proc-val-002",
+		Name:              "Bad",
+		BusinessServiceID: "bs-missing",
+		Status:            "active",
+		Origin:            "manual",
+		Managed:           true,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}); err == nil {
+		t.Fatal("expected error for unknown business_service_id, got nil")
+	}
+
+	// Process with empty business_service_id fails.
+	if err := procRepo.Create(ctx, &process.Process{
+		ID:        "proc-val-003",
+		Name:      "Empty",
 		Status:    "active",
 		Origin:    "manual",
 		Managed:   true,
 		CreatedAt: now,
 		UpdatedAt: now,
-	}); err != nil {
-		t.Fatalf("seed capability: %v", err)
-	}
-
-	// Process with known capability succeeds.
-	if err := procRepo.Create(ctx, &process.Process{
-		ID:           "proc-val-001",
-		Name:         "OK",
-		CapabilityID: "cap-proc-val",
-		Status:       "active",
-		Origin:       "manual",
-		Managed:      true,
-		CreatedAt:    now,
-		UpdatedAt:    now,
-	}); err != nil {
-		t.Fatalf("Create with known capability: %v", err)
-	}
-
-	// Process with unknown capability fails.
-	if err := procRepo.Create(ctx, &process.Process{
-		ID:           "proc-val-002",
-		Name:         "Bad",
-		CapabilityID: "cap-missing",
-		Status:       "active",
-		Origin:       "manual",
-		Managed:      true,
-		CreatedAt:    now,
-		UpdatedAt:    now,
 	}); err == nil {
-		t.Fatal("expected error for unknown capability_id, got nil")
-	}
-}
-
-func TestProcessRepo_ListByCapabilityID(t *testing.T) {
-	ctx := context.Background()
-	procRepo := NewProcessRepo()
-
-	now := time.Now().UTC()
-	procs := []*process.Process{
-		{ID: "proc-list-001", Name: "P1", CapabilityID: "cap-A", Status: "active", Origin: "manual", Managed: true, CreatedAt: now, UpdatedAt: now},
-		{ID: "proc-list-002", Name: "P2", CapabilityID: "cap-A", Status: "active", Origin: "manual", Managed: true, CreatedAt: now, UpdatedAt: now},
-		{ID: "proc-list-003", Name: "P3", CapabilityID: "cap-B", Status: "active", Origin: "manual", Managed: true, CreatedAt: now, UpdatedAt: now},
-	}
-	for _, p := range procs {
-		if err := procRepo.Create(ctx, p); err != nil {
-			t.Fatalf("Create %s: %v", p.ID, err)
-		}
-	}
-
-	rows, err := procRepo.ListByCapabilityID(ctx, "cap-A")
-	if err != nil {
-		t.Fatalf("ListByCapabilityID: %v", err)
-	}
-	if len(rows) != 2 {
-		t.Errorf("ListByCapabilityID(cap-A): want 2 rows, got %d", len(rows))
+		t.Fatal("expected error for empty business_service_id, got nil")
 	}
 }

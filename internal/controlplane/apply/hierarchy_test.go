@@ -9,7 +9,8 @@ package apply_test
 // Test D  — valid parent process succeeds
 // Test E  — self-parent process rejected
 // Test F  — process cycle rejected
-// Test G  — cross-capability parent process still rejected (G-7 rule preserved)
+// Test G  — cross-business-service parent process rejected (v1 service-led
+//           equivalent of the prior cross-capability rule)
 
 import (
 	"context"
@@ -41,7 +42,11 @@ func hierCapDoc(id, parentCapID string) parser.ParsedDocument {
 	}
 }
 
-func hierProcDoc(id, capID, parentProcID string) parser.ParsedDocument {
+// hierProcDoc constructs a Process document for hierarchy tests. The bsID
+// parameter is the BusinessService the process belongs to (required in
+// the v1 service-led model — the parent-shares-business-service invariant
+// replaces the prior parent-shares-capability rule).
+func hierProcDoc(id, bsID, parentProcID string) parser.ParsedDocument {
 	return parser.ParsedDocument{
 		Kind: types.KindProcess,
 		ID:   id,
@@ -50,9 +55,26 @@ func hierProcDoc(id, capID, parentProcID string) parser.ParsedDocument {
 			Kind:       types.KindProcess,
 			Metadata:   types.DocumentMetadata{ID: id, Name: id},
 			Spec: types.ProcessSpec{
-				CapabilityID:    capID,
-				ParentProcessID: parentProcID,
-				Status:          "active",
+				BusinessServiceID: bsID,
+				ParentProcessID:   parentProcID,
+				Status:            "active",
+			},
+		},
+	}
+}
+
+// hierBSDoc constructs a BusinessService document for hierarchy tests.
+func hierBSDoc(id string) parser.ParsedDocument {
+	return parser.ParsedDocument{
+		Kind: types.KindBusinessService,
+		ID:   id,
+		Doc: types.BusinessServiceDocument{
+			APIVersion: types.APIVersionV1,
+			Kind:       types.KindBusinessService,
+			Metadata:   types.DocumentMetadata{ID: id, Name: id},
+			Spec: types.BusinessServiceSpec{
+				ServiceType: "internal",
+				Status:      "active",
 			},
 		},
 	}
@@ -252,15 +274,15 @@ func TestG5G6_CapabilityHierarchy_CycleViaRepo_Rejected(t *testing.T) {
 func TestG5G6_ProcessHierarchy_ValidParent_Succeeds(t *testing.T) {
 	repos := memory.NewRepositories()
 	svc := apply.NewServiceWithRepos(apply.RepositorySet{
-		Capabilities: repos.Capabilities,
-		Processes:    repos.Processes,
+		BusinessServices: repos.BusinessServices,
+		Processes:        repos.Processes,
 	})
 	ctx := context.Background()
 
 	bundle := []parser.ParsedDocument{
-		hierCapDoc("cap-proc-d", ""),
-		hierProcDoc("proc-d-parent", "cap-proc-d", ""),
-		hierProcDoc("proc-d-child", "cap-proc-d", "proc-d-parent"),
+		hierBSDoc("bs-proc-d"),
+		hierProcDoc("proc-d-parent", "bs-proc-d", ""),
+		hierProcDoc("proc-d-child", "bs-proc-d", "proc-d-parent"),
 	}
 
 	result := svc.Apply(ctx, bundle, "test")
@@ -294,16 +316,16 @@ func TestG5G6_ProcessHierarchy_ValidParent_Succeeds(t *testing.T) {
 func TestG5G6_ProcessHierarchy_SelfParent_Rejected(t *testing.T) {
 	repos := memory.NewRepositories()
 	svc := apply.NewServiceWithRepos(apply.RepositorySet{
-		Capabilities: repos.Capabilities,
-		Processes:    repos.Processes,
+		BusinessServices: repos.BusinessServices,
+		Processes:        repos.Processes,
 	})
 	ctx := context.Background()
 
-	// Seed the capability first.
-	svc.Apply(ctx, []parser.ParsedDocument{hierCapDoc("cap-proc-e", "")}, "test")
+	// Seed the business service first.
+	svc.Apply(ctx, []parser.ParsedDocument{hierBSDoc("bs-proc-e")}, "test")
 
 	result := svc.Apply(ctx, []parser.ParsedDocument{
-		hierProcDoc("proc-self", "cap-proc-e", "proc-self"),
+		hierProcDoc("proc-self", "bs-proc-e", "proc-self"),
 	}, "test")
 
 	assertHasErrorOnField(t, result, "spec.parent_process_id")
@@ -324,18 +346,18 @@ func TestG5G6_ProcessHierarchy_SelfParent_Rejected(t *testing.T) {
 func TestG5G6_ProcessHierarchy_Cycle_Rejected(t *testing.T) {
 	repos := memory.NewRepositories()
 	svc := apply.NewServiceWithRepos(apply.RepositorySet{
-		Capabilities: repos.Capabilities,
-		Processes:    repos.Processes,
+		BusinessServices: repos.BusinessServices,
+		Processes:        repos.Processes,
 	})
 	ctx := context.Background()
 
-	// Seed capability.
-	svc.Apply(ctx, []parser.ParsedDocument{hierCapDoc("cap-proc-f", "")}, "test")
+	// Seed business service.
+	svc.Apply(ctx, []parser.ParsedDocument{hierBSDoc("bs-proc-f")}, "test")
 
 	// Bundle: proc-f-a → proc-f-b, proc-f-b → proc-f-a (cycle).
 	bundle := []parser.ParsedDocument{
-		hierProcDoc("proc-f-a", "cap-proc-f", "proc-f-b"),
-		hierProcDoc("proc-f-b", "cap-proc-f", "proc-f-a"),
+		hierProcDoc("proc-f-a", "bs-proc-f", "proc-f-b"),
+		hierProcDoc("proc-f-b", "bs-proc-f", "proc-f-a"),
 	}
 
 	result := svc.Apply(ctx, bundle, "test")
@@ -365,18 +387,18 @@ func TestG5G6_ProcessHierarchy_Cycle_Rejected(t *testing.T) {
 func TestG5G6_ProcessHierarchy_ThreeNodeCycle_Rejected(t *testing.T) {
 	repos := memory.NewRepositories()
 	svc := apply.NewServiceWithRepos(apply.RepositorySet{
-		Capabilities: repos.Capabilities,
-		Processes:    repos.Processes,
+		BusinessServices: repos.BusinessServices,
+		Processes:        repos.Processes,
 	})
 	ctx := context.Background()
 
-	svc.Apply(ctx, []parser.ParsedDocument{hierCapDoc("cap-proc-f2", "")}, "test")
+	svc.Apply(ctx, []parser.ParsedDocument{hierBSDoc("bs-proc-f2")}, "test")
 
 	// Three nodes: a→b→c→a.
 	bundle := []parser.ParsedDocument{
-		hierProcDoc("proc-f2-a", "cap-proc-f2", "proc-f2-c"),
-		hierProcDoc("proc-f2-b", "cap-proc-f2", "proc-f2-a"),
-		hierProcDoc("proc-f2-c", "cap-proc-f2", "proc-f2-b"),
+		hierProcDoc("proc-f2-a", "bs-proc-f2", "proc-f2-c"),
+		hierProcDoc("proc-f2-b", "bs-proc-f2", "proc-f2-a"),
+		hierProcDoc("proc-f2-c", "bs-proc-f2", "proc-f2-b"),
 	}
 
 	result := svc.Apply(ctx, bundle, "test")
@@ -389,27 +411,28 @@ func TestG5G6_ProcessHierarchy_ThreeNodeCycle_Rejected(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Test G — cross-capability parent process still rejected (G-7 preservation)
+// Test G — cross-business-service parent process rejected (v1 service-led
+// equivalent of the prior cross-capability rule)
 // ---------------------------------------------------------------------------
 
-func TestG5G6_ProcessHierarchy_CrossCapability_StillRejected(t *testing.T) {
+func TestG5G6_ProcessHierarchy_CrossBusinessService_Rejected(t *testing.T) {
 	repos := memory.NewRepositories()
 	svc := apply.NewServiceWithRepos(apply.RepositorySet{
-		Capabilities: repos.Capabilities,
-		Processes:    repos.Processes,
+		BusinessServices: repos.BusinessServices,
+		Processes:        repos.Processes,
 	})
 	ctx := context.Background()
 
 	bundle := []parser.ParsedDocument{
-		hierCapDoc("cap-proc-g-1", ""),
-		hierCapDoc("cap-proc-g-2", ""),
-		hierProcDoc("proc-g-parent", "cap-proc-g-1", ""),
-		hierProcDoc("proc-g-child", "cap-proc-g-2", "proc-g-parent"), // cross-capability
+		hierBSDoc("bs-proc-g-1"),
+		hierBSDoc("bs-proc-g-2"),
+		hierProcDoc("proc-g-parent", "bs-proc-g-1", ""),
+		hierProcDoc("proc-g-child", "bs-proc-g-2", "proc-g-parent"), // cross-business-service
 	}
 
 	result := svc.Apply(ctx, bundle, "test")
 	if result.ValidationErrorCount() == 0 {
-		t.Fatal("expected validation error for cross-capability parent, got none")
+		t.Fatal("expected validation error for cross-business-service parent, got none")
 	}
 	assertHasErrorOnField(t, result, "spec.parent_process_id")
 	if result.CreatedCount() != 0 {
@@ -419,6 +442,6 @@ func TestG5G6_ProcessHierarchy_CrossCapability_StillRejected(t *testing.T) {
 	// Child must not be persisted.
 	child, _ := repos.Processes.GetByID(ctx, "proc-g-child")
 	if child != nil {
-		t.Error("cross-capability process must not be persisted")
+		t.Error("cross-business-service process must not be persisted")
 	}
 }

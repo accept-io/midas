@@ -10,11 +10,10 @@ const (
 	KindAgent           = "Agent"
 	KindProfile         = "Profile"
 	KindGrant           = "Grant"
-	KindCapability          = "Capability"
-	KindProcess             = "Process"
-	KindBusinessService     = "BusinessService"
-	KindProcessCapability        = "ProcessCapability"
-	KindProcessBusinessService   = "ProcessBusinessService"
+	KindCapability                = "Capability"
+	KindProcess                   = "Process"
+	KindBusinessService           = "BusinessService"
+	KindBusinessServiceCapability = "BusinessServiceCapability"
 )
 
 // Document is the common interface implemented by all control plane documents.
@@ -322,10 +321,9 @@ type ProcessDocument struct {
 
 type ProcessSpec struct {
 	Description       string `json:"description,omitempty" yaml:"description,omitempty"`
-	CapabilityID      string `json:"capability_id" yaml:"capability_id"`
 	Status            string `json:"status" yaml:"status"`
 	Owner             string `json:"owner,omitempty" yaml:"owner,omitempty"`
-	BusinessServiceID string `json:"business_service_id,omitempty" yaml:"business_service_id,omitempty"`
+	BusinessServiceID string `json:"business_service_id" yaml:"business_service_id"`
 	ParentProcessID   string `json:"parent_process_id,omitempty" yaml:"parent_process_id,omitempty"`
 }
 
@@ -355,49 +353,32 @@ func (b BusinessServiceDocument) GetKind() string { return b.Kind }
 func (b BusinessServiceDocument) GetID() string   { return b.Metadata.ID }
 
 // ---------------------------------------------------------------------------
-// ProcessCapability
+// BusinessServiceCapability
 // ---------------------------------------------------------------------------
+//
+// BusinessServiceCapability declares an M:N link between a BusinessService and
+// a Capability — the canonical Capability ↔ BusinessService relationship in
+// the v1 service-led structural model. The metadata.id is a synthetic
+// control-plane handle used for bundle identity and duplicate detection; it
+// is not stored in the business_service_capabilities table.
+//
+// Per ADR-XXX, junction rows have no lifecycle: the spec carries only the two
+// foreign references. No origin/managed/replaces/status fields.
 
-// ProcessCapabilityDocument declares a link between a Process and a Capability.
-// The metadata.id is a synthetic control-plane handle used for bundle identity
-// and duplicate detection. It is not stored in the process_capabilities table.
-type ProcessCapabilityDocument struct {
-	APIVersion string                 `json:"apiVersion" yaml:"apiVersion"`
-	Kind       string                 `json:"kind" yaml:"kind"`
-	Metadata   DocumentMetadata       `json:"metadata" yaml:"metadata"`
-	Spec       ProcessCapabilitySpec  `json:"spec" yaml:"spec"`
-}
-
-// ProcessCapabilitySpec identifies the process ↔ capability link.
-type ProcessCapabilitySpec struct {
-	ProcessID    string `json:"process_id" yaml:"process_id"`
-	CapabilityID string `json:"capability_id" yaml:"capability_id"`
-}
-
-func (pc ProcessCapabilityDocument) GetKind() string { return pc.Kind }
-func (pc ProcessCapabilityDocument) GetID() string   { return pc.Metadata.ID }
-
-// ---------------------------------------------------------------------------
-// ProcessBusinessService
-// ---------------------------------------------------------------------------
-
-// ProcessBusinessServiceDocument declares a link between a Process and a BusinessService.
-// This represents membership in the N:M process_business_services relationship,
-// additive to the existing process.business_service_id N:1 field.
-// The metadata.id is a synthetic control-plane handle used for bundle identity
-// and duplicate detection. It is not stored in the process_business_services table.
-type ProcessBusinessServiceDocument struct {
+type BusinessServiceCapabilityDocument struct {
 	APIVersion string                        `json:"apiVersion" yaml:"apiVersion"`
 	Kind       string                        `json:"kind" yaml:"kind"`
 	Metadata   DocumentMetadata              `json:"metadata" yaml:"metadata"`
-	Spec       ProcessBusinessServiceSpec    `json:"spec" yaml:"spec"`
+	Spec       BusinessServiceCapabilitySpec `json:"spec" yaml:"spec"`
 }
 
-// ProcessBusinessServiceSpec identifies the process ↔ business-service link.
-type ProcessBusinessServiceSpec struct {
-	ProcessID         string `json:"process_id" yaml:"process_id"`
+// BusinessServiceCapabilitySpec identifies the BusinessService ↔ Capability link.
+// Both fields are required.
+type BusinessServiceCapabilitySpec struct {
 	BusinessServiceID string `json:"business_service_id" yaml:"business_service_id"`
+	CapabilityID      string `json:"capability_id" yaml:"capability_id"`
 }
 
-func (pbs ProcessBusinessServiceDocument) GetKind() string { return pbs.Kind }
-func (pbs ProcessBusinessServiceDocument) GetID() string   { return pbs.Metadata.ID }
+func (bsc BusinessServiceCapabilityDocument) GetKind() string { return bsc.Kind }
+func (bsc BusinessServiceCapabilityDocument) GetID() string   { return bsc.Metadata.ID }
+

@@ -12,14 +12,20 @@ import (
 // T1 — Permission inventory and naming discipline
 // ---------------------------------------------------------------------------
 
-// TestAllControlPlaneWritePermissions_Count guards the 20-permission
-// invariant. Adding or removing a permission requires updating this count
+// TestAllControlPlaneWritePermissions_Count guards the v1 17-permission
+// invariant. The v1 service-led model removed PermProcessCapabilityWrite
+// and PermProcessBusinessServiceWrite alongside the obsolete
+// ProcessCapability and ProcessBusinessService Kinds (ADR-XXX),
+// reintroduced a single PermBusinessServiceCapabilityWrite to gate the
+// new BusinessServiceCapability junction Kind, and removed
+// PermControlplanePromote and PermControlplaneCleanup with the inference
+// subsystem. Adding or removing a permission requires updating this count
 // deliberately, which forces a review of the corresponding platform.admin
 // bundle.
 func TestAllControlPlaneWritePermissions_Count(t *testing.T) {
 	got := authz.AllControlPlaneWritePermissions()
-	if len(got) != 20 {
-		t.Errorf("want 20 control-plane write permissions, got %d", len(got))
+	if len(got) != 17 {
+		t.Errorf("want 17 control-plane write permissions, got %d", len(got))
 	}
 }
 
@@ -116,8 +122,6 @@ func TestGovernanceApprover_ExactScope(t *testing.T) {
 		authz.PermProfileDeprecate,
 		authz.PermControlplaneApply,
 		authz.PermControlplanePlan,
-		authz.PermControlplanePromote,
-		authz.PermControlplaneCleanup,
 		authz.PermGrantSuspend,
 		authz.PermGrantRevoke,
 		authz.PermGrantReinstate,
@@ -299,15 +303,14 @@ func TestHasPermission_CaseInsensitiveRoleMatch(t *testing.T) {
 // catches drift when a new Kind is added or a constant is renamed.
 func TestKindToWritePermission_AllKnownKinds(t *testing.T) {
 	want := map[string]authz.Permission{
-		"Capability":             authz.PermCapabilityWrite,
-		"Process":                authz.PermProcessWrite,
-		"BusinessService":        authz.PermBusinessServiceWrite,
-		"Surface":                authz.PermSurfaceWrite,
-		"Profile":                authz.PermProfileWrite,
-		"Agent":                  authz.PermAgentWrite,
-		"Grant":                  authz.PermGrantWrite,
-		"ProcessCapability":      authz.PermProcessCapabilityWrite,
-		"ProcessBusinessService": authz.PermProcessBusinessServiceWrite,
+		"Capability":                authz.PermCapabilityWrite,
+		"Process":                   authz.PermProcessWrite,
+		"BusinessService":           authz.PermBusinessServiceWrite,
+		"BusinessServiceCapability": authz.PermBusinessServiceCapabilityWrite,
+		"Surface":                   authz.PermSurfaceWrite,
+		"Profile":                   authz.PermProfileWrite,
+		"Agent":                     authz.PermAgentWrite,
+		"Grant":                     authz.PermGrantWrite,
 	}
 	for kind, wantPerm := range want {
 		got := authz.KindToWritePermission(kind)

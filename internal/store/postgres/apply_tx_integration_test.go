@@ -73,42 +73,33 @@ func (r *atomicityIntegrationTxRunner) WithTx(
 ) error {
 	return r.store.WithTx(ctx, operation, func(repos *store.Repositories) error {
 		return fn(&apply.RepositorySet{
-			Surfaces:                repos.Surfaces,
-			Agents:                  repos.Agents,
-			Profiles:                repos.Profiles,
-			Grants:                  repos.Grants,
-			Processes:               &failOnIDProcessRepo{inner: repos.Processes, failID: r.failProcessID, failErr: r.failProcessErr},
-			Capabilities:            repos.Capabilities,
-			BusinessServices:        repos.BusinessServices,
-			ProcessCapabilities:     repos.ProcessCapabilities,
-			ProcessBusinessServices: repos.ProcessBusinessServices,
+			Surfaces:         repos.Surfaces,
+			Agents:           repos.Agents,
+			Profiles:         repos.Profiles,
+			Grants:           repos.Grants,
+			Processes:        &failOnIDProcessRepo{inner: repos.Processes, failID: r.failProcessID, failErr: r.failProcessErr},
+			Capabilities:     repos.Capabilities,
+			BusinessServices: repos.BusinessServices,
 		})
 	})
 }
 
 func atomicityIntegrationBundle() []parser.ParsedDocument {
-	// The bundle contains four documents because the apply planner
-	// requires every Process's primary capability_id to appear as a
-	// ProcessCapability link in the same bundle when a
-	// ProcessCapabilities repo is wired (see planProcessEntry). The
-	// failure-injection test wires one (via postgres.Store's full
-	// Repositories set), so the link must be present for the plan to
-	// reach execution.
+	// In the v1 service-led model the bundle is BusinessService → Process → Surface.
 	//
-	// Execution order (see orderedEntries): Capability (1) → Process
-	// (2) → ProcessCapability (3) → Surface (4). The Process.Create
-	// is still the operation the failure-injection wrapper targets,
-	// so the rollback scenario is identical; the ProcessCapability
-	// and Surface tiers simply never run.
+	// Execution order (see orderedEntries): BusinessService (0) → Process (2)
+	// → Surface (3). The Process.Create is the operation the failure-injection
+	// wrapper targets, so the rollback scenario covers the BusinessService
+	// commit being undone and the Surface tier never running.
 	return []parser.ParsedDocument{
 		{
-			Kind: types.KindCapability,
-			ID:   "cap-atomic-int",
-			Doc: types.CapabilityDocument{
+			Kind: types.KindBusinessService,
+			ID:   "bs-atomic-int",
+			Doc: types.BusinessServiceDocument{
 				APIVersion: types.APIVersionV1,
-				Kind:       types.KindCapability,
-				Metadata:   types.DocumentMetadata{ID: "cap-atomic-int", Name: "Atomic Integration Capability"},
-				Spec:       types.CapabilitySpec{Status: "active", Description: "integration atomicity test"},
+				Kind:       types.KindBusinessService,
+				Metadata:   types.DocumentMetadata{ID: "bs-atomic-int", Name: "Atomic Integration Service"},
+				Spec:       types.BusinessServiceSpec{ServiceType: "internal", Status: "active"},
 			},
 		},
 		{
@@ -118,20 +109,7 @@ func atomicityIntegrationBundle() []parser.ParsedDocument {
 				APIVersion: types.APIVersionV1,
 				Kind:       types.KindProcess,
 				Metadata:   types.DocumentMetadata{ID: "proc-atomic-int", Name: "Atomic Integration Process"},
-				Spec:       types.ProcessSpec{CapabilityID: "cap-atomic-int", Status: "active"},
-			},
-		},
-		{
-			Kind: types.KindProcessCapability,
-			ID:   "pc-atomic-int",
-			Doc: types.ProcessCapabilityDocument{
-				APIVersion: types.APIVersionV1,
-				Kind:       types.KindProcessCapability,
-				Metadata:   types.DocumentMetadata{ID: "pc-atomic-int"},
-				Spec: types.ProcessCapabilitySpec{
-					ProcessID:    "proc-atomic-int",
-					CapabilityID: "cap-atomic-int",
-				},
+				Spec:       types.ProcessSpec{BusinessServiceID: "bs-atomic-int", Status: "active"},
 			},
 		},
 		{
@@ -155,13 +133,10 @@ func atomicityIntegrationBundle() []parser.ParsedDocument {
 func cleanupAtomicityIntegrationRows(t *testing.T, db *sql.DB) {
 	t.Helper()
 	// Children before parents to keep FK constraints happy.
-	// process_capabilities references processes and capabilities, so
-	// it goes first alongside decision_surfaces.
 	for _, stmt := range []string{
 		`DELETE FROM decision_surfaces WHERE id = 'surf-atomic-int'`,
-		`DELETE FROM process_capabilities WHERE process_id = 'proc-atomic-int' AND capability_id = 'cap-atomic-int'`,
 		`DELETE FROM processes WHERE process_id = 'proc-atomic-int'`,
-		`DELETE FROM capabilities WHERE capability_id = 'cap-atomic-int'`,
+		`DELETE FROM business_services WHERE business_service_id = 'bs-atomic-int'`,
 	} {
 		if _, err := db.Exec(stmt); err != nil {
 			t.Fatalf("cleanup %q: %v", stmt, err)
@@ -206,17 +181,15 @@ func TestApplyAtomicity_PostgresRealRollback(t *testing.T) {
 	// Outer (non-transactional) repos drive plan-time lookups.
 	// Tx-scoped repos drive execute-time writes.
 	svc := apply.NewServiceWithRepos(apply.RepositorySet{
-		Surfaces:                repos.Surfaces,
-		Processes:               repos.Processes,
-		Capabilities:            repos.Capabilities,
-		BusinessServices:        repos.BusinessServices,
-		ProcessCapabilities:     repos.ProcessCapabilities,
-		ProcessBusinessServices: repos.ProcessBusinessServices,
-		Agents:                  repos.Agents,
-		Profiles:                repos.Profiles,
-		Grants:                  repos.Grants,
-		ControlAudit:            repos.ControlAudit,
-		Tx:                      txRunner,
+		Surfaces:         repos.Surfaces,
+		Processes:        repos.Processes,
+		Capabilities:     repos.Capabilities,
+		BusinessServices: repos.BusinessServices,
+		Agents:           repos.Agents,
+		Profiles:         repos.Profiles,
+		Grants:           repos.Grants,
+		ControlAudit:     repos.ControlAudit,
+		Tx:               txRunner,
 	})
 
 	ctx := context.Background()
@@ -226,19 +199,19 @@ func TestApplyAtomicity_PostgresRealRollback(t *testing.T) {
 		t.Fatalf("expected an apply error from the injected Process.Create failure; got result=%+v", result)
 	}
 
-	// Assertion: the Capability that was written earlier in the same
+	// Assertion: the BusinessService that was written earlier in the same
 	// transaction must NOT remain in Postgres. A raw SELECT outside
 	// the transaction probes the committed state directly.
-	var capCount int
+	var bsCount int
 	if err := db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM capabilities WHERE capability_id = $1`,
-		"cap-atomic-int",
-	).Scan(&capCount); err != nil {
-		t.Fatalf("SELECT capabilities: %v", err)
+		`SELECT COUNT(*) FROM business_services WHERE business_service_id = $1`,
+		"bs-atomic-int",
+	).Scan(&bsCount); err != nil {
+		t.Fatalf("SELECT business_services: %v", err)
 	}
-	if capCount != 0 {
-		t.Errorf("real-postgres atomicity violated: Capability %q remained after mid-bundle failure (rows=%d). "+
-			"This means the transaction did not roll back as expected.", "cap-atomic-int", capCount)
+	if bsCount != 0 {
+		t.Errorf("real-postgres atomicity violated: BusinessService %q remained after mid-bundle failure (rows=%d). "+
+			"This means the transaction did not roll back as expected.", "bs-atomic-int", bsCount)
 	}
 
 	// Defensive: the Process and Surface must also be absent. Process
@@ -290,17 +263,15 @@ func TestApplyAtomicity_PostgresPositiveControl(t *testing.T) {
 	}
 
 	svc := apply.NewServiceWithRepos(apply.RepositorySet{
-		Surfaces:                repos.Surfaces,
-		Processes:               repos.Processes,
-		Capabilities:            repos.Capabilities,
-		BusinessServices:        repos.BusinessServices,
-		ProcessCapabilities:     repos.ProcessCapabilities,
-		ProcessBusinessServices: repos.ProcessBusinessServices,
-		Agents:                  repos.Agents,
-		Profiles:                repos.Profiles,
-		Grants:                  repos.Grants,
-		ControlAudit:            repos.ControlAudit,
-		Tx:                      NewApplyTxRunner(s), // the real production adapter
+		Surfaces:         repos.Surfaces,
+		Processes:        repos.Processes,
+		Capabilities:     repos.Capabilities,
+		BusinessServices: repos.BusinessServices,
+		Agents:           repos.Agents,
+		Profiles:         repos.Profiles,
+		Grants:           repos.Grants,
+		ControlAudit:     repos.ControlAudit,
+		Tx:               NewApplyTxRunner(s), // the real production adapter
 	})
 
 	ctx := context.Background()
@@ -318,7 +289,7 @@ func TestApplyAtomicity_PostgresPositiveControl(t *testing.T) {
 	for _, check := range []struct {
 		name, query, id string
 	}{
-		{"capability", `SELECT COUNT(*) FROM capabilities WHERE capability_id = $1`, "cap-atomic-int"},
+		{"business_service", `SELECT COUNT(*) FROM business_services WHERE business_service_id = $1`, "bs-atomic-int"},
 		{"process", `SELECT COUNT(*) FROM processes WHERE process_id = $1`, "proc-atomic-int"},
 		{"surface", `SELECT COUNT(*) FROM decision_surfaces WHERE id = $1`, "surf-atomic-int"},
 	} {

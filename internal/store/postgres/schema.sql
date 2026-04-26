@@ -77,19 +77,18 @@ CREATE INDEX IF NOT EXISTS idx_capabilities_replaces
 -- =============================================================================
 -- PROCESSES
 -- =============================================================================
--- Processes are workflows within a Capability. Each process belongs to exactly
--- one Capability (capability_id). parent_process_id supports optional nesting
--- for sub-process hierarchies within the same Capability.
+-- Processes are workflows within a BusinessService. In the v1 service-led
+-- structural model every process belongs to exactly one BusinessService via
+-- business_service_id (NOT NULL). parent_process_id supports optional
+-- nesting for sub-process hierarchies.
 --
--- Invariant: a child process must share the same capability_id as its parent.
--- This cross-row rule is enforced by trg_processes_parent_capability_check
--- because PostgreSQL CHECK constraints cannot reference other rows.
+-- Capabilities relate to BusinessServices through the
+-- business_service_capabilities junction (M:N), not through processes.
 --
 -- Cycle prevention is enforced at the application/control-plane layer.
 
 CREATE TABLE IF NOT EXISTS processes (
     process_id TEXT PRIMARY KEY,
-    capability_id TEXT NOT NULL,
     parent_process_id TEXT,
     name TEXT NOT NULL,
     status TEXT NOT NULL,
@@ -103,14 +102,14 @@ CREATE TABLE IF NOT EXISTS processes (
     replaces TEXT,
     owner_id TEXT,
 
-    -- V2 structural layer (schema v2.4)
-    business_service_id TEXT,
+    -- v1 service-led structural model: every process belongs to exactly one
+    -- BusinessService. The FK is added below in an ALTER block because
+    -- business_services is defined later in this file and inline CREATE TABLE
+    -- cannot forward-reference it.
+    business_service_id TEXT NOT NULL,
 
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL,
-
-    CONSTRAINT fk_processes_capability
-        FOREIGN KEY (capability_id) REFERENCES capabilities(capability_id),
 
     CONSTRAINT fk_processes_parent
         FOREIGN KEY (parent_process_id) REFERENCES processes(process_id),
@@ -134,9 +133,6 @@ CREATE TABLE IF NOT EXISTS processes (
         CHECK (replaces IS NULL OR replaces <> process_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_processes_capability_id
-    ON processes (capability_id);
-
 CREATE INDEX IF NOT EXISTS idx_processes_parent_process_id
     ON processes (parent_process_id);
 
@@ -149,44 +145,6 @@ CREATE INDEX IF NOT EXISTS idx_processes_origin
 CREATE INDEX IF NOT EXISTS idx_processes_replaces
     ON processes (replaces)
     WHERE replaces IS NOT NULL;
-
--- Trigger: enforce that a child process shares its parent's capability_id.
--- Fires on INSERT and on UPDATE of parent_process_id or capability_id.
-
-CREATE OR REPLACE FUNCTION enforce_process_parent_capability_match()
-RETURNS trigger AS $$
-DECLARE
-    parent_capability_id TEXT;
-BEGIN
-    IF NEW.parent_process_id IS NULL THEN
-        RETURN NEW;
-    END IF;
-
-    SELECT capability_id
-      INTO parent_capability_id
-      FROM processes
-     WHERE process_id = NEW.parent_process_id;
-
-    IF NOT FOUND THEN
-        -- Parent row absent: the FK constraint on parent_process_id will reject this.
-        RETURN NEW;
-    END IF;
-
-    IF parent_capability_id <> NEW.capability_id THEN
-        RAISE EXCEPTION
-            'process % capability_id (%) must match parent process % capability_id (%)',
-            NEW.process_id, NEW.capability_id,
-            NEW.parent_process_id, parent_capability_id;
-    END IF;
-
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE OR REPLACE TRIGGER trg_processes_parent_capability_check
-BEFORE INSERT OR UPDATE OF parent_process_id, capability_id ON processes
-FOR EACH ROW
-EXECUTE FUNCTION enforce_process_parent_capability_match();
 
 -- =============================================================================
 -- DECISION SURFACES
@@ -931,19 +889,18 @@ CREATE INDEX IF NOT EXISTS idx_admin_audit_actor_id    ON platform_admin_audit_e
 CREATE INDEX IF NOT EXISTS idx_admin_audit_target      ON platform_admin_audit_events (target_type, target_id);
 
 -- =============================================================================
--- V2 STRUCTURAL LAYER (BusinessService Model)
+-- SERVICE-LED STRUCTURAL LAYER
 -- =============================================================================
--- business_services: top-level structural entity for the V2 model.
--- Represents a deployable or logical service that owns decision surfaces and
--- executes governed processes. Supports the same origin/managed/replaces
--- lifecycle semantics as capabilities and processes.
+-- business_services: top-level structural entity in the v1 service-led model.
+-- A BusinessService is what the organisation delivers and governs. Every
+-- Process belongs to exactly one BusinessService (processes.business_service_id
+-- NOT NULL). Capabilities — what the organisation can do — are related to
+-- BusinessServices through the business_service_capabilities junction (M:N):
+-- a BusinessService is realised by one or more Capabilities, and a Capability
+-- can be realised by one or more BusinessServices.
 --
--- process_capabilities: many-to-many junction between processes and capabilities.
--- In the V2 model, Process <-> Capability is a usage relationship rather than
--- strict containment (replacing the V1 process.capability_id ownership model).
---
--- These tables are additive. No existing tables are modified.
--- No application logic uses these tables until Chunk 2 (domain models).
+-- Supports the same origin/managed/replaces lifecycle semantics as
+-- capabilities and processes.
 
 CREATE TABLE IF NOT EXISTS business_services (
     business_service_id TEXT PRIMARY KEY,
@@ -989,49 +946,25 @@ CREATE INDEX IF NOT EXISTS idx_business_services_replaces
     ON business_services (replaces)
     WHERE replaces IS NOT NULL;
 
-CREATE TABLE IF NOT EXISTS process_capabilities (
-    process_id    TEXT NOT NULL,
-    capability_id TEXT NOT NULL,
-    created_at    TIMESTAMPTZ NOT NULL,
-
-    PRIMARY KEY (process_id, capability_id),
-
-    CONSTRAINT fk_process_capabilities_process
-        FOREIGN KEY (process_id)
-        REFERENCES processes(process_id)
-        ON DELETE CASCADE,
-
-    CONSTRAINT fk_process_capabilities_capability
-        FOREIGN KEY (capability_id)
-        REFERENCES capabilities(capability_id)
-        ON DELETE RESTRICT
-);
-
-CREATE INDEX IF NOT EXISTS idx_process_capabilities_capability
-    ON process_capabilities (capability_id);
-
--- process_business_services: many-to-many junction between processes and business services.
--- Additive to process.business_service_id (N:1); this table captures additional memberships.
-CREATE TABLE IF NOT EXISTS process_business_services (
-    process_id          TEXT NOT NULL,
-    business_service_id TEXT NOT NULL,
+-- business_service_capabilities: M:N junction between BusinessServices and
+-- Capabilities. The canonical Capability ↔ BusinessService relationship in
+-- the v1 service-led model: a BusinessService is realised by one or more
+-- Capabilities, and a Capability can be realised by multiple BusinessServices.
+--
+-- This is a pure relationship table: no lifecycle fields (origin, managed,
+-- replaces, status) by design (per ADR-XXX). The lifecycle of the
+-- relationship itself is conveyed by the lifecycle of the participating
+-- BusinessService and Capability rows.
+CREATE TABLE IF NOT EXISTS business_service_capabilities (
+    business_service_id TEXT NOT NULL REFERENCES business_services(business_service_id) ON DELETE CASCADE,
+    capability_id       TEXT NOT NULL REFERENCES capabilities(capability_id) ON DELETE RESTRICT,
     created_at          TIMESTAMPTZ NOT NULL,
 
-    PRIMARY KEY (process_id, business_service_id),
-
-    CONSTRAINT fk_pbs_process
-        FOREIGN KEY (process_id)
-        REFERENCES processes(process_id)
-        ON DELETE CASCADE,
-
-    CONSTRAINT fk_pbs_business_service
-        FOREIGN KEY (business_service_id)
-        REFERENCES business_services(business_service_id)
-        ON DELETE RESTRICT
+    PRIMARY KEY (business_service_id, capability_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_pbs_business_service
-    ON process_business_services (business_service_id);
+CREATE INDEX IF NOT EXISTS idx_bsc_capability
+    ON business_service_capabilities (capability_id);
 
 -- =============================================================================
 -- VIEWS
@@ -1269,13 +1202,46 @@ DO $$ BEGIN
     END IF;
 END $$;
 
--- Idempotent column additions for databases created before schema v2.4.
--- business_service_id links a process to its owning business service (V2 structural model).
--- Nullable: existing process rows are not required to reference a business service.
--- FK is added via DO block rather than inline in CREATE TABLE because business_services
--- is defined after processes in this file; the inline CREATE TABLE cannot forward-reference it.
-ALTER TABLE processes ADD COLUMN IF NOT EXISTS business_service_id TEXT;
+-- =============================================================================
+-- v1 SERVICE-LED MODEL: idempotent destructive operations
+-- =============================================================================
+-- These statements migrate dev databases from the prior capability-led shape
+-- to the v1 service-led foundation. They are written to be idempotent on
+-- fresh installs (where the targeted objects do not exist) and on already-
+-- service-led databases (where the operations are no-ops).
+--
+-- Per ADR-XXX (clean-install posture), pre-stable dev databases must be
+-- rebuilt clean. If schema application fails on the SET NOT NULL below
+-- because pre-existing process rows have NULL business_service_id, run:
+--   dropdb midas && createdb midas
+-- and re-apply the schema. There is no in-place backfill or migration
+-- framework — that is intentional.
 
+-- Drop the parent-capability invariant trigger and its function. The
+-- service-led model has no parent-shares-capability rule because Process
+-- no longer carries capability_id at all.
+DROP TRIGGER IF EXISTS trg_processes_parent_capability_check ON processes;
+DROP FUNCTION IF EXISTS enforce_process_parent_capability_match();
+
+-- Drop the obsolete junction tables. process_capabilities and
+-- process_business_services were both replaced by:
+--   - business_service_capabilities (canonical Capability ↔ BusinessService)
+--   - processes.business_service_id NOT NULL (canonical Process → BusinessService N:1)
+DROP TABLE IF EXISTS process_capabilities;
+DROP TABLE IF EXISTS process_business_services;
+
+-- Drop the obsolete index on processes.capability_id before dropping the
+-- column itself. (Postgres would CASCADE this, but explicit is safer.)
+DROP INDEX IF EXISTS idx_processes_capability_id;
+
+-- Drop the obsolete capability_id column from processes. Process no longer
+-- belongs to a Capability directly; the relationship is BusinessService → Process,
+-- with Capability ↔ BusinessService through business_service_capabilities.
+ALTER TABLE processes DROP COLUMN IF EXISTS capability_id;
+
+-- Add the FK on processes.business_service_id (declared NOT NULL inline in
+-- CREATE TABLE; the FK lives here because business_services is defined later
+-- in this file and inline CREATE TABLE cannot forward-reference it).
 DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_processes_business_service') THEN
         ALTER TABLE processes
@@ -1284,9 +1250,16 @@ DO $$ BEGIN
     END IF;
 END $$;
 
+-- Promote business_service_id to NOT NULL for dev databases created before
+-- the v1 service-led schema (where the column existed as nullable). On fresh
+-- installs CREATE TABLE already declares NOT NULL inline so this is a no-op.
+-- On a dev DB that contains pre-existing process rows with NULL
+-- business_service_id, this statement will fail loudly — see the comment at
+-- the top of this section.
+ALTER TABLE processes ALTER COLUMN business_service_id SET NOT NULL;
+
 CREATE INDEX IF NOT EXISTS idx_processes_business_service_id
-    ON processes (business_service_id)
-    WHERE business_service_id IS NOT NULL;
+    ON processes (business_service_id);
 
 -- Idempotent constraint tightening for databases created before schema v2.5
 -- (Issue #33 — Surface → Process invariant).
