@@ -288,12 +288,20 @@ spec:
 
 // TestParserContract_UnknownFields_RejectedAcrossKinds proves the strict
 // posture applies to every supported document kind, not just Surface.
+//
+// Each case asserts both that the strict decoder rejects the injected
+// unknown field and that the error message names the offending key.
+// This stricter assertion catches regressions where a future change
+// silently rewrites yaml.v3 errors so the offending field is no longer
+// surfaced — the actionable diagnostic for operators is the field name.
 func TestParserContract_UnknownFields_RejectedAcrossKinds(t *testing.T) {
 	// Each case is a minimal-ish valid document for a given kind with one
-	// unknown field injected under the kind's spec.
+	// unknown field injected under the kind's spec. wantFieldToken is the
+	// offending key the strict-decode error must name.
 	cases := []struct {
-		name string
-		yaml string
+		name           string
+		yaml           string
+		wantFieldToken string
 	}{
 		{
 			name: "Agent",
@@ -310,6 +318,7 @@ spec:
   status: active
   unknown_agent_spec: reject-me
 `,
+			wantFieldToken: "unknown_agent_spec",
 		},
 		{
 			name: "Profile",
@@ -330,6 +339,7 @@ spec:
     fail_mode: closed
   unknown_profile_spec: reject-me
 `,
+			wantFieldToken: "unknown_profile_spec",
 		},
 		{
 			name: "Grant",
@@ -346,6 +356,7 @@ spec:
   status: active
   unknown_grant_spec: reject-me
 `,
+			wantFieldToken: "unknown_grant_spec",
 		},
 		{
 			name: "Capability",
@@ -357,18 +368,25 @@ spec:
   status: active
   unknown_capability_spec: reject-me
 `,
+			wantFieldToken: "unknown_capability_spec",
 		},
 		{
+			// In the v1 service-led structural model, ProcessSpec carries
+			// business_service_id (NOT capability_id). Using a current
+			// valid field here ensures the strict decoder reaches the
+			// injected unknown_process_spec rather than rejecting on
+			// capability_id first.
 			name: "Process",
 			yaml: `apiVersion: midas.accept.io/v1
 kind: Process
 metadata:
   id: proc-x
 spec:
-  capability_id: cap-x
+  business_service_id: bs-x
   status: active
   unknown_process_spec: reject-me
 `,
+			wantFieldToken: "unknown_process_spec",
 		},
 		{
 			name: "BusinessService",
@@ -381,30 +399,27 @@ spec:
   status: active
   unknown_bs_spec: reject-me
 `,
+			wantFieldToken: "unknown_bs_spec",
 		},
 		{
-			name: "ProcessCapability",
+			// BusinessServiceCapability is the canonical Capability ↔
+			// BusinessService junction Kind in the v1 service-led model.
+			// The retired ProcessCapability and ProcessBusinessService
+			// junction Kinds are no longer parser inputs (they fall
+			// through to the parser's "unsupported kind" branch and so
+			// would not exercise the strict-decode contract this test
+			// is for).
+			name: "BusinessServiceCapability",
 			yaml: `apiVersion: midas.accept.io/v1
-kind: ProcessCapability
+kind: BusinessServiceCapability
 metadata:
-  id: pc-x
+  id: bsc-x
 spec:
-  process_id: p
-  capability_id: c
-  unknown_pc_spec: reject-me
+  business_service_id: bs-x
+  capability_id: cap-x
+  unknown_bsc_spec: reject-me
 `,
-		},
-		{
-			name: "ProcessBusinessService",
-			yaml: `apiVersion: midas.accept.io/v1
-kind: ProcessBusinessService
-metadata:
-  id: pbs-x
-spec:
-  process_id: p
-  business_service_id: b
-  unknown_pbs_spec: reject-me
-`,
+			wantFieldToken: "unknown_bsc_spec",
 		},
 	}
 
@@ -413,6 +428,10 @@ spec:
 			_, err := ParseYAML([]byte(tc.yaml))
 			if err == nil {
 				t.Fatalf("strict-parse contract violated for %s: unknown spec field was accepted", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.wantFieldToken) {
+				t.Errorf("strict-parse contract for %s: expected error to name the offending field %q; got %q",
+					tc.name, tc.wantFieldToken, err.Error())
 			}
 		})
 	}
@@ -577,5 +596,161 @@ func TestParserContract_AdversarialAliases_StreamBoundedTime(t *testing.T) {
 		// success or error — either is acceptable; only a hang fails.
 	case <-time.After(deadline):
 		t.Fatalf("ParseYAMLStream did not return within %s on adversarial alias input (bundle=%d bytes)", deadline, len(bundle))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Contract: a stream containing zero real documents is rejected by
+// ParseYAMLStream with the parser-produced "no YAML documents found" error.
+//
+// This pins the empty/whitespace/comment-only entry-point behaviour. The
+// stream parser deliberately skips empty, null, {}, and comment-only
+// documents (so a bundle author can put a header comment above a real
+// document), but it must not silently return an empty parsed-document
+// slice — a zero-document apply or plan must fail loudly.
+// ---------------------------------------------------------------------------
+
+func TestParserContract_EmptyBundle_StreamReturnsError(t *testing.T) {
+	cases := []struct {
+		name string
+		yaml string
+	}{
+		{name: "empty_string", yaml: ""},
+		// Spaces and newlines only — no tabs. Tabs at the start of a
+		// non-empty line trigger a yaml.v3 lex error ("found character
+		// that cannot start any token") before the stream parser
+		// reaches the empty-document branch. Tab handling is covered
+		// by TestParserContract_MalformedYAML_ReturnsError.
+		{name: "whitespace_only", yaml: "   \n     \n"},
+		{name: "comment_only", yaml: "# only a comment\n# nothing else here\n"},
+	}
+
+	const wantSubstring = "no YAML documents found"
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseYAMLStream([]byte(tc.yaml))
+			if err == nil {
+				t.Fatalf("ParseYAMLStream(%q) accepted empty bundle, want error", tc.name)
+			}
+			if !strings.Contains(err.Error(), wantSubstring) {
+				t.Errorf("ParseYAMLStream(%q): error must contain %q; got %q",
+					tc.name, wantSubstring, err.Error())
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Contract: a YAML document whose root is not a mapping is rejected by
+// both ParseYAML and ParseYAMLStream.
+//
+// Scalars, flow sequences, and block sequences cannot be control-plane
+// documents because they cannot carry the apiVersion/kind discriminators.
+// The exact error wording comes from yaml.v3 internals when its decode
+// hits a type mismatch, so this test asserts only that an error is
+// returned — not any specific message — to avoid coupling to the YAML
+// library's wording across versions.
+// ---------------------------------------------------------------------------
+
+func TestParserContract_NonObjectRoot_Rejected(t *testing.T) {
+	cases := []struct {
+		name string
+		yaml string
+	}{
+		{name: "scalar_integer", yaml: "42\n"},
+		{name: "scalar_string", yaml: "\"hello\"\n"},
+		{name: "flow_sequence", yaml: "[a, b, c]\n"},
+		{name: "block_sequence", yaml: "- a\n- b\n- c\n"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name+"/ParseYAML", func(t *testing.T) {
+			_, err := ParseYAML([]byte(tc.yaml))
+			if err == nil {
+				t.Fatalf("ParseYAML(%q): expected error for non-object root, got nil", tc.name)
+			}
+		})
+		t.Run(tc.name+"/ParseYAMLStream", func(t *testing.T) {
+			_, err := ParseYAMLStream([]byte(tc.yaml))
+			if err == nil {
+				t.Fatalf("ParseYAMLStream(%q): expected error for non-object root, got nil", tc.name)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Contract: an apiVersion that is well-formed but unsupported is rejected
+// by ParseYAML with an error that names "unsupported apiVersion" and the
+// offending value verbatim.
+//
+// This pins the apiVersion allowlist: today the only accepted value is
+// types.APIVersionV1 ("midas.accept.io/v1"). A future addition to the
+// allowlist must update this test deliberately.
+// ---------------------------------------------------------------------------
+
+func TestParserContract_WrongAPIVersion_Rejected(t *testing.T) {
+	const offendingVersion = "midas.accept.io/v2"
+	data := []byte(`apiVersion: midas.accept.io/v2
+kind: Surface
+metadata:
+  id: payment.execute
+spec:
+  category: financial
+`)
+
+	_, err := ParseYAML(data)
+	if err == nil {
+		t.Fatal("expected error for unsupported apiVersion, got nil")
+	}
+	if !strings.Contains(err.Error(), "unsupported apiVersion") {
+		t.Errorf("error must contain %q; got %q", "unsupported apiVersion", err.Error())
+	}
+	if !strings.Contains(err.Error(), offendingVersion) {
+		t.Errorf("error must name the offending value %q; got %q", offendingVersion, err.Error())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Contract: a kind not in the parser's allowlist is rejected by ParseYAML
+// with an error that names "unsupported kind", names the offending value
+// verbatim, AND enumerates every Kind in the current allowlist.
+//
+// The eight-Kind enumeration is load-bearing as a regression guard: a
+// future change that accidentally drops a valid Kind from the parser's
+// switch (or typos one) will surface here as a missing-Kind assertion
+// failure, not as a silent "kind X is no longer supported" runtime
+// surprise.
+// ---------------------------------------------------------------------------
+
+func TestParserContract_UnknownKind_Rejected(t *testing.T) {
+	const offendingKind = "Unicorn"
+	data := []byte(`apiVersion: midas.accept.io/v1
+kind: Unicorn
+metadata:
+  id: u-1
+spec:
+  category: mythical
+`)
+
+	_, err := ParseYAML(data)
+	if err == nil {
+		t.Fatal("expected error for unsupported kind, got nil")
+	}
+	if !strings.Contains(err.Error(), "unsupported kind") {
+		t.Errorf("error must contain %q; got %q", "unsupported kind", err.Error())
+	}
+	if !strings.Contains(err.Error(), offendingKind) {
+		t.Errorf("error must name the offending value %q; got %q", offendingKind, err.Error())
+	}
+	for _, kind := range []string{
+		"Surface", "Agent", "Profile", "Grant",
+		"Capability", "Process", "BusinessService", "BusinessServiceCapability",
+	} {
+		if !strings.Contains(err.Error(), kind) {
+			t.Errorf("unsupported-kind error must enumerate the allowlisted Kind %q; got %q",
+				kind, err.Error())
+		}
 	}
 }
