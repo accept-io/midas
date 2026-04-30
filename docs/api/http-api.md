@@ -739,17 +739,11 @@ Response fields: `id`, `name`, `description`, `status`, `owner`, `created_at`, `
 
 **Error cases:** `404` if not found.
 
-### GET /v1/capabilities/{id}/processes
-
-List all processes belonging to a capability.
-
-```bash
-curl -s http://localhost:8080/v1/capabilities/cap-lending/processes | jq .
-```
-
-Returns a JSON array of process objects. Each item: `id`, `name`, `capability_id`, `description`, `status`, `owner`, `created_at`, `updated_at`.
-
-**Error cases:** `404` if capability not found.
+> **Note.** Under the v1 service-led structural model, Process belongs to a
+> BusinessService (not directly to a Capability). The relationship between
+> Capabilities and Processes is indirect, via
+> `BusinessService → BusinessServiceCapability → Capability`. The previous
+> `GET /v1/capabilities/{id}/processes` endpoint has been removed.
 
 ### GET /v1/processes
 
@@ -759,7 +753,7 @@ List all processes.
 curl -s http://localhost:8080/v1/processes | jq .
 ```
 
-Returns a JSON array. Each item: `id`, `name`, `capability_id`, `description`, `status`, `owner`, `created_at`, `updated_at`.
+Returns a JSON array. Each item: `id`, `name`, `business_service_id`, `description`, `status`, `owner`, `created_at`, `updated_at`.
 
 ### GET /v1/processes/{id}
 
@@ -769,7 +763,7 @@ Retrieve a single process by ID.
 curl -s http://localhost:8080/v1/processes/proc-loan-origination | jq .
 ```
 
-Response fields: `id`, `name`, `capability_id`, `description`, `status`, `owner`, `created_at`, `updated_at`.
+Response fields: `id`, `name`, `business_service_id`, `description`, `status`, `owner`, `created_at`, `updated_at`.
 
 **Error cases:** `404` if not found.
 

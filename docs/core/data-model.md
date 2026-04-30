@@ -20,16 +20,15 @@ MIDAS stores governance configuration and runtime evaluation evidence across the
 
 | Table | Purpose |
 |------|--------|
-| capabilities | Logical business domains grouping related processes |
-| processes | Governed actions within a capability |
+| business_services | Organizational service offerings; the structural anchor in the v1 service-led model |
+| capabilities | Logical business abilities (e.g. identity verification, fraud detection) |
+| business_service_capabilities | M:N junction linking BusinessServices to Capabilities |
+| processes | Governed actions; each Process belongs to exactly one BusinessService |
 | decision_surfaces | Registry of governed business decisions |
 | authority_profiles | Authority rules and thresholds for a surface |
 | agents | Autonomous actors (AI, service, or operator) |
 | authority_grants | Grants linking agents to authority profiles |
 | operational_envelopes | Runtime evaluation records |
-| business_services | Organizational service offerings that processes belong to |
-| process_capabilities | M:N junction linking processes to capabilities |
-| process_business_services | M:N junction linking processes to business services |
 
 ---
 
@@ -281,7 +280,7 @@ The envelope stores references to configuration versions so that the exact autho
 
 # business_services
 
-Stores organizational service offerings. Processes can reference a business service via `processes.business_service_id` (N:1) and via the `process_business_services` junction table (M:N).
+Stores organizational service offerings. Every Process belongs to exactly one BusinessService via `processes.business_service_id` (NOT NULL). Capabilities link to BusinessServices through the `business_service_capabilities` junction table (M:N).
 
 ## Columns
 
@@ -313,55 +312,25 @@ business_service_id
 
 ---
 
-# process_capabilities
+# business_service_capabilities
 
-M:N junction table linking processes to capabilities.
+M:N junction table linking BusinessServices to Capabilities. This is the canonical Capability ↔ BusinessService relationship in the v1 service-led model: a BusinessService is enabled by zero or more Capabilities, and a Capability enables zero or more BusinessServices.
 
 ## Columns
 
 | Column | Type | Description |
 |------|------|-------------|
-| process_id | text | FK to `processes.process_id` (ON DELETE CASCADE) |
+| business_service_id | text | FK to `business_services.business_service_id` (ON DELETE CASCADE) |
 | capability_id | text | FK to `capabilities.capability_id` (ON DELETE RESTRICT) |
 | created_at | timestamp | Record creation time |
 
 ## Primary Key
 
 ```
-(process_id, capability_id)
+(business_service_id, capability_id)
 ```
 
----
-
-# process_business_services
-
-M:N junction table linking processes to business services.
-
-## Columns
-
-| Column | Type | Description |
-|------|------|-------------|
-| process_id | text | FK to `processes.process_id` (ON DELETE CASCADE) |
-| business_service_id | text | FK to `business_services.business_service_id` (ON DELETE RESTRICT) |
-| created_at | timestamp | Record creation time |
-
-## Primary Key
-
-```
-(process_id, business_service_id)
-```
-
----
-
-# Ambiguity: capability_id vs process_capabilities
-
-The schema contains two mechanisms for relating processes to capabilities:
-
-1. `processes.capability_id` — a NOT NULL foreign key on the `processes` table. This is the structural N:1 relationship enforced by a database constraint and a trigger (`enforce_process_parent_capability_match`).
-
-2. `process_capabilities` — an M:N junction table that records additional capability memberships for a process.
-
-Both exist in the current schema and are written by the control plane apply path. The control plane enforces (via planning validation) that a process's `capability_id` value also appears as a row in `process_capabilities` when both the process and the junction link are submitted in the same bundle. Beyond this consistency check, the relationship between the two mechanisms is not further documented in the codebase.
+The junction row carries no lifecycle of its own — no `origin`, `managed`, `replaces`, or `status` columns. The lifecycle of the relationship is conveyed by the participating BusinessService and Capability rows.
 
 ---
 
@@ -385,15 +354,16 @@ This allows deterministic audit reconstruction of any decision evaluation.
 ## Structural model
 
 ```
-BusinessService ←─ Process ←─ DecisionSurface
-                     │
-                     ├── capability_id (N:1 FK to Capability)
-                     ├── business_service_id (N:1 FK to BusinessService)
-                     ├── process_capabilities (M:N junction to Capability)
-                     └── process_business_services (M:N junction to BusinessService)
+Capability ←─ business_service_capabilities ─→ BusinessService ←─ Process ←─ DecisionSurface
 ```
 
-The structural model provides classification and lifecycle context for governed decisions. The `process_id` column on `decision_surfaces` links a surface to its governing process. The `capability_id` column on `processes` links a process to its primary capability. Business services and junction tables provide additional organizational context.
+The v1 model is **service-led**: BusinessService is the structural anchor.
+
+- `processes.business_service_id` (NOT NULL) — every Process belongs to exactly one BusinessService.
+- `decision_surfaces.process_id` (NOT NULL) — every Surface belongs to exactly one Process.
+- `business_service_capabilities` — M:N junction. A Capability enables many BusinessServices and vice versa. The junction has no lifecycle columns; lineage and status live on the participating rows.
+
+There is **no direct foreign key from Process to Capability**. The relationship between a Process and a Capability is indirect, traversed via `Process → BusinessService → BusinessServiceCapability → Capability`.
 
 ---
 

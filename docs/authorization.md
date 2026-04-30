@@ -63,12 +63,11 @@ The `*:write` permissions correspond to document Kinds in a control-plane apply 
 | `Capability` | `capability:write` |
 | `Process` | `process:write` |
 | `BusinessService` | `businessservice:write` |
+| `BusinessServiceCapability` | `businessservicecapability:write` |
 | `Surface` | `surface:write` |
 | `Profile` | `profile:write` |
 | `Agent` | `agent:write` |
 | `Grant` | `grant:write` |
-| `ProcessCapability` | `processcapability:write` |
-| `ProcessBusinessService` | `processbusinessservice:write` |
 
 ---
 
@@ -80,7 +79,7 @@ The apply endpoint enforces authorization at **two layers**:
 
 2. **Planner per-document check — fine-grained.** Once the bundle is parsed, the apply planner checks the caller's per-Kind write permission for each document. A caller holding `controlplane:apply` but missing (for example) `agent:write` will see the Agent document marked invalid in the apply result — with a validation error quoting `agent:write` — while other documents plan normally. No document from the bundle is persisted when any document is invalid, matching existing `ApplyPlan` semantics.
 
-The two tiers exist so that an operator can scope a caller to a subset of Kinds without giving them blanket admin. For example, a catalogue-editor role composition could grant `controlplane:apply`, `controlplane:plan`, and only `businessservice:write` + `processbusinessservice:write`.
+The two tiers exist so that an operator can scope a caller to a subset of Kinds without giving them blanket admin. For example, a catalogue-editor role composition could grant `controlplane:apply`, `controlplane:plan`, and only `businessservice:write` + `businessservicecapability:write`.
 
 The plan endpoint (`POST /v1/controlplane/plan`) applies the same per-document check. Under the default five roles this is observationally a no-op (only `platform.admin` holds `controlplane:plan`, and `platform.admin` holds every `*:write`), but it keeps the two-tier model uniform for future custom role compositions.
 

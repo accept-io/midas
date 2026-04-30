@@ -12,7 +12,7 @@ Every document requires:
 
 ```yaml
 apiVersion: midas.accept.io/v1
-kind: Surface | Agent | Profile | Grant | Capability | Process | BusinessService | ProcessCapability | ProcessBusinessService
+kind: Surface | Agent | Profile | Grant | Capability | Process | BusinessService | BusinessServiceCapability
 metadata:
   id: <identifier>
 ```
@@ -38,12 +38,14 @@ spec:
   domain: payments
   category: financial
   risk_tier: high
+  status: active
   decision_type: operational
   reversibility_class: conditionally_reversible
   minimum_confidence: 0.80
   failure_mode: closed
   business_owner: Head of Payments
   technical_owner: payments-platform-team
+  process_id: proc-payment-release
   required_context:
     fields:
       - name: account_id
@@ -69,13 +71,16 @@ Key `spec` fields:
 
 | Field | Type | Description |
 |-------|------|-------------|
+| `category` | string | Free-text classification (e.g. `financial`, `customer_data`, `compliance`, `operational`). **Required.** |
+| `risk_tier` | string | `low`, `medium`, or `high`. **Required.** |
+| `status` | string | `active`, `inactive`, or `deprecated` is required by the validator, but the apply path always persists newly-applied Surfaces as `review`. Approve via `POST /v1/controlplane/surfaces/{id}/approve` to bring a Surface from `review` to `active`. |
+| `process_id` | string | Owning Process ID. **Required.** Must reference a Process that exists in the store or in the same bundle. |
 | `domain` | string | Business domain. Defaults to `"default"` if omitted. |
 | `decision_type` | string | `strategic`, `tactical`, or `operational`. Default: `operational`. |
 | `reversibility_class` | string | `reversible`, `conditionally_reversible`, or `irreversible`. Default: `conditionally_reversible`. |
 | `minimum_confidence` | float64 | Floor confidence for this surface (0.0–1.0). |
 | `failure_mode` | string | `closed` (fail-safe) or `open`. Default: `closed`. |
 | `required_context.fields` | array | Context keys that all profiles on this surface must receive. |
-| `status` | string | Validated but always overridden to `review` on apply. |
 
 ### Agent
 
@@ -128,6 +133,8 @@ spec:
     effective_from: "2026-01-01T00:00:00Z"
     version: 1
 ```
+
+> **Profile review semantics.** As with Surfaces, the apply path always persists newly-applied Profiles in `review` status regardless of `lifecycle.status` in the document. Approve via `POST /v1/controlplane/profiles/{id}/approve` to bring a Profile from `review` to `active`.
 
 Consequence threshold types: `monetary`, `data_access`, `risk_rating`.
 
@@ -187,7 +194,9 @@ Capabilities are immutable once created via apply. Applying a Capability with an
 
 ### Process
 
-Defines a governed action within a capability. Every process must reference a capability via `capability_id`. Processes can be hierarchical via `parent_process_id` (the parent must share the same `capability_id`).
+Defines a governed action that belongs to a BusinessService. Every Process must reference a BusinessService via `business_service_id`. Processes can be hierarchical via `parent_process_id`.
+
+In the v1 service-led model, Process belongs to a BusinessService, **not** directly to a Capability. The relationship between a Process and a Capability is indirect, via `BusinessService → BusinessServiceCapability → Capability`.
 
 ```yaml
 apiVersion: midas.accept.io/v1
@@ -196,7 +205,7 @@ metadata:
   id: proc-loan-origination
   name: Loan Origination
 spec:
-  capability_id: cap-lending
+  description: End-to-end loan origination flow
   status: active
   owner: lending-team
   business_service_id: bs-consumer-lending
@@ -207,19 +216,17 @@ Key `spec` fields:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `capability_id` | string | Parent capability. Required. Must reference a capability that exists in the store or in the same bundle. |
+| `business_service_id` | string | Owning BusinessService. **Required.** Must reference a BusinessService that exists in the store or in the same bundle. |
 | `status` | string | `active`, `inactive`, or `deprecated`. Required. |
+| `description` | string | Human-readable description. Optional. |
 | `owner` | string | Owning team or system. Optional. |
-| `business_service_id` | string | Primary business service. Optional. Must reference an existing business service if provided. |
-| `parent_process_id` | string | Parent process. Optional. Must share the same `capability_id` as this process. |
+| `parent_process_id` | string | Parent Process. Optional. Must reference a Process in the store or the same bundle. |
 
 Processes are immutable once created via apply. Applying a Process with an existing ID returns **conflict**.
 
-When a `ProcessCapability` repository is configured, the apply planner also requires that the process's `capability_id` appears as a `ProcessCapability` link in the same bundle.
-
 ### BusinessService
 
-Defines an organizational service offering that processes can belong to.
+Defines an organizational service offering that processes belong to.
 
 ```yaml
 apiVersion: midas.accept.io/v1
@@ -239,50 +246,36 @@ Key `spec` fields:
 | Field | Type | Description |
 |-------|------|-------------|
 | `service_type` | string | `customer_facing`, `internal`, or `technical`. Required. |
-| `status` | string | `active` or `deprecated`. Required. |
+| `status` | string | `active` or `deprecated`. Required. (BusinessService status is narrower than other Kinds — `inactive` is not accepted.) |
+| `description` | string | Human-readable description. Optional. |
 | `owner_id` | string | Owning team or system. Optional. |
 
 Business services are immutable once created via apply. Applying a BusinessService with an existing ID returns **conflict**.
 
-### ProcessCapability
+### BusinessServiceCapability
 
-Declares an M:N link between a process and a capability. The `metadata.id` is a synthetic control-plane handle used for bundle identity and duplicate detection; it is not stored in the `process_capabilities` table.
+Declares an M:N link between a BusinessService and a Capability — the canonical Capability ↔ BusinessService relationship in the v1 service-led model. A BusinessService is enabled by zero or more Capabilities; a Capability enables zero or more BusinessServices.
 
-```yaml
-apiVersion: midas.accept.io/v1
-kind: ProcessCapability
-metadata:
-  id: pc-loan-origination-lending
-spec:
-  process_id: proc-loan-origination
-  capability_id: cap-lending
-```
-
-Key `spec` fields:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `process_id` | string | Process ID. Required. Must reference a process that exists in the store or in the same bundle. |
-| `capability_id` | string | Capability ID. Required. Must reference a capability that exists in the store or in the same bundle. |
-
-### ProcessBusinessService
-
-Declares an M:N link between a process and a business service. The `metadata.id` is a synthetic control-plane handle. This represents membership in the `process_business_services` junction table, additive to the `process.business_service_id` N:1 field.
+The `metadata.id` is a synthetic control-plane handle used for bundle identity and duplicate detection; it is not stored in the `business_service_capabilities` table. The junction row carries no lifecycle of its own — no `origin`, `managed`, `replaces`, or `status` fields.
 
 ```yaml
 apiVersion: midas.accept.io/v1
-kind: ProcessBusinessService
+kind: BusinessServiceCapability
 metadata:
-  id: pbs-loan-origination-consumer-lending
+  id: bsc-consumer-lending-fraud-detection
 spec:
-  process_id: proc-loan-origination
   business_service_id: bs-consumer-lending
+  capability_id: cap-fraud-detection
 ```
 
 Key `spec` fields:
 
 | Field | Type | Description |
 |-------|------|-------------|
+| `business_service_id` | string | BusinessService ID. Required. Must reference a BusinessService that exists in the store or in the same bundle. |
+| `capability_id` | string | Capability ID. Required. Must reference a Capability that exists in the store or in the same bundle. |
+
+BusinessServiceCapability links are immutable once created via apply. Applying a link with the same `(business_service_id, capability_id)` pair returns **conflict**.
 | `process_id` | string | Process ID. Required. Must reference a process that exists in the store or in the same bundle. |
 | `business_service_id` | string | Business service ID. Required. Must reference a business service that exists in the store or in the same bundle. |
 
@@ -391,7 +384,7 @@ Plan entries carry three optional, additive fields. They are purely informationa
 - `new` — the planner found no prior row for this resource
 - `new_version` — an existing versioned lineage was found; a new version will be appended (Surface or Profile)
 
-**`diff`** — emitted only for `create_kind: "new_version"` entries whose `kind` is `Surface` or `Profile`. Carries a `fields` array of changed scalar fields with `before` and `after` values. No diff is emitted for plain `new` creates or for any other resource kind (Agent, Grant, Capability, Process, BusinessService, ProcessCapability, ProcessBusinessService).
+**`diff`** — emitted only for `create_kind: "new_version"` entries whose `kind` is `Surface` or `Profile`. Carries a `fields` array of changed scalar fields with `before` and `after` values. No diff is emitted for plain `new` creates or for any other resource kind (Agent, Grant, Capability, Process, BusinessService, BusinessServiceCapability).
 
 **`warnings`** — advisory signals attached to an entry. Warnings never change the entry's `action`, never contribute to `invalid_count` or `conflict_count`, and never affect `would_apply`. They surface reviewer-relevant context that does not rise to the level of a validation failure. Warning codes:
 
@@ -608,7 +601,7 @@ The parser rejects any document with:
 - Missing or empty `apiVersion`
 - `apiVersion` other than `midas.accept.io/v1`
 - Missing or empty `kind`
-- `kind` other than `Surface`, `Agent`, `Profile`, `Grant`, `Capability`, `Process`, `BusinessService`, `ProcessCapability`, or `ProcessBusinessService`
+- `kind` other than `Surface`, `Agent`, `Profile`, `Grant`, `Capability`, `Process`, `BusinessService`, or `BusinessServiceCapability`
 - Missing `metadata.id`
 
 Structural validation also checks:
@@ -617,11 +610,11 @@ Structural validation also checks:
 - `spec.surface_id` on Profile must reference a known surface (either in the store or within the same bundle)
 - `spec.agent_id` and `spec.profile_id` on Grant must reference known agents and profiles
 - `spec.process_id` on Surface is required and must be a valid ID format; the referenced process must exist in the store or in the same bundle
-- `spec.capability_id` on Process is required and must be a valid ID format; the referenced capability must exist in the store or in the same bundle
+- `spec.business_service_id` on Process is required and must be a valid ID format; the referenced BusinessService must exist in the store or in the same bundle
 - `spec.status` on Capability and Process must be `active`, `inactive`, or `deprecated`
+- `spec.status` on BusinessService must be `active` or `deprecated`
 - `spec.service_type` on BusinessService must be `customer_facing`, `internal`, or `technical`
-- `spec.process_id` and `spec.capability_id` on ProcessCapability must reference known entities
-- `spec.process_id` and `spec.business_service_id` on ProcessBusinessService must reference known entities
+- `spec.business_service_id` and `spec.capability_id` on BusinessServiceCapability must reference known entities
 
 ---
 

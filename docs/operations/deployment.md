@@ -28,7 +28,9 @@ For authentication configuration (Local IAM, OIDC/SSO, bearer tokens), see [docs
 
 ## Step 1: Define your resources
 
-Create a YAML bundle file (e.g. `governance-bundle.yaml`). A bundle may contain one or more documents separated by `---`. Supported kinds are `Surface`, `Agent`, `Profile`, and `Grant`.
+Create a YAML bundle file (e.g. `governance-bundle.yaml`). A bundle may contain one or more documents separated by `---`. Supported kinds are `Surface`, `Agent`, `Profile`, `Grant`, `Capability`, `Process`, `BusinessService`, and `BusinessServiceCapability`.
+
+> The Surface example below references `process_id: proc-refund-handling`. In a real deployment, that Process (and its owning `BusinessService`, plus any relevant `Capability` and `BusinessServiceCapability` links) must exist in the store or appear earlier in the same bundle. See [docs/control-plane.md](../control-plane.md) for the structural Kinds and the v1 service-led model.
 
 ```yaml
 apiVersion: midas.accept.io/v1
@@ -39,11 +41,15 @@ metadata:
 spec:
   domain: customer-operations
   description: Governs autonomous refund approvals up to operator-defined limits
+  category: operational
+  risk_tier: medium
+  status: active
   decision_type: operational
   reversibility_class: reversible
   failure_mode: closed
   business_owner: Head of Customer Operations
   technical_owner: platform-team
+  process_id: proc-refund-handling
   required_context:
     fields:
       - name: customer_id

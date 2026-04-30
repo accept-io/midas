@@ -96,22 +96,25 @@ A grant is a thin link between an agent and an authority profile. It says "this 
 
 When swapping a model version (e.g. replacing `lending-model-v3` with `lending-model-v4`), you point the new agent at the same profile. When two agents need different authority on the same surface, you create two profiles.
 
-### Structural layer (capability, process, business service)
+### Structural layer (business service, capability, process)
 
 The structural layer sits behind decision surfaces and provides classification, lifecycle hierarchy, and organizational context for governed decisions. It exists independently of the surface/profile/grant authority chain.
 
-A **capability** is a logical business domain — for example, "Lending" or "Payments". Capabilities can be hierarchical via `parent_capability_id`. They group related processes.
+The v1 model is **service-led**: BusinessService is the unit of organizational ownership, and the rest of the structural layer attaches to it.
 
-A **process** is a governed action within a capability — for example, "Loan Origination" or "Payment Release". Every decision surface is associated with a process (via `process_id`). Every process belongs to a capability (via `capability_id`, NOT NULL). Processes can be hierarchical within a capability via `parent_process_id`.
+A **business service** is an organizational service offering — for example, "Consumer Lending" or "Merchant Services". A BusinessService is the structural anchor: every Process belongs to exactly one BusinessService, and Capabilities link to BusinessServices through a junction.
 
-A **business service** is an organizational service offering — for example, "Consumer Lending" or "Merchant Services". Processes can reference a primary business service via `business_service_id`.
+A **capability** is a logical business ability — for example, "Identity Verification", "Credit Scoring", "Fraud Detection". Capabilities can be hierarchical via `parent_capability_id`. Capabilities link to BusinessServices via the `BusinessServiceCapability` junction (M:N): a Capability can enable many BusinessServices, and a BusinessService is enabled by many Capabilities.
 
-In addition to the primary N:1 relationships (`process.capability_id`, `process.business_service_id`), the schema includes M:N junction tables:
+A **process** is a governed action — for example, "Loan Origination" or "Payment Release". Every Process belongs to exactly one BusinessService via `business_service_id` (NOT NULL). Processes can be hierarchical via `parent_process_id`. Every decision surface is associated with a process via `process_id`.
 
-- `process_capabilities` — records additional capability memberships for a process beyond its primary `capability_id`
-- `process_business_services` — records additional business service memberships beyond the primary `business_service_id`
+The structural relationships are:
 
-All structural entities (capabilities, processes, business services) and their junction links are managed through the control plane apply path as first-class resource Kinds.
+- `Capability ↔ BusinessService` — M:N via the `BusinessServiceCapability` junction Kind. Both sides of the link are first-class apply Kinds; the junction row carries no lifecycle of its own.
+- `BusinessService → Process` — 1:N. `processes.business_service_id` is NOT NULL; every Process has exactly one BusinessService.
+- `Process → Surface` — 1:N. `decision_surfaces.process_id` is NOT NULL; every Surface belongs to exactly one Process.
+
+All structural entities (BusinessServices, Capabilities, BusinessServiceCapability links, Processes) are managed through the control plane apply path as first-class resource Kinds.
 
 ### Structural origin
 

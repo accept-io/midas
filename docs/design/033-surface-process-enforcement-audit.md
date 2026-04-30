@@ -1,13 +1,28 @@
 # 033 — Surface → Process Enforcement Audit
 
-> **Historical document.** This audit predates the v1 inference retirement
-> (ADR-XXX). Sections referencing `internal/inference/`,
-> `inference.EnsureInferredStructure`, `SurfaceRepo.EnsureInferred`,
-> `MigrateProcess`, and `FindEligibleForCleanup` describe a subsystem that
-> no longer exists in v1. Source-line links into `internal/inference/`
-> and into now-removed methods on `internal/store/postgres/surface_repo.go`
-> are stale. The analytical content is preserved as-is for historical
-> accuracy.
+> **Historical document.** This audit predates two subsequent reworks:
+>
+> 1. The v1 inference retirement. Sections referencing
+>    `internal/inference/`, `inference.EnsureInferredStructure`,
+>    `SurfaceRepo.EnsureInferred`, `MigrateProcess`, and
+>    `FindEligibleForCleanup` describe a subsystem that no longer exists.
+>    Source-line links into `internal/inference/` and into now-removed
+>    methods on `internal/store/postgres/surface_repo.go` are stale.
+>
+> 2. The v1 service-led structural metamodel rework. References to
+>    `processes.capability_id`, the `process_capabilities` junction, the
+>    `process_business_services` junction, and the
+>    `enforce_process_parent_capability_match` trigger describe schema
+>    objects that have been dropped. The current model is
+>    `Capability ↔ BusinessService → Process → Surface`, with the
+>    `business_service_capabilities` junction as the canonical
+>    Capability ↔ BusinessService link and `processes.business_service_id`
+>    as the only structural FK on Process. See
+>    [`docs/core/data-model.md`](../core/data-model.md) and
+>    [`docs/architecture/architecture.md`](../architecture/architecture.md)
+>    for the current schema.
+>
+> The analytical content is preserved as-is for historical accuracy.
 
 **Status:** Analysis only. No code, schema, test, config, fixture, or seed changes in this audit.
 **Tracking issue:** #33
