@@ -51,6 +51,7 @@ type Service struct {
 	capabilityRepo                CapabilityRepository
 	businessServiceRepo           BusinessServiceRepository
 	businessServiceCapabilityRepo BusinessServiceCapabilityRepository
+	governanceExpectationRepo     GovernanceExpectationRepository
 	controlAuditRepo              controlaudit.Repository
 	tx                            TxRunner
 }
@@ -84,6 +85,7 @@ func NewServiceWithRepos(repos RepositorySet) *Service {
 		capabilityRepo:                repos.Capabilities,
 		businessServiceRepo:           repos.BusinessServices,
 		businessServiceCapabilityRepo: repos.BusinessServiceCapabilities,
+		governanceExpectationRepo:     repos.GovernanceExpectations,
 		controlAuditRepo:              repos.ControlAudit,
 		tx:                            repos.Tx,
 	}
@@ -319,6 +321,15 @@ func (s *Service) buildApplyPlan(ctx context.Context, docs []parser.ParsedDocume
 	bundleProcessBusinessServiceIDs := make(map[string]string)
 	bundleCapabilityParentIDs := make(map[string]string)
 	bundleProcessParentIDs := make(map[string]string)
+	// bundleSurfaceIDs collects logical IDs of Surfaces in the bundle so
+	// GovernanceExpectation references can resolve same-bundle creates.
+	bundleSurfaceIDs := make(map[string]struct{})
+	// bundleSurfaceProcessIDs maps surface ID → declared process_id from
+	// the Surface document. Used by planGovernanceExpectationEntry to
+	// validate that the referenced Surface belongs to the declared
+	// Process when the Surface is being created in the same bundle (no
+	// repo round-trip needed).
+	bundleSurfaceProcessIDs := make(map[string]string)
 	// bundleBSCPairs maps "businessServiceID\x00capabilityID" → first
 	// document index that introduced the pair. Used to detect duplicate
 	// BusinessServiceCapability documents within the same bundle so the
@@ -354,6 +365,13 @@ func (s *Service) buildApplyPlan(ctx context.Context, docs []parser.ParsedDocume
 					if _, seen := bundleBSCPairs[key]; !seen {
 						bundleBSCPairs[key] = i + 1
 					}
+				}
+			}
+		case types.KindSurface:
+			if doc.ID != "" {
+				bundleSurfaceIDs[doc.ID] = struct{}{}
+				if sDoc, ok := doc.Doc.(types.SurfaceDocument); ok {
+					bundleSurfaceProcessIDs[doc.ID] = strings.TrimSpace(sDoc.Spec.ProcessID)
 				}
 			}
 		}
@@ -452,6 +470,14 @@ func (s *Service) buildApplyPlan(ctx context.Context, docs []parser.ParsedDocume
 			case types.KindGrant:
 				if s.grantRepo != nil {
 					s.planGrantEntry(ctx, doc, &entry)
+				} else {
+					entry.Action = ApplyActionCreate
+					entry.DecisionSource = DecisionSourceValidation
+					entry.CreateKind = CreateKindNew
+				}
+			case types.KindGovernanceExpectation:
+				if s.governanceExpectationRepo != nil {
+					s.planGovernanceExpectationEntry(ctx, doc, bundleProcessIDs, bundleSurfaceIDs, bundleSurfaceProcessIDs, &entry)
 				} else {
 					entry.Action = ApplyActionCreate
 					entry.DecisionSource = DecisionSourceValidation
@@ -1665,6 +1691,242 @@ func (s *Service) planGrantEntry(ctx context.Context, doc parser.ParsedDocument,
 	entry.CreateKind = CreateKindNew
 }
 
+// planGovernanceExpectationEntry plans a single GovernanceExpectation
+// document. The Kind is versioned in the same way as Profile: applying
+// a document whose logical ID already exists creates a new version
+// (CreateKindNewVersion, NewVersion = existing.Version+1) rather than
+// conflicting; first-time applies use CreateKindNew with NewVersion=1.
+//
+// Persisted state is always written with status=review (forced by the
+// mapper). The document's lifecycle.status is informational and is not
+// consulted here.
+//
+// Referential integrity (#52 scope, process-only):
+//
+//   - spec.scope_id must reference a Process that exists in persisted
+//     state OR is being created in the same bundle.
+//   - spec.required_surface_id must reference a Surface that exists in
+//     persisted state OR is being created in the same bundle.
+//   - The required Surface MUST belong to the declared Process. When
+//     the Surface is in this bundle, its process_id is read from the
+//     bundle pre-pass map; otherwise the latest persisted Surface
+//     version's ProcessID is used.
+//
+// scope_kind=business_service and scope_kind=capability are rejected by
+// the validator in #52, so they will never reach this method on the
+// happy path. As a defensive measure the planner re-checks scope_kind
+// here and refuses to plan under those scopes; this is belt-and-braces
+// against future code paths that bypass document validation.
+func (s *Service) planGovernanceExpectationEntry(
+	ctx context.Context,
+	doc parser.ParsedDocument,
+	bundleProcessIDs map[string]struct{},
+	bundleSurfaceIDs map[string]struct{},
+	bundleSurfaceProcessIDs map[string]string,
+	entry *ApplyPlanEntry,
+) {
+	geDoc, ok := doc.Doc.(types.GovernanceExpectationDocument)
+	if !ok {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourceValidation
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Message: "document payload is not a GovernanceExpectationDocument",
+		})
+		return
+	}
+
+	scopeKind := strings.TrimSpace(geDoc.Spec.ScopeKind)
+	scopeID := strings.TrimSpace(geDoc.Spec.ScopeID)
+	requiredSurfaceID := strings.TrimSpace(geDoc.Spec.RequiredSurfaceID)
+
+	// Defensive scope_kind check. The validator rejects non-process
+	// scopes with a tailored error message; this is a second line of
+	// defence in case planning ever runs on an unvalidated document.
+	if scopeKind != "process" {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourceValidation
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Field:   "spec.scope_kind",
+			Message: fmt.Sprintf("scope_kind %q is not supported by control-plane apply yet; only \"process\" is supported", scopeKind),
+		})
+		return
+	}
+
+	// Versioning lookup. Done before referential checks so we can build
+	// a clear plan message even when the entry is later marked invalid.
+	existing, err := s.governanceExpectationRepo.FindByID(ctx, geDoc.Metadata.ID)
+	if err != nil {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourcePersistedState
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Message: "repository error during planning: " + err.Error(),
+		})
+		return
+	}
+
+	// Process referent. Must exist in bundle or in repo. Mirrors the
+	// helper Surface uses for the same-named check.
+	if !s.checkProcessExists(ctx, doc, scopeID, bundleProcessIDs, entry) {
+		// helper has already populated entry with the correct field/message
+		// using "spec.process_id" — overwrite to the GovernanceExpectation
+		// field name so operator-facing errors point at the right key.
+		s.retargetField(entry, "spec.process_id", "spec.scope_id")
+		return
+	}
+
+	// Surface referent + Surface↔Process relationship. Resolves
+	// in-bundle Surface refs first; falls back to the surfaceRepo for
+	// persisted state.
+	if !s.checkSurfaceBelongsToProcess(ctx, doc, requiredSurfaceID, scopeID, bundleSurfaceIDs, bundleSurfaceProcessIDs, entry) {
+		return
+	}
+
+	// Plan action. First-time → new; otherwise → new version, mirroring
+	// planProfileEntry's message form.
+	entry.Action = ApplyActionCreate
+	entry.DecisionSource = DecisionSourcePersistedState
+
+	if existing != nil {
+		entry.NewVersion = existing.Version + 1
+		entry.CreateKind = CreateKindNewVersion
+		entry.Message = fmt.Sprintf(
+			"governance expectation %q exists at version %d; will create version %d",
+			geDoc.Metadata.ID, existing.Version, existing.Version+1,
+		)
+	} else {
+		entry.NewVersion = 1
+		entry.CreateKind = CreateKindNew
+	}
+}
+
+// checkSurfaceBelongsToProcess validates that requiredSurfaceID refers
+// to a Surface (in the bundle or in persisted state) whose ProcessID
+// equals the declared scopeID. Returns true on success; otherwise marks
+// the entry invalid with a Field of "spec.required_surface_id" and a
+// message naming all three IDs.
+//
+// Resolution order matches the precedent set by Surface→Process and
+// Process→BusinessService checks in this package:
+//  1. If the referenced Surface is being created in the same bundle,
+//     read its process_id from bundleSurfaceProcessIDs.
+//  2. Otherwise, look up the latest persisted Surface version via
+//     surfaceRepo.FindLatestByID and compare its ProcessID.
+//  3. Missing surfaceRepo or a not-found Surface → invalid.
+func (s *Service) checkSurfaceBelongsToProcess(
+	ctx context.Context,
+	doc parser.ParsedDocument,
+	requiredSurfaceID, scopeID string,
+	bundleSurfaceIDs map[string]struct{},
+	bundleSurfaceProcessIDs map[string]string,
+	entry *ApplyPlanEntry,
+) bool {
+	if requiredSurfaceID == "" {
+		// Validation has already caught this; defensive guard.
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourceValidation
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Field:   "spec.required_surface_id",
+			Message: "required_surface_id is required",
+		})
+		return false
+	}
+
+	// In-bundle resolution: trust the Surface document being applied in
+	// this same bundle. Its process_id is the post-apply truth.
+	if _, inBundle := bundleSurfaceIDs[requiredSurfaceID]; inBundle {
+		surfaceProcessID := bundleSurfaceProcessIDs[requiredSurfaceID]
+		if surfaceProcessID != scopeID {
+			entry.Action = ApplyActionInvalid
+			entry.DecisionSource = DecisionSourceValidation
+			entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+				Kind:  doc.Kind,
+				ID:    doc.ID,
+				Field: "spec.required_surface_id",
+				Message: fmt.Sprintf(
+					"surface %q belongs to process %q but expectation declares scope process %q; required_surface_id must belong to the declared process",
+					requiredSurfaceID, surfaceProcessID, scopeID,
+				),
+			})
+			return false
+		}
+		return true
+	}
+
+	// Persisted-state resolution.
+	if s.surfaceRepo == nil {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourcePersistedState
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Field:   "spec.required_surface_id",
+			Message: "required_surface_id validation unavailable: SurfaceRepository not configured",
+		})
+		return false
+	}
+	ds, err := s.surfaceRepo.FindLatestByID(ctx, requiredSurfaceID)
+	if err != nil {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourcePersistedState
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Field:   "spec.required_surface_id",
+			Message: "repository error checking surface existence: " + err.Error(),
+		})
+		return false
+	}
+	if ds == nil {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourcePersistedState
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Field:   "spec.required_surface_id",
+			Message: fmt.Sprintf("required_surface_id %q does not exist", requiredSurfaceID),
+		})
+		return false
+	}
+	if ds.ProcessID != scopeID {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourcePersistedState
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:  doc.Kind,
+			ID:    doc.ID,
+			Field: "spec.required_surface_id",
+			Message: fmt.Sprintf(
+				"surface %q belongs to process %q but expectation declares scope process %q; required_surface_id must belong to the declared process",
+				requiredSurfaceID, ds.ProcessID, scopeID,
+			),
+		})
+		return false
+	}
+	return true
+}
+
+// retargetField rewrites Field on every just-appended ValidationError
+// from oldField to newField. Used when a shared helper (checkProcessExists)
+// emits errors with a field name that does not match the calling Kind's
+// schema (e.g. checkProcessExists labels its errors "spec.process_id"
+// because that is the Surface field, but in GovernanceExpectation the
+// referrer field is "spec.scope_id"). The rest of the error stays
+// intact so the helper's diagnostic message remains accurate.
+func (s *Service) retargetField(entry *ApplyPlanEntry, oldField, newField string) {
+	for i := range entry.ValidationErrors {
+		if entry.ValidationErrors[i].Field == oldField {
+			entry.ValidationErrors[i].Field = newField
+		}
+	}
+}
+
 // executePlan carries out the actions decided by buildApplyPlan, persisting
 // resources and building an ApplyResult. The executor does not re-decide
 // business meaning: each entry's Action drives its execution path.
@@ -1708,7 +1970,8 @@ func (s *Service) executePlan(ctx context.Context, plan ApplyPlan, actor string)
 	// created (conflicts are still reported; unchanged entries are skipped).
 	// Dependency order is maintained for consistency even in this mode.
 	if s.surfaceRepo == nil && s.agentRepo == nil && s.profileRepo == nil && s.grantRepo == nil &&
-		s.processRepo == nil && s.capabilityRepo == nil && s.businessServiceRepo == nil {
+		s.processRepo == nil && s.capabilityRepo == nil && s.businessServiceRepo == nil &&
+		s.governanceExpectationRepo == nil {
 		for _, entry := range orderedEntries(plan.Entries) {
 			switch entry.Action {
 			case ApplyActionConflict:
@@ -1874,6 +2137,12 @@ func (s *Service) applyCreateEntry(
 			return nil
 		}
 		return s.applyGrant(ctx, repos, pendingAudit, entry.Doc, now, actor, result)
+	case types.KindGovernanceExpectation:
+		if repos.GovernanceExpectations == nil {
+			result.AddCreated(entry.Kind, entry.ID)
+			return nil
+		}
+		return s.applyGovernanceExpectation(ctx, repos, pendingAudit, entry.Doc, now, actor, entry.NewVersion, result)
 	default:
 		result.AddCreated(entry.Kind, entry.ID)
 		return nil
@@ -1894,6 +2163,7 @@ func (s *Service) ownRepositorySet() *RepositorySet {
 		Capabilities:                s.capabilityRepo,
 		BusinessServices:            s.businessServiceRepo,
 		BusinessServiceCapabilities: s.businessServiceCapabilityRepo,
+		GovernanceExpectations:      s.governanceExpectationRepo,
 	}
 }
 
@@ -1928,7 +2198,8 @@ func (s *Service) appendControlAudit(ctx context.Context, rec *controlaudit.Cont
 //  6. Agent                     — no dependencies
 //  7. Profile                   — depends on Surface
 //  8. Grant                     — depends on Agent and Profile
-//  9. Other                     — unknown kinds, emitted after known kinds
+//  9. GovernanceExpectation     — depends on Process and Surface
+// 10. Other                     — unknown kinds, emitted after known kinds
 //
 // Within each tier, relative document order is preserved. Conflict and unchanged
 // entries are emitted after all create entries, in their original document order,
@@ -1943,10 +2214,11 @@ func orderedEntries(entries []ApplyPlanEntry) []ApplyPlanEntry {
 		types.KindAgent:                     5,
 		types.KindProfile:                   6,
 		types.KindGrant:                     7,
+		types.KindGovernanceExpectation:     8,
 	}
 
 	// Separate create entries (must respect order) from non-create entries.
-	creates := make([][]ApplyPlanEntry, 9) // 8 known tiers + 1 unknown
+	creates := make([][]ApplyPlanEntry, 10) // 9 known tiers + 1 unknown
 	var nonCreates []ApplyPlanEntry
 
 	for _, e := range entries {
@@ -1956,7 +2228,7 @@ func orderedEntries(entries []ApplyPlanEntry) []ApplyPlanEntry {
 		}
 		tier, known := kindOrder[e.Kind]
 		if !known {
-			tier = 8
+			tier = 9
 		}
 		creates[tier] = append(creates[tier], e)
 	}
@@ -2106,6 +2378,52 @@ func (s *Service) applyGrant(
 
 	result.AddCreated(doc.Kind, doc.ID)
 	*pendingAudit = append(*pendingAudit, controlaudit.NewGrantCreatedRecord(actor, g.ID))
+	return nil
+}
+
+// applyGovernanceExpectation maps a GovernanceExpectationDocument to a
+// GovernanceExpectation domain model and persists it. version is the
+// planned version number assigned by planGovernanceExpectationEntry: 1
+// for first-time creates, N+1 when appending to an existing logical
+// lineage. The mapper forces Status = ExpectationStatusReview regardless
+// of the lifecycle.status field in the document.
+//
+// Audit emission mirrors Profile: the first version emits a
+// "governance_expectation.created" record; subsequent versions emit
+// "governance_expectation.versioned". Records are buffered into
+// pendingAudit and flushed only after the apply transaction commits
+// (ADR-041b control-audit boundary).
+func (s *Service) applyGovernanceExpectation(
+	ctx context.Context,
+	repos *RepositorySet,
+	pendingAudit *[]*controlaudit.ControlAuditRecord,
+	doc parser.ParsedDocument,
+	now time.Time,
+	actor string,
+	version int,
+	result *types.ApplyResult,
+) error {
+	geDoc, ok := doc.Doc.(types.GovernanceExpectationDocument)
+	if !ok {
+		return fmt.Errorf("%w: invalid document payload for kind %q", ErrInvalidBundle, types.KindGovernanceExpectation)
+	}
+
+	e, err := mapGovernanceExpectationDocumentToDomain(geDoc, now, actor, version)
+	if err != nil {
+		return fmt.Errorf("map governance expectation document: %w", err)
+	}
+
+	if err := repos.GovernanceExpectations.Create(ctx, e); err != nil {
+		return fmt.Errorf("create governance expectation: %w", err)
+	}
+
+	result.AddCreated(doc.Kind, doc.ID)
+
+	if version == 1 {
+		*pendingAudit = append(*pendingAudit, controlaudit.NewGovernanceExpectationCreatedRecord(actor, e.ID, version))
+	} else {
+		*pendingAudit = append(*pendingAudit, controlaudit.NewGovernanceExpectationVersionedRecord(actor, e.ID, version))
+	}
 	return nil
 }
 

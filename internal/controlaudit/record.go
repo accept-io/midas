@@ -52,14 +52,23 @@ const (
 
 	// ActionGrantReinstated is emitted when a suspended grant is reinstated to active.
 	ActionGrantReinstated Action = "grant.reinstated"
+
+	// ActionGovernanceExpectationCreated is emitted when a governance
+	// expectation is applied for the first time (version 1).
+	ActionGovernanceExpectationCreated Action = "governance_expectation.created"
+
+	// ActionGovernanceExpectationVersioned is emitted when a subsequent
+	// governance expectation version (>1) is applied.
+	ActionGovernanceExpectationVersioned Action = "governance_expectation.versioned"
 )
 
 // ResourceKind mirrors the control-plane document kinds to avoid a circular import.
 const (
-	ResourceKindSurface = "surface"
-	ResourceKindProfile = "profile"
-	ResourceKindAgent   = "agent"
-	ResourceKindGrant   = "grant"
+	ResourceKindSurface               = "surface"
+	ResourceKindProfile               = "profile"
+	ResourceKindAgent                 = "agent"
+	ResourceKindGrant                 = "grant"
+	ResourceKindGovernanceExpectation = "governance_expectation"
 )
 
 // Metadata carries structured context attached to a ControlAuditRecord.
@@ -273,6 +282,36 @@ func NewGrantReinstatedRecord(actor, grantID string) *ControlAuditRecord {
 		grantID,
 		nil,
 		"grant reinstated: "+grantID,
+		nil,
+	)
+}
+
+// NewGovernanceExpectationCreatedRecord builds a record for a first-time
+// governance expectation creation (version 1). Mirrors
+// NewProfileCreatedRecord in shape and naming.
+func NewGovernanceExpectationCreatedRecord(actor, expectationID string, version int) *ControlAuditRecord {
+	return newRecord(
+		actor,
+		ActionGovernanceExpectationCreated,
+		ResourceKindGovernanceExpectation,
+		expectationID,
+		intPtr(version),
+		"governance expectation created: "+expectationID+" v"+itoa(version),
+		nil,
+	)
+}
+
+// NewGovernanceExpectationVersionedRecord builds a record for a
+// subsequent governance expectation version (>1). Mirrors
+// NewProfileVersionedRecord in shape and naming.
+func NewGovernanceExpectationVersionedRecord(actor, expectationID string, version int) *ControlAuditRecord {
+	return newRecord(
+		actor,
+		ActionGovernanceExpectationVersioned,
+		ResourceKindGovernanceExpectation,
+		expectationID,
+		intPtr(version),
+		"governance expectation versioned: "+expectationID+" v"+itoa(version),
 		nil,
 	)
 }

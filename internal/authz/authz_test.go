@@ -12,20 +12,21 @@ import (
 // T1 — Permission inventory and naming discipline
 // ---------------------------------------------------------------------------
 
-// TestAllControlPlaneWritePermissions_Count guards the v1 17-permission
+// TestAllControlPlaneWritePermissions_Count guards the v1 18-permission
 // invariant. The v1 service-led model removed PermProcessCapabilityWrite
 // and PermProcessBusinessServiceWrite alongside the obsolete
 // ProcessCapability and ProcessBusinessService Kinds (ADR-XXX),
 // reintroduced a single PermBusinessServiceCapabilityWrite to gate the
 // new BusinessServiceCapability junction Kind, and removed
 // PermControlplanePromote and PermControlplaneCleanup with the inference
-// subsystem. Adding or removing a permission requires updating this count
-// deliberately, which forces a review of the corresponding platform.admin
-// bundle.
+// subsystem. Issue #52 added PermGovernanceExpectationWrite to gate the
+// new GovernanceExpectation Kind. Adding or removing a permission
+// requires updating this count deliberately, which forces a review of
+// the corresponding platform.admin bundle.
 func TestAllControlPlaneWritePermissions_Count(t *testing.T) {
 	got := authz.AllControlPlaneWritePermissions()
-	if len(got) != 17 {
-		t.Errorf("want 17 control-plane write permissions, got %d", len(got))
+	if len(got) != 18 {
+		t.Errorf("want 18 control-plane write permissions, got %d", len(got))
 	}
 }
 
@@ -311,6 +312,7 @@ func TestKindToWritePermission_AllKnownKinds(t *testing.T) {
 		"Profile":                   authz.PermProfileWrite,
 		"Agent":                     authz.PermAgentWrite,
 		"Grant":                     authz.PermGrantWrite,
+		"GovernanceExpectation":     authz.PermGovernanceExpectationWrite,
 	}
 	for kind, wantPerm := range want {
 		got := authz.KindToWritePermission(kind)

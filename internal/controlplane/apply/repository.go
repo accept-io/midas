@@ -9,6 +9,7 @@ import (
 	"github.com/accept-io/midas/internal/businessservicecapability"
 	"github.com/accept-io/midas/internal/capability"
 	"github.com/accept-io/midas/internal/controlaudit"
+	"github.com/accept-io/midas/internal/governanceexpectation"
 	"github.com/accept-io/midas/internal/process"
 	"github.com/accept-io/midas/internal/surface"
 )
@@ -69,16 +70,27 @@ type BusinessServiceCapabilityRepository interface {
 	Create(ctx context.Context, bsc *businessservicecapability.BusinessServiceCapability) error
 }
 
+// GovernanceExpectationRepository is the persistence interface for the
+// apply service's GovernanceExpectation operations. FindByID looks up
+// the latest version (used by the planner to decide first-create vs
+// new-version), Create appends a (id, version) row. Mirrors the
+// ProfileRepository surface used for the other versioned Kind.
+type GovernanceExpectationRepository interface {
+	FindByID(ctx context.Context, id string) (*governanceexpectation.GovernanceExpectation, error)
+	Create(ctx context.Context, e *governanceexpectation.GovernanceExpectation) error
+}
+
 type RepositorySet struct {
-	Surfaces                   SurfaceRepository
-	Agents                     AgentRepository
-	Profiles                   ProfileRepository
-	Grants                     GrantRepository
-	Processes                  ProcessRepository
-	Capabilities               CapabilityRepository
-	BusinessServices           BusinessServiceRepository
+	Surfaces                    SurfaceRepository
+	Agents                      AgentRepository
+	Profiles                    ProfileRepository
+	Grants                      GrantRepository
+	Processes                   ProcessRepository
+	Capabilities                CapabilityRepository
+	BusinessServices            BusinessServiceRepository
 	BusinessServiceCapabilities BusinessServiceCapabilityRepository
-	ControlAudit               controlaudit.Repository
+	GovernanceExpectations      GovernanceExpectationRepository
+	ControlAudit                controlaudit.Repository
 	// Tx, when non-nil, wraps the executor's mutation loop in an
 	// atomic transaction. The callback receives a scoped *RepositorySet
 	// whose repositories are bound to the transaction; on callback-

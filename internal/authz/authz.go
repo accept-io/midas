@@ -56,6 +56,7 @@ const (
 	PermProfileWrite                   Permission = "profile:write"
 	PermAgentWrite                     Permission = "agent:write"
 	PermGrantWrite                     Permission = "grant:write"
+	PermGovernanceExpectationWrite     Permission = "governanceexpectation:write"
 )
 
 // Lifecycle-action permissions. Each sub-action of surface/profile/grant
@@ -72,7 +73,7 @@ const (
 	PermGrantReinstate   Permission = "grant:reinstate"
 )
 
-// allControlPlaneWritePermissions is the canonical 17-permission set that
+// allControlPlaneWritePermissions is the canonical 18-permission set that
 // platform.admin expands to. Declared as a slice so tests can iterate the
 // full matrix; exposed as a copy via AllControlPlaneWritePermissions.
 //
@@ -91,6 +92,7 @@ var allControlPlaneWritePermissions = []Permission{
 	PermProfileWrite,
 	PermAgentWrite,
 	PermGrantWrite,
+	PermGovernanceExpectationWrite,
 
 	PermSurfaceApprove,
 	PermSurfaceDeprecate,
@@ -222,6 +224,8 @@ func KindToWritePermission(kind string) Permission {
 		return PermAgentWrite
 	case "Grant":
 		return PermGrantWrite
+	case "GovernanceExpectation":
+		return PermGovernanceExpectationWrite
 	default:
 		return ""
 	}

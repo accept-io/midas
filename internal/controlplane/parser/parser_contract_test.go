@@ -421,6 +421,30 @@ spec:
 `,
 			wantFieldToken: "unknown_bsc_spec",
 		},
+		{
+			// GovernanceExpectation is the declared coverage rule Kind
+			// added in the GCA epic. condition_payload is intentionally
+			// opaque (map[string]any), so unknown nested keys inside the
+			// payload are NOT rejected by strict-decode — the strict
+			// posture applies to known struct fields only. The unknown
+			// field injected here lives at spec level so it exercises
+			// the strict-decode path correctly.
+			name: "GovernanceExpectation",
+			yaml: `apiVersion: midas.accept.io/v1
+kind: GovernanceExpectation
+metadata:
+  id: ge-x
+spec:
+  scope_kind: process
+  scope_id: proc-x
+  required_surface_id: surf-x
+  condition_type: risk_condition
+  business_owner: biz
+  technical_owner: tech
+  unknown_ge_spec: reject-me
+`,
+			wantFieldToken: "unknown_ge_spec",
+		},
 	}
 
 	for _, tc := range cases {
@@ -747,6 +771,7 @@ spec:
 	for _, kind := range []string{
 		"Surface", "Agent", "Profile", "Grant",
 		"Capability", "Process", "BusinessService", "BusinessServiceCapability",
+		"GovernanceExpectation",
 	} {
 		if !strings.Contains(err.Error(), kind) {
 			t.Errorf("unsupported-kind error must enumerate the allowlisted Kind %q; got %q",

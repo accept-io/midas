@@ -6,14 +6,15 @@ import "time"
 const (
 	APIVersionV1 = "midas.accept.io/v1"
 
-	KindSurface         = "Surface"
-	KindAgent           = "Agent"
-	KindProfile         = "Profile"
-	KindGrant           = "Grant"
+	KindSurface                   = "Surface"
+	KindAgent                     = "Agent"
+	KindProfile                   = "Profile"
+	KindGrant                     = "Grant"
 	KindCapability                = "Capability"
 	KindProcess                   = "Process"
 	KindBusinessService           = "BusinessService"
 	KindBusinessServiceCapability = "BusinessServiceCapability"
+	KindGovernanceExpectation     = "GovernanceExpectation"
 )
 
 // Document is the common interface implemented by all control plane documents.
@@ -382,3 +383,58 @@ type BusinessServiceCapabilitySpec struct {
 func (bsc BusinessServiceCapabilityDocument) GetKind() string { return bsc.Kind }
 func (bsc BusinessServiceCapabilityDocument) GetID() string   { return bsc.Metadata.ID }
 
+// ---------------------------------------------------------------------------
+// GovernanceExpectation
+// ---------------------------------------------------------------------------
+//
+// GovernanceExpectation is a declared coverage rule of the form "in this
+// scope, when these conditions match the arriving decision, this Surface
+// is the one that should have governed it." It is versioned per logical
+// ID, persisted in `review` status by control-plane apply (forced by the
+// mapper, mirroring Surface and Profile), and only becomes load-bearing
+// for the matching engine once approved (out of #52 scope — see #51 epic).
+//
+// Apply support in #52 deliberately accepts only ScopeKind="process".
+// The other two ScopeKind values defined by the domain
+// (`business_service`, `capability`) are rejected by the validator with
+// an explicit "not supported by control-plane apply yet" message; they
+// will be enabled by #53 alongside the matching engine that needs the
+// extra traversal validation.
+//
+// condition_payload is opaque to apply: a YAML map decoded into
+// map[string]any and JSON-marshalled by the mapper for JSONB
+// persistence. Per-type payload schema validation is the matching
+// engine's responsibility (#53).
+
+type GovernanceExpectationDocument struct {
+	APIVersion string                    `json:"apiVersion" yaml:"apiVersion"`
+	Kind       string                    `json:"kind" yaml:"kind"`
+	Metadata   DocumentMetadata          `json:"metadata" yaml:"metadata"`
+	Spec       GovernanceExpectationSpec `json:"spec" yaml:"spec"`
+}
+
+type GovernanceExpectationSpec struct {
+	Description       string                         `json:"description,omitempty" yaml:"description,omitempty"`
+	ScopeKind         string                         `json:"scope_kind" yaml:"scope_kind"`                                   // process | business_service | capability — only "process" accepted by apply in #52
+	ScopeID           string                         `json:"scope_id" yaml:"scope_id"`                                       // logical ID of the structural anchor
+	RequiredSurfaceID string                         `json:"required_surface_id" yaml:"required_surface_id"`                 // logical Surface ID; not version-pinned
+	ConditionType     string                         `json:"condition_type" yaml:"condition_type"`                           // closed enum; today only "risk_condition"
+	ConditionPayload  map[string]any                 `json:"condition_payload,omitempty" yaml:"condition_payload,omitempty"` // opaque to apply
+	BusinessOwner     string                         `json:"business_owner" yaml:"business_owner"`
+	TechnicalOwner    string                         `json:"technical_owner" yaml:"technical_owner"`
+	Lifecycle         GovernanceExpectationLifecycle `json:"lifecycle,omitempty" yaml:"lifecycle,omitempty"`
+}
+
+// GovernanceExpectationLifecycle mirrors ProfileLifecycle's posture: dates
+// are RFC3339 strings parsed in the mapper, not time.Time. The `version`
+// field is informational; the apply planner authors the persisted version
+// (1 for first apply, latest+1 for re-apply).
+type GovernanceExpectationLifecycle struct {
+	Status         string `json:"status,omitempty" yaml:"status,omitempty"`                   // accepted but persistence is always 'review'
+	EffectiveFrom  string `json:"effective_from,omitempty" yaml:"effective_from,omitempty"`   // RFC3339
+	EffectiveUntil string `json:"effective_until,omitempty" yaml:"effective_until,omitempty"` // RFC3339
+	Version        int    `json:"version,omitempty" yaml:"version,omitempty"`                 // informational; planner authoritative
+}
+
+func (g GovernanceExpectationDocument) GetKind() string { return g.Kind }
+func (g GovernanceExpectationDocument) GetID() string   { return g.Metadata.ID }

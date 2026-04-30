@@ -183,6 +183,7 @@ func runQuickstartWithConfig(ctx context.Context, cfg config.Config, actor strin
 		Capabilities:                repos.Capabilities,
 		BusinessServices:            repos.BusinessServices,
 		BusinessServiceCapabilities: repos.BusinessServiceCapabilities,
+		GovernanceExpectations:      repos.GovernanceExpectations,
 		Tx:                          postgres.NewApplyTxRunner(pgStore),
 	})
 

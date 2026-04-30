@@ -175,6 +175,7 @@ func main() {
 		Capabilities:                repos.Capabilities,
 		BusinessServices:            repos.BusinessServices,
 		BusinessServiceCapabilities: repos.BusinessServiceCapabilities,
+		GovernanceExpectations:      repos.GovernanceExpectations,
 		Tx:                          applyTx,
 	})
 

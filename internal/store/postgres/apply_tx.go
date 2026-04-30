@@ -50,6 +50,7 @@ func (a *ApplyTxRunner) WithTx(
 			Capabilities:                repos.Capabilities,
 			BusinessServices:            repos.BusinessServices,
 			BusinessServiceCapabilities: repos.BusinessServiceCapabilities,
+			GovernanceExpectations:      repos.GovernanceExpectations,
 		})
 	})
 }

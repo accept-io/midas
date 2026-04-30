@@ -34,6 +34,26 @@ var (
 	// Using ValidStatuses here would let 'inactive' pass validation and then fail
 	// at the DB with a constraint error instead of a clean 422.
 	ValidBusinessServiceStatuses = []string{"active", "deprecated"}
+
+	// ValidExpectationStatuses mirrors the 5-element ExpectationStatus enum
+	// in internal/governanceexpectation. Apply forces 'review' regardless
+	// of what the document states; this list is used only for shape
+	// validation of an explicitly-supplied lifecycle.status field.
+	ValidExpectationStatuses = []string{"draft", "review", "active", "deprecated", "retired"}
+
+	// ValidExpectationConditionTypes is the closed enum of permitted
+	// condition discriminator values. Today only "risk_condition" exists;
+	// a future addition is an explicit code change with its own design
+	// discussion.
+	ValidExpectationConditionTypes = []string{"risk_condition"}
+
+	// ExpectationScopeKindProcessOnly is the apply-side allowlist for
+	// scope_kind in #52. The domain itself accepts process,
+	// business_service, and capability; apply only accepts process until
+	// the matching engine in #53 supplies the additional traversal
+	// validators. Operators submitting business_service or capability
+	// scopes get a clean validation error instead of partial support.
+	ExpectationScopeKindProcessOnly = []string{"process"}
 )
 
 type document interface {
@@ -66,6 +86,8 @@ func ValidateDocument(doc parser.ParsedDocument) []types.ValidationError {
 		errs = append(errs, validateProfile(d)...)
 	case types.GrantDocument:
 		errs = append(errs, validateGrant(d)...)
+	case types.GovernanceExpectationDocument:
+		errs = append(errs, validateGovernanceExpectation(d)...)
 	default:
 		errs = append(errs, types.ValidationError{
 			Kind:    doc.Kind,
@@ -481,6 +503,154 @@ func validateGrant(doc types.GrantDocument) []types.ValidationError {
 	if grantedAtOK && effectiveFromOK && grantedAt.After(effectiveFrom) {
 		errs = append(errs, fieldErr(doc, "spec.granted_at",
 			"must be before or equal to spec.effective_from"))
+	}
+
+	return errs
+}
+
+// validateGovernanceExpectation validates a GovernanceExpectation
+// document. The contract for #52 is process-scope-only: the domain
+// itself accepts business_service and capability scopes, but apply
+// rejects them with an explicit "not supported by control-plane apply
+// yet" message because the matching engine in #53 needs to provide the
+// additional traversal validators (Surface→Process→BusinessService and
+// the M:N Capability link) before those scopes can be admitted.
+//
+// Cross-document referential integrity (does the Process exist? does the
+// Surface belong to the declared Process?) is the apply planner's
+// concern, not this validator's. The planner uses the bundle pre-pass
+// and the repository to resolve references and emit error messages with
+// the appropriate field paths.
+//
+// condition_payload is opaque to apply: shape validation is the
+// matching engine's responsibility (#53). All this validator does for
+// the payload is accept it as a YAML map (already enforced by the
+// strict-decode of types.GovernanceExpectationSpec).
+func validateGovernanceExpectation(doc types.GovernanceExpectationDocument) []types.ValidationError {
+	var errs []types.ValidationError
+
+	// metadata.name
+	if strings.TrimSpace(doc.Metadata.Name) == "" {
+		errs = append(errs, requiredFieldErr(doc, "metadata.name"))
+	} else if len(doc.Metadata.Name) > MaxNameLength {
+		errs = append(errs, fieldErr(doc, "metadata.name",
+			fmt.Sprintf("exceeds maximum length of %d characters", MaxNameLength)))
+	}
+
+	// scope_kind: required, and process-only for #52.
+	scopeKind := strings.TrimSpace(doc.Spec.ScopeKind)
+	if scopeKind == "" {
+		errs = append(errs, requiredFieldErr(doc, "spec.scope_kind"))
+	} else if scopeKind != "process" {
+		// business_service and capability are domain-valid but
+		// apply-rejected in #52. Issue a tailored error so the operator
+		// understands this is an apply-side scoping limitation, not a
+		// general domain rejection.
+		switch scopeKind {
+		case "business_service", "capability":
+			errs = append(errs, fieldErr(doc, "spec.scope_kind",
+				fmt.Sprintf("scope_kind %q is not supported by control-plane apply yet; only \"process\" is supported", scopeKind)))
+		default:
+			errs = append(errs, enumErr(doc, "spec.scope_kind", scopeKind, ExpectationScopeKindProcessOnly))
+		}
+	}
+
+	// scope_id: required, ID-format-checked.
+	scopeID := strings.TrimSpace(doc.Spec.ScopeID)
+	if scopeID == "" {
+		errs = append(errs, requiredFieldErr(doc, "spec.scope_id"))
+	} else if err := validateIDFormat(scopeID); err != nil {
+		errs = append(errs, fieldErr(doc, "spec.scope_id", err.Error()))
+	}
+
+	// required_surface_id: required, ID-format-checked.
+	requiredSurfaceID := strings.TrimSpace(doc.Spec.RequiredSurfaceID)
+	if requiredSurfaceID == "" {
+		errs = append(errs, requiredFieldErr(doc, "spec.required_surface_id"))
+	} else if err := validateIDFormat(requiredSurfaceID); err != nil {
+		errs = append(errs, fieldErr(doc, "spec.required_surface_id", err.Error()))
+	}
+
+	// condition_type: required, closed enum.
+	conditionType := strings.TrimSpace(doc.Spec.ConditionType)
+	if conditionType == "" {
+		errs = append(errs, requiredFieldErr(doc, "spec.condition_type"))
+	} else if !contains(ValidExpectationConditionTypes, conditionType) {
+		errs = append(errs, enumErr(doc, "spec.condition_type", conditionType, ValidExpectationConditionTypes))
+	}
+
+	// business_owner: required.
+	if strings.TrimSpace(doc.Spec.BusinessOwner) == "" {
+		errs = append(errs, requiredFieldErr(doc, "spec.business_owner"))
+	} else if len(doc.Spec.BusinessOwner) > MaxFieldLength {
+		errs = append(errs, fieldErr(doc, "spec.business_owner",
+			fmt.Sprintf("exceeds maximum length of %d characters", MaxFieldLength)))
+	}
+
+	// technical_owner: required.
+	if strings.TrimSpace(doc.Spec.TechnicalOwner) == "" {
+		errs = append(errs, requiredFieldErr(doc, "spec.technical_owner"))
+	} else if len(doc.Spec.TechnicalOwner) > MaxFieldLength {
+		errs = append(errs, fieldErr(doc, "spec.technical_owner",
+			fmt.Sprintf("exceeds maximum length of %d characters", MaxFieldLength)))
+	}
+
+	// description: optional, length-bounded.
+	if len(doc.Spec.Description) > MaxFieldLength {
+		errs = append(errs, fieldErr(doc, "spec.description",
+			fmt.Sprintf("exceeds maximum length of %d characters", MaxFieldLength)))
+	}
+
+	// lifecycle.status: optional; if present, must be one of the 5
+	// ExpectationStatus values. Apply forces 'review' on persistence
+	// regardless of the value here, but a typo'd status should still
+	// be reported as an enum error rather than silently ignored.
+	if status := strings.TrimSpace(doc.Spec.Lifecycle.Status); status != "" {
+		if !contains(ValidExpectationStatuses, status) {
+			errs = append(errs, enumErr(doc, "spec.lifecycle.status", status, ValidExpectationStatuses))
+		}
+	}
+
+	// lifecycle dates: RFC3339 strings; if both present, until > from.
+	var effectiveFrom, effectiveUntil time.Time
+	var effectiveFromOK, effectiveUntilOK bool
+
+	if s := strings.TrimSpace(doc.Spec.Lifecycle.EffectiveFrom); s != "" {
+		parsed, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			errs = append(errs, fieldErr(doc, "spec.lifecycle.effective_from",
+				"must be a valid RFC3339 timestamp"))
+		} else {
+			effectiveFrom = parsed
+			effectiveFromOK = true
+		}
+	}
+
+	if s := strings.TrimSpace(doc.Spec.Lifecycle.EffectiveUntil); s != "" {
+		parsed, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			errs = append(errs, fieldErr(doc, "spec.lifecycle.effective_until",
+				"must be a valid RFC3339 timestamp"))
+		} else {
+			effectiveUntil = parsed
+			effectiveUntilOK = true
+		}
+	}
+
+	if effectiveFromOK && effectiveUntilOK && !effectiveUntil.After(effectiveFrom) {
+		errs = append(errs, fieldErr(doc, "spec.lifecycle.effective_until",
+			"must be after spec.lifecycle.effective_from"))
+	}
+
+	// lifecycle.version: optional; if non-zero, must be ≥ 1. The planner
+	// authors the persisted version, so a value here is informational.
+	// Negative or zero-but-explicit values (which yaml.v3 cannot
+	// distinguish from omitempty) we treat as "non-positive" and reject
+	// when negative; a literal `version: 0` is indistinguishable from
+	// "not supplied" and is therefore allowed through.
+	if doc.Spec.Lifecycle.Version < 0 {
+		errs = append(errs, fieldErr(doc, "spec.lifecycle.version",
+			"must be >= 1 when supplied"))
 	}
 
 	return errs
