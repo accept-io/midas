@@ -200,4 +200,28 @@ type Repository interface {
 	// UpdatedAt. Used by lifecycle transitions; non-lifecycle fields
 	// are immutable per version.
 	Update(ctx context.Context, e *GovernanceExpectation) error
+
+	// ListActiveByScope returns every GovernanceExpectation row under
+	// (scopeKind, scopeID) that is active at the given time. The
+	// predicate is:
+	//
+	//   status         = 'active'
+	//   effective_date <= at
+	//   (effective_until IS NULL OR effective_until > at)
+	//   retired_at IS NULL
+	//
+	// Multiple rows for the same logical ID may be returned if more than
+	// one version satisfies the predicate (a domain invariant violation
+	// in steady state); the caller (typically the coverage matcher) is
+	// expected to pick the highest version per logical ID.
+	//
+	// Result order is unspecified — callers must sort if they care. The
+	// memory implementation walks its map; the Postgres implementation
+	// reads via the existing (scope_kind, scope_id) index.
+	ListActiveByScope(
+		ctx context.Context,
+		scopeKind ScopeKind,
+		scopeID string,
+		at time.Time,
+	) ([]*GovernanceExpectation, error)
 }

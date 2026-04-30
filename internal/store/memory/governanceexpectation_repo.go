@@ -123,6 +123,48 @@ func (r *GovernanceExpectationRepo) Update(_ context.Context, e *governanceexpec
 	return fmt.Errorf("governance expectation not found: id=%s version=%d", e.ID, e.Version)
 }
 
+// ListActiveByScope returns clones of every stored row matching the
+// active-at-time predicate under (scopeKind, scopeID). Mirrors the
+// Postgres impl's predicate exactly:
+//
+//   - Status         == active
+//   - EffectiveDate  <= at
+//   - EffectiveUntil == nil OR > at
+//   - RetiredAt      == nil
+//
+// Multiple versions of the same logical ID may be returned; the caller
+// is responsible for picking a single version. Order is unspecified —
+// the memory walk is map-iteration order.
+func (r *GovernanceExpectationRepo) ListActiveByScope(
+	_ context.Context,
+	scopeKind governanceexpectation.ScopeKind,
+	scopeID string,
+	at time.Time,
+) ([]*governanceexpectation.GovernanceExpectation, error) {
+	var out []*governanceexpectation.GovernanceExpectation
+	for _, versions := range r.items {
+		for _, e := range versions {
+			if e.ScopeKind != scopeKind || e.ScopeID != scopeID {
+				continue
+			}
+			if e.Status != governanceexpectation.ExpectationStatusActive {
+				continue
+			}
+			if e.EffectiveDate.After(at) {
+				continue
+			}
+			if e.EffectiveUntil != nil && !e.EffectiveUntil.After(at) {
+				continue
+			}
+			if e.RetiredAt != nil {
+				continue
+			}
+			out = append(out, cloneExpectation(e))
+		}
+	}
+	return out, nil
+}
+
 // cloneExpectation returns a deep copy: every *time.Time pointer is
 // independently allocated and the ConditionPayload byte slice is copied
 // so callers cannot mutate stored state through a returned pointer.

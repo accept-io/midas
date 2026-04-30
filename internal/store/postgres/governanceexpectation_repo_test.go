@@ -327,3 +327,195 @@ func TestGovernanceExpectationRepo_NilPayload_NormalisedToEmptyObject(t *testing
 			string(got.ConditionPayload))
 	}
 }
+
+// TestGovernanceExpectationRepo_ListActiveByScope_FiltersOnEveryPredicate
+// exercises every leg of the active-at-time predicate against the live
+// Postgres index. Each candidate uses unique IDs so the test is isolated
+// from any other rows in the table.
+func TestGovernanceExpectationRepo_ListActiveByScope_FiltersOnEveryPredicate(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	repo, err := NewGovernanceExpectationRepo(db)
+	if err != nil {
+		t.Fatalf("NewGovernanceExpectationRepo: %v", err)
+	}
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	scopeID := "tst-list-active-proc"
+
+	type candidate struct {
+		id     string
+		mutate func(*governanceexpectation.GovernanceExpectation)
+	}
+	cases := []candidate{
+		{id: "tst-list-active-match", mutate: func(e *governanceexpectation.GovernanceExpectation) {
+			e.ScopeID = scopeID
+			e.Status = governanceexpectation.ExpectationStatusActive
+			e.EffectiveDate = now.Add(-time.Hour)
+		}},
+		{id: "tst-list-active-from-equals-now", mutate: func(e *governanceexpectation.GovernanceExpectation) {
+			e.ScopeID = scopeID
+			e.Status = governanceexpectation.ExpectationStatusActive
+			e.EffectiveDate = now
+		}},
+		{id: "tst-list-active-review", mutate: func(e *governanceexpectation.GovernanceExpectation) {
+			e.ScopeID = scopeID
+			e.Status = governanceexpectation.ExpectationStatusReview
+			e.EffectiveDate = now.Add(-time.Hour)
+		}},
+		{id: "tst-list-active-deprecated", mutate: func(e *governanceexpectation.GovernanceExpectation) {
+			e.ScopeID = scopeID
+			e.Status = governanceexpectation.ExpectationStatusDeprecated
+			e.EffectiveDate = now.Add(-time.Hour)
+		}},
+		{id: "tst-list-active-other-scope", mutate: func(e *governanceexpectation.GovernanceExpectation) {
+			e.ScopeID = "tst-list-active-other-proc"
+			e.Status = governanceexpectation.ExpectationStatusActive
+			e.EffectiveDate = now.Add(-time.Hour)
+		}},
+		{id: "tst-list-active-future", mutate: func(e *governanceexpectation.GovernanceExpectation) {
+			e.ScopeID = scopeID
+			e.Status = governanceexpectation.ExpectationStatusActive
+			e.EffectiveDate = now.Add(time.Hour)
+		}},
+		{id: "tst-list-active-expired", mutate: func(e *governanceexpectation.GovernanceExpectation) {
+			past := now.Add(-time.Minute)
+			e.ScopeID = scopeID
+			e.Status = governanceexpectation.ExpectationStatusActive
+			e.EffectiveDate = now.Add(-time.Hour)
+			e.EffectiveUntil = &past
+		}},
+		{id: "tst-list-active-until-equals-now", mutate: func(e *governanceexpectation.GovernanceExpectation) {
+			until := now
+			e.ScopeID = scopeID
+			e.Status = governanceexpectation.ExpectationStatusActive
+			e.EffectiveDate = now.Add(-time.Hour)
+			e.EffectiveUntil = &until
+		}},
+		// retired_at is constrained by the schema's chk_governance_expectations_retired_at
+		// to be >= effective_date, so a non-nil retired_at requires a matching
+		// past effective_date. The predicate filters on retired_at IS NULL
+		// independently of status.
+		{id: "tst-list-active-retired-at", mutate: func(e *governanceexpectation.GovernanceExpectation) {
+			retired := now.Add(-time.Minute)
+			e.ScopeID = scopeID
+			e.Status = governanceexpectation.ExpectationStatusActive
+			e.EffectiveDate = now.Add(-time.Hour)
+			e.RetiredAt = &retired
+		}},
+	}
+
+	for _, c := range cases {
+		c := c
+		e := makeExpectation(c.id, 1, governanceexpectation.ExpectationStatusActive)
+		c.mutate(e)
+		if err := repo.Create(ctx, e); err != nil {
+			t.Fatalf("create %s: %v", c.id, err)
+		}
+		t.Cleanup(func() { cleanupExpectation(t, db, c.id) })
+	}
+
+	got, err := repo.ListActiveByScope(ctx, governanceexpectation.ScopeKindProcess, scopeID, now)
+	if err != nil {
+		t.Fatalf("ListActiveByScope: %v", err)
+	}
+
+	gotIDs := map[string]bool{}
+	for _, e := range got {
+		gotIDs[e.ID] = true
+	}
+
+	wantPresent := []string{"tst-list-active-match", "tst-list-active-from-equals-now"}
+	wantAbsent := []string{
+		"tst-list-active-review",
+		"tst-list-active-deprecated",
+		"tst-list-active-other-scope",
+		"tst-list-active-future",
+		"tst-list-active-expired",
+		"tst-list-active-until-equals-now",
+		"tst-list-active-retired-at",
+	}
+	for _, id := range wantPresent {
+		if !gotIDs[id] {
+			t.Errorf("expected %q in ListActiveByScope result; got %v", id, gotIDs)
+		}
+	}
+	for _, id := range wantAbsent {
+		if gotIDs[id] {
+			t.Errorf("did not expect %q in ListActiveByScope result; got %v", id, gotIDs)
+		}
+	}
+}
+
+// TestGovernanceExpectationRepo_ListActiveByScope_MultipleVersions
+// asserts that when more than one version of the same logical id is
+// active and within the effective-date window, all matching versions
+// are returned. Selection of a single version is the caller's concern.
+func TestGovernanceExpectationRepo_ListActiveByScope_MultipleVersions(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	repo, err := NewGovernanceExpectationRepo(db)
+	if err != nil {
+		t.Fatalf("NewGovernanceExpectationRepo: %v", err)
+	}
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	scopeID := "tst-list-multi-proc"
+	id := "tst-list-multi-id"
+
+	for _, v := range []int{1, 2} {
+		e := makeExpectation(id, v, governanceexpectation.ExpectationStatusActive)
+		e.ScopeID = scopeID
+		e.EffectiveDate = now.Add(-time.Hour)
+		if err := repo.Create(ctx, e); err != nil {
+			t.Fatalf("create v%d: %v", v, err)
+		}
+	}
+	t.Cleanup(func() { cleanupExpectation(t, db, id) })
+
+	got, err := repo.ListActiveByScope(ctx, governanceexpectation.ScopeKindProcess, scopeID, now)
+	if err != nil {
+		t.Fatalf("ListActiveByScope: %v", err)
+	}
+
+	count := 0
+	for _, e := range got {
+		if e.ID == id {
+			count++
+		}
+	}
+	if count != 2 {
+		t.Errorf("expected both versions of %q, got %d", id, count)
+	}
+}
+
+// TestGovernanceExpectationRepo_ListActiveByScope_EmptyResult covers the
+// no-matching-rows branch: query returns an empty (or nil) slice with
+// no error.
+func TestGovernanceExpectationRepo_ListActiveByScope_EmptyResult(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	repo, err := NewGovernanceExpectationRepo(db)
+	if err != nil {
+		t.Fatalf("NewGovernanceExpectationRepo: %v", err)
+	}
+
+	got, err := repo.ListActiveByScope(
+		ctx,
+		governanceexpectation.ScopeKindProcess,
+		"tst-list-active-no-such-process-id",
+		time.Now().UTC(),
+	)
+	if err != nil {
+		t.Fatalf("ListActiveByScope: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("want 0 results, got %d", len(got))
+	}
+}

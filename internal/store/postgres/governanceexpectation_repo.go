@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/accept-io/midas/internal/governanceexpectation"
 	"github.com/accept-io/midas/internal/store/sqltx"
@@ -218,6 +219,59 @@ func (r *GovernanceExpectationRepo) Update(ctx context.Context, e *governanceexp
 		return fmt.Errorf("governance expectation not found: id=%s version=%d", e.ID, e.Version)
 	}
 	return nil
+}
+
+// ListActiveByScope returns every active expectation under
+// (scopeKind, scopeID) at the given time. Predicate matches the memory
+// impl exactly:
+//
+//	scope_kind     = $1
+//	scope_id       = $2
+//	status         = 'active'
+//	effective_date <= $3
+//	(effective_until IS NULL OR effective_until > $3)
+//	retired_at IS NULL
+//
+// The query reads via the existing (scope_kind, scope_id) index. Result
+// order is unspecified at the SQL level; callers (typically the
+// coverage matcher) must sort if they care. Multiple versions of the
+// same logical ID may be returned when more than one row satisfies the
+// predicate — that is a domain invariant violation in steady state and
+// the caller is expected to pick the highest version per logical ID.
+func (r *GovernanceExpectationRepo) ListActiveByScope(
+	ctx context.Context,
+	scopeKind governanceexpectation.ScopeKind,
+	scopeID string,
+	at time.Time,
+) ([]*governanceexpectation.GovernanceExpectation, error) {
+	const q = expectationSelectColumns + `
+		FROM governance_expectations
+		WHERE scope_kind = $1
+		  AND scope_id   = $2
+		  AND status     = 'active'
+		  AND effective_date <= $3
+		  AND (effective_until IS NULL OR effective_until > $3)
+		  AND retired_at IS NULL
+	`
+
+	rows, err := r.db.QueryContext(ctx, q, string(scopeKind), scopeID, at.UTC())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []*governanceexpectation.GovernanceExpectation
+	for rows.Next() {
+		e, err := scanExpectationRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // expectationSelectColumns is the canonical SELECT column list for

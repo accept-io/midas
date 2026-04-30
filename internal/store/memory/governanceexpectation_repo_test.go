@@ -300,6 +300,166 @@ func TestGovernanceExpectationMemoryRepo_ReturnsClones(t *testing.T) {
 	}
 }
 
+// TestGovernanceExpectationMemoryRepo_ListActiveByScope_FiltersOnEveryPredicate
+// covers all four legs of the active-at-time predicate (status, scope,
+// effective-date window, retired_at) plus the "in scope but mismatched
+// scope_kind" path. Each candidate is built around a pinned `now` so
+// the test is deterministic.
+func TestGovernanceExpectationMemoryRepo_ListActiveByScope_FiltersOnEveryPredicate(t *testing.T) {
+	r := NewGovernanceExpectationRepo()
+	ctx := context.Background()
+	now := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+
+	mk := func(id string, mutate func(*governanceexpectation.GovernanceExpectation)) {
+		e := makeExpectation(id, 1, governanceexpectation.ExpectationStatusActive)
+		e.EffectiveDate = now.Add(-time.Hour)
+		mutate(e)
+		if err := r.Create(ctx, e); err != nil {
+			t.Fatalf("create %s: %v", id, err)
+		}
+	}
+
+	// Match candidate.
+	mk("ge-match", func(e *governanceexpectation.GovernanceExpectation) {})
+
+	// Status filtered out.
+	mk("ge-review", func(e *governanceexpectation.GovernanceExpectation) {
+		e.Status = governanceexpectation.ExpectationStatusReview
+	})
+	mk("ge-deprecated", func(e *governanceexpectation.GovernanceExpectation) {
+		e.Status = governanceexpectation.ExpectationStatusDeprecated
+	})
+
+	// Scope filtered out.
+	mk("ge-other-scope", func(e *governanceexpectation.GovernanceExpectation) {
+		e.ScopeID = "proc-2"
+	})
+	mk("ge-other-kind", func(e *governanceexpectation.GovernanceExpectation) {
+		e.ScopeKind = governanceexpectation.ScopeKindBusinessService
+	})
+
+	// Future-dated.
+	mk("ge-future", func(e *governanceexpectation.GovernanceExpectation) {
+		e.EffectiveDate = now.Add(time.Hour)
+	})
+
+	// Expired.
+	mk("ge-expired", func(e *governanceexpectation.GovernanceExpectation) {
+		past := now.Add(-time.Minute)
+		e.EffectiveUntil = &past
+	})
+
+	// EffectiveUntil exactly == now: must NOT match (predicate is strict >).
+	mk("ge-until-equals-now", func(e *governanceexpectation.GovernanceExpectation) {
+		until := now
+		e.EffectiveUntil = &until
+	})
+
+	// Retired_at non-nil.
+	mk("ge-retired-at", func(e *governanceexpectation.GovernanceExpectation) {
+		retired := now.Add(-time.Minute)
+		e.RetiredAt = &retired
+	})
+
+	// EffectiveDate exactly == now: must match (predicate is <= for from).
+	mk("ge-from-equals-now", func(e *governanceexpectation.GovernanceExpectation) {
+		e.EffectiveDate = now
+	})
+
+	got, err := r.ListActiveByScope(ctx, governanceexpectation.ScopeKindProcess, "proc-1", now)
+	if err != nil {
+		t.Fatalf("ListActiveByScope: %v", err)
+	}
+
+	gotIDs := map[string]bool{}
+	for _, e := range got {
+		gotIDs[e.ID] = true
+	}
+	want := []string{"ge-match", "ge-from-equals-now"}
+	for _, id := range want {
+		if !gotIDs[id] {
+			t.Errorf("expected %q in result, got %v", id, gotIDs)
+		}
+	}
+	for _, id := range []string{"ge-review", "ge-deprecated", "ge-other-scope", "ge-other-kind", "ge-future", "ge-expired", "ge-until-equals-now", "ge-retired-at"} {
+		if gotIDs[id] {
+			t.Errorf("did not expect %q in result", id)
+		}
+	}
+}
+
+// TestGovernanceExpectationMemoryRepo_ListActiveByScope_ReturnsClones
+// asserts the read path's defensive-copy posture extends to
+// ListActiveByScope: callers must not be able to mutate stored state
+// through a returned pointer.
+func TestGovernanceExpectationMemoryRepo_ListActiveByScope_ReturnsClones(t *testing.T) {
+	r := NewGovernanceExpectationRepo()
+	ctx := context.Background()
+	now := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+
+	e := makeExpectation("ge-clone", 1, governanceexpectation.ExpectationStatusActive)
+	e.EffectiveDate = now.Add(-time.Hour)
+	originalName := e.Name
+	if err := r.Create(ctx, e); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	got, err := r.ListActiveByScope(ctx, governanceexpectation.ScopeKindProcess, "proc-1", now)
+	if err != nil {
+		t.Fatalf("ListActiveByScope: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want 1 result, got %d", len(got))
+	}
+
+	got[0].Name = "mutated-by-caller"
+	again, _ := r.ListActiveByScope(ctx, governanceexpectation.ScopeKindProcess, "proc-1", now)
+	if again[0].Name != originalName {
+		t.Errorf("post-read mutation leaked into stored state: stored Name = %q", again[0].Name)
+	}
+}
+
+// TestGovernanceExpectationMemoryRepo_ListActiveByScope_MultipleVersions
+// asserts the impl returns every active version when more than one
+// satisfies the predicate. Picking a single version is the caller's
+// concern, not the repo's.
+func TestGovernanceExpectationMemoryRepo_ListActiveByScope_MultipleVersions(t *testing.T) {
+	r := NewGovernanceExpectationRepo()
+	ctx := context.Background()
+	now := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+
+	for _, v := range []int{1, 2} {
+		e := makeExpectation("ge-multi", v, governanceexpectation.ExpectationStatusActive)
+		e.EffectiveDate = now.Add(-time.Hour)
+		if err := r.Create(ctx, e); err != nil {
+			t.Fatalf("create v%d: %v", v, err)
+		}
+	}
+
+	got, err := r.ListActiveByScope(ctx, governanceexpectation.ScopeKindProcess, "proc-1", now)
+	if err != nil {
+		t.Fatalf("ListActiveByScope: %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("want 2 versions, got %d", len(got))
+	}
+}
+
+// TestGovernanceExpectationMemoryRepo_ListActiveByScope_EmptyResult
+// asserts the empty-scope path returns a nil/empty slice with no error.
+func TestGovernanceExpectationMemoryRepo_ListActiveByScope_EmptyResult(t *testing.T) {
+	r := NewGovernanceExpectationRepo()
+	ctx := context.Background()
+
+	got, err := r.ListActiveByScope(ctx, governanceexpectation.ScopeKindProcess, "no-such-process", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ListActiveByScope: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("want 0 results, got %d", len(got))
+	}
+}
+
 // TestGovernanceExpectationMemoryRepo_RepositoryInterface is a redundant
 // compile-time-style check — if the Repository assignment fails the
 // package would not build. Kept as a self-documenting assertion that the
