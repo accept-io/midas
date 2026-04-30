@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"html"
 	"log/slog"
 	"net/http"
 
@@ -171,7 +172,7 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	if errParam := r.URL.Query().Get("error"); errParam != "" {
 		desc := r.URL.Query().Get("error_description")
 		slog.Warn("oidc_provider_error", "error", errParam, "description", desc)
-		oidcError(w, errParam, desc, http.StatusUnauthorized)
+		oidcError(w, "provider_error", "Login could not be completed. Please try again.", http.StatusUnauthorized)
 		return
 	}
 
@@ -237,30 +238,10 @@ func oidcError(w http.ResponseWriter, code, message string, status int) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	_, _ = w.Write([]byte(`<!doctype html><html><head><title>Login error</title></head><body>` +
-		`<h2>Login failed</h2><p>` + htmlEscape(message) + `</p>` +
+		`<h2>Login failed</h2><p>` + html.EscapeString(message) + `</p>` +
 		`<p><a href="/explorer">Return to Explorer</a></p>` +
 		`</body></html>`))
 	slog.Debug("oidc_error_response", "code", code, "status", status)
-}
-
-// htmlEscape escapes characters that would be unsafe in HTML text content.
-func htmlEscape(s string) string {
-	var out []byte
-	for i := 0; i < len(s); i++ {
-		switch s[i] {
-		case '<':
-			out = append(out, []byte("&lt;")...)
-		case '>':
-			out = append(out, []byte("&gt;")...)
-		case '&':
-			out = append(out, []byte("&amp;")...)
-		case '"':
-			out = append(out, []byte("&#34;")...)
-		default:
-			out = append(out, s[i])
-		}
-	}
-	return string(out)
 }
 
 // WithExplorerEnabled registers the /explorer routes when enabled is true.
