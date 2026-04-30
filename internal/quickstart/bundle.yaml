@@ -1,0 +1,293 @@
+# MIDAS Quickstart Bundle
+#
+# This is the static starter bundle applied by `midas init quickstart`.
+# It contains 2 BusinessServices, 4 Capabilities, 5 BusinessServiceCapability
+# links, 4 Processes, and 6 Surfaces: a structural metamodel demonstrating
+# Capability ↔ BusinessService → Process → Surface.
+#
+# After applying, the bundle's Surfaces will be in review status. Approve
+# them through /v1/controlplane/surfaces/{id}/approve before submitting
+# /v1/evaluate calls. Author your own Agent, Profile, and Grant via the
+# normal apply path to complete the authority chain.
+#
+# This bundle is static and reviewed in source control. Edits to this file
+# are governed change.
+
+# -----------------------------------------------------------------------------
+# BusinessServices (2)
+# -----------------------------------------------------------------------------
+
+apiVersion: midas.accept.io/v1
+kind: BusinessService
+metadata:
+  id: bs-consumer-lending
+  name: Consumer Lending
+spec:
+  description: Retail lending products for individual consumers
+  service_type: customer_facing
+  status: active
+---
+apiVersion: midas.accept.io/v1
+kind: BusinessService
+metadata:
+  id: bs-merchant-services
+  name: Merchant Services
+spec:
+  description: Payment processing and fraud prevention for merchants
+  service_type: customer_facing
+  status: active
+
+# -----------------------------------------------------------------------------
+# Capabilities (4)
+#
+# cap-identity-verification is the preflight anchor for `midas init quickstart`.
+# It is the first Capability in this file and any reorder requires updating
+# the anchor constant in cmd/midas/init_quickstart.go.
+# -----------------------------------------------------------------------------
+
+---
+apiVersion: midas.accept.io/v1
+kind: Capability
+metadata:
+  id: cap-identity-verification
+  name: Identity Verification
+spec:
+  description: Verifies identity claims for onboarding and authentication
+  status: active
+---
+apiVersion: midas.accept.io/v1
+kind: Capability
+metadata:
+  id: cap-credit-scoring
+  name: Credit Scoring
+spec:
+  description: Assesses creditworthiness for lending decisions
+  status: active
+---
+apiVersion: midas.accept.io/v1
+kind: Capability
+metadata:
+  id: cap-fraud-detection
+  name: Fraud Detection
+spec:
+  description: Detects fraudulent activity across consumer and merchant flows
+  status: active
+---
+apiVersion: midas.accept.io/v1
+kind: Capability
+metadata:
+  id: cap-payment-authorization
+  name: Payment Authorization
+spec:
+  description: Authorizes payment transactions against risk and limits
+  status: active
+
+# -----------------------------------------------------------------------------
+# BusinessServiceCapability links (5)
+#
+# cap-fraud-detection enables both consumer-lending and merchant-services,
+# demonstrating Capability ↔ BusinessService is M:N.
+# -----------------------------------------------------------------------------
+
+---
+apiVersion: midas.accept.io/v1
+kind: BusinessServiceCapability
+metadata:
+  id: bsc-consumer-lending-identity-verification
+spec:
+  business_service_id: bs-consumer-lending
+  capability_id: cap-identity-verification
+---
+apiVersion: midas.accept.io/v1
+kind: BusinessServiceCapability
+metadata:
+  id: bsc-consumer-lending-credit-scoring
+spec:
+  business_service_id: bs-consumer-lending
+  capability_id: cap-credit-scoring
+---
+apiVersion: midas.accept.io/v1
+kind: BusinessServiceCapability
+metadata:
+  id: bsc-consumer-lending-fraud-detection
+spec:
+  business_service_id: bs-consumer-lending
+  capability_id: cap-fraud-detection
+---
+apiVersion: midas.accept.io/v1
+kind: BusinessServiceCapability
+metadata:
+  id: bsc-merchant-services-fraud-detection
+spec:
+  business_service_id: bs-merchant-services
+  capability_id: cap-fraud-detection
+---
+apiVersion: midas.accept.io/v1
+kind: BusinessServiceCapability
+metadata:
+  id: bsc-merchant-services-payment-authorization
+spec:
+  business_service_id: bs-merchant-services
+  capability_id: cap-payment-authorization
+
+# -----------------------------------------------------------------------------
+# Processes (4)
+# -----------------------------------------------------------------------------
+
+---
+apiVersion: midas.accept.io/v1
+kind: Process
+metadata:
+  id: proc-consumer-onboarding
+  name: Consumer Onboarding
+spec:
+  description: End-to-end onboarding journey for new consumer applicants
+  status: active
+  business_service_id: bs-consumer-lending
+---
+apiVersion: midas.accept.io/v1
+kind: Process
+metadata:
+  id: proc-credit-assessment
+  name: Credit Assessment
+spec:
+  description: Credit decisioning for consumer lending applications
+  status: active
+  business_service_id: bs-consumer-lending
+---
+apiVersion: midas.accept.io/v1
+kind: Process
+metadata:
+  id: proc-merchant-risk-screen
+  name: Merchant Risk Screening
+spec:
+  description: Risk screening for merchant transactions
+  status: active
+  business_service_id: bs-merchant-services
+---
+apiVersion: midas.accept.io/v1
+kind: Process
+metadata:
+  id: proc-merchant-payment-auth
+  name: Merchant Payment Authorization
+spec:
+  description: Payment authorization for merchant transactions
+  status: active
+  business_service_id: bs-merchant-services
+
+# -----------------------------------------------------------------------------
+# Surfaces (6)
+#
+# Surfaces are persisted as `status=review` regardless of the value declared
+# here; the apply path forces the review status. Approve them via
+# /v1/controlplane/surfaces/{id}/approve before submitting /v1/evaluate calls.
+# -----------------------------------------------------------------------------
+
+---
+apiVersion: midas.accept.io/v1
+kind: Surface
+metadata:
+  id: surf-v2-id-verify
+  name: Identity Verification
+spec:
+  description: Governs automated identity verification for consumer onboarding
+  domain: consumer-lending
+  category: compliance
+  risk_tier: high
+  status: active
+  decision_type: tactical
+  reversibility_class: conditionally_reversible
+  failure_mode: closed
+  business_owner: consumer-lending-team
+  technical_owner: midas
+  process_id: proc-consumer-onboarding
+---
+apiVersion: midas.accept.io/v1
+kind: Surface
+metadata:
+  id: surf-v2-consumer-fraud
+  name: Consumer Fraud Check
+spec:
+  description: Governs fraud screening during consumer onboarding
+  domain: consumer-lending
+  category: operational
+  risk_tier: medium
+  status: active
+  decision_type: tactical
+  reversibility_class: conditionally_reversible
+  failure_mode: closed
+  business_owner: consumer-lending-team
+  technical_owner: midas
+  process_id: proc-consumer-onboarding
+---
+apiVersion: midas.accept.io/v1
+kind: Surface
+metadata:
+  id: surf-v2-credit-assess
+  name: Credit Assessment
+spec:
+  description: Governs automated credit assessment decisions
+  domain: consumer-lending
+  category: financial
+  risk_tier: high
+  status: active
+  decision_type: tactical
+  reversibility_class: conditionally_reversible
+  failure_mode: closed
+  business_owner: consumer-lending-team
+  technical_owner: midas
+  process_id: proc-credit-assessment
+---
+apiVersion: midas.accept.io/v1
+kind: Surface
+metadata:
+  id: surf-v2-merchant-risk
+  name: Merchant Risk Screening
+spec:
+  description: Governs merchant transaction risk screening
+  domain: merchant-services
+  category: operational
+  risk_tier: medium
+  status: active
+  decision_type: tactical
+  reversibility_class: conditionally_reversible
+  failure_mode: closed
+  business_owner: merchant-services-team
+  technical_owner: midas
+  process_id: proc-merchant-risk-screen
+---
+apiVersion: midas.accept.io/v1
+kind: Surface
+metadata:
+  id: surf-v2-merchant-payment
+  name: Merchant Payment Authorization
+spec:
+  description: Governs automated payment authorization for merchants
+  domain: merchant-services
+  category: financial
+  risk_tier: high
+  status: active
+  decision_type: tactical
+  reversibility_class: conditionally_reversible
+  failure_mode: closed
+  business_owner: merchant-services-team
+  technical_owner: midas
+  process_id: proc-merchant-payment-auth
+---
+apiVersion: midas.accept.io/v1
+kind: Surface
+metadata:
+  id: surf-v2-merchant-hv-pay
+  name: Merchant High-Value Payment Authorization
+spec:
+  description: Governs high-value payment authorization with enhanced scrutiny
+  domain: merchant-services
+  category: financial
+  risk_tier: high
+  status: active
+  decision_type: strategic
+  reversibility_class: irreversible
+  failure_mode: closed
+  business_owner: merchant-services-team
+  technical_owner: midas
+  process_id: proc-merchant-payment-auth

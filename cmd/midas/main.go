@@ -55,7 +55,25 @@ func main() {
 			err = runConfigValidate(os.Args[3:])
 		default:
 			fmt.Fprintf(os.Stderr, "unknown config subcommand %q\n", os.Args[2])
-			fmt.Fprintln(os.Stderr, "Usage: midas config init | midas config validate")
+			fmt.Fprintln(os.Stderr, "Usage: midas config init | midas config validate | midas init quickstart")
+			os.Exit(1)
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// Handle `midas init <subcommand>` before any other initialisation.
+	if len(os.Args) >= 3 && os.Args[1] == "init" {
+		var err error
+		switch os.Args[2] {
+		case "quickstart":
+			err = runInitQuickstart(os.Args[3:])
+		default:
+			fmt.Fprintf(os.Stderr, "unknown init subcommand %q\n", os.Args[2])
+			fmt.Fprintln(os.Stderr, "Usage: midas init quickstart")
 			os.Exit(1)
 		}
 		if err != nil {

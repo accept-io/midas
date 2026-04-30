@@ -161,6 +161,46 @@ go run ./cmd/midas
 Apply a bundle, then evaluate against its IDs (see
 [docs/control-plane.md](control-plane.md) for bundle authoring).
 
+#### `midas init quickstart`
+
+For a Postgres deployment that does not yet have any structural content,
+the `midas init quickstart` subcommand applies a curated structural
+skeleton through the standard control-plane apply path:
+
+```bash
+go run ./cmd/midas init quickstart
+```
+
+The bundle creates 2 BusinessServices, 4 Capabilities, 5
+BusinessServiceCapability links, 4 Processes, and 6 Surfaces — a
+navigable governance metamodel demonstrating
+`Capability ↔ BusinessService → Process → Surface`.
+
+Notes:
+
+- The Postgres schema is applied automatically the first time the store
+  is opened (the same path the server uses on startup); no separate
+  migration step is required.
+- The bundle is applied through the standard apply pipeline. Surfaces
+  are persisted in `review` status — the apply path's normal behaviour.
+  `/v1/evaluate` calls against these Surfaces will return
+  `SURFACE_INACTIVE` until you approve them via
+  `POST /v1/controlplane/surfaces/{id}/approve`.
+- The bundle does **not** include `Agent`, `Profile`, or `Grant`
+  documents. Author those through the normal apply path. After your
+  Profile is approved (`POST /v1/controlplane/profiles/{id}/approve`),
+  evaluation against your Surface will succeed using your new Agent and
+  Grant.
+- Memory backend is rejected: memory state is per-process and would not
+  survive the command's exit.
+- Re-running the command refuses cleanly via a preflight check on a
+  bundle anchor capability, so it cannot accidentally accumulate
+  pending-review Surface or Profile versions.
+
+This is a structural quickstart plus guided next steps — not a
+"one command from install to evaluation" path. Authority artefact
+authorship and surface approval remain explicit governance steps.
+
 Retrieve the full governance envelope:
 
 ```bash
