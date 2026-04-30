@@ -201,6 +201,11 @@ This is a structural quickstart plus guided next steps — not a
 "one command from install to evaluation" path. Authority artefact
 authorship and surface approval remain explicit governance steps.
 
+For an end-to-end walkthrough that takes a fresh Postgres install
+through quickstart, Surface approval, Agent/Profile/Grant authoring,
+Profile approval, and a successful `/v1/evaluate` call, see
+[docs/guides/quickstart-first-evaluation.md](guides/quickstart-first-evaluation.md).
+
 Retrieve the full governance envelope:
 
 ```bash

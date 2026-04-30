@@ -168,7 +168,8 @@ Full variable reference: [docs/operations/deployment.md](docs/operations/deploym
 
 | Document | Contents |
 |----------|----------|
-| [docs/getting-started.md](docs/getting-started.md) | Prerequisites, quickstart, first evaluation walkthrough |
+| [docs/getting-started.md](docs/getting-started.md) | Prerequisites, install paths, memory-mode first evaluation |
+| [docs/guides/quickstart-first-evaluation.md](docs/guides/quickstart-first-evaluation.md) | End-to-end Postgres walkthrough: `midas init quickstart` → Surface approval → Agent/Profile/Grant → Profile approval → `/v1/evaluate` |
 | [docs/explorer.md](docs/explorer.md) | Explorer sandbox: usage, endpoints, auth, envelope inspector |
 | [docs/control-plane.md](docs/control-plane.md) | Apply, plan, surface lifecycle, versioning |
 | [docs/core/authority-model.md](docs/core/authority-model.md) | Surfaces, profiles, grants, the authority chain |
