@@ -105,7 +105,8 @@ auth:
 # local_iam:
 #   enabled: true
 #   session_ttl: 8h
-#   secure_cookies: false   # set true in production behind TLS
+#   secure_cookies: true    # required by production profile
+#   # secure_cookies: false # use only for local HTTP development
 
 # ---------------------------------------------------------------------------
 # Platform OIDC — enable for enterprise SSO via Entra ID or Google Workspace.

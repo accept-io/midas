@@ -97,6 +97,10 @@ midas:
     enabled: false
     sessionTtl: "8h"
     # secureCookies: MUST be true when running behind TLS (Ingress or LoadBalancer).
+    # Production-profile deployments fail config validation if localIam.enabled is
+    # true and this is false (see internal/config/validator.go ValidateSemantic).
+    # The chart default remains false to keep local kind/minikube installs working
+    # over plain HTTP; flip to true for any TLS-fronted deployment.
     secureCookies: false
 
   observability:

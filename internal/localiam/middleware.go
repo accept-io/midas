@@ -69,6 +69,11 @@ func EnforceMustChangePassword(next http.Handler) http.Handler {
 }
 
 // SetSessionCookie writes the session cookie to the response.
+//
+// The Secure attribute is sourced from config. Production-profile deployments
+// require it to be true via config.ValidateSemantic when local_iam.enabled is
+// true; local HTTP development keeps it false so browsers round-trip the
+// cookie over plain HTTP.
 func (s *Service) SetSessionCookie(w http.ResponseWriter, sessionID string, expiresAt time.Time) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     SessionCookieName,
@@ -76,12 +81,16 @@ func (s *Service) SetSessionCookie(w http.ResponseWriter, sessionID string, expi
 		Expires:  expiresAt,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   s.cfg.SecureCookies,
-		Path:     "/",
+		// Production-profile deployments require this to be true via config validation.
+		Secure: s.cfg.SecureCookies,
+		Path:   "/",
 	})
 }
 
 // clearCookie clears the session cookie by setting MaxAge = -1.
+//
+// The Secure attribute mirrors SetSessionCookie so set and clear pairs stay
+// coherent across deployment modes.
 func (s *Service) clearCookie(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     SessionCookieName,
@@ -89,8 +98,9 @@ func (s *Service) clearCookie(w http.ResponseWriter) {
 		MaxAge:   -1,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   s.cfg.SecureCookies,
-		Path:     "/",
+		// Production-profile deployments require this to be true via config validation.
+		Secure: s.cfg.SecureCookies,
+		Path:   "/",
 	})
 }
 

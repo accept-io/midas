@@ -86,7 +86,7 @@ These values **must** be supplied for a functional production deployment:
 | `midas.store.backend` | `postgres` | Store backend: `memory` or `postgres` |
 | `midas.auth.mode` | `required` | Auth mode: `open` (dev) or `required` (production) |
 | `midas.localIam.enabled` | `false` | Enable Local IAM for browser-based login |
-| `midas.localIam.secureCookies` | `false` | **MUST be `true` when running behind TLS** |
+| `midas.localIam.secureCookies` | `false` | **MUST be `true` when running behind TLS.** Production-profile deployments fail config validation at startup if `localIam.enabled` is `true` and this is `false`. |
 | `midas.observability.logLevel` | `info` | Log level: `debug`, `info`, `warn`, `error` |
 | `midas.observability.logFormat` | `json` | Log format: `json` or `text` |
 | `midas.dev.seedDemoData` | `false` | Seed demonstration surfaces and agents at startup |
@@ -227,7 +227,7 @@ MIDAS provides distinct endpoints for liveness and readiness. The liveness probe
 ## Limitations and current scope
 
 - **No ingress** — add an Ingress resource separately if external access is required
-- **No TLS termination** — terminate TLS at an ingress controller or load balancer; set `midas.localIam.secureCookies=true` when doing so
+- **No TLS termination** — terminate TLS at an ingress controller or load balancer; set `midas.localIam.secureCookies=true` when doing so. Production-profile deployments enforce this via config validation.
 - **No HPA** — autoscaling is not configured
 - **No Prometheus ServiceMonitor** — metrics endpoint is not yet part of the MIDAS feature set
 - **No bundled database** — provision Postgres externally

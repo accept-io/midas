@@ -145,9 +145,124 @@ func TestValidateSemantic_ProductionValid(t *testing.T) {
 	cfg.Store.DSN = "postgres://x:y@host/db"
 	cfg.Auth.Mode = AuthModeRequired
 	cfg.Auth.Tokens = []TokenEntry{{Token: "tok", Principal: "user:admin", Roles: "admin"}}
+	cfg.LocalIAM.SecureCookies = true
 
 	if err := ValidateSemantic(cfg); err != nil {
 		t.Errorf("valid production config failed: %v", err)
+	}
+}
+
+// productionBaseConfig returns a Config that satisfies every production-profile
+// requirement except those each Local-IAM secure-cookies test deliberately
+// mutates. Tests built from this baseline isolate the secure_cookies rule from
+// the existing postgres / auth-mode / token rules.
+func productionBaseConfig() Config {
+	cfg := DefaultConfig()
+	cfg.Profile = ProfileProduction
+	cfg.Store.Backend = "postgres"
+	cfg.Store.DSN = "postgres://x:y@host/db"
+	cfg.Auth.Mode = AuthModeRequired
+	cfg.Auth.Tokens = []TokenEntry{{Token: "tok", Principal: "user:admin", Roles: "admin"}}
+	return cfg
+}
+
+// hasFieldError reports whether ve carries a ValidationError for the named field.
+func hasFieldError(err error, field string) bool {
+	ve, ok := err.(ValidationErrors)
+	if !ok {
+		return false
+	}
+	for _, e := range ve {
+		if e.Field == field {
+			return true
+		}
+	}
+	return false
+}
+
+// Case A: production + local_iam.enabled=true + secure_cookies=false → must
+// fail with an error on field "local_iam.secure_cookies".
+func TestValidateSemantic_ProductionRequiresSecureCookies_WhenLocalIAMEnabled(t *testing.T) {
+	cfg := productionBaseConfig()
+	cfg.LocalIAM.Enabled = true
+	cfg.LocalIAM.SecureCookies = false
+
+	err := ValidateSemantic(cfg)
+	if err == nil {
+		t.Fatal("want error: production profile with local_iam.enabled and secure_cookies=false")
+	}
+	if !hasFieldError(err, "local_iam.secure_cookies") {
+		t.Errorf("want ValidationError on local_iam.secure_cookies, got: %v", err)
+	}
+}
+
+// Case B: production + local_iam.enabled=true + secure_cookies=true → no error
+// from the secure_cookies rule.
+func TestValidateSemantic_ProductionAllowsSecureCookiesTrue(t *testing.T) {
+	cfg := productionBaseConfig()
+	cfg.LocalIAM.Enabled = true
+	cfg.LocalIAM.SecureCookies = true
+
+	if err := ValidateSemantic(cfg); err != nil {
+		t.Errorf("valid production config with secure_cookies=true failed: %v", err)
+	}
+}
+
+// Case C: production + local_iam.enabled=false + secure_cookies=false → no
+// error: a headless production deployment writes no Local IAM cookies, so the
+// rule does not fire.
+func TestValidateSemantic_ProductionLocalIAMDisabled_DoesNotRequireSecureCookies(t *testing.T) {
+	cfg := productionBaseConfig()
+	cfg.LocalIAM.Enabled = false
+	cfg.LocalIAM.SecureCookies = false
+
+	if err := ValidateSemantic(cfg); err != nil {
+		t.Errorf("production with local_iam.enabled=false should pass regardless of secure_cookies: %v", err)
+	}
+}
+
+// Case D: dev profile + local_iam.enabled=true + secure_cookies=false → no
+// error: the rule is scoped to the production profile so local HTTP
+// development is unaffected.
+func TestValidateSemantic_DevProfile_DoesNotRequireSecureCookies(t *testing.T) {
+	cfg := DefaultConfig() // ProfileDev by default
+	cfg.LocalIAM.Enabled = true
+	cfg.LocalIAM.SecureCookies = false
+
+	err := ValidateSemantic(cfg)
+	if err != nil {
+		t.Errorf("dev profile with secure_cookies=false should pass: %v", err)
+	}
+	if hasFieldError(err, "local_iam.secure_cookies") {
+		t.Errorf("dev profile must not raise local_iam.secure_cookies error: %v", err)
+	}
+}
+
+// TestDefaultConfig_LocalIAM_DevPosture locks in the documented defaulting
+// contract: DefaultConfig returns a dev-profile configuration whose Local IAM
+// posture supports local HTTP login. SecureCookies is intentionally false at
+// this layer so a binary launched with no midas.yaml works on
+// http://localhost:8080 (browsers do not round-trip Secure cookies over plain
+// HTTP). Production-profile deployments are required to flip SecureCookies to
+// true via ValidateSemantic — the test cases above lock in that path.
+//
+// If a future change flips the default to true, this test will fail and force
+// a deliberate decision about the local-quickstart experience rather than
+// drifting silently. See internal/config/validator.go for the production rule
+// and docs/guides/authentication.md for the local-HTTP rationale.
+func TestDefaultConfig_LocalIAM_DevPosture(t *testing.T) {
+	cfg := DefaultConfig()
+
+	if cfg.Profile != ProfileDev {
+		t.Errorf("DefaultConfig().Profile: want %q (dev profile is the documented default), got %q", ProfileDev, cfg.Profile)
+	}
+	if !cfg.LocalIAM.Enabled {
+		t.Errorf("DefaultConfig().LocalIAM.Enabled: want true (out-of-box Explorer login), got false")
+	}
+	if cfg.LocalIAM.SecureCookies {
+		t.Errorf("DefaultConfig().LocalIAM.SecureCookies: want false " +
+			"(dev profile supports local HTTP; production validator enforces true). " +
+			"If this default is being flipped, update the test, the docs, and verify the local quickstart still works on http://localhost.")
 	}
 }
 

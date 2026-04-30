@@ -157,6 +157,15 @@ func ValidateSemantic(cfg Config) error {
 				`production profile requires "required"`,
 			})
 		}
+		// Local IAM cookies must carry the Secure attribute in production. The
+		// rule is gated on local_iam.enabled because a headless production
+		// deployment writes no Local IAM cookies.
+		if cfg.LocalIAM.Enabled && !cfg.LocalIAM.SecureCookies {
+			errs = append(errs, ValidationError{
+				"local_iam.secure_cookies",
+				`production profile requires "true" when local_iam.enabled is true`,
+			})
+		}
 	}
 
 	// Required auth needs at least one token.

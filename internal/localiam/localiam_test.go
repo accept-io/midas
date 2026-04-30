@@ -2,6 +2,8 @@ package localiam
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -413,5 +415,114 @@ func TestSeedDemoUser_NoOp_WhenUserExists(t *testing.T) {
 	n, _ := svc.users.Count(ctx)
 	if n != 2 { // admin + demo
 		t.Errorf("want exactly 2 users after 2 SeedDemoUser calls, got %d", n)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Cookie attributes
+//
+// These tests lock in the contract between Config.SecureCookies and the
+// Secure attribute on the session cookie. The same flag drives the set and
+// clear paths; the asserted attributes (HttpOnly, SameSite, Path) are common
+// to both modes and are checked here so a regression on any one of them
+// would surface alongside the Secure regression.
+//
+// Production-profile deployments are required by config.ValidateSemantic to
+// set SecureCookies=true when local_iam.enabled=true; the false path is
+// preserved for local HTTP development only. See ADR / docs/guides/authentication.md.
+// ---------------------------------------------------------------------------
+
+func cookieServiceWithSecure(secure bool) *Service {
+	users := &memUserRepo{byID: map[string]*User{}, byUsername: map[string]*User{}}
+	sessions := &memSessionRepo{items: map[string]*Session{}}
+	return NewService(users, sessions, Config{SessionTTL: time.Hour, SecureCookies: secure})
+}
+
+// findSessionCookie returns the Set-Cookie entry for the session cookie, or
+// fails the test if the cookie is absent.
+func findSessionCookie(t *testing.T, w *httptest.ResponseRecorder) *http.Cookie {
+	t.Helper()
+	for _, c := range w.Result().Cookies() {
+		if c.Name == SessionCookieName {
+			return c
+		}
+	}
+	t.Fatalf("session cookie %q not found in response (got %v)", SessionCookieName, w.Result().Cookies())
+	return nil
+}
+
+func TestSetSessionCookie_SecureTrue_SetsSecureAttribute(t *testing.T) {
+	svc := cookieServiceWithSecure(true)
+	w := httptest.NewRecorder()
+
+	svc.SetSessionCookie(w, "session-id-1", time.Now().Add(time.Hour))
+
+	c := findSessionCookie(t, w)
+	if !c.Secure {
+		t.Errorf("Secure: want true when cfg.SecureCookies=true, got false")
+	}
+	if !c.HttpOnly {
+		t.Errorf("HttpOnly: want true, got false")
+	}
+	if c.SameSite != http.SameSiteLaxMode {
+		t.Errorf("SameSite: want Lax, got %v", c.SameSite)
+	}
+	if c.Path != "/" {
+		t.Errorf("Path: want \"/\", got %q", c.Path)
+	}
+	if c.Value != "session-id-1" {
+		t.Errorf("Value: want \"session-id-1\", got %q", c.Value)
+	}
+}
+
+// SecureCookies=false is the documented local-HTTP development posture.
+// Browsers will not round-trip Secure cookies over plain HTTP, so the local
+// quickstart deliberately opts out. Production-profile deployments are
+// rejected at config validation; see internal/config/validator.go.
+func TestSetSessionCookie_SecureFalse_OmitsSecureForLocalHTTP(t *testing.T) {
+	svc := cookieServiceWithSecure(false)
+	w := httptest.NewRecorder()
+
+	svc.SetSessionCookie(w, "session-id-2", time.Now().Add(time.Hour))
+
+	c := findSessionCookie(t, w)
+	if c.Secure {
+		t.Errorf("Secure: want false when cfg.SecureCookies=false (local HTTP development), got true")
+	}
+	if !c.HttpOnly {
+		t.Errorf("HttpOnly: want true, got false")
+	}
+}
+
+func TestClearSessionCookie_SecureTrue_MirrorsSetPath(t *testing.T) {
+	svc := cookieServiceWithSecure(true)
+	w := httptest.NewRecorder()
+
+	svc.ClearSessionCookie(w)
+
+	c := findSessionCookie(t, w)
+	if !c.Secure {
+		t.Errorf("Secure: want true when cfg.SecureCookies=true, got false (set/clear must be symmetric)")
+	}
+	if c.MaxAge != -1 {
+		t.Errorf("MaxAge: want -1 (clear), got %d", c.MaxAge)
+	}
+	if !c.HttpOnly {
+		t.Errorf("HttpOnly: want true, got false")
+	}
+}
+
+func TestClearSessionCookie_SecureFalse_MirrorsSetPath(t *testing.T) {
+	svc := cookieServiceWithSecure(false)
+	w := httptest.NewRecorder()
+
+	svc.ClearSessionCookie(w)
+
+	c := findSessionCookie(t, w)
+	if c.Secure {
+		t.Errorf("Secure: want false when cfg.SecureCookies=false, got true (set/clear must be symmetric)")
+	}
+	if c.MaxAge != -1 {
+		t.Errorf("MaxAge: want -1 (clear), got %d", c.MaxAge)
 	}
 }
