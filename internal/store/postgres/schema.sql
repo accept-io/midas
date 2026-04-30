@@ -576,6 +576,102 @@ CREATE INDEX IF NOT EXISTS idx_authority_grants_delegation_depth
     ON authority_grants (delegation_depth);
 
 -- =============================================================================
+-- GOVERNANCE EXPECTATIONS
+-- =============================================================================
+-- governance_expectations: declared coverage rules for Governance Coverage
+-- Assurance (GCA). An expectation says "in this scope, when these conditions
+-- match the arriving decision, this Surface is the one that should have
+-- governed it."
+--
+-- Versioned (id, version) like authority_profiles. References to structural
+-- entities are by logical ID, not version-pinned, matching the envelope
+-- structural snapshot pattern (ADR-0001):
+--   - scope_id is interpreted according to scope_kind (process_id /
+--     business_service_id / capability_id) but is not FK-enforced; the
+--     matching engine resolves by logical ID at evaluation time.
+--   - required_surface_id is the logical Surface ID; not version-pinned.
+--
+-- condition_payload_json is per-type opaque JSONB. The condition_type
+-- discriminator is a closed enum (CHECK below); per-type payload validation
+-- is the matching engine's responsibility.
+
+CREATE TABLE IF NOT EXISTS governance_expectations (
+    -- Composite logical-version key
+    id      TEXT    NOT NULL,
+    version INTEGER NOT NULL,
+
+    -- Scope: where this expectation applies. Logical IDs only; no FK.
+    scope_kind TEXT NOT NULL,
+    scope_id   TEXT NOT NULL,
+
+    -- The Surface that should have governed an arriving decision when
+    -- this expectation's conditions match in its scope. Logical ID; not
+    -- version-pinned. No FK because decision_surfaces is keyed by
+    -- (id, version) — same posture as authority_profiles.surface_id.
+    required_surface_id TEXT NOT NULL,
+
+    -- Identity / docs
+    name        TEXT NOT NULL,
+    description TEXT,
+
+    -- Lifecycle (mirrors authority_profiles)
+    status          TEXT        NOT NULL,
+    effective_date  TIMESTAMPTZ NOT NULL,
+    effective_until TIMESTAMPTZ,
+    retired_at      TIMESTAMPTZ,
+
+    -- Condition (typed discriminator + JSONB payload)
+    condition_type         TEXT  NOT NULL,
+    condition_payload_json JSONB NOT NULL DEFAULT '{}',
+
+    -- Ownership
+    business_owner  TEXT NOT NULL,
+    technical_owner TEXT NOT NULL,
+
+    -- Timestamps
+    created_at  TIMESTAMPTZ NOT NULL,
+    updated_at  TIMESTAMPTZ NOT NULL,
+    created_by  TEXT,
+    approved_by TEXT,
+    approved_at TIMESTAMPTZ,
+
+    PRIMARY KEY (id, version),
+
+    CONSTRAINT chk_governance_expectations_status
+        CHECK (status IN ('draft', 'review', 'active', 'deprecated', 'retired')),
+
+    CONSTRAINT chk_governance_expectations_scope_kind
+        CHECK (scope_kind IN ('process', 'business_service', 'capability')),
+
+    CONSTRAINT chk_governance_expectations_condition_type
+        CHECK (condition_type IN ('risk_condition')),
+
+    CONSTRAINT chk_governance_expectations_effective_dates
+        CHECK (effective_until IS NULL OR effective_until > effective_date),
+
+    CONSTRAINT chk_governance_expectations_retired_at
+        CHECK (retired_at IS NULL OR retired_at >= effective_date),
+
+    CONSTRAINT chk_governance_expectations_approval_fields
+        CHECK (
+            (status IN ('draft', 'review') AND approved_at IS NULL)
+            OR (status IN ('active', 'deprecated', 'retired'))
+        )
+);
+
+CREATE INDEX IF NOT EXISTS idx_governance_expectations_id_version_desc
+    ON governance_expectations (id, version DESC);
+
+CREATE INDEX IF NOT EXISTS idx_governance_expectations_scope
+    ON governance_expectations (scope_kind, scope_id);
+
+CREATE INDEX IF NOT EXISTS idx_governance_expectations_required_surface_id
+    ON governance_expectations (required_surface_id);
+
+CREATE INDEX IF NOT EXISTS idx_governance_expectations_status
+    ON governance_expectations (status);
+
+-- =============================================================================
 -- OPERATIONAL ENVELOPES
 -- =============================================================================
 -- Denormalized authority-chain identifiers are stored as top-level columns for:

@@ -214,6 +214,11 @@ func newRepositories(db sqltx.DBTX) (*store.Repositories, error) {
 		return nil, err
 	}
 
+	governanceExpectations, err := NewGovernanceExpectationRepo(db)
+	if err != nil {
+		return nil, err
+	}
+
 	return &store.Repositories{
 		Capabilities:                caps,
 		Processes:                   procs,
@@ -230,6 +235,6 @@ func newRepositories(db sqltx.DBTX) (*store.Repositories, error) {
 		LocalSessions:               localSessions,
 		BusinessServices:            businessServices,
 		BusinessServiceCapabilities: bsCaps,
+		GovernanceExpectations:      governanceExpectations,
 	}, nil
 }
-

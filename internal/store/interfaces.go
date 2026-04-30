@@ -10,6 +10,7 @@ import (
 	"github.com/accept-io/midas/internal/capability"
 	"github.com/accept-io/midas/internal/controlaudit"
 	"github.com/accept-io/midas/internal/envelope"
+	"github.com/accept-io/midas/internal/governanceexpectation"
 	"github.com/accept-io/midas/internal/localiam"
 	"github.com/accept-io/midas/internal/outbox"
 	"github.com/accept-io/midas/internal/process"
@@ -41,4 +42,10 @@ type Repositories struct {
 	Processes                   process.ProcessRepository
 	BusinessServices            businessservice.BusinessServiceRepository
 	BusinessServiceCapabilities businessservicecapability.BusinessServiceCapabilityRepository
+
+	// GovernanceExpectations is the repository for declared
+	// governance-coverage rules (Issue #51). Used by the matching engine
+	// added in a later issue. Nil-safe: emission/lookup sites must check
+	// for nil before use, matching the convention for other newer repos.
+	GovernanceExpectations governanceexpectation.Repository
 }

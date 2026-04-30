@@ -13,6 +13,7 @@ import (
 	"github.com/accept-io/midas/internal/businessservicecapability"
 	"github.com/accept-io/midas/internal/capability"
 	"github.com/accept-io/midas/internal/envelope"
+	"github.com/accept-io/midas/internal/governanceexpectation"
 	"github.com/accept-io/midas/internal/outbox"
 	"github.com/accept-io/midas/internal/process"
 	"github.com/accept-io/midas/internal/store"
@@ -609,6 +610,7 @@ func NewRepositories() *store.Repositories {
 		Processes:                   procs,
 		BusinessServices:            bsvcs,
 		BusinessServiceCapabilities: bscRepo,
+		GovernanceExpectations:      NewGovernanceExpectationRepo(),
 	}
 }
 
@@ -621,3 +623,4 @@ var _ capability.CapabilityRepository = (*CapabilityRepo)(nil)
 var _ process.ProcessRepository = (*ProcessRepo)(nil)
 var _ businessservice.BusinessServiceRepository = (*BusinessServiceRepo)(nil)
 var _ businessservicecapability.BusinessServiceCapabilityRepository = (*BusinessServiceCapabilityRepo)(nil)
+var _ governanceexpectation.Repository = (*GovernanceExpectationRepo)(nil)
