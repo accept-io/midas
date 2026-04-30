@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
 
+# Least-privilege token: the workflow only reads source via actions/checkout
+# and runs Go tests. It does not write to the repository, post comments,
+# upload artifacts, publish packages, create releases, or upload SARIF.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
