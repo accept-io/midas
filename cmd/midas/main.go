@@ -22,6 +22,7 @@ import (
 	"github.com/accept-io/midas/internal/controlplane/apply"
 	"github.com/accept-io/midas/internal/controlplane/approval"
 	"github.com/accept-io/midas/internal/decision"
+	"github.com/accept-io/midas/internal/governancecoverage"
 	"github.com/accept-io/midas/internal/httpapi"
 	"github.com/accept-io/midas/internal/identity"
 	"github.com/accept-io/midas/internal/localiam"
@@ -152,6 +153,16 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	// Governance Coverage Assurance (#54): wire the matching service so
+	// the orchestrator emits GOVERNANCE_CONDITION_DETECTED runtime audit
+	// events when an active GovernanceExpectation matches an evaluation
+	// context. Coverage emission is observational and never alters
+	// outcomes; the wiring is additive and safe to enable on any
+	// deployment that has the GovernanceExpectations repository
+	// configured (#51B + #52 already do).
+	coverageSvc := governancecoverage.NewService(repos.GovernanceExpectations)
+	orchestrator = orchestrator.WithCoverageService(coverageSvc)
 
 	// Transaction runner for the control-plane apply executor. When the
 	// store backend is postgres we adapt *postgres.Store.WithTx into an

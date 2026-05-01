@@ -17,6 +17,7 @@ import (
 	"github.com/accept-io/midas/internal/authority"
 	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/eval"
+	"github.com/accept-io/midas/internal/governancecoverage"
 	"github.com/accept-io/midas/internal/outbox"
 	"github.com/accept-io/midas/internal/policy"
 	"github.com/accept-io/midas/internal/store"
@@ -162,6 +163,15 @@ type Orchestrator struct {
 	metrics    EvaluationRecorder
 	clock      Clock
 	policyMode string // detected once at construction via PolicyModer interface
+
+	// coverage is optional. When non-nil, the orchestrator queries the
+	// GovernanceExpectation matching service after structural resolution
+	// and emits one GOVERNANCE_CONDITION_DETECTED audit event per match.
+	// Wired in production via WithCoverageService; left nil in tests
+	// that don't exercise coverage emission and in deployments that
+	// have not opted in. Coverage emission is observational and never
+	// alters the evaluation outcome.
+	coverage *governancecoverage.Service
 }
 
 // NewOrchestrator constructs an Orchestrator with a real clock.
@@ -205,6 +215,24 @@ func NewOrchestratorWithClock(
 		clock:      clock,
 		policyMode: policyMode,
 	}, nil
+}
+
+// WithCoverageService injects the GovernanceExpectation matching
+// service. When non-nil, the orchestrator queries the service after
+// structural resolution during Evaluate and emits one
+// GOVERNANCE_CONDITION_DETECTED runtime audit event per match.
+//
+// The method is a builder: it mutates the receiver and returns it for
+// chaining. Existing call sites that do not opt in keep their
+// constructors and call shapes unchanged — coverage emission is
+// strictly additive. Passing nil disables emission.
+//
+// Coverage emission is observational only. A nil coverage service, a
+// repository error from the service, or a matcher producing zero
+// matches all leave the evaluation outcome and reason code unchanged.
+func (o *Orchestrator) WithCoverageService(svc *governancecoverage.Service) *Orchestrator {
+	o.coverage = svc
+	return o
 }
 
 // ---------------------------------------------------------------------------
@@ -545,6 +573,27 @@ func (o *Orchestrator) evaluate(
 		"business_service_id", bsSnap.ID,
 		"enabling_capability_count", len(capSnaps),
 	)
+
+	// Step 1.6: Governance Coverage Assurance (#54).
+	//
+	// If a coverage service is wired, query it for active GovernanceExpectations
+	// under the resolved Process scope and queue one observational audit event
+	// per match. Coverage emission is purely observational: it never changes
+	// the outcome, never alters the decision flow, and never fails the
+	// evaluation. A repository error logs at warn level and the loop is
+	// skipped — see #54's recommended error policy.
+	//
+	// Idempotency: this site sits after the orchestrator's exact-replay
+	// short-circuit (line ~470), so replays return early before reaching
+	// this code and never re-emit coverage events.
+	if err := o.emitCoverageEvents(ctx, acc, env, req, procSnap.ID, now); err != nil {
+		// emitCoverageEvents itself already swallows operational errors
+		// (repo failures, matcher failures) and logs them. A non-nil
+		// return here means an audit-queue invariant was violated — that
+		// is a programmer error, propagate it as a system failure rather
+		// than silently dropping it.
+		return EvaluationResult{}, err
+	}
 
 	// Step 2: Agent
 	a, outcome, reason, err := o.resolveAgent(ctx, repos.Agents, req.AgentID)

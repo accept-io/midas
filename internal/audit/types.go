@@ -35,6 +35,18 @@ const (
 	AuditEventConsequenceChecked     AuditEventType = "CONSEQUENCE_CHECKED"
 	AuditEventPolicyEvaluated        AuditEventType = "POLICY_EVALUATED"
 
+	// AuditEventGovernanceConditionDetected records that an active
+	// GovernanceExpectation matched the runtime input during evaluation.
+	// It is the runtime-evidence event for Governance Coverage Assurance
+	// (#54). Emitted via acc.recordObservation; payload carries the
+	// expectation identity (id, version), the structural anchor
+	// (process_id, required_surface_id), the condition discriminator
+	// (condition_type), and a typed risk-shape summary of the matched
+	// input. Multiple matches in the same evaluation produce multiple
+	// events in matcher-sorted order. Idempotent replay does not
+	// re-emit (orchestrator short-circuits before queueing events).
+	AuditEventGovernanceConditionDetected AuditEventType = "GOVERNANCE_CONDITION_DETECTED"
+
 	// ---------------------------------------------------------------------------
 	// Deprecated — retained for backward compatibility with existing audit rows
 	// and integrity_test.go stubs. New code must not emit this event type.
