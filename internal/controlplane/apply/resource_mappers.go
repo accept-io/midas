@@ -99,11 +99,18 @@ func mapProfileDocumentToAuthorityProfile(doc types.ProfileDocument, now time.Ti
 		ConfidenceThreshold:  doc.Spec.Authority.DecisionConfidenceThreshold,
 		ConsequenceThreshold: consequence,
 		PolicyReference:      strings.TrimSpace(doc.Spec.Policy.Reference),
-		FailMode:             failMode,
-		RequiredContextKeys:  append([]string(nil), doc.Spec.InputRequirements.RequiredContext...),
-		CreatedAt:            now,
-		UpdatedAt:            now,
-		CreatedBy:            strings.TrimSpace(createdBy),
+		// EscalationMode default: profiles created via control-plane apply
+		// default to auto-escalation. The YAML document type does not
+		// expose escalation_mode today; manual escalation is reachable via
+		// direct domain construction. Without this default, AuthorityProfile.EscalationMode
+		// would be the empty string and Postgres' chk_profiles_escalation_mode
+		// CHECK (auto|manual) would reject the row on Create.
+		EscalationMode:      authority.EscalationModeAuto,
+		FailMode:            failMode,
+		RequiredContextKeys: append([]string(nil), doc.Spec.InputRequirements.RequiredContext...),
+		CreatedAt:           now,
+		UpdatedAt:           now,
+		CreatedBy:           strings.TrimSpace(createdBy),
 	}, nil
 }
 

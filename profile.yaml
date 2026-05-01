@@ -1,0 +1,20 @@
+﻿apiVersion: midas.accept.io/v1
+kind: Profile
+metadata:
+  id: profile-quickstart-credit-assess
+  name: Quickstart Credit-Assess Profile
+spec:
+  surface_id: surf-v2-credit-assess
+  authority:
+    decision_confidence_threshold: 0.85
+    consequence_threshold:
+      type: risk_rating
+      risk_rating: high
+  policy:
+    reference: quickstart-credit-policy
+    escalation_mode: manual
+    fail_mode: closed
+  lifecycle:
+    status: active
+    effective_from: "2026-01-01T00:00:00Z"
+    version: 1

@@ -1,0 +1,41 @@
+﻿apiVersion: midas.accept.io/v1
+kind: Agent
+metadata:
+  id: agent-quickstart-demo
+  name: Quickstart Demo Agent
+spec:
+  type: automation
+  status: active
+---
+apiVersion: midas.accept.io/v1
+kind: Profile
+metadata:
+  id: profile-quickstart-credit-assess
+  name: Quickstart Credit-Assess Profile
+spec:
+  surface_id: surf-v2-credit-assess
+  authority:
+    decision_confidence_threshold: 0.85
+    consequence_threshold:
+      type: financial
+      amount: 5000
+      currency: GBP
+  policy:
+    reference: quickstart-credit-policy
+    fail_mode: closed
+  lifecycle:
+    status: active
+    effective_from: "2026-01-01T00:00:00Z"
+    version: 1
+---
+apiVersion: midas.accept.io/v1
+kind: Grant
+metadata:
+  id: grant-quickstart-credit-assess
+spec:
+  agent_id: agent-quickstart-demo
+  profile_id: profile-quickstart-credit-assess
+  granted_by: user:admin
+  granted_at: "2026-01-01T00:00:00Z"
+  effective_from: "2026-01-01T00:00:00Z"
+  status: active

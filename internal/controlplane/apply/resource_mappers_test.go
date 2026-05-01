@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/accept-io/midas/internal/agent"
+	"github.com/accept-io/midas/internal/authority"
 	"github.com/accept-io/midas/internal/controlplane/types"
 )
 
@@ -181,4 +182,62 @@ func TestMapSurfaceDocument_ProcessID(t *testing.T) {
 			t.Errorf("ProcessID = %q, want empty string", ds.ProcessID)
 		}
 	})
+}
+
+// TestMapProfileDocumentToAuthorityProfile_DefaultsEscalationModeAuto pins the
+// behaviour required to keep Profile apply working against Postgres. The YAML
+// document type does not expose escalation_mode today; without a mapper-side
+// default, AuthorityProfile.EscalationMode would be "" and Postgres'
+// chk_profiles_escalation_mode CHECK (auto|manual) would reject the row on
+// Create. The fix is the smallest possible: default to auto in the mapper.
+//
+// Manual escalation through YAML is intentionally out of scope here — the
+// document type extension is tracked separately. This test pins the default
+// so a future YAML schema change cannot silently regress the apply path.
+func TestMapProfileDocumentToAuthorityProfile_DefaultsEscalationModeAuto(t *testing.T) {
+	now := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+
+	doc := types.ProfileDocument{
+		APIVersion: types.APIVersionV1,
+		Kind:       types.KindProfile,
+		Metadata: types.DocumentMetadata{
+			ID:   "profile-mapper-default-test",
+			Name: "Mapper Default Test Profile",
+		},
+		Spec: types.ProfileSpec{
+			SurfaceID: "surf-mapper-default-test",
+			Authority: types.ProfileAuthority{
+				DecisionConfidenceThreshold: 0.85,
+				ConsequenceThreshold: types.ConsequenceThreshold{
+					Type:     "monetary",
+					Amount:   1000,
+					Currency: "GBP",
+				},
+			},
+			Policy: types.ProfilePolicy{
+				Reference: "rego://test/auto",
+				FailMode:  "closed",
+			},
+			Lifecycle: types.ProfileLifecycle{
+				Status:        "active",
+				EffectiveFrom: "2026-01-01T00:00:00Z",
+				Version:       1,
+			},
+		},
+	}
+
+	p, err := mapProfileDocumentToAuthorityProfile(doc, now, "tester", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if p == nil {
+		t.Fatal("mapper returned nil profile")
+	}
+	if p.EscalationMode != authority.EscalationModeAuto {
+		t.Errorf("EscalationMode = %q, want %q (Postgres CHECK requires auto|manual)",
+			p.EscalationMode, authority.EscalationModeAuto)
+	}
+	if p.EscalationMode == "" {
+		t.Errorf("EscalationMode is empty — would fail chk_profiles_escalation_mode on apply")
+	}
 }
