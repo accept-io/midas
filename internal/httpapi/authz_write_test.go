@@ -13,6 +13,7 @@ import (
 	"github.com/accept-io/midas/internal/authz"
 	"github.com/accept-io/midas/internal/config"
 	cpTypes "github.com/accept-io/midas/internal/controlplane/types"
+	"github.com/accept-io/midas/internal/governanceexpectation"
 	"github.com/accept-io/midas/internal/identity"
 	"github.com/accept-io/midas/internal/surface"
 )
@@ -70,6 +71,14 @@ func writeTestServer(t *testing.T) *Server {
 		},
 		deprecateProfileFn: func(_ context.Context, id string, _ int, _ string) (*authority.AuthorityProfile, error) {
 			return &authority.AuthorityProfile{ID: id, Status: authority.ProfileStatusDeprecated}, nil
+		},
+		approveGovernanceExpectationFn: func(_ context.Context, id string, version int, approvedBy string) (*governanceexpectation.GovernanceExpectation, error) {
+			return &governanceexpectation.GovernanceExpectation{
+				ID:         id,
+				Version:    version,
+				Status:     governanceexpectation.ExpectationStatusActive,
+				ApprovedBy: approvedBy,
+			}, nil
 		},
 	}
 	mockGrants := &mockGrantLifecycleService{
@@ -138,6 +147,8 @@ spec:
 			`{"version":1,"approved_by":"user:x"}`, authz.PermProfileApprove},
 		{"profile-deprecate", http.MethodPost, "/v1/controlplane/profiles/prof-1/deprecate", "application/json",
 			`{"version":1,"deprecated_by":"user:x"}`, authz.PermProfileDeprecate},
+		{"governanceexpectation-approve", http.MethodPost, "/v1/controlplane/expectations/expect-1/approve", "application/json",
+			`{"version":1,"approved_by":"user:x"}`, authz.PermGovernanceExpectationApprove},
 		{"grant-suspend", http.MethodPost, "/v1/controlplane/grants/g1/suspend", "application/json",
 			`{"suspended_by":"user:x","reason":"test"}`, authz.PermGrantSuspend},
 		{"grant-revoke", http.MethodPost, "/v1/controlplane/grants/g1/revoke", "application/json",
@@ -223,8 +234,9 @@ func TestWriteEndpoints_GovernanceApprover_NarrowScope(t *testing.T) {
 	srv := writeTestServer(t)
 
 	allowed := map[string]bool{
-		"surface-approve": true,
-		"profile-approve": true,
+		"surface-approve":               true,
+		"profile-approve":               true,
+		"governanceexpectation-approve": true,
 	}
 
 	for _, ep := range writeEndpoints() {
@@ -317,15 +329,29 @@ func TestWriteEndpoints_OpenMode_BypassesPermission(t *testing.T) {
 		},
 	}
 	mockApproval := &mockApprovalService{
-		approveSurfaceFn:   func(_ context.Context, id string, _, _ identity.Principal) (*surface.DecisionSurface, error) { return &surface.DecisionSurface{ID: id, Status: surface.SurfaceStatusActive}, nil },
-		deprecateSurfaceFn: func(_ context.Context, id string, _, _, _ string) (*surface.DecisionSurface, error) { return &surface.DecisionSurface{ID: id, Status: surface.SurfaceStatusDeprecated}, nil },
-		approveProfileFn:   func(_ context.Context, id string, _ int, _ string) (*authority.AuthorityProfile, error) { return &authority.AuthorityProfile{ID: id, Status: authority.ProfileStatusActive}, nil },
-		deprecateProfileFn: func(_ context.Context, id string, _ int, _ string) (*authority.AuthorityProfile, error) { return &authority.AuthorityProfile{ID: id, Status: authority.ProfileStatusDeprecated}, nil },
+		approveSurfaceFn: func(_ context.Context, id string, _, _ identity.Principal) (*surface.DecisionSurface, error) {
+			return &surface.DecisionSurface{ID: id, Status: surface.SurfaceStatusActive}, nil
+		},
+		deprecateSurfaceFn: func(_ context.Context, id string, _, _, _ string) (*surface.DecisionSurface, error) {
+			return &surface.DecisionSurface{ID: id, Status: surface.SurfaceStatusDeprecated}, nil
+		},
+		approveProfileFn: func(_ context.Context, id string, _ int, _ string) (*authority.AuthorityProfile, error) {
+			return &authority.AuthorityProfile{ID: id, Status: authority.ProfileStatusActive}, nil
+		},
+		deprecateProfileFn: func(_ context.Context, id string, _ int, _ string) (*authority.AuthorityProfile, error) {
+			return &authority.AuthorityProfile{ID: id, Status: authority.ProfileStatusDeprecated}, nil
+		},
 	}
 	mockGrants := &mockGrantLifecycleService{
-		suspendGrantFn:   func(_ context.Context, id, _, _ string) (*authority.AuthorityGrant, error) { return &authority.AuthorityGrant{ID: id, Status: authority.GrantStatusSuspended}, nil },
-		revokeGrantFn:    func(_ context.Context, id, _, _ string) (*authority.AuthorityGrant, error) { return &authority.AuthorityGrant{ID: id, Status: authority.GrantStatusRevoked}, nil },
-		reinstateGrantFn: func(_ context.Context, id, _ string) (*authority.AuthorityGrant, error) { return &authority.AuthorityGrant{ID: id, Status: authority.GrantStatusActive}, nil },
+		suspendGrantFn: func(_ context.Context, id, _, _ string) (*authority.AuthorityGrant, error) {
+			return &authority.AuthorityGrant{ID: id, Status: authority.GrantStatusSuspended}, nil
+		},
+		revokeGrantFn: func(_ context.Context, id, _, _ string) (*authority.AuthorityGrant, error) {
+			return &authority.AuthorityGrant{ID: id, Status: authority.GrantStatusRevoked}, nil
+		},
+		reinstateGrantFn: func(_ context.Context, id, _ string) (*authority.AuthorityGrant, error) {
+			return &authority.AuthorityGrant{ID: id, Status: authority.GrantStatusActive}, nil
+		},
 	}
 	srv := NewServerFull(&mockOrchestrator{}, mockCP, mockApproval, nil, nil, mockGrants).
 		WithAuthMode(config.AuthModeOpen)
@@ -649,9 +675,15 @@ func writeTestServerWithAuthenticator(t *testing.T, authn auth.Authenticator) *S
 		},
 	}
 	mockGrants := &mockGrantLifecycleService{
-		suspendGrantFn:   func(_ context.Context, id, _, _ string) (*authority.AuthorityGrant, error) { return &authority.AuthorityGrant{ID: id, Status: authority.GrantStatusSuspended}, nil },
-		revokeGrantFn:    func(_ context.Context, id, _, _ string) (*authority.AuthorityGrant, error) { return &authority.AuthorityGrant{ID: id, Status: authority.GrantStatusRevoked}, nil },
-		reinstateGrantFn: func(_ context.Context, id, _ string) (*authority.AuthorityGrant, error) { return &authority.AuthorityGrant{ID: id, Status: authority.GrantStatusActive}, nil },
+		suspendGrantFn: func(_ context.Context, id, _, _ string) (*authority.AuthorityGrant, error) {
+			return &authority.AuthorityGrant{ID: id, Status: authority.GrantStatusSuspended}, nil
+		},
+		revokeGrantFn: func(_ context.Context, id, _, _ string) (*authority.AuthorityGrant, error) {
+			return &authority.AuthorityGrant{ID: id, Status: authority.GrantStatusRevoked}, nil
+		},
+		reinstateGrantFn: func(_ context.Context, id, _ string) (*authority.AuthorityGrant, error) {
+			return &authority.AuthorityGrant{ID: id, Status: authority.GrantStatusActive}, nil
+		},
 	}
 	return NewServerFull(&mockOrchestrator{}, mockCP, mockApproval, nil, nil, mockGrants).
 		WithAuthMode(config.AuthModeRequired).

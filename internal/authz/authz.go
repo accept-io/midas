@@ -64,16 +64,17 @@ const (
 // maker–checker separation (approve vs deprecate, suspend vs revoke vs
 // reinstate) that the prior role-gated model already enforced.
 const (
-	PermSurfaceApprove   Permission = "surface:approve"
-	PermSurfaceDeprecate Permission = "surface:deprecate"
-	PermProfileApprove   Permission = "profile:approve"
-	PermProfileDeprecate Permission = "profile:deprecate"
-	PermGrantSuspend     Permission = "grant:suspend"
-	PermGrantRevoke      Permission = "grant:revoke"
-	PermGrantReinstate   Permission = "grant:reinstate"
+	PermSurfaceApprove               Permission = "surface:approve"
+	PermSurfaceDeprecate             Permission = "surface:deprecate"
+	PermProfileApprove               Permission = "profile:approve"
+	PermProfileDeprecate             Permission = "profile:deprecate"
+	PermGrantSuspend                 Permission = "grant:suspend"
+	PermGrantRevoke                  Permission = "grant:revoke"
+	PermGrantReinstate               Permission = "grant:reinstate"
+	PermGovernanceExpectationApprove Permission = "governanceexpectation:approve"
 )
 
-// allControlPlaneWritePermissions is the canonical 18-permission set that
+// allControlPlaneWritePermissions is the canonical 19-permission set that
 // platform.admin expands to. Declared as a slice so tests can iterate the
 // full matrix; exposed as a copy via AllControlPlaneWritePermissions.
 //
@@ -98,6 +99,7 @@ var allControlPlaneWritePermissions = []Permission{
 	PermSurfaceDeprecate,
 	PermProfileApprove,
 	PermProfileDeprecate,
+	PermGovernanceExpectationApprove,
 	PermGrantSuspend,
 	PermGrantRevoke,
 	PermGrantReinstate,
@@ -125,9 +127,15 @@ var roleBundles = map[string][]Permission{
 	identity.RolePlatformAdmin: append([]Permission(nil), allControlPlaneWritePermissions...),
 
 	// Maker–checker: approver can approve, cannot deprecate, cannot write.
+	// PermGovernanceExpectationApprove is granted here to mirror the
+	// existing surface/profile approver pattern. The corresponding
+	// PermGovernanceExpectationWrite is intentionally NOT in this
+	// bundle: write is authoring (admin-only); approve is the
+	// maker-checker counterparty (granted to the approver role).
 	identity.RoleGovernanceApprover: {
 		PermSurfaceApprove,
 		PermProfileApprove,
+		PermGovernanceExpectationApprove,
 	},
 
 	// Operator, viewer, and reviewer hold no control-plane write permissions

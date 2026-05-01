@@ -447,6 +447,16 @@ components:
         deprecated_by:
           type: string
 
+    ApproveGovernanceExpectationRequest:
+      type: object
+      required: [version, approved_by]
+      properties:
+        version:
+          type: integer
+          minimum: 1
+        approved_by:
+          type: string
+
     GrantLifecycleRequest:
       type: object
       properties:
@@ -1515,6 +1525,75 @@ paths:
                 $ref: "#/components/schemas/Error"
         "404":
           description: Profile not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/controlplane/expectations/{id}/approve:
+    post:
+      operationId: approveGovernanceExpectation
+      summary: Approve a GovernanceExpectation version in review state
+      description: >
+        Transitions a specific GovernanceExpectation version from review to
+        active. After approval the matcher (#53) considers the expectation
+        when emitting GOVERNANCE_CONDITION_DETECTED runtime audit events.
+        Requires platform.admin or governance.approver role.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApproveGovernanceExpectationRequest"
+      responses:
+        "200":
+          description: GovernanceExpectation approved
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [expectation_id, version, status, approved_by]
+                properties:
+                  expectation_id:
+                    type: string
+                  version:
+                    type: integer
+                  status:
+                    type: string
+                  approved_by:
+                    type: string
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: GovernanceExpectation not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Expectation is not in review state
           content:
             application/json:
               schema:

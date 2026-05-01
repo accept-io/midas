@@ -12,7 +12,7 @@ import (
 // T1 — Permission inventory and naming discipline
 // ---------------------------------------------------------------------------
 
-// TestAllControlPlaneWritePermissions_Count guards the v1 18-permission
+// TestAllControlPlaneWritePermissions_Count guards the v1 19-permission
 // invariant. The v1 service-led model removed PermProcessCapabilityWrite
 // and PermProcessBusinessServiceWrite alongside the obsolete
 // ProcessCapability and ProcessBusinessService Kinds (ADR-XXX),
@@ -20,13 +20,15 @@ import (
 // new BusinessServiceCapability junction Kind, and removed
 // PermControlplanePromote and PermControlplaneCleanup with the inference
 // subsystem. Issue #52 added PermGovernanceExpectationWrite to gate the
-// new GovernanceExpectation Kind. Adding or removing a permission
-// requires updating this count deliberately, which forces a review of
-// the corresponding platform.admin bundle.
+// new GovernanceExpectation Kind; issue #57 added
+// PermGovernanceExpectationApprove for the approval lifecycle endpoint.
+// Adding or removing a permission requires updating this count
+// deliberately, which forces a review of the corresponding
+// platform.admin bundle.
 func TestAllControlPlaneWritePermissions_Count(t *testing.T) {
 	got := authz.AllControlPlaneWritePermissions()
-	if len(got) != 18 {
-		t.Errorf("want 18 control-plane write permissions, got %d", len(got))
+	if len(got) != 19 {
+		t.Errorf("want 19 control-plane write permissions, got %d", len(got))
 	}
 }
 
@@ -102,11 +104,19 @@ func TestPlatformAdmin_IsNotWildcard(t *testing.T) {
 }
 
 // TestGovernanceApprover_ExactScope fixes the approver bundle to exactly
-// the two approve permissions. Widening it (e.g. adding deprecate) would
-// regress the maker–checker split the prior role model enforced.
+// the three approve permissions (surface, profile, governance
+// expectation — the latter added by #57). Widening it to cover
+// deprecate or write actions would regress the maker–checker split the
+// prior role model enforced. PermGovernanceExpectationWrite is
+// deliberately NOT in this bundle: write is authoring (admin-only);
+// approve is the maker-checker counterparty.
 func TestGovernanceApprover_ExactScope(t *testing.T) {
 	got := authz.PermissionsForRole(identity.RoleGovernanceApprover)
-	want := []authz.Permission{authz.PermSurfaceApprove, authz.PermProfileApprove}
+	want := []authz.Permission{
+		authz.PermSurfaceApprove,
+		authz.PermProfileApprove,
+		authz.PermGovernanceExpectationApprove,
+	}
 	if len(got) != len(want) {
 		t.Fatalf("governance.approver bundle size: want %d, got %d (%v)", len(want), len(got), got)
 	}
@@ -117,6 +127,10 @@ func TestGovernanceApprover_ExactScope(t *testing.T) {
 		}
 	}
 	// Explicit denials — one representative permission per category.
+	// PermGovernanceExpectationWrite is in the denial set to pin the
+	// #57 asymmetry: governance.approver gets *approve* on
+	// GovernanceExpectations but never *write*. Authoring stays
+	// admin-only.
 	p := &identity.Principal{Roles: []string{identity.RoleGovernanceApprover}}
 	for _, denied := range []authz.Permission{
 		authz.PermSurfaceDeprecate,
@@ -128,6 +142,7 @@ func TestGovernanceApprover_ExactScope(t *testing.T) {
 		authz.PermGrantReinstate,
 		authz.PermSurfaceWrite,
 		authz.PermProfileWrite,
+		authz.PermGovernanceExpectationWrite,
 	} {
 		if authz.HasPermission(p, denied) {
 			t.Errorf("governance.approver must not hold %q", denied)

@@ -60,6 +60,13 @@ const (
 	// ActionGovernanceExpectationVersioned is emitted when a subsequent
 	// governance expectation version (>1) is applied.
 	ActionGovernanceExpectationVersioned Action = "governance_expectation.versioned"
+
+	// ActionGovernanceExpectationApproved is emitted when a governance
+	// expectation transitions from review to active via the approval
+	// lifecycle endpoint (#57). The record carries actor + (id, version)
+	// — enough to reconstruct "who approved which version of which
+	// expectation when".
+	ActionGovernanceExpectationApproved Action = "governance_expectation.approved"
 )
 
 // ResourceKind mirrors the control-plane document kinds to avoid a circular import.
@@ -312,6 +319,21 @@ func NewGovernanceExpectationVersionedRecord(actor, expectationID string, versio
 		expectationID,
 		intPtr(version),
 		"governance expectation versioned: "+expectationID+" v"+itoa(version),
+		nil,
+	)
+}
+
+// NewGovernanceExpectationApprovedRecord builds a record for a
+// governance expectation approval (review → active transition).
+// Mirrors NewProfileApprovedRecord in shape and naming.
+func NewGovernanceExpectationApprovedRecord(actor, expectationID string, version int) *ControlAuditRecord {
+	return newRecord(
+		actor,
+		ActionGovernanceExpectationApproved,
+		ResourceKindGovernanceExpectation,
+		expectationID,
+		intPtr(version),
+		"governance expectation approved: "+expectationID+" v"+itoa(version),
 		nil,
 	)
 }

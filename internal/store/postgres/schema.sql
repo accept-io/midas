@@ -957,9 +957,18 @@ CREATE TABLE IF NOT EXISTS controlplane_audit_events (
                          'profile.deprecated',
                          'grant.suspended',
                          'grant.revoked',
-                         'grant.reinstated'
+                         'grant.reinstated',
+                         -- Governance Coverage Assurance lifecycle (#52, #57).
+                         -- These were declared as Go constants by #52 but
+                         -- omitted from the CHECK list — combined with the
+                         -- best-effort error swallow in appendControlAudit
+                         -- (per ADR-041b), the records silently failed to
+                         -- persist on Postgres until #57 added them here.
+                         'governance_expectation.created',
+                         'governance_expectation.versioned',
+                         'governance_expectation.approved'
                      )),
-    resource_kind    TEXT        NOT NULL CHECK (resource_kind IN ('surface', 'profile', 'agent', 'grant')),
+    resource_kind    TEXT        NOT NULL CHECK (resource_kind IN ('surface', 'profile', 'agent', 'grant', 'governance_expectation')),
     resource_id      TEXT        NOT NULL,
     resource_version INTEGER,
     summary          TEXT        NOT NULL,

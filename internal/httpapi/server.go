@@ -29,10 +29,11 @@ import (
 	"github.com/accept-io/midas/internal/decision"
 	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/eval"
+	"github.com/accept-io/midas/internal/governanceexpectation"
 	"github.com/accept-io/midas/internal/identity"
-	"github.com/accept-io/midas/internal/process"
 	"github.com/accept-io/midas/internal/localiam"
 	"github.com/accept-io/midas/internal/oidc"
+	"github.com/accept-io/midas/internal/process"
 	"github.com/accept-io/midas/internal/surface"
 	"github.com/accept-io/midas/internal/value"
 )
@@ -70,6 +71,7 @@ type approvalService interface {
 	DeprecateSurface(ctx context.Context, surfaceID string, deprecatedBy string, reason string, successorID string) (*surface.DecisionSurface, error)
 	ApproveProfile(ctx context.Context, profileID string, version int, approvedBy string) (*authority.AuthorityProfile, error)
 	DeprecateProfile(ctx context.Context, profileID string, version int, deprecatedBy string) (*authority.AuthorityProfile, error)
+	ApproveGovernanceExpectation(ctx context.Context, expectationID string, version int, approvedBy string) (*governanceexpectation.GovernanceExpectation, error)
 }
 
 // introspectionService defines the read-only operator visibility contract.
@@ -143,30 +145,30 @@ type oidcProvider interface {
 }
 
 type Server struct {
-	mux                 *http.ServeMux
-	orchestrator        orchestrator
-	controlPlane        controlPlaneService
-	approval            approvalService
-	introspection       introspectionService
-	controlAudit        controlAuditService
-	grantLifecycle      grantLifecycleService
-	structural          structuralService
-	authenticator       auth.Authenticator
-	authMode            config.AuthMode              // set via WithAuthMode; must be called at startup with cfg.Auth.Mode
-	policyMode          string                       // e.g. "noop" — set via WithPolicyMeta at boot
-	policyEvaluatorName string                       // human-readable evaluator name for health responses
-	readyFn             func(context.Context) error  // nil means always ready (memory mode)
-	explorerEnabled      bool                         // set via WithExplorerEnabled; registers /explorer routes when true
-	storeBackend         string                       // e.g. "memory" or "postgres" — set via WithStoreBackend at boot
-	explorerDemoSeeded   *bool                        // nil = unknown, &true = seeded, &false = not seeded
-	seedDemoUser         bool                         // set via WithSeedDemoUser; mirrors cfg.Dev.SeedDemoUser
-	explorerOrchestrator orchestrator                 // isolated in-memory orchestrator for POST /explorer
-	localIAM             *localiam.Service            // nil when local IAM is disabled
-	oidcService          oidcProvider                 // nil when OIDC is disabled
-	secureCookiesFlag    bool                         // mirrors LocalIAM.SecureCookies; used by OIDC helper cookies
-	structuralMode       config.StructuralMode        // set via WithStructuralMode; empty/unset treated as permissive
-	explicitValidator    explicitModeValidator        // nil when explicit-mode validation is not wired
-	adminAudit           adminaudit.Repository        // nil when admin-audit is not wired (Issue #41)
+	mux                  *http.ServeMux
+	orchestrator         orchestrator
+	controlPlane         controlPlaneService
+	approval             approvalService
+	introspection        introspectionService
+	controlAudit         controlAuditService
+	grantLifecycle       grantLifecycleService
+	structural           structuralService
+	authenticator        auth.Authenticator
+	authMode             config.AuthMode             // set via WithAuthMode; must be called at startup with cfg.Auth.Mode
+	policyMode           string                      // e.g. "noop" — set via WithPolicyMeta at boot
+	policyEvaluatorName  string                      // human-readable evaluator name for health responses
+	readyFn              func(context.Context) error // nil means always ready (memory mode)
+	explorerEnabled      bool                        // set via WithExplorerEnabled; registers /explorer routes when true
+	storeBackend         string                      // e.g. "memory" or "postgres" — set via WithStoreBackend at boot
+	explorerDemoSeeded   *bool                       // nil = unknown, &true = seeded, &false = not seeded
+	seedDemoUser         bool                        // set via WithSeedDemoUser; mirrors cfg.Dev.SeedDemoUser
+	explorerOrchestrator orchestrator                // isolated in-memory orchestrator for POST /explorer
+	localIAM             *localiam.Service           // nil when local IAM is disabled
+	oidcService          oidcProvider                // nil when OIDC is disabled
+	secureCookiesFlag    bool                        // mirrors LocalIAM.SecureCookies; used by OIDC helper cookies
+	structuralMode       config.StructuralMode       // set via WithStructuralMode; empty/unset treated as permissive
+	explicitValidator    explicitModeValidator       // nil when explicit-mode validation is not wired
+	adminAudit           adminaudit.Repository       // nil when admin-audit is not wired (Issue #41)
 }
 
 type approveSurfaceRequest struct {
@@ -217,6 +219,25 @@ type deprecateProfileResponse struct {
 	Status    string `json:"status"`
 }
 
+// approveExpectationRequest mirrors approveProfileRequest's shape.
+// version is required; approved_by is body-supplied with
+// actorFromContext fallback at the handler.
+type approveExpectationRequest struct {
+	Version    int    `json:"version"`
+	ApprovedBy string `json:"approved_by"`
+}
+
+// approveExpectationResponse mirrors approveProfileResponse: id, version,
+// status, approved_by. approved_at is intentionally omitted to match
+// Profile's wire shape — callers can re-fetch the resource if they need
+// the timestamp; it's persisted on the row.
+type approveExpectationResponse struct {
+	ExpectationID string `json:"expectation_id"`
+	Version       int    `json:"version"`
+	Status        string `json:"status"`
+	ApprovedBy    string `json:"approved_by"`
+}
+
 // surfaceResponse is the wire format for GET /v1/surfaces/{id}.
 type surfaceResponse struct {
 	ID                 string     `json:"id"`
@@ -246,22 +267,22 @@ type surfaceVersionResponse struct {
 
 // profileResponse is one item in the GET /v1/profiles?surface_id={id} list.
 type profileResponse struct {
-	ID                   string     `json:"id"`
-	Version              int        `json:"version"`
-	SurfaceID            string     `json:"surface_id"`
-	Name                 string     `json:"name"`
-	Description          string     `json:"description,omitempty"`
-	Status               string     `json:"status"`
-	EffectiveDate        time.Time  `json:"effective_date"`
-	ConfidenceThreshold  float64    `json:"confidence_threshold"`
-	EscalationMode       string     `json:"escalation_mode"`
-	FailMode             string     `json:"fail_mode"`
-	PolicyReference      string     `json:"policy_reference,omitempty"`
-	RequiredContextKeys  []string   `json:"required_context_keys,omitempty"`
-	CreatedAt            time.Time  `json:"created_at"`
-	UpdatedAt            time.Time  `json:"updated_at"`
-	ApprovedBy           string     `json:"approved_by,omitempty"`
-	ApprovedAt           *time.Time `json:"approved_at,omitempty"`
+	ID                  string     `json:"id"`
+	Version             int        `json:"version"`
+	SurfaceID           string     `json:"surface_id"`
+	Name                string     `json:"name"`
+	Description         string     `json:"description,omitempty"`
+	Status              string     `json:"status"`
+	EffectiveDate       time.Time  `json:"effective_date"`
+	ConfidenceThreshold float64    `json:"confidence_threshold"`
+	EscalationMode      string     `json:"escalation_mode"`
+	FailMode            string     `json:"fail_mode"`
+	PolicyReference     string     `json:"policy_reference,omitempty"`
+	RequiredContextKeys []string   `json:"required_context_keys,omitempty"`
+	CreatedAt           time.Time  `json:"created_at"`
+	UpdatedAt           time.Time  `json:"updated_at"`
+	ApprovedBy          string     `json:"approved_by,omitempty"`
+	ApprovedAt          *time.Time `json:"approved_at,omitempty"`
 }
 
 // capabilityResponse is the wire format for GET /v1/capabilities/{id} and list items.
@@ -369,12 +390,12 @@ type impactProfileEntry struct {
 
 // impactGrantEntry is one grant in the impact grants section.
 type impactGrantEntry struct {
-	ID            string     `json:"id"`
-	AgentID       string     `json:"agent_id"`
-	ProfileID     string     `json:"profile_id"`
-	Status        string     `json:"status"`
-	GrantedBy     string     `json:"granted_by"`
-	EffectiveFrom time.Time  `json:"effective_from"`
+	ID             string     `json:"id"`
+	AgentID        string     `json:"agent_id"`
+	ProfileID      string     `json:"profile_id"`
+	Status         string     `json:"status"`
+	GrantedBy      string     `json:"granted_by"`
+	EffectiveFrom  time.Time  `json:"effective_from"`
 	EffectiveUntil *time.Time `json:"effective_until,omitempty"`
 }
 
@@ -731,6 +752,108 @@ func (s *Server) handleDeprecateProfile(w http.ResponseWriter, r *http.Request, 
 		ProfileID: updated.ID,
 		Version:   updated.Version,
 		Status:    string(updated.Status),
+	})
+}
+
+// ---------------------------------------------------------------------------
+// GovernanceExpectation Lifecycle Actions (#57)
+// ---------------------------------------------------------------------------
+//
+// Mirrors handleProfileActions: dispatches POST
+// /v1/controlplane/expectations/{id}/{action}. Today only the "approve"
+// action is shipped; "deprecate" routes through the default 404 branch
+// until a future issue adds it. The dispatcher shape is forward-
+// compatible — adding a new action means adding one case here.
+
+// handleExpectationActions dispatches POST /v1/controlplane/expectations/{id}/{action}.
+func (s *Server) handleExpectationActions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+
+	const prefix = "/v1/controlplane/expectations/"
+	if !strings.HasPrefix(r.URL.Path, prefix) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+
+	rest := strings.TrimPrefix(r.URL.Path, prefix)
+	parts := strings.Split(strings.Trim(rest, "/"), "/")
+	if len(parts) != 2 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+
+	expectationID := strings.TrimSpace(parts[0])
+	if expectationID == "" || !isValidIdentifier(expectationID) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid expectation id"})
+		return
+	}
+
+	action := parts[1]
+	switch action {
+	case "approve":
+		// governanceexpectation:approve — granted to governance.approver and
+		// platform.admin bundles. Mirrors profile:approve / surface:approve.
+		s.requirePermission(authz.PermGovernanceExpectationApprove)(func(w http.ResponseWriter, r *http.Request) {
+			s.handleApproveGovernanceExpectation(w, r, expectationID)
+		})(w, r)
+	default:
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+	}
+}
+
+// handleApproveGovernanceExpectation processes
+// POST /v1/controlplane/expectations/{id}/approve. It transitions a
+// GovernanceExpectation version from review to active status. Mirrors
+// handleApproveProfile in shape: strict JSON decode, version >= 1,
+// approved_by from authenticated principal with body fallback.
+func (s *Server) handleApproveGovernanceExpectation(w http.ResponseWriter, r *http.Request, expectationID string) {
+	if s.approval == nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "approval service not configured"})
+		return
+	}
+
+	rawBody, err := readRequestBody(w, r, maxRequestBodyBytes)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, errRequestBodyTooLarge) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		writeJSON(w, status, map[string]string{"error": err.Error()})
+		return
+	}
+
+	var req approveExpectationRequest
+	if err := decodeStrictJSON(rawBody, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	req.ApprovedBy = strings.TrimSpace(req.ApprovedBy)
+	approvedBy := actorFromContext(r.Context(), req.ApprovedBy)
+	if !isValidIdentifier(approvedBy) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "approved_by must be a valid identifier"})
+		return
+	}
+	if req.Version < 1 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "version must be >= 1"})
+		return
+	}
+
+	updated, err := s.approval.ApproveGovernanceExpectation(r.Context(), expectationID, req.Version, approvedBy)
+	if err != nil {
+		statusCode, errResp := mapApprovalError(err)
+		writeJSON(w, statusCode, errResp)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, approveExpectationResponse{
+		ExpectationID: updated.ID,
+		Version:       updated.Version,
+		Status:        string(updated.Status),
+		ApprovedBy:    updated.ApprovedBy,
 	})
 }
 
@@ -1098,6 +1221,7 @@ func (s *Server) routes() {
 	// Resource lifecycle — role enforcement applied per-action inside each dispatcher.
 	s.mux.HandleFunc("/v1/controlplane/surfaces/", s.requireAuth(s.handleSurfaceActions))
 	s.mux.HandleFunc("/v1/controlplane/profiles/", s.requireAuth(s.handleProfileActions))
+	s.mux.HandleFunc("/v1/controlplane/expectations/", s.requireAuth(s.handleExpectationActions))
 	s.mux.HandleFunc("/v1/controlplane/grants/", s.requireAuth(s.handleGrantActions))
 
 	// Operator introspection — platform.viewer or above.
@@ -2908,6 +3032,10 @@ func mapApprovalError(err error) (int, map[string]string) {
 		return http.StatusConflict, map[string]string{"error": err.Error()}
 	case errors.Is(err, approval.ErrProfileNotActive):
 		return http.StatusConflict, map[string]string{"error": err.Error()}
+	case errors.Is(err, approval.ErrGovernanceExpectationNotFound):
+		return http.StatusNotFound, map[string]string{"error": "governance expectation not found"}
+	case errors.Is(err, approval.ErrGovernanceExpectationNotInReview):
+		return http.StatusConflict, map[string]string{"error": err.Error()}
 	default:
 		return http.StatusInternalServerError, map[string]string{"error": err.Error()}
 	}
@@ -3100,17 +3228,17 @@ func (s *Server) handleListControlAudit(w http.ResponseWriter, r *http.Request) 
 
 // adminAuditEntryResponse is the wire format for a single admin-audit record.
 type adminAuditEntryResponse struct {
-	ID                 string            `json:"id"`
-	OccurredAt         time.Time         `json:"occurred_at"`
-	Action             string            `json:"action"`
-	Outcome            string            `json:"outcome"`
-	ActorType          string            `json:"actor_type"`
-	ActorID            string            `json:"actor_id,omitempty"`
-	TargetType         string            `json:"target_type,omitempty"`
-	TargetID           string            `json:"target_id,omitempty"`
-	RequestID          string            `json:"request_id,omitempty"`
-	ClientIP           string            `json:"client_ip,omitempty"`
-	RequiredPermission string            `json:"required_permission,omitempty"`
+	ID                 string              `json:"id"`
+	OccurredAt         time.Time           `json:"occurred_at"`
+	Action             string              `json:"action"`
+	Outcome            string              `json:"outcome"`
+	ActorType          string              `json:"actor_type"`
+	ActorID            string              `json:"actor_id,omitempty"`
+	TargetType         string              `json:"target_type,omitempty"`
+	TargetID           string              `json:"target_id,omitempty"`
+	RequestID          string              `json:"request_id,omitempty"`
+	ClientIP           string              `json:"client_ip,omitempty"`
+	RequiredPermission string              `json:"required_permission,omitempty"`
 	Details            *adminaudit.Details `json:"details,omitempty"`
 }
 

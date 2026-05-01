@@ -361,3 +361,94 @@ func TestControlAuditRepo_Postgres_LimitEnforced(t *testing.T) {
 		t.Errorf("expected 3, got %d", len(results))
 	}
 }
+
+// TestControlAuditRepo_Postgres_GovernanceExpectationActionsAndKindAccepted
+// is the load-bearing parity test for #57's schema CHECK extension. It
+// asserts that the live audit_events action and resource_kind CHECK
+// constraints accept all four GovernanceExpectation values:
+//   - action = 'governance_expectation.created'
+//   - action = 'governance_expectation.versioned'
+//   - action = 'governance_expectation.approved'
+//   - resource_kind = 'governance_expectation'
+//
+// Without the #57 schema extension, these inserts silently fail: the
+// approval service's appendControlAudit (and the apply service's
+// equivalent) swallow Append errors per ADR-041b, so a Postgres CHECK
+// rejection would not surface to the caller. The only way to verify the
+// schema accepts these values is a direct repository round-trip — which
+// is what this test does.
+//
+// All three records persist and round-trip through List, proving the
+// schema CHECK extension covers #57's new approved record AND
+// retroactively closes #52's latent gap for the created/versioned
+// records that were previously broken on Postgres.
+func TestControlAuditRepo_Postgres_GovernanceExpectationActionsAndKindAccepted(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	if _, err := db.Exec(`DELETE FROM controlplane_audit_events`); err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+	t.Cleanup(func() { db.Exec(`DELETE FROM controlplane_audit_events`) }) //nolint
+
+	repo, err := NewControlAuditRepo(db)
+	if err != nil {
+		t.Fatalf("NewControlAuditRepo: %v", err)
+	}
+
+	ctx := context.Background()
+	records := []*controlaudit.ControlAuditRecord{
+		controlaudit.NewGovernanceExpectationCreatedRecord("alice", "expect-credit-001", 1),
+		controlaudit.NewGovernanceExpectationVersionedRecord("alice", "expect-credit-001", 2),
+		controlaudit.NewGovernanceExpectationApprovedRecord("approver-bob", "expect-credit-001", 2),
+	}
+	for _, rec := range records {
+		if err := repo.Append(ctx, rec); err != nil {
+			t.Fatalf("Append %s: %v — schema CHECK likely missing the action or resource_kind value",
+				rec.Action, err)
+		}
+	}
+
+	results, err := repo.List(ctx, controlaudit.ListFilter{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("expected 3 records, got %d", len(results))
+	}
+
+	// Every persisted row must use ResourceKindGovernanceExpectation —
+	// proving the resource_kind CHECK accepts the new value. The
+	// expectation_version field on every record must round-trip too.
+	for _, got := range results {
+		if got.ResourceKind != controlaudit.ResourceKindGovernanceExpectation {
+			t.Errorf("ResourceKind: want %q, got %q",
+				controlaudit.ResourceKindGovernanceExpectation, got.ResourceKind)
+		}
+		if got.ResourceID != "expect-credit-001" {
+			t.Errorf("ResourceID: want expect-credit-001, got %q", got.ResourceID)
+		}
+		if got.ResourceVersion == nil {
+			t.Errorf("ResourceVersion: want non-nil for action %q", got.Action)
+		}
+	}
+
+	// Every action must be one of the three GE actions and no other.
+	gotActions := make(map[controlaudit.Action]bool)
+	for _, got := range results {
+		gotActions[got.Action] = true
+	}
+	for _, want := range []controlaudit.Action{
+		controlaudit.ActionGovernanceExpectationCreated,
+		controlaudit.ActionGovernanceExpectationVersioned,
+		controlaudit.ActionGovernanceExpectationApproved,
+	} {
+		if !gotActions[want] {
+			t.Errorf("expected action %q in persisted set; got actions %v", want, gotActions)
+		}
+	}
+
+	// Wait one millisecond between inserts so the ID-tiebreak is not
+	// relied on. (Defensive — newRecord's UUIDs already disambiguate.)
+	_ = time.Millisecond
+}

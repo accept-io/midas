@@ -20,6 +20,7 @@ import (
 	"github.com/accept-io/midas/internal/decision"
 	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/eval"
+	"github.com/accept-io/midas/internal/governanceexpectation"
 	"github.com/accept-io/midas/internal/identity"
 	"github.com/accept-io/midas/internal/surface"
 )
@@ -2628,10 +2629,11 @@ func TestPlanBundle_BundleDependency_DecisionSourceVisible(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 type mockApprovalService struct {
-	approveSurfaceFn   func(ctx context.Context, surfaceID string, submitter identity.Principal, approver identity.Principal) (*surface.DecisionSurface, error)
-	deprecateSurfaceFn func(ctx context.Context, surfaceID string, deprecatedBy string, reason string, successorID string) (*surface.DecisionSurface, error)
-	approveProfileFn   func(ctx context.Context, profileID string, version int, approvedBy string) (*authority.AuthorityProfile, error)
-	deprecateProfileFn func(ctx context.Context, profileID string, version int, deprecatedBy string) (*authority.AuthorityProfile, error)
+	approveSurfaceFn               func(ctx context.Context, surfaceID string, submitter identity.Principal, approver identity.Principal) (*surface.DecisionSurface, error)
+	deprecateSurfaceFn             func(ctx context.Context, surfaceID string, deprecatedBy string, reason string, successorID string) (*surface.DecisionSurface, error)
+	approveProfileFn               func(ctx context.Context, profileID string, version int, approvedBy string) (*authority.AuthorityProfile, error)
+	deprecateProfileFn             func(ctx context.Context, profileID string, version int, deprecatedBy string) (*authority.AuthorityProfile, error)
+	approveGovernanceExpectationFn func(ctx context.Context, expectationID string, version int, approvedBy string) (*governanceexpectation.GovernanceExpectation, error)
 }
 
 func (m *mockApprovalService) ApproveSurface(ctx context.Context, surfaceID string, submitter identity.Principal, approver identity.Principal) (*surface.DecisionSurface, error) {
@@ -2660,6 +2662,13 @@ func (m *mockApprovalService) DeprecateProfile(ctx context.Context, profileID st
 		return m.deprecateProfileFn(ctx, profileID, version, deprecatedBy)
 	}
 	return nil, fmt.Errorf("deprecateProfile not implemented")
+}
+
+func (m *mockApprovalService) ApproveGovernanceExpectation(ctx context.Context, expectationID string, version int, approvedBy string) (*governanceexpectation.GovernanceExpectation, error) {
+	if m.approveGovernanceExpectationFn != nil {
+		return m.approveGovernanceExpectationFn(ctx, expectationID, version, approvedBy)
+	}
+	return nil, fmt.Errorf("approveGovernanceExpectation not implemented")
 }
 
 // ---------------------------------------------------------------------------

@@ -8,19 +8,22 @@ import (
 
 	"github.com/accept-io/midas/internal/authority"
 	"github.com/accept-io/midas/internal/controlaudit"
+	"github.com/accept-io/midas/internal/governanceexpectation"
 	"github.com/accept-io/midas/internal/identity"
 	"github.com/accept-io/midas/internal/outbox"
 	"github.com/accept-io/midas/internal/surface"
 )
 
 var (
-	ErrSurfaceNotFound    = errors.New("surface not found")
-	ErrApprovalForbidden  = errors.New("approval forbidden")
-	ErrInvalidStatus      = errors.New("surface is not awaiting approval")
-	ErrInvalidTransition  = errors.New("transition not permitted")
-	ErrProfileNotFound    = errors.New("profile not found")
-	ErrProfileNotInReview = errors.New("profile is not in review state")
-	ErrProfileNotActive   = errors.New("profile is not in active state")
+	ErrSurfaceNotFound                  = errors.New("surface not found")
+	ErrApprovalForbidden                = errors.New("approval forbidden")
+	ErrInvalidStatus                    = errors.New("surface is not awaiting approval")
+	ErrInvalidTransition                = errors.New("transition not permitted")
+	ErrProfileNotFound                  = errors.New("profile not found")
+	ErrProfileNotInReview               = errors.New("profile is not in review state")
+	ErrProfileNotActive                 = errors.New("profile is not in active state")
+	ErrGovernanceExpectationNotFound    = errors.New("governance expectation not found")
+	ErrGovernanceExpectationNotInReview = errors.New("governance expectation is not in review state")
 )
 
 type SurfaceRepository interface {
@@ -34,6 +37,17 @@ type ProfileRepository interface {
 	Update(ctx context.Context, p *authority.AuthorityProfile) error
 }
 
+// ExpectationRepository is the minimal read/write interface required by
+// GovernanceExpectation lifecycle operations (#57). Mirrors
+// ProfileRepository in shape — versioned (id, version) lookup +
+// lifecycle/audit-only Update — because GovernanceExpectation's
+// versioning posture, narrow lifecycle graph, and Update field set all
+// match Profile's exactly.
+type ExpectationRepository interface {
+	FindByIDAndVersion(ctx context.Context, id string, version int) (*governanceexpectation.GovernanceExpectation, error)
+	Update(ctx context.Context, e *governanceexpectation.GovernanceExpectation) error
+}
+
 // Service orchestrates surface lifecycle governance: approval and deprecation.
 //
 // If an outbox.Repository is provided (via NewServiceWithOutbox), a surface.approved
@@ -44,11 +58,12 @@ type ProfileRepository interface {
 // If a controlaudit.Repository is provided, a control-plane audit record is
 // appended after each successful lifecycle transition.
 type Service struct {
-	repo         SurfaceRepository
-	profileRepo  ProfileRepository       // nil-safe: profile operations unavailable if nil
-	policy       Policy
-	outbox       outbox.Repository       // nil-safe: no event emitted if nil
-	controlAudit controlaudit.Repository // nil-safe: no audit record if nil
+	repo            SurfaceRepository
+	profileRepo     ProfileRepository     // nil-safe: profile operations unavailable if nil
+	expectationRepo ExpectationRepository // nil-safe: GE operations unavailable if nil
+	policy          Policy
+	outbox          outbox.Repository       // nil-safe: no event emitted if nil
+	controlAudit    controlaudit.Repository // nil-safe: no audit record if nil
 }
 
 // NewService constructs a Service without outbox emission. Existing callers
@@ -102,6 +117,20 @@ func NewServiceWithProfileAndOutbox(repo SurfaceRepository, profileRepo ProfileR
 		outbox:       outboxRepo,
 		controlAudit: controlAuditRepo,
 	}
+}
+
+// WithExpectationRepository injects the GovernanceExpectation
+// repository used by ApproveGovernanceExpectation (#57). When nil, GE
+// approval is unavailable — the method returns an error explaining the
+// repository is not configured. Returns the receiver for chaining,
+// matching the orchestrator's WithCoverageService pattern from #54.
+//
+// Existing call sites that don't opt in stay green: GE approval is
+// strictly additive over the surface/profile lifecycle the existing
+// constructors already wire.
+func (s *Service) WithExpectationRepository(repo ExpectationRepository) *Service {
+	s.expectationRepo = repo
+	return s
 }
 
 // appendControlAudit appends a control-plane audit record. It is a no-op when
@@ -401,6 +430,69 @@ func (s *Service) DeprecateProfile(ctx context.Context, profileID string, versio
 	}
 
 	s.appendControlAudit(ctx, controlaudit.NewProfileDeprecatedRecord(deprecatedBy, current.ID, current.Version))
+
+	return current, nil
+}
+
+// ApproveGovernanceExpectation promotes a GovernanceExpectation version
+// from review to active (#57). Mirrors ApproveProfile in shape —
+// versioned (id, version) lookup, CanTransitionTo gate, lifecycle/audit
+// fields persisted via the repository's narrow Update, control-audit
+// record emitted after a successful update.
+//
+// Only expectations in review status may be approved. Other states
+// return ErrGovernanceExpectationNotInReview (deprecated, retired, or
+// the unreachable draft / active states all share this error so the
+// HTTP layer can map the 409 uniformly).
+//
+// approvedBy is recorded on the row's ApprovedBy field. Tests and the
+// HTTP layer derive it from the authenticated principal (or a
+// body-supplied fallback) before calling this method — same posture as
+// ApproveProfile.
+//
+// No outbox event is emitted today; #57's brief defers it until a
+// downstream consumer exists. The control-audit record is the source of
+// truth for "this expectation was approved" until that consumer arrives.
+func (s *Service) ApproveGovernanceExpectation(
+	ctx context.Context,
+	id string,
+	version int,
+	approvedBy string,
+) (*governanceexpectation.GovernanceExpectation, error) {
+	if s.expectationRepo == nil {
+		return nil, fmt.Errorf("governance expectation repository not configured")
+	}
+
+	current, err := s.expectationRepo.FindByIDAndVersion(ctx, id, version)
+	if err != nil {
+		return nil, err
+	}
+	if current == nil {
+		return nil, ErrGovernanceExpectationNotFound
+	}
+
+	if !current.CanTransitionTo(governanceexpectation.ExpectationStatusActive) {
+		return nil, ErrGovernanceExpectationNotInReview
+	}
+
+	now := time.Now().UTC()
+	current.Status = governanceexpectation.ExpectationStatusActive
+	current.ApprovedBy = approvedBy
+	current.ApprovedAt = &now
+	current.UpdatedAt = now
+
+	// Defensive fallback mirroring ApproveProfile. The apply mapper
+	// (#52) always sets a non-zero EffectiveDate; this branch covers
+	// any future code path that bypasses apply.
+	if current.EffectiveDate.IsZero() {
+		current.EffectiveDate = now
+	}
+
+	if err := s.expectationRepo.Update(ctx, current); err != nil {
+		return nil, err
+	}
+
+	s.appendControlAudit(ctx, controlaudit.NewGovernanceExpectationApprovedRecord(approvedBy, current.ID, current.Version))
 
 	return current, nil
 }
