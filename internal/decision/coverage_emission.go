@@ -85,14 +85,40 @@ func (o *Orchestrator) emitCoverageEvents(
 	}
 
 	for _, m := range matches {
-		payload := buildGovernanceConditionDetectedPayload(m, req, processID)
+		// Always queue the detected event for the match.
 		if err := acc.recordObservation(
 			env.RequestSource(),
 			env.RequestID(),
 			audit.AuditEventGovernanceConditionDetected,
-			payload,
+			buildGovernanceConditionDetectedPayload(m, req, processID),
 		); err != nil {
 			return err
+		}
+
+		// Per #55: when the matched expectation's required surface
+		// differs from the surface this evaluation was actually for,
+		// queue a GOVERNANCE_COVERAGE_GAP event immediately after the
+		// detected event. The interleaved per-match emission keeps
+		// each match's facts adjacent in the audit chain, which makes
+		// replay analysis simpler than a grouped (all detected, then
+		// all gap) shape would.
+		//
+		// MVP correlation is same-evaluation only: the comparison
+		// happens with both observations in scope of the current
+		// orchestrator pass. There is no time-window correlation, no
+		// background reconciliation, and no bypass detection (a
+		// condition appearing on a path that never invokes
+		// /v1/evaluate produces no matcher invocation and therefore
+		// no gap event — see AuditEventGovernanceCoverageGap doc).
+		if m.RequiredSurfaceID != req.SurfaceID {
+			if err := acc.recordObservation(
+				env.RequestSource(),
+				env.RequestID(),
+				audit.AuditEventGovernanceCoverageGap,
+				buildGovernanceCoverageGapPayload(m, req, processID, env.ID()),
+			); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -110,18 +136,88 @@ func (o *Orchestrator) emitCoverageEvents(
 //     would risk leaking sensitive data into the hash-chained audit
 //     trail. Defer to a future typed-context contract.
 //
-// The "summary" sub-object follows the existing CONSEQUENCE_CHECKED
-// pattern (see appendConsequenceCheckedEvent): when req.Consequence is
-// nil we omit the consequence key entirely so a JSONB-path query like
-// `payload_json -> 'summary' ? 'consequence'` is true only when
-// consequence facts were actually present at evaluation time.
-// Including `consequence: {}` would create false positives for that
-// query shape and is the wrong shape for the audit consumer.
+// The "summary" sub-object is built by buildCoverageContextSummary so
+// that the GOVERNANCE_CONDITION_DETECTED and GOVERNANCE_COVERAGE_GAP
+// events for the same match carry byte-identical summary fields. Drift
+// between the two events' summary shapes would be a maintenance hazard
+// for #56's read model.
 func buildGovernanceConditionDetectedPayload(
 	m governancecoverage.Match,
 	req eval.DecisionRequest,
 	processID string,
 ) map[string]any {
+	return map[string]any{
+		"expectation_id":      m.ExpectationID,
+		"expectation_version": m.Version,
+		"process_id":          processID,
+		"required_surface_id": m.RequiredSurfaceID,
+		"condition_type":      string(m.ConditionType),
+		"summary":             buildCoverageContextSummary(req),
+	}
+}
+
+// buildGovernanceCoverageGapPayload constructs the audit-event payload
+// for a single coverage gap (#55). A gap is recorded when an active
+// GovernanceExpectation matches but the evaluation actually ran for a
+// different Surface — the expected Surface was not invoked.
+//
+// Two surface IDs disambiguate "what was expected" from "what actually
+// happened":
+//
+//   - missing_surface_id is the Surface the expectation required
+//     (m.RequiredSurfaceID); it carries the issue's "missing surface
+//     ID" label.
+//   - actual_surface_id is the Surface this evaluation was actually
+//     for (req.SurfaceID).
+//
+// The correlation_basis sub-object discriminates the MVP correlation
+// model. Today the only value is "same_evaluation" — both observations
+// (the matched condition and the surface mismatch) are produced inside
+// the same orchestrator pass, so elapsed time is meaningfully zero and
+// is deliberately omitted. The discriminator's `type` field gives
+// future correlation models (time_window, external_evidence) a stable
+// extension shape without restructuring the payload.
+//
+// summary is built by the shared buildCoverageContextSummary helper so
+// the gap and detected events for the same match carry byte-identical
+// summary fields.
+func buildGovernanceCoverageGapPayload(
+	m governancecoverage.Match,
+	req eval.DecisionRequest,
+	processID string,
+	envelopeID string,
+) map[string]any {
+	return map[string]any{
+		"expectation_id":      m.ExpectationID,
+		"expectation_version": m.Version,
+		"missing_surface_id":  m.RequiredSurfaceID,
+		"actual_surface_id":   req.SurfaceID,
+		"process_id":          processID,
+		"condition_type":      string(m.ConditionType),
+		"correlation_basis": map[string]any{
+			"type":           "same_evaluation",
+			"request_source": req.RequestSource,
+			"request_id":     req.RequestID,
+			"envelope_id":    envelopeID,
+		},
+		"summary": buildCoverageContextSummary(req),
+	}
+}
+
+// buildCoverageContextSummary returns the typed risk-shape summary
+// shared by the GOVERNANCE_CONDITION_DETECTED and
+// GOVERNANCE_COVERAGE_GAP events. Both events describe the same matched
+// condition; identical summary shape is required so #56's read model
+// can join them on a single canonical sub-object.
+//
+// Follows the existing CONSEQUENCE_CHECKED pattern (see
+// appendConsequenceCheckedEvent in orchestrator.go): when
+// req.Consequence is nil the consequence key is omitted entirely so a
+// JSONB-path query like `payload_json -> 'summary' ? 'consequence'` is
+// true only when consequence facts were actually present at evaluation
+// time. Including `consequence: {}` would create false positives for
+// that query shape and is the wrong shape for the audit consumer.
+func buildCoverageContextSummary(req eval.DecisionRequest) map[string]any {
 	summary := map[string]any{
 		"confidence": req.Confidence,
 	}
@@ -133,12 +229,5 @@ func buildGovernanceConditionDetectedPayload(
 			"risk_rating": string(req.Consequence.RiskRating),
 		}
 	}
-	return map[string]any{
-		"expectation_id":      m.ExpectationID,
-		"expectation_version": m.Version,
-		"process_id":          processID,
-		"required_surface_id": m.RequiredSurfaceID,
-		"condition_type":      string(m.ConditionType),
-		"summary":             summary,
-	}
+	return summary
 }

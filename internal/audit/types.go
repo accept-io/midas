@@ -47,6 +47,24 @@ const (
 	// re-emit (orchestrator short-circuits before queueing events).
 	AuditEventGovernanceConditionDetected AuditEventType = "GOVERNANCE_CONDITION_DETECTED"
 
+	// AuditEventGovernanceCoverageGap records that an active
+	// GovernanceExpectation matched but the evaluation was for a
+	// different Surface than the one the expectation required (#55).
+	// Emitted immediately after its sibling GOVERNANCE_CONDITION_DETECTED
+	// event in the same matcher loop, so each per-match group of events
+	// is adjacent in the audit chain. Payload includes the missing and
+	// actual surface IDs, a `correlation_basis` discriminator naming the
+	// MVP same-evaluation correlation model, and the same context
+	// summary shape as the detected event (built by a shared helper to
+	// guarantee byte-identical summary fields between the two events).
+	//
+	// Limitation: this event detects gaps within evaluations that do
+	// occur. It does NOT detect bypass — the case where a condition
+	// appears in a code path that never invokes /v1/evaluate at all.
+	// Bypass detection requires external condition-evidence ingestion
+	// and is deferred to a future issue.
+	AuditEventGovernanceCoverageGap AuditEventType = "GOVERNANCE_COVERAGE_GAP"
+
 	// ---------------------------------------------------------------------------
 	// Deprecated — retained for backward compatibility with existing audit rows
 	// and integrity_test.go stubs. New code must not emit this event type.

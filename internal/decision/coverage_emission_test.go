@@ -106,6 +106,31 @@ func coverageEventsFor(t *testing.T, st *fakeStore, envelopeID string) []*audit.
 	return out
 }
 
+// gapEventsFor extracts every GOVERNANCE_COVERAGE_GAP event for the
+// envelope, in audit-chain order.
+func gapEventsFor(t *testing.T, st *fakeStore, envelopeID string) []*audit.AuditEvent {
+	t.Helper()
+	all := auditEventsFor(t, st, envelopeID)
+	var out []*audit.AuditEvent
+	for _, ev := range all {
+		if ev.EventType == audit.AuditEventGovernanceCoverageGap {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
+// expectationRequiringSurface returns an active expectation whose
+// RequiredSurfaceID is the supplied surface (rather than the canonical
+// testSurfaceID). Used by gap-detection tests to construct the
+// surfaces-differ case without changing the request's actual SurfaceID
+// (which would break the rest of the resolution chain).
+func expectationRequiringSurface(id string, version int, requiredSurfaceID, payload string) *governanceexpectation.GovernanceExpectation {
+	e := activeExpectation(id, version, payload)
+	e.RequiredSurfaceID = requiredSurfaceID
+	return e
+}
+
 // ---------------------------------------------------------------------------
 // 1. Active matching expectation emits exactly one event.
 // 2. Event payload contains every required field including summary.
@@ -487,6 +512,455 @@ func TestCoverageEmission_NilConsequence_OmitsConsequenceKey(t *testing.T) {
 	}
 	if _, present := summary["confidence"]; !present {
 		t.Errorf("summary.confidence must always be present even when Consequence is nil")
+	}
+}
+
+// ===========================================================================
+// #55 — GOVERNANCE_COVERAGE_GAP gap-detection tests.
+//
+// All gap tests use expectationRequiringSurface to construct the
+// surfaces-differ case: the matched expectation requires a different
+// surface than the request's actual SurfaceID. The matcher's lifecycle
+// and scope filters are exercised in #54's existing tests above; the
+// gap-tests focus on the per-match surface comparison and the
+// interleaved emission shape introduced by #55.
+// ===========================================================================
+
+const otherSurfaceID = "surf-other-required"
+
+// ---------------------------------------------------------------------------
+// G1. Surfaces match → detected event emitted, no gap event.
+// (Re-pin of the matching-surface case so a future regression that
+// emits a spurious gap fails this test rather than the load-bearing
+// payload assertions.)
+// ---------------------------------------------------------------------------
+
+func TestCoverageGap_SurfacesMatch_NoGapEvent(t *testing.T) {
+	o, st, _ := orchestratorWithExpectations(t,
+		activeExpectation("ge-match-surface", 1, `{}`),
+	)
+
+	req := coverageRequest("req-gap-match")
+	result := evaluate1(t, o, req, buildPayload(t, req))
+
+	if got := coverageEventsFor(t, st, result.EnvelopeID); len(got) != 1 {
+		t.Errorf("want 1 detected event, got %d", len(got))
+	}
+	if got := gapEventsFor(t, st, result.EnvelopeID); len(got) != 0 {
+		t.Errorf("matching surfaces must produce no gap event; got %d", len(got))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// G2. Surfaces differ → detected event AND gap event emitted.
+// ---------------------------------------------------------------------------
+
+func TestCoverageGap_SurfacesDiffer_BothEventsEmitted(t *testing.T) {
+	o, st, _ := orchestratorWithExpectations(t,
+		expectationRequiringSurface("ge-gap", 1, otherSurfaceID, `{}`),
+	)
+
+	req := coverageRequest("req-gap-diff")
+	result := evaluate1(t, o, req, buildPayload(t, req))
+
+	if got := coverageEventsFor(t, st, result.EnvelopeID); len(got) != 1 {
+		t.Errorf("want 1 detected event, got %d", len(got))
+	}
+	gaps := gapEventsFor(t, st, result.EnvelopeID)
+	if len(gaps) != 1 {
+		t.Fatalf("want 1 gap event, got %d", len(gaps))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// G3. Multiple matches, mixed surfaces → interleaved per-match order.
+// Sequence numbers must show detected/gap pairs adjacent; the matcher's
+// lex-sorted output makes the ordering deterministic.
+// ---------------------------------------------------------------------------
+
+func TestCoverageGap_MultipleMatches_InterleavedPerMatchOrder(t *testing.T) {
+	// Three expectations: A (surfaces match), B (surfaces differ),
+	// C (surfaces match). Lex-sorted matcher output is A, B, C, so the
+	// resulting audit-chain coverage subset must be:
+	//   detected A, detected B, gap B, detected C
+	o, st, _ := orchestratorWithExpectations(t,
+		activeExpectation("ge-a", 1, `{}`),
+		expectationRequiringSurface("ge-b", 1, otherSurfaceID, `{}`),
+		activeExpectation("ge-c", 1, `{}`),
+	)
+
+	req := coverageRequest("req-gap-multi")
+	result := evaluate1(t, o, req, buildPayload(t, req))
+
+	all := auditEventsFor(t, st, result.EnvelopeID)
+	var coverageSubset []*audit.AuditEvent
+	for _, ev := range all {
+		if ev.EventType == audit.AuditEventGovernanceConditionDetected ||
+			ev.EventType == audit.AuditEventGovernanceCoverageGap {
+			coverageSubset = append(coverageSubset, ev)
+		}
+	}
+	if len(coverageSubset) != 4 {
+		t.Fatalf("want 4 coverage-subset events (3 detected + 1 gap), got %d", len(coverageSubset))
+	}
+
+	type want struct {
+		eventType audit.AuditEventType
+		expID     string
+	}
+	wantOrder := []want{
+		{audit.AuditEventGovernanceConditionDetected, "ge-a"},
+		{audit.AuditEventGovernanceConditionDetected, "ge-b"},
+		{audit.AuditEventGovernanceCoverageGap, "ge-b"},
+		{audit.AuditEventGovernanceConditionDetected, "ge-c"},
+	}
+	for i, w := range wantOrder {
+		got := coverageSubset[i]
+		if got.EventType != w.eventType {
+			t.Errorf("position %d: type got %q, want %q", i, got.EventType, w.eventType)
+		}
+		gotID, _ := got.Payload["expectation_id"].(string)
+		if gotID != w.expID {
+			t.Errorf("position %d: expectation_id got %q, want %q", i, gotID, w.expID)
+		}
+	}
+
+	// Sequence numbers must be contiguous within the coverage-subset
+	// (the accumulator preserves declaration order through
+	// flushEventsAndUpdate). Pinning this guards against a future
+	// shuffle that would break replay analysis.
+	for i := 1; i < len(coverageSubset); i++ {
+		if coverageSubset[i].SequenceNo != coverageSubset[i-1].SequenceNo+1 {
+			t.Errorf("non-contiguous sequence at coverage[%d]: got %d after %d",
+				i, coverageSubset[i].SequenceNo, coverageSubset[i-1].SequenceNo)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// G4. Gap payload contains every required field including the
+// correlation_basis discriminator with envelope_id, request_source,
+// request_id, and type=same_evaluation.
+// ---------------------------------------------------------------------------
+
+func TestCoverageGap_PayloadShape(t *testing.T) {
+	o, st, _ := orchestratorWithExpectations(t,
+		expectationRequiringSurface("ge-gap-shape", 5, otherSurfaceID,
+			`{"min_confidence": 0.5, "consequence_currency": "GBP"}`),
+	)
+
+	req := coverageRequest("req-gap-shape")
+	result := evaluate1(t, o, req, buildPayload(t, req))
+
+	gaps := gapEventsFor(t, st, result.EnvelopeID)
+	if len(gaps) != 1 {
+		t.Fatalf("want 1 gap event, got %d", len(gaps))
+	}
+	ev := gaps[0]
+
+	if ev.EnvelopeID != result.EnvelopeID {
+		t.Errorf("EnvelopeID: got %q, want %q", ev.EnvelopeID, result.EnvelopeID)
+	}
+	if ev.RequestSource != "test-source" {
+		t.Errorf("RequestSource: got %q", ev.RequestSource)
+	}
+	if ev.RequestID != "req-gap-shape" {
+		t.Errorf("RequestID: got %q", ev.RequestID)
+	}
+
+	wantPayload := map[string]any{
+		"expectation_id":      "ge-gap-shape",
+		"expectation_version": 5,
+		"missing_surface_id":  otherSurfaceID,
+		"actual_surface_id":   testSurfaceID,
+		"process_id":          testProcessID,
+		"condition_type":      "risk_condition",
+	}
+	for k, want := range wantPayload {
+		if !equalAny(ev.Payload[k], want) {
+			t.Errorf("payload[%q]: got %v (%T), want %v (%T)", k, ev.Payload[k], ev.Payload[k], want, want)
+		}
+	}
+
+	// correlation_basis discriminator + identifying fields.
+	cb, ok := ev.Payload["correlation_basis"].(map[string]any)
+	if !ok {
+		t.Fatalf("correlation_basis: want map, got %T", ev.Payload["correlation_basis"])
+	}
+	if cb["type"] != "same_evaluation" {
+		t.Errorf("correlation_basis.type: got %v, want same_evaluation", cb["type"])
+	}
+	if cb["request_source"] != "test-source" {
+		t.Errorf("correlation_basis.request_source: got %v", cb["request_source"])
+	}
+	if cb["request_id"] != "req-gap-shape" {
+		t.Errorf("correlation_basis.request_id: got %v", cb["request_id"])
+	}
+	if cb["envelope_id"] != result.EnvelopeID {
+		t.Errorf("correlation_basis.envelope_id: got %v, want %v", cb["envelope_id"], result.EnvelopeID)
+	}
+
+	// MVP correlation must NOT include elapsed_ms (zero would be
+	// misleading; Step 4 of the assessment commits to omitting it).
+	if _, present := cb["elapsed_ms"]; present {
+		t.Errorf("correlation_basis.elapsed_ms must be omitted in same_evaluation MVP; got %v", cb["elapsed_ms"])
+	}
+
+	// Summary must be populated and consistent with #54 shape.
+	summary, ok := ev.Payload["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("summary: want map, got %T", ev.Payload["summary"])
+	}
+	if !equalAny(summary["confidence"], 0.9) {
+		t.Errorf("summary.confidence: got %v", summary["confidence"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// G5. Detected and gap events for the same match carry byte-identical
+// summary sub-objects. This is the load-bearing test that pins the
+// shared buildCoverageContextSummary helper — drift between the two
+// summaries would be a #56 maintenance hazard.
+// ---------------------------------------------------------------------------
+
+func TestCoverageGap_SummaryByteIdentical(t *testing.T) {
+	o, st, _ := orchestratorWithExpectations(t,
+		expectationRequiringSurface("ge-summary-parity", 1, otherSurfaceID, `{}`),
+	)
+
+	req := coverageRequest("req-gap-summary")
+	result := evaluate1(t, o, req, buildPayload(t, req))
+
+	detected := coverageEventsFor(t, st, result.EnvelopeID)
+	gaps := gapEventsFor(t, st, result.EnvelopeID)
+	if len(detected) != 1 || len(gaps) != 1 {
+		t.Fatalf("want 1 detected and 1 gap; got %d / %d", len(detected), len(gaps))
+	}
+
+	// json.Marshal the two summary maps and compare byte-identically.
+	// reflect.DeepEqual would also work but byte-identity proves the
+	// JSONB representation will be identical too.
+	dSummary, dErr := json.Marshal(detected[0].Payload["summary"])
+	gSummary, gErr := json.Marshal(gaps[0].Payload["summary"])
+	if dErr != nil || gErr != nil {
+		t.Fatalf("marshal: detected err=%v gap err=%v", dErr, gErr)
+	}
+	if string(dSummary) != string(gSummary) {
+		t.Errorf("summary drift between detected and gap events:\n  detected=%s\n       gap=%s",
+			string(dSummary), string(gSummary))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// G6. Nil consequence: summary.consequence omitted from the gap
+// payload, exactly as it is from the detected payload.
+// ---------------------------------------------------------------------------
+
+func TestCoverageGap_NilConsequence_OmitsConsequenceKey(t *testing.T) {
+	o, st, _ := orchestratorWithExpectations(t,
+		expectationRequiringSurface("ge-gap-nilcons", 1, otherSurfaceID, `{"min_confidence": 0.5}`),
+	)
+
+	req := coverageRequest("req-gap-nilcons")
+	req.Consequence = nil
+	result := evaluate1(t, o, req, buildPayload(t, req))
+
+	gaps := gapEventsFor(t, st, result.EnvelopeID)
+	if len(gaps) != 1 {
+		t.Fatalf("want 1 gap event, got %d", len(gaps))
+	}
+	summary, ok := gaps[0].Payload["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("summary: want map, got %T", gaps[0].Payload["summary"])
+	}
+	if _, present := summary["consequence"]; present {
+		t.Errorf("nil Consequence must omit summary.consequence on gap event; got %v", summary["consequence"])
+	}
+	if _, present := summary["confidence"]; !present {
+		t.Errorf("summary.confidence must be present on gap event even when Consequence is nil")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// G7. Idempotent replay: a second Evaluate with the same payload
+// returns the existing envelope's chain unchanged. No duplicate gap or
+// detected events appear.
+// ---------------------------------------------------------------------------
+
+func TestCoverageGap_IdempotentReplay_NoDuplicate(t *testing.T) {
+	o, st, _ := orchestratorWithExpectations(t,
+		expectationRequiringSurface("ge-gap-replay", 1, otherSurfaceID, `{}`),
+	)
+
+	req := coverageRequest("req-gap-replay")
+	raw := buildPayload(t, req)
+	first := evaluate1(t, o, req, raw)
+
+	if got := coverageEventsFor(t, st, first.EnvelopeID); len(got) != 1 {
+		t.Fatalf("first apply: want 1 detected event, got %d", len(got))
+	}
+	if got := gapEventsFor(t, st, first.EnvelopeID); len(got) != 1 {
+		t.Fatalf("first apply: want 1 gap event, got %d", len(got))
+	}
+
+	// Replay.
+	second, err := o.Evaluate(context.Background(), req, raw)
+	if err != nil {
+		t.Fatalf("replay Evaluate: %v", err)
+	}
+	if second.EnvelopeID != first.EnvelopeID {
+		t.Errorf("replay must return the same envelope; got %q != %q", second.EnvelopeID, first.EnvelopeID)
+	}
+	if got := coverageEventsFor(t, st, first.EnvelopeID); len(got) != 1 {
+		t.Errorf("replay must not duplicate detected events; got %d total", len(got))
+	}
+	if got := gapEventsFor(t, st, first.EnvelopeID); len(got) != 1 {
+		t.Errorf("replay must not duplicate gap events; got %d total", len(got))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// G8. Hash chain validates with detected + gap events present.
+// ---------------------------------------------------------------------------
+
+func TestCoverageGap_HashChainStillValid(t *testing.T) {
+	o, st, _ := orchestratorWithExpectations(t,
+		activeExpectation("ge-chain-match", 1, `{}`),
+		expectationRequiringSurface("ge-chain-gap", 1, otherSurfaceID, `{}`),
+	)
+
+	req := coverageRequest("req-gap-chain")
+	result := evaluate1(t, o, req, buildPayload(t, req))
+
+	all := auditEventsFor(t, st, result.EnvelopeID)
+	if len(all) < 4 {
+		t.Fatalf("want at least 4 audit events (lifecycle + 2 detected + 1 gap), got %d", len(all))
+	}
+	if all[0].PrevHash != "" {
+		t.Errorf("first event PrevHash: want empty, got %q", all[0].PrevHash)
+	}
+	for i := 1; i < len(all); i++ {
+		if all[i].PrevHash != all[i-1].EventHash {
+			t.Errorf("event %d PrevHash mismatch: got %q, want %q",
+				i, all[i].PrevHash, all[i-1].EventHash)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// G9. Outcome and reason code are unchanged whether gap events fire or
+// not. Gap detection must remain observational.
+// ---------------------------------------------------------------------------
+
+func TestCoverageGap_OutcomeUnchanged_WithVsWithoutGap(t *testing.T) {
+	// Without gap (matching surfaces).
+	oMatch, _, _ := orchestratorWithExpectations(t,
+		activeExpectation("ge-out-match", 1, `{}`),
+	)
+	reqA := coverageRequest("req-gap-out-a")
+	noGapResult := evaluate1(t, oMatch, reqA, buildPayload(t, reqA))
+
+	// With gap (mismatching surfaces).
+	oGap, _, _ := orchestratorWithExpectations(t,
+		expectationRequiringSurface("ge-out-gap", 1, otherSurfaceID, `{}`),
+	)
+	reqB := coverageRequest("req-gap-out-b")
+	gapResult := evaluate1(t, oGap, reqB, buildPayload(t, reqB))
+
+	if noGapResult.Outcome != gapResult.Outcome {
+		t.Errorf("Outcome differs: no_gap=%q, gap=%q", noGapResult.Outcome, gapResult.Outcome)
+	}
+	if noGapResult.ReasonCode != gapResult.ReasonCode {
+		t.Errorf("ReasonCode differs: no_gap=%q, gap=%q", noGapResult.ReasonCode, gapResult.ReasonCode)
+	}
+	if noGapResult.State != gapResult.State {
+		t.Errorf("State differs: no_gap=%q, gap=%q", noGapResult.State, gapResult.State)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// G10. No matches → no gap events. (Guards against a regression that
+// emits gap events for non-matched expectations.)
+// ---------------------------------------------------------------------------
+
+func TestCoverageGap_NoMatches_NoGapEvents(t *testing.T) {
+	o, st, _ := orchestratorWithExpectations(t,
+		expectationRequiringSurface("ge-gap-nomatch", 1, otherSurfaceID, `{"min_confidence": 0.99}`),
+	)
+
+	req := coverageRequest("req-gap-nomatch")
+	req.Confidence = 0.5 // below threshold → no match
+	result := evaluate1(t, o, req, buildPayload(t, req))
+
+	if got := coverageEventsFor(t, st, result.EnvelopeID); len(got) != 0 {
+		t.Errorf("no match → no detected events; got %d", len(got))
+	}
+	if got := gapEventsFor(t, st, result.EnvelopeID); len(got) != 0 {
+		t.Errorf("no match → no gap events; got %d", len(got))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// G11. Lifecycle filtering: review/deprecated/retired/draft expectations
+// produce neither detected nor gap events even when surfaces would
+// differ. (Re-pins the matcher's lifecycle filter at the gap-detection
+// boundary.)
+// ---------------------------------------------------------------------------
+
+func TestCoverageGap_NonActiveStatuses_NoGapEvents(t *testing.T) {
+	cases := []governanceexpectation.ExpectationStatus{
+		governanceexpectation.ExpectationStatusReview,
+		governanceexpectation.ExpectationStatusDeprecated,
+		governanceexpectation.ExpectationStatusRetired,
+		governanceexpectation.ExpectationStatusDraft,
+	}
+	for _, status := range cases {
+		t.Run(string(status), func(t *testing.T) {
+			e := expectationRequiringSurface("ge-gap-nonactive", 1, otherSurfaceID, `{}`)
+			e.Status = status
+			o, st, _ := orchestratorWithExpectations(t, e)
+
+			req := coverageRequest("req-gap-status")
+			result := evaluate1(t, o, req, buildPayload(t, req))
+
+			if got := gapEventsFor(t, st, result.EnvelopeID); len(got) != 0 {
+				t.Errorf("status=%s: gap events must not fire; got %d", status, len(got))
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// G12. Out-of-window expectations (future-dated / expired) produce no
+// gap events even when surfaces differ.
+// ---------------------------------------------------------------------------
+
+func TestCoverageGap_OutOfWindow_NoGapEvents(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*governanceexpectation.GovernanceExpectation)
+	}{
+		{"future_dated", func(e *governanceexpectation.GovernanceExpectation) {
+			e.EffectiveDate = testNow.Add(time.Hour)
+		}},
+		{"expired", func(e *governanceexpectation.GovernanceExpectation) {
+			past := testNow.Add(-time.Minute)
+			e.EffectiveUntil = &past
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := expectationRequiringSurface("ge-gap-window", 1, otherSurfaceID, `{}`)
+			tc.mutate(e)
+			o, st, _ := orchestratorWithExpectations(t, e)
+
+			req := coverageRequest("req-gap-window")
+			result := evaluate1(t, o, req, buildPayload(t, req))
+
+			if got := gapEventsFor(t, st, result.EnvelopeID); len(got) != 0 {
+				t.Errorf("%s: gap events must not fire; got %d", tc.name, len(got))
+			}
+		})
 	}
 }
 
