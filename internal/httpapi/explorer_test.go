@@ -34,8 +34,19 @@ func TestExplorer_Enabled_ReturnsHTML(t *testing.T) {
 	if !strings.Contains(ct, "text/html") {
 		t.Errorf("want Content-Type text/html, got %q", ct)
 	}
-	if !strings.Contains(rec.Body.String(), "MIDAS Explorer") {
+	body := rec.Body.String()
+	if !strings.Contains(body, "MIDAS Explorer") {
 		t.Errorf("want HTML body to contain 'MIDAS Explorer'")
+	}
+	// Issue #56: the Coverage panel ships as part of the embedded shell.
+	// Pinning the marker-class plus the panel title here means a refactor
+	// that drops the panel surfaces as a test failure rather than a
+	// silent regression in the UI.
+	if !strings.Contains(body, `id="coverage-card"`) {
+		t.Error("want Explorer shell to include the #coverage-card panel")
+	}
+	if !strings.Contains(body, "Governance Coverage") {
+		t.Error("want Explorer shell to include the Governance Coverage section title")
 	}
 }
 

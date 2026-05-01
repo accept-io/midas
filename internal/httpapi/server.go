@@ -16,6 +16,7 @@ import (
 
 	"github.com/accept-io/midas/internal/adminaudit"
 	"github.com/accept-io/midas/internal/agent"
+	"github.com/accept-io/midas/internal/audit"
 	"github.com/accept-io/midas/internal/auth"
 	"github.com/accept-io/midas/internal/authority"
 	"github.com/accept-io/midas/internal/authz"
@@ -29,6 +30,7 @@ import (
 	"github.com/accept-io/midas/internal/decision"
 	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/eval"
+	"github.com/accept-io/midas/internal/governancecoverage"
 	"github.com/accept-io/midas/internal/governanceexpectation"
 	"github.com/accept-io/midas/internal/identity"
 	"github.com/accept-io/midas/internal/localiam"
@@ -98,6 +100,12 @@ type controlAuditService interface {
 	ListAudit(ctx context.Context, f controlaudit.ListFilter) ([]*controlaudit.ControlAuditRecord, error)
 }
 
+// coverageReadService defines the read-only interface for governance
+// coverage records. If nil, /v1/coverage returns 501 Not Implemented.
+type coverageReadService interface {
+	ListCoverage(ctx context.Context, f governancecoverage.CoverageFilter) ([]*governancecoverage.CoverageRecord, error)
+}
+
 // grantLifecycleService manages operational grant lifecycle: suspend, revoke, reinstate.
 // If nil, the grant lifecycle endpoints return 501 Not Implemented.
 type grantLifecycleService interface {
@@ -163,12 +171,15 @@ type Server struct {
 	explorerDemoSeeded   *bool                       // nil = unknown, &true = seeded, &false = not seeded
 	seedDemoUser         bool                        // set via WithSeedDemoUser; mirrors cfg.Dev.SeedDemoUser
 	explorerOrchestrator orchestrator                // isolated in-memory orchestrator for POST /explorer
+	explorerAudit        audit.AuditEventRepository  // Explorer-isolated audit repo, disjoint from production audit; backs explorerCoverageRead (Issue #56)
+	explorerCoverageRead coverageReadService         // Explorer-isolated coverage read service for GET /explorer/coverage; backed by explorerAudit (Issue #56)
 	localIAM             *localiam.Service           // nil when local IAM is disabled
 	oidcService          oidcProvider                // nil when OIDC is disabled
 	secureCookiesFlag    bool                        // mirrors LocalIAM.SecureCookies; used by OIDC helper cookies
 	structuralMode       config.StructuralMode       // set via WithStructuralMode; empty/unset treated as permissive
 	explicitValidator    explicitModeValidator       // nil when explicit-mode validation is not wired
 	adminAudit           adminaudit.Repository       // nil when admin-audit is not wired (Issue #41)
+	coverageRead         coverageReadService         // nil when coverage read service is not wired (Issue #56)
 }
 
 type approveSurfaceRequest struct {
@@ -1142,6 +1153,14 @@ func (s *Server) WithAdminAudit(repo adminaudit.Repository) *Server {
 	return s
 }
 
+// WithCoverageReadService attaches the governance coverage read service
+// that powers GET /v1/coverage. When nil (or not called) the endpoint
+// returns 501 Not Implemented. See Issue #56.
+func (s *Server) WithCoverageReadService(svc coverageReadService) *Server {
+	s.coverageRead = svc
+	return s
+}
+
 // appendAdminAudit persists an administrative audit record. It is a no-op
 // when the repository is not configured. Append errors are logged but never
 // fail the calling action — the audit trail's value here is investigability,
@@ -1214,6 +1233,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/v1/controlplane/plan", s.requireAuth(s.requirePermission(authz.PermControlplanePlan)(s.handlePlanBundle)))
 	// audit read: platform.viewer or above.
 	s.mux.HandleFunc("/v1/controlplane/audit", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleListControlAudit)))
+	// Governance coverage read (Issue #56): platform.viewer or above —
+	// mirrors the controlplane audit read scope; both are read-only
+	// observability of platform-internal events.
+	s.mux.HandleFunc("/v1/coverage", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleListCoverage)))
 	// Platform admin-audit read (Issue #41): admin-only because the trail
 	// includes password-change and bootstrap events, which are more
 	// sensitive than the resource-oriented control-plane audit.
@@ -3224,6 +3247,210 @@ func (s *Server) handleListControlAudit(w http.ResponseWriter, r *http.Request) 
 		resp.Entries = append(resp.Entries, toControlAuditEntryResponse(rec))
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// coverageRecordResponse is the wire format for a single merged coverage
+// record returned by GET /v1/coverage. See Issue #56.
+type coverageRecordResponse struct {
+	RequestSource      string         `json:"request_source"`
+	RequestID          string         `json:"request_id"`
+	EnvelopeID         string         `json:"envelope_id"`
+	ProcessID          string         `json:"process_id"`
+	ExpectationID      string         `json:"expectation_id"`
+	ExpectationVersion int            `json:"expectation_version"`
+	ConditionType      string         `json:"condition_type,omitempty"`
+	RequiredSurfaceID  string         `json:"required_surface_id,omitempty"`
+	MissingSurfaceID   string         `json:"missing_surface_id,omitempty"`
+	ActualSurfaceID    string         `json:"actual_surface_id,omitempty"`
+	Status             string         `json:"status"`
+	Gap                bool           `json:"gap"`
+	Partial            bool           `json:"partial"`
+	Summary            map[string]any `json:"summary,omitempty"`
+	CorrelationBasis   map[string]any `json:"correlation_basis,omitempty"`
+	DetectedAt         *time.Time     `json:"detected_at,omitempty"`
+	GapDetectedAt      *time.Time     `json:"gap_detected_at,omitempty"`
+}
+
+// coverageListResponse is the wire format for GET /v1/coverage.
+//
+// limitations is a fixed string array describing the read model's
+// scope and correlation semantics. Surfacing it on every response is
+// deliberate: callers must be able to interpret the absence of a gap
+// record (no false negatives in scope; no claims about other scopes).
+// The strings are stable contract — change them only with a wire
+// version bump.
+type coverageListResponse struct {
+	Records     []coverageRecordResponse `json:"records"`
+	Limitations []string                 `json:"limitations"`
+}
+
+// coverageLimitations is the fixed limitations array surfaced on every
+// /v1/coverage response. Documents the read model's scope and the
+// correlation semantics it does and does not implement (see #53/#54/#55):
+//
+//   - scope=process: matching is process-scoped only; business_service
+//     and capability scopes are out of scope for this iteration.
+//   - correlation=same-evaluation: detected/gap pairs are correlated
+//     by (envelope_id, expectation_id, expectation_version) within the
+//     same evaluation. No cross-evaluation joins.
+//   - no-bypass-detection: this endpoint reports detected/gap events
+//     only; it does not infer "expectation should have fired but
+//     didn't" from envelope state.
+//   - no-time-window-correlation: correlation is keyed strictly on the
+//     merge triple, not on temporal proximity.
+var coverageLimitations = []string{
+	"scope=process",
+	"correlation=same-evaluation",
+	"no-bypass-detection",
+	"no-time-window-correlation",
+}
+
+// handleListCoverage serves GET /v1/coverage against the production
+// coverage read service. Authorization: viewer-or-higher, mirroring
+// /v1/controlplane/audit. See serveCoverageList for response semantics.
+func (s *Server) handleListCoverage(w http.ResponseWriter, r *http.Request) {
+	s.serveCoverageList(w, r, s.coverageRead)
+}
+
+// handleExplorerCoverage serves GET /explorer/coverage against the
+// Explorer's isolated coverage read service. The Explorer's audit
+// repository is constructed in initExplorerRuntime and is disjoint
+// from the production audit repository — this disjointness is the
+// load-bearing isolation property pinned by TestExplorerCoverage_*
+// in coverage_handler_test.go (Issue #56).
+func (s *Server) handleExplorerCoverage(w http.ResponseWriter, r *http.Request) {
+	s.serveCoverageList(w, r, s.explorerCoverageRead)
+}
+
+// serveCoverageList implements the shared GET handler for both
+// /v1/coverage and /explorer/coverage. The two endpoints differ only
+// in which read service they consult; everything else — parameter
+// parsing, status code mapping, response shape, the limitations
+// vocabulary — is identical.
+//
+// Query parameters (all optional):
+//   - request_source, request_id, envelope_id  — exact match
+//   - process_id, expectation_id               — exact match (top-level
+//     payload key on the underlying audit events)
+//   - since, until                             — RFC3339; since is
+//     inclusive, until is exclusive
+//   - limit                                    — positive integer,
+//     <= MaxListLimit; default DefaultListLimit; oversize returns 400
+//
+// Responses:
+//   - 200 OK with coverageListResponse
+//   - 400 on invalid limit / unparseable since|until
+//   - 405 on non-GET methods
+//   - 501 when svc is nil (mirrors /v1/controlplane/audit's behaviour)
+//   - 500 on service error
+func (s *Server) serveCoverageList(w http.ResponseWriter, r *http.Request, svc coverageReadService) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+
+	if svc == nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{
+			"error": "coverage read service not configured",
+		})
+		return
+	}
+
+	q := r.URL.Query()
+
+	limitStr := strings.TrimSpace(q.Get("limit"))
+	limit := 0
+	if limitStr != "" {
+		parsed, err := parsePositiveInt(limitStr)
+		if err != nil || parsed <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "limit must be a positive integer",
+			})
+			return
+		}
+		if parsed > audit.MaxListLimit {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "limit exceeds maximum allowed value",
+			})
+			return
+		}
+		limit = parsed
+	}
+
+	since, err := parseRFC3339Param(q.Get("since"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "since must be an RFC3339 timestamp",
+		})
+		return
+	}
+	until, err := parseRFC3339Param(q.Get("until"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "until must be an RFC3339 timestamp",
+		})
+		return
+	}
+
+	f := governancecoverage.CoverageFilter{
+		RequestSource: strings.TrimSpace(q.Get("request_source")),
+		RequestID:     strings.TrimSpace(q.Get("request_id")),
+		EnvelopeID:    strings.TrimSpace(q.Get("envelope_id")),
+		ProcessID:     strings.TrimSpace(q.Get("process_id")),
+		ExpectationID: strings.TrimSpace(q.Get("expectation_id")),
+		Since:         since,
+		Until:         until,
+		Limit:         limit,
+	}
+
+	records, err := svc.ListCoverage(r.Context(), f)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "failed to list coverage records",
+		})
+		return
+	}
+
+	resp := coverageListResponse{
+		Records:     make([]coverageRecordResponse, 0, len(records)),
+		Limitations: coverageLimitations,
+	}
+	for _, rec := range records {
+		resp.Records = append(resp.Records, toCoverageRecordResponse(rec))
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// parseRFC3339Param parses an optional RFC3339 timestamp from a query
+// parameter. Empty input returns the zero time without error.
+func parseRFC3339Param(s string) (time.Time, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return time.Time{}, nil
+	}
+	return time.Parse(time.RFC3339, s)
+}
+
+func toCoverageRecordResponse(rec *governancecoverage.CoverageRecord) coverageRecordResponse {
+	return coverageRecordResponse{
+		RequestSource:      rec.RequestSource,
+		RequestID:          rec.RequestID,
+		EnvelopeID:         rec.EnvelopeID,
+		ProcessID:          rec.ProcessID,
+		ExpectationID:      rec.ExpectationID,
+		ExpectationVersion: rec.ExpectationVersion,
+		ConditionType:      rec.ConditionType,
+		RequiredSurfaceID:  rec.RequiredSurfaceID,
+		MissingSurfaceID:   rec.MissingSurfaceID,
+		ActualSurfaceID:    rec.ActualSurfaceID,
+		Status:             string(rec.Status),
+		Gap:                rec.Gap,
+		Partial:            rec.Partial,
+		Summary:            rec.Summary,
+		CorrelationBasis:   rec.CorrelationBasis,
+		DetectedAt:         rec.DetectedAt,
+		GapDetectedAt:      rec.GapDetectedAt,
+	}
 }
 
 // adminAuditEntryResponse is the wire format for a single admin-audit record.

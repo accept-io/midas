@@ -243,6 +243,12 @@ func main() {
 	if repos.AdminAudit != nil {
 		srv.WithAdminAudit(repos.AdminAudit)
 	}
+	// Issue #56: wire the governance coverage read service that powers
+	// GET /v1/coverage. The service reads from the existing audit-event
+	// repository (the same trail emitted by #54/#55) — no new storage.
+	if repos.Audit != nil {
+		srv.WithCoverageReadService(governancecoverage.NewReadService(repos.Audit))
+	}
 	srv.WithStructuralMode(cfg.Structural.Mode)
 	if authenticator != nil {
 		srv.WithAuthenticator(authenticator)

@@ -262,6 +262,7 @@ func (s *Server) WithExplorerEnabled(enabled bool) *Server {
 		s.mux.HandleFunc("POST /explorer/simulate", s.explorerAuthHandler(s.handleExplorerSimulate))
 		s.mux.HandleFunc("GET /explorer/config", s.handleExplorerConfig)
 		s.mux.HandleFunc("GET /explorer/envelopes/", s.explorerReadAuthHandler(s.handleExplorerGetEnvelope))
+		s.mux.HandleFunc("GET /explorer/coverage", s.explorerReadAuthHandler(s.handleExplorerCoverage))
 		s.mux.HandleFunc("GET /explorer/", s.handleExplorerAssets)
 	}
 	return s

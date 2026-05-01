@@ -267,6 +267,10 @@ func (r *fakeAuditRepo) ListByRequestID(_ context.Context, requestID string) ([]
 	return out, nil
 }
 
+func (r *fakeAuditRepo) List(_ context.Context, _ audit.ListFilter) ([]*audit.AuditEvent, error) {
+	return nil, nil
+}
+
 // ---------------------------------------------------------------------------
 // Domain fakes: surface, agent, grant, profile
 // ---------------------------------------------------------------------------

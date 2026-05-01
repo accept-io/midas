@@ -1340,6 +1340,138 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /v1/coverage:
+    get:
+      operationId: listGovernanceCoverage
+      summary: List governance coverage records
+      description: >
+        Returns merged GOVERNANCE_CONDITION_DETECTED / GOVERNANCE_COVERAGE_GAP
+        runtime audit events as coverage records keyed by
+        (envelope_id, expectation_id, expectation_version). Each response
+        includes a fixed limitations array describing the read model's scope
+        and correlation semantics — see Issue #56. Requires platform.viewer
+        or above.
+      parameters:
+        - name: request_source
+          in: query
+          required: false
+          schema: { type: string }
+        - name: request_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: envelope_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: process_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: expectation_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: since
+          in: query
+          required: false
+          description: RFC3339 timestamp; inclusive lower bound on event occurred_at.
+          schema: { type: string, format: date-time }
+        - name: until
+          in: query
+          required: false
+          description: RFC3339 timestamp; exclusive upper bound on event occurred_at.
+          schema: { type: string, format: date-time }
+        - name: limit
+          in: query
+          required: false
+          description: Positive integer; capped at the audit list maximum. Oversize values are rejected with 400.
+          schema: { type: integer, minimum: 1 }
+      responses:
+        "200":
+          description: Coverage records (newest first) plus the limitations array.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [records, limitations]
+                properties:
+                  records:
+                    type: array
+                    items:
+                      type: object
+                      required:
+                        - request_source
+                        - request_id
+                        - envelope_id
+                        - process_id
+                        - expectation_id
+                        - expectation_version
+                        - status
+                        - gap
+                        - partial
+                      properties:
+                        request_source: { type: string }
+                        request_id: { type: string }
+                        envelope_id: { type: string }
+                        process_id: { type: string }
+                        expectation_id: { type: string }
+                        expectation_version: { type: integer }
+                        condition_type: { type: string }
+                        required_surface_id: { type: string }
+                        missing_surface_id: { type: string }
+                        actual_surface_id: { type: string }
+                        status:
+                          type: string
+                          enum: [covered, gap]
+                        gap: { type: boolean }
+                        partial: { type: boolean }
+                        summary:
+                          type: object
+                          additionalProperties: true
+                        correlation_basis:
+                          type: object
+                          additionalProperties: true
+                        detected_at:
+                          type: string
+                          format: date-time
+                        gap_detected_at:
+                          type: string
+                          format: date-time
+                  limitations:
+                    type: array
+                    description: Stable strings describing read-model scope and correlation semantics.
+                    items: { type: string }
+                    example:
+                      - scope=process
+                      - correlation=same-evaluation
+                      - no-bypass-detection
+                      - no-time-window-correlation
+        "400":
+          description: Invalid limit or unparseable since|until timestamp.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: Coverage read service not configured.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /v1/controlplane/surfaces/{id}/approve:
     post:
       operationId: approveSurface

@@ -4,6 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
+
+	"github.com/lib/pq"
 
 	"github.com/accept-io/midas/internal/store/sqltx"
 )
@@ -187,6 +190,116 @@ func nullableString(s string) any {
 		return nil
 	}
 	return s
+}
+
+// List implements AuditEventRepository.List for the Postgres backend.
+// Builds a parameterised SELECT against audit_events. The query
+// honours the existing indexes:
+//
+//   - event_type / event_type = ANY(...) → idx_audit_events_event_type
+//   - envelope_id                        → idx_audit_events_envelope_id_seq
+//   - request_source + request_id        → idx_audit_events_request_scope
+//   - occurred_at range                  → idx_audit_events_occurred_at
+//   - PayloadContains @>                 → idx_audit_events_payload_gin
+//
+// All values are passed as parameters; no SQL is built by string
+// concatenation of caller-supplied values. ORDER BY occurred_at
+// {DESC|ASC}, sequence_no ASC stabilises ties so detected/gap pairs
+// from the same evaluation surface in chain order.
+func (r *PostgresRepository) List(ctx context.Context, filter ListFilter) ([]*AuditEvent, error) {
+	if err := filter.Validate(); err != nil {
+		return nil, err
+	}
+
+	const selectClause = `
+		SELECT
+			id, envelope_id, request_source, request_id, sequence_no, event_type,
+			performed_by_type, performed_by_id, payload_json,
+			prev_hash, event_hash, occurred_at
+		FROM audit_events
+	`
+
+	var (
+		predicates []string
+		args       []any
+	)
+	addPredicate := func(clause string, val any) {
+		args = append(args, val)
+		predicates = append(predicates, fmt.Sprintf(clause, len(args)))
+	}
+
+	wantTypes := effectiveEventTypes(filter)
+	switch len(wantTypes) {
+	case 0:
+		// No event-type filter applied.
+	case 1:
+		addPredicate("event_type = $%d", string(wantTypes[0]))
+	default:
+		strs := make([]string, len(wantTypes))
+		for i, t := range wantTypes {
+			strs[i] = string(t)
+		}
+		addPredicate("event_type = ANY($%d)", pq.Array(strs))
+	}
+	if filter.EnvelopeID != "" {
+		addPredicate("envelope_id = $%d", filter.EnvelopeID)
+	}
+	if filter.RequestSource != "" {
+		addPredicate("request_source = $%d", filter.RequestSource)
+	}
+	if filter.RequestID != "" {
+		addPredicate("request_id = $%d", filter.RequestID)
+	}
+	if !filter.Since.IsZero() {
+		addPredicate("occurred_at >= $%d", filter.Since.UTC())
+	}
+	if !filter.Until.IsZero() {
+		addPredicate("occurred_at < $%d", filter.Until.UTC())
+	}
+	if len(filter.PayloadContains) > 0 {
+		// JSONB containment via @>; the GIN index on
+		// payload_json jsonb_path_ops handles top-level keys.
+		bytes, err := json.Marshal(filter.PayloadContains)
+		if err != nil {
+			return nil, fmt.Errorf("audit list: marshal PayloadContains: %w", err)
+		}
+		addPredicate("payload_json @> $%d", string(bytes))
+	}
+
+	q := selectClause
+	if len(predicates) > 0 {
+		q += " WHERE " + joinAnd(predicates)
+	}
+	if filter.OrderDesc {
+		q += " ORDER BY occurred_at DESC, sequence_no ASC"
+	} else {
+		q += " ORDER BY occurred_at ASC, sequence_no ASC"
+	}
+
+	args = append(args, filter.EffectiveLimit())
+	q += fmt.Sprintf(" LIMIT $%d", len(args))
+
+	rows, err := r.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return scanEventRows(rows)
+}
+
+// joinAnd joins predicate fragments with " AND " — a tiny helper that
+// keeps the List query construction free of strings.Join's import-only
+// pull, since the rest of this package doesn't use it.
+func joinAnd(predicates []string) string {
+	if len(predicates) == 0 {
+		return ""
+	}
+	out := predicates[0]
+	for i := 1; i < len(predicates); i++ {
+		out += " AND " + predicates[i]
+	}
+	return out
 }
 
 var _ AuditEventRepository = (*PostgresRepository)(nil)

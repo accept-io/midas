@@ -965,6 +965,98 @@ func TestCoverageGap_OutOfWindow_NoGapEvents(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// End-to-end coverage workflow (#56)
+//
+// Pins the apply/seed expectation → evaluate → detected/gap emission →
+// governancecoverage.ReadService.ListCoverage chain end-to-end. The
+// emitter and read service are tested independently; this test pins
+// the *contract between them* — that the payload shape the emitter
+// writes matches what the read service expects to merge.
+//
+// Bridges events from the orchestrator's test-fake audit (whose List
+// is a no-op stub deliberately) into a real audit.MemoryRepository
+// whose List is exercised by Cluster A's tests. This is the minimal
+// integration possible without introducing new fixtures.
+// ---------------------------------------------------------------------------
+
+func TestCoverageReadModel_EndToEnd_DetectedAndGapMergeFromEmitter(t *testing.T) {
+	o, st, _ := orchestratorWithExpectations(t,
+		expectationRequiringSurface("ge-int-1", 4, otherSurfaceID, `{}`),
+	)
+
+	req := coverageRequest("req-int-end-to-end")
+	result := evaluate1(t, o, req, buildPayload(t, req))
+
+	// Sanity: orchestrator emitted both expected events. Failure here
+	// indicates a regression in the matcher/emitter, not the read model.
+	if got := coverageEventsFor(t, st, result.EnvelopeID); len(got) != 1 {
+		t.Fatalf("setup: want 1 detected event, got %d", len(got))
+	}
+	if got := gapEventsFor(t, st, result.EnvelopeID); len(got) != 1 {
+		t.Fatalf("setup: want 1 gap event, got %d", len(got))
+	}
+
+	// Bridge: copy emitted events into a real audit.MemoryRepository
+	// so the read service has a working List to scan. Struct-copy each
+	// event so Append's hash-chain mutations don't clobber the fake
+	// repo's bookkeeping.
+	realRepo := audit.NewMemoryRepository()
+	ctx := context.Background()
+	for _, ev := range auditEventsFor(t, st, result.EnvelopeID) {
+		cp := *ev
+		if err := realRepo.Append(ctx, &cp); err != nil {
+			t.Fatalf("bridge Append: %v", err)
+		}
+	}
+
+	svc := governancecoverage.NewReadService(realRepo)
+	records, err := svc.ListCoverage(ctx, governancecoverage.CoverageFilter{
+		EnvelopeID: result.EnvelopeID,
+	})
+	if err != nil {
+		t.Fatalf("ListCoverage: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 merged coverage record, got %d", len(records))
+	}
+	rec := records[0]
+
+	if rec.EnvelopeID != result.EnvelopeID {
+		t.Errorf("EnvelopeID: want %q, got %q", result.EnvelopeID, rec.EnvelopeID)
+	}
+	if rec.ExpectationID != "ge-int-1" {
+		t.Errorf("ExpectationID: want ge-int-1, got %q", rec.ExpectationID)
+	}
+	if rec.ExpectationVersion != 4 {
+		t.Errorf("ExpectationVersion: want 4, got %d", rec.ExpectationVersion)
+	}
+	if rec.Status != governancecoverage.CoverageStatusGap {
+		t.Errorf("Status: want gap, got %q", rec.Status)
+	}
+	if !rec.Gap {
+		t.Error("Gap: want true (detected + gap pair)")
+	}
+	if rec.Partial {
+		t.Error("Partial: want false (both events present)")
+	}
+	if rec.RequiredSurfaceID != otherSurfaceID {
+		t.Errorf("RequiredSurfaceID: want %q, got %q", otherSurfaceID, rec.RequiredSurfaceID)
+	}
+	if rec.MissingSurfaceID != otherSurfaceID {
+		t.Errorf("MissingSurfaceID: want %q, got %q", otherSurfaceID, rec.MissingSurfaceID)
+	}
+	if rec.ActualSurfaceID != testSurfaceID {
+		t.Errorf("ActualSurfaceID: want %q (the request's resolved surface), got %q", testSurfaceID, rec.ActualSurfaceID)
+	}
+	if rec.DetectedAt == nil {
+		t.Error("DetectedAt: want non-nil")
+	}
+	if rec.GapDetectedAt == nil {
+		t.Error("GapDetectedAt: want non-nil")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Test-local helpers
 // ---------------------------------------------------------------------------
 

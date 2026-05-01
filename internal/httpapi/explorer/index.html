@@ -329,6 +329,66 @@
   .runtime-key { color: #6b7280; width: 90px; flex-shrink: 0; }
   .runtime-val { color: #1a1a1a; font-family: "SF Mono", "Fira Code", monospace; }
 
+  .coverage-card {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: 12px;
+  }
+  .coverage-empty { color: #6b7280; font-style: italic; }
+  .coverage-record {
+    border-top: 1px solid #f1f5f9;
+    padding: 8px 0;
+  }
+  .coverage-record:first-child { border-top: 0; padding-top: 0; }
+  .coverage-record:last-child { padding-bottom: 0; }
+  .coverage-status {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-right: 6px;
+  }
+  .coverage-status.covered { background: #dcfce7; color: #166534; }
+  .coverage-status.gap { background: #fee2e2; color: #991b1b; }
+  .coverage-status.partial { background: #fef3c7; color: #92400e; }
+  .coverage-meta {
+    color: #6b7280;
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 11px;
+  }
+  .coverage-detail {
+    margin-top: 4px;
+    font-family: "SF Mono", "Fira Code", monospace;
+    color: #1a1a1a;
+    font-size: 11px;
+    line-height: 1.5;
+    word-break: break-all;
+  }
+  .coverage-limitations {
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px dashed #e5e7eb;
+    color: #6b7280;
+    font-size: 11px;
+  }
+  .coverage-limit-token {
+    display: inline-block;
+    padding: 1px 6px;
+    margin-right: 4px;
+    margin-bottom: 2px;
+    background: #f1f5f9;
+    border-radius: 4px;
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 10px;
+    color: #475569;
+  }
+  .coverage-limit-footer { margin-top: 4px; font-size: 10px; color: #6b7280; }
+
   .status-dot {
     display: inline-block;
     width: 8px;
@@ -1159,6 +1219,13 @@
       </div>
     </div>
 
+    <div class="section">
+      <div class="section-title">Governance Coverage</div>
+      <div class="coverage-card" id="coverage-card">
+        <div class="coverage-empty">loading...</div>
+      </div>
+    </div>
+
   </div>
 </div>
 
@@ -1529,6 +1596,89 @@
       runtimeCard.innerHTML = '<div class="runtime-row"><span class="runtime-key">status</span><span class="runtime-val" style="color:#ef4444">unreachable</span></div>';
       runtimeBadge.textContent = 'offline';
     });
+
+  // ── Governance Coverage panel ──────────────────────────────────────────────
+  // Reads from /explorer/coverage — the Explorer-isolated coverage view (Issue #56).
+  // Renders the most recent records from the Explorer's audit trail. The
+  // limitations array is the canonical machine-readable scope vocabulary
+  // returned by the API; the footer line below it is a one-line human
+  // gloss, not a substitute for the tokens themselves.
+  const coverageCard = document.getElementById('coverage-card');
+
+  function escapeHTML(s) {
+    return String(s).replace(/[&<>"']/g, c => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[c]));
+  }
+
+  function renderCoverage(payload) {
+    if (!payload || !Array.isArray(payload.records)) {
+      coverageCard.innerHTML = '<div class="coverage-empty">no coverage data available</div>';
+      return;
+    }
+    const records = payload.records;
+    const limitations = Array.isArray(payload.limitations) ? payload.limitations : [];
+
+    let html = '';
+    if (records.length === 0) {
+      html = '<div class="coverage-empty">no coverage records yet — run an evaluation to populate</div>';
+    } else {
+      html = records.slice(0, 10).map(rec => {
+        const statusClass = rec.partial ? 'partial' : (rec.gap ? 'gap' : 'covered');
+        const statusText  = rec.partial ? 'partial' : (rec.gap ? 'gap' : 'covered');
+        const meta = [
+          rec.process_id      ? `process=${escapeHTML(rec.process_id)}`           : null,
+          rec.expectation_id  ? `expectation=${escapeHTML(rec.expectation_id)}`   : null,
+          rec.envelope_id     ? `envelope=${escapeHTML(rec.envelope_id)}`         : null,
+        ].filter(Boolean).join(' · ');
+        const detail = [];
+        if (rec.required_surface_id) detail.push(`required: ${escapeHTML(rec.required_surface_id)}`);
+        if (rec.actual_surface_id && rec.actual_surface_id !== rec.required_surface_id) {
+          detail.push(`actual: ${escapeHTML(rec.actual_surface_id)}`);
+        }
+        if (rec.missing_surface_id && rec.missing_surface_id !== rec.required_surface_id) {
+          detail.push(`missing: ${escapeHTML(rec.missing_surface_id)}`);
+        }
+        return (
+          '<div class="coverage-record">' +
+            `<div><span class="coverage-status ${statusClass}">${statusText}</span>` +
+            `<span class="coverage-meta">${meta}</span></div>` +
+            (detail.length ? `<div class="coverage-detail">${detail.join(' → ')}</div>` : '') +
+          '</div>'
+        );
+      }).join('');
+    }
+
+    if (limitations.length) {
+      const tokens = limitations.map(t => `<span class="coverage-limit-token">${escapeHTML(t)}</span>`).join('');
+      html += '<div class="coverage-limitations">' + tokens +
+        '<div class="coverage-limit-footer">Read-model scope. Process-scoped, same-evaluation correlation only.</div>' +
+        '</div>';
+    }
+    coverageCard.innerHTML = html;
+  }
+
+  async function refreshCoverage() {
+    if (!coverageCard) return;
+    try {
+      const headers = { 'Accept': 'application/json' };
+      const tok = (typeof getToken === 'function') ? getToken() : null;
+      if (tok) headers['Authorization'] = 'Bearer ' + tok;
+      const res = await fetch('/explorer/coverage?limit=10', { headers, credentials: 'same-origin' });
+      if (!res.ok) {
+        coverageCard.innerHTML = `<div class="coverage-empty">coverage unavailable (HTTP ${res.status})</div>`;
+        return;
+      }
+      const payload = await res.json();
+      renderCoverage(payload);
+    } catch (e) {
+      coverageCard.innerHTML = '<div class="coverage-empty">coverage fetch failed</div>';
+    }
+  }
+
+  // Initial load. Subsequent refreshes fire after each successful POST /explorer
+  // (see the lastEvalResult capture below).
+  refreshCoverage();
 
   // ── Mode tabs ──────────────────────────────────────────────────────────────
   let currentMode = 'form';
@@ -1910,6 +2060,9 @@
         lastEvalResult = { httpStatus: res.status, data, body };
         // Eagerly fetch envelope to populate explanation and authority chain panels.
         if (data.envelope_id) autoFetchEnvelopeForPanels(data.envelope_id);
+        // Refresh the governance coverage panel — a new evaluation may have
+        // emitted detected/gap audit events that change what we display.
+        refreshCoverage();
       }
     } catch (e) {
       showError('Network error: ' + e.message, null);

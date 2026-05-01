@@ -247,3 +247,187 @@ func TestPostgresRepository_ListByRequestID_ReturnsEvents(t *testing.T) {
 		}
 	}
 }
+
+// ===========================================================================
+// List() — Postgres parity tests for the new generic query primitive
+// (#56). Each test exercises one filter dimension against the live
+// audit_events table and indexes.
+// ===========================================================================
+
+// seedListEvent appends an event via the production Append path then
+// rewrites occurred_at on the row so time-range queries are pinned to a
+// deterministic value rather than wall-clock.
+func seedListEvent(
+	t *testing.T,
+	db *sql.DB,
+	repo *PostgresRepository,
+	eventType AuditEventType,
+	envelopeID, requestSource, requestID string,
+	occurredAt time.Time,
+	payload map[string]any,
+) *AuditEvent {
+	t.Helper()
+	insertTestEnvelope(t, db, envelopeID, requestSource, requestID)
+
+	ev := NewEvent(envelopeID, requestSource, requestID, eventType,
+		EventPerformerSystem, "midas-orchestrator", payload)
+	if err := repo.Append(context.Background(), ev); err != nil {
+		t.Fatalf("seed Append: %v", err)
+	}
+	if _, err := db.Exec(
+		`UPDATE audit_events SET occurred_at = $1 WHERE id = $2`,
+		occurredAt.UTC(), ev.ID,
+	); err != nil {
+		t.Fatalf("seed UPDATE occurred_at: %v", err)
+	}
+	ev.OccurredAt = occurredAt.UTC()
+	return ev
+}
+
+func TestPostgresRepository_List_NoFilter_ReturnsAllUpToDefaultLimit(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+	resetAuditEventsTable(t, db)
+	repo := NewPostgresRepository(db)
+
+	now := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	const src = "src-no-filter"
+	seedListEvent(t, db, repo, AuditEventGovernanceConditionDetected,
+		"env-list-1", src, "req-1", now, map[string]any{"expectation_id": "ge-1"})
+	seedListEvent(t, db, repo, AuditEventGovernanceCoverageGap,
+		"env-list-1", src, "req-1", now.Add(time.Second), map[string]any{"expectation_id": "ge-1"})
+
+	got, err := repo.List(context.Background(), ListFilter{OrderDesc: true})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("want 2 events, got %d", len(got))
+	}
+}
+
+func TestPostgresRepository_List_EventTypes_FiltersToUnion(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+	resetAuditEventsTable(t, db)
+	repo := NewPostgresRepository(db)
+
+	now := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	const src = "src-evt-types"
+	seedListEvent(t, db, repo, AuditEventGovernanceConditionDetected,
+		"env-list-evt-1", src, "req-1", now, nil)
+	seedListEvent(t, db, repo, AuditEventGovernanceCoverageGap,
+		"env-list-evt-1", src, "req-1", now.Add(time.Second), nil)
+	seedListEvent(t, db, repo, AuditEventEvaluationStarted,
+		"env-list-evt-1", src, "req-1", now.Add(2*time.Second), nil)
+
+	got, err := repo.List(context.Background(), ListFilter{
+		EventTypes: []AuditEventType{
+			AuditEventGovernanceConditionDetected,
+			AuditEventGovernanceCoverageGap,
+		},
+	})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("want 2 events (DETECTED + GAP), got %d", len(got))
+	}
+}
+
+func TestPostgresRepository_List_PayloadContains_TopLevelOnly(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+	resetAuditEventsTable(t, db)
+	repo := NewPostgresRepository(db)
+
+	now := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	const src = "src-payload"
+	seedListEvent(t, db, repo, AuditEventGovernanceConditionDetected,
+		"env-list-pl-1", src, "req-1", now,
+		map[string]any{"expectation_id": "ge-A", "process_id": "proc-1"})
+	seedListEvent(t, db, repo, AuditEventGovernanceConditionDetected,
+		"env-list-pl-2", src, "req-2", now.Add(time.Second),
+		map[string]any{"expectation_id": "ge-B", "process_id": "proc-1"})
+
+	got, err := repo.List(context.Background(), ListFilter{
+		PayloadContains: map[string]any{"expectation_id": "ge-A"},
+	})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 1 || got[0].EnvelopeID != "env-list-pl-1" {
+		t.Errorf("PayloadContains expectation_id=ge-A: want 1 (env-list-pl-1), got %d", len(got))
+	}
+}
+
+func TestPostgresRepository_List_TimeRange_SinceInclusive_UntilExclusive(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+	resetAuditEventsTable(t, db)
+	repo := NewPostgresRepository(db)
+
+	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	const src = "src-time-range"
+	seedListEvent(t, db, repo, AuditEventGovernanceConditionDetected,
+		"env-list-time-1", src, "req-1", t0, nil)
+	seedListEvent(t, db, repo, AuditEventGovernanceConditionDetected,
+		"env-list-time-2", src, "req-2", t0.Add(time.Second), nil)
+	seedListEvent(t, db, repo, AuditEventGovernanceConditionDetected,
+		"env-list-time-3", src, "req-3", t0.Add(2*time.Second), nil)
+
+	got, err := repo.List(context.Background(), ListFilter{
+		Since: t0,
+		Until: t0.Add(2 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("want 2 events in [t0, t0+2s), got %d", len(got))
+	}
+}
+
+func TestPostgresRepository_List_OrderDesc_NewestFirst(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+	resetAuditEventsTable(t, db)
+	repo := NewPostgresRepository(db)
+
+	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	const src = "src-order"
+	seedListEvent(t, db, repo, AuditEventGovernanceConditionDetected,
+		"env-list-ord-1", src, "req-1", t0, nil)
+	seedListEvent(t, db, repo, AuditEventGovernanceConditionDetected,
+		"env-list-ord-2", src, "req-2", t0.Add(time.Second), nil)
+
+	got, err := repo.List(context.Background(), ListFilter{OrderDesc: true})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 2 || got[0].EnvelopeID != "env-list-ord-2" {
+		t.Errorf("OrderDesc=true: want newest first; got %+v", got)
+	}
+}
+
+func TestPostgresRepository_List_LimitCapped(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+	resetAuditEventsTable(t, db)
+	repo := NewPostgresRepository(db)
+
+	now := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	const src = "src-limit"
+	for i := 0; i < 5; i++ {
+		seedListEvent(t, db, repo, AuditEventGovernanceConditionDetected,
+			"env-list-lim-1", src, "req-1", now.Add(time.Duration(i)*time.Second), nil)
+	}
+
+	got, err := repo.List(context.Background(), ListFilter{Limit: 3})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 3 {
+		t.Errorf("Limit=3: want 3, got %d", len(got))
+	}
+}

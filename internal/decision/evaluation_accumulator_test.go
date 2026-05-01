@@ -203,6 +203,10 @@ func (r *accFakeAuditRepo) ListByRequestID(_ context.Context, _ string) ([]*audi
 	return nil, nil
 }
 
+func (r *accFakeAuditRepo) List(_ context.Context, _ audit.ListFilter) ([]*audit.AuditEvent, error) {
+	return nil, nil
+}
+
 // makeAccTestRepos wires the fake repos into a *store.Repositories so tests
 // can call the narrowed persist(ctx, repos) signature.
 func makeAccTestRepos(envRepo *accFakeEnvRepo, auditRepo *accFakeAuditRepo) *store.Repositories {

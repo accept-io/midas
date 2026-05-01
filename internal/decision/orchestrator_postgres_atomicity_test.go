@@ -44,6 +44,10 @@ func (r *failAfterNAuditRepo) ListByRequestID(ctx context.Context, requestID str
 	return r.inner.ListByRequestID(ctx, requestID)
 }
 
+func (r *failAfterNAuditRepo) List(ctx context.Context, filter audit.ListFilter) ([]*audit.AuditEvent, error) {
+	return r.inner.List(ctx, filter)
+}
+
 type wrappedTxStore struct {
 	base      *postgres.Store
 	failAfter int

@@ -10,6 +10,7 @@ import (
 
 	"github.com/accept-io/midas/internal/bootstrap"
 	"github.com/accept-io/midas/internal/decision"
+	"github.com/accept-io/midas/internal/governancecoverage"
 	"github.com/accept-io/midas/internal/platformauth"
 	"github.com/accept-io/midas/internal/policy"
 	"github.com/accept-io/midas/internal/store/memory"
@@ -22,6 +23,15 @@ var explorerFS embed.FS
 // POST /explorer. It always seeds the demo dataset unconditionally, independent
 // of cfg.Dev.SeedDemoData. Seeding failures are logged as warnings — Explorer
 // continues to work as a request builder even without seeded data.
+//
+// Side-effects on Server:
+//   - explorerOrchestrator   — used by POST /explorer and /explorer/simulate
+//   - explorerCoverageRead   — used by GET /explorer/coverage; backed by the
+//     same isolated audit repository the orchestrator writes to, so Explorer
+//     coverage reads see only Explorer-emitted events. The production
+//     coverage read service (s.coverageRead) is bound to the production
+//     audit repository in cmd/midas/main.go and is unaffected — that
+//     isolation is the load-bearing property pinned by the isolation tests.
 func (s *Server) initExplorerRuntime() {
 	explorerStore := memory.NewStore()
 	repos, err := explorerStore.Repositories()
@@ -39,6 +49,10 @@ func (s *Server) initExplorerRuntime() {
 		return
 	}
 	s.explorerOrchestrator = orch
+	if repos.Audit != nil {
+		s.explorerAudit = repos.Audit
+		s.explorerCoverageRead = governancecoverage.NewReadService(repos.Audit)
+	}
 }
 
 // handleExplorerIndex serves the Explorer single-page UI at GET /explorer.
