@@ -48,15 +48,16 @@ const (
 // missing the required *:write for a document Kind will have that document
 // marked invalid in the returned plan (and therefore never persisted).
 const (
-	PermCapabilityWrite                Permission = "capability:write"
-	PermProcessWrite                   Permission = "process:write"
-	PermBusinessServiceWrite           Permission = "businessservice:write"
-	PermBusinessServiceCapabilityWrite Permission = "businessservicecapability:write"
-	PermSurfaceWrite                   Permission = "surface:write"
-	PermProfileWrite                   Permission = "profile:write"
-	PermAgentWrite                     Permission = "agent:write"
-	PermGrantWrite                     Permission = "grant:write"
-	PermGovernanceExpectationWrite     Permission = "governanceexpectation:write"
+	PermCapabilityWrite                  Permission = "capability:write"
+	PermProcessWrite                     Permission = "process:write"
+	PermBusinessServiceWrite             Permission = "businessservice:write"
+	PermBusinessServiceCapabilityWrite   Permission = "businessservicecapability:write"
+	PermBusinessServiceRelationshipWrite Permission = "businessservicerelationship:write"
+	PermSurfaceWrite                     Permission = "surface:write"
+	PermProfileWrite                     Permission = "profile:write"
+	PermAgentWrite                       Permission = "agent:write"
+	PermGrantWrite                       Permission = "grant:write"
+	PermGovernanceExpectationWrite       Permission = "governanceexpectation:write"
 )
 
 // Lifecycle-action permissions. Each sub-action of surface/profile/grant
@@ -89,6 +90,7 @@ var allControlPlaneWritePermissions = []Permission{
 	PermProcessWrite,
 	PermBusinessServiceWrite,
 	PermBusinessServiceCapabilityWrite,
+	PermBusinessServiceRelationshipWrite,
 	PermSurfaceWrite,
 	PermProfileWrite,
 	PermAgentWrite,
@@ -224,6 +226,8 @@ func KindToWritePermission(kind string) Permission {
 		return PermBusinessServiceWrite
 	case "BusinessServiceCapability":
 		return PermBusinessServiceCapabilityWrite
+	case "BusinessServiceRelationship":
+		return PermBusinessServiceRelationshipWrite
 	case "Surface":
 		return PermSurfaceWrite
 	case "Profile":

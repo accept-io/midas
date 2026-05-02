@@ -214,27 +214,33 @@ func newRepositories(db sqltx.DBTX) (*store.Repositories, error) {
 		return nil, err
 	}
 
+	bsRelationships, err := NewBusinessServiceRelationshipRepo(db)
+	if err != nil {
+		return nil, err
+	}
+
 	governanceExpectations, err := NewGovernanceExpectationRepo(db)
 	if err != nil {
 		return nil, err
 	}
 
 	return &store.Repositories{
-		Capabilities:                caps,
-		Processes:                   procs,
-		Surfaces:                    surfaces,
-		Agents:                      agents,
-		Profiles:                    profiles,
-		Grants:                      grants,
-		Envelopes:                   envelopes,
-		Audit:                       auditRepo,
-		ControlAudit:                controlAuditRepo,
-		AdminAudit:                  adminAuditRepo,
-		Outbox:                      outboxRepo,
-		LocalUsers:                  localUsers,
-		LocalSessions:               localSessions,
-		BusinessServices:            businessServices,
-		BusinessServiceCapabilities: bsCaps,
-		GovernanceExpectations:      governanceExpectations,
+		Capabilities:                 caps,
+		Processes:                    procs,
+		Surfaces:                     surfaces,
+		Agents:                       agents,
+		Profiles:                     profiles,
+		Grants:                       grants,
+		Envelopes:                    envelopes,
+		Audit:                        auditRepo,
+		ControlAudit:                 controlAuditRepo,
+		AdminAudit:                   adminAuditRepo,
+		Outbox:                       outboxRepo,
+		LocalUsers:                   localUsers,
+		LocalSessions:                localSessions,
+		BusinessServices:             businessServices,
+		BusinessServiceCapabilities:  bsCaps,
+		BusinessServiceRelationships: bsRelationships,
+		GovernanceExpectations:       governanceExpectations,
 	}, nil
 }

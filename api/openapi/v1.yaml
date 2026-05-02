@@ -568,6 +568,54 @@ components:
           type: string
           format: date-time
 
+    BusinessServiceRelationship:
+      type: object
+      description: >
+        A directed link between two BusinessServices (Epic 1, PR 1). The
+        junction has no lifecycle of its own; description is the only
+        mutable field.
+      required: [id, source_business_service_id, target_business_service_id, relationship_type, created_at]
+      properties:
+        id:
+          type: string
+          description: Synthetic relationship identifier.
+        source_business_service_id:
+          type: string
+        target_business_service_id:
+          type: string
+        relationship_type:
+          type: string
+          enum: [depends_on, supports, part_of]
+        description:
+          type: string
+          description: Optional. Omitted when empty.
+        created_at:
+          type: string
+          format: date-time
+        created_by:
+          type: string
+          description: Optional. Actor that created the row.
+
+    BusinessServiceRelationshipsResponse:
+      type: object
+      description: >
+        Top-level response shape for GET /v1/businessservices/{id}/relationships.
+        Outgoing rows are those where the queried service is the source;
+        incoming rows are those where it is the target. Both arrays are
+        always present (never null).
+      required: [business_service_id, outgoing, incoming]
+      properties:
+        business_service_id:
+          type: string
+        outgoing:
+          type: array
+          items:
+            $ref: "#/components/schemas/BusinessServiceRelationship"
+        incoming:
+          type: array
+          items:
+            $ref: "#/components/schemas/BusinessServiceRelationship"
+
     AdminAuditDetails:
       type: object
       description: >
@@ -2666,6 +2714,62 @@ paths:
                 $ref: "#/components/schemas/Error"
               example:
                 error: structural service not configured
+
+  /v1/businessservices/{id}/relationships:
+    get:
+      operationId: listBusinessServiceRelationships
+      summary: List business-service relationships
+      description: >
+        Returns the directed BusinessServiceRelationship rows for the queried
+        service, partitioned by direction. `outgoing` rows are those where
+        the queried service is the source; `incoming` rows are those where it
+        is the target. Both arrays are always present (never null) so callers
+        can iterate without nil checks. Requires platform.viewer or above.
+        See Epic 1, PR 1 (Service-Centric AI Governance Map).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Business service identifier.
+      responses:
+        "200":
+          description: Relationships partitioned by direction.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessServiceRelationshipsResponse"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Business service not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Repository error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: BSR reader or structural service not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /v1/platform/admin-audit:
     get:

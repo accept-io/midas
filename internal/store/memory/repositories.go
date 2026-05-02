@@ -591,26 +591,30 @@ func NewRepositories() *store.Repositories {
 	bscRepo.businessSvcs = bsvcs
 	bscRepo.capabilities = caps
 
+	bsrRepo := NewBusinessServiceRelationshipRepo()
+	bsrRepo.businessSvcs = bsvcs
+
 	surfRepo := NewSurfaceRepo()
 	surfRepo.processes = procs
 
 	return &store.Repositories{
-		Surfaces:                    surfRepo,
-		Agents:                      NewAgentRepo(),
-		Profiles:                    NewProfileRepo(),
-		Grants:                      NewGrantRepo(),
-		Envelopes:                   NewEnvelopeRepo(),
-		Audit:                       audit.NewMemoryRepository(),
-		ControlAudit:                NewControlAuditRepo(),
-		AdminAudit:                  NewAdminAuditRepo(),
-		Outbox:                      outbox.NewMemoryRepository(),
-		LocalUsers:                  NewLocalUserRepo(),
-		LocalSessions:               NewLocalSessionRepo(),
-		Capabilities:                caps,
-		Processes:                   procs,
-		BusinessServices:            bsvcs,
-		BusinessServiceCapabilities: bscRepo,
-		GovernanceExpectations:      NewGovernanceExpectationRepo(),
+		Surfaces:                     surfRepo,
+		Agents:                       NewAgentRepo(),
+		Profiles:                     NewProfileRepo(),
+		Grants:                       NewGrantRepo(),
+		Envelopes:                    NewEnvelopeRepo(),
+		Audit:                        audit.NewMemoryRepository(),
+		ControlAudit:                 NewControlAuditRepo(),
+		AdminAudit:                   NewAdminAuditRepo(),
+		Outbox:                       outbox.NewMemoryRepository(),
+		LocalUsers:                   NewLocalUserRepo(),
+		LocalSessions:                NewLocalSessionRepo(),
+		Capabilities:                 caps,
+		Processes:                    procs,
+		BusinessServices:             bsvcs,
+		BusinessServiceCapabilities:  bscRepo,
+		BusinessServiceRelationships: bsrRepo,
+		GovernanceExpectations:       NewGovernanceExpectationRepo(),
 	}
 }
 

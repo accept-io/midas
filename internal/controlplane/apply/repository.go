@@ -70,6 +70,18 @@ type BusinessServiceCapabilityRepository interface {
 	Create(ctx context.Context, bsc *businessservicecapability.BusinessServiceCapability) error
 }
 
+// BusinessServiceRelationshipRepository is the apply-time persistence
+// interface for the directed BusinessService↔BusinessService junction
+// (Epic 1, PR 1). The planner uses GetByID and the listing methods to
+// detect already-existing rows; Create persists new rows; Update mutates
+// the description (the only mutable column).
+type BusinessServiceRelationshipRepository interface {
+	GetByID(ctx context.Context, id string) (*businessservice.BusinessServiceRelationship, error)
+	ListBySourceBusinessService(ctx context.Context, sourceID string) ([]*businessservice.BusinessServiceRelationship, error)
+	Create(ctx context.Context, rel *businessservice.BusinessServiceRelationship) error
+	Update(ctx context.Context, rel *businessservice.BusinessServiceRelationship) error
+}
+
 // GovernanceExpectationRepository is the persistence interface for the
 // apply service's GovernanceExpectation operations. FindByID looks up
 // the latest version (used by the planner to decide first-create vs
@@ -81,16 +93,17 @@ type GovernanceExpectationRepository interface {
 }
 
 type RepositorySet struct {
-	Surfaces                    SurfaceRepository
-	Agents                      AgentRepository
-	Profiles                    ProfileRepository
-	Grants                      GrantRepository
-	Processes                   ProcessRepository
-	Capabilities                CapabilityRepository
-	BusinessServices            BusinessServiceRepository
-	BusinessServiceCapabilities BusinessServiceCapabilityRepository
-	GovernanceExpectations      GovernanceExpectationRepository
-	ControlAudit                controlaudit.Repository
+	Surfaces                     SurfaceRepository
+	Agents                       AgentRepository
+	Profiles                     ProfileRepository
+	Grants                       GrantRepository
+	Processes                    ProcessRepository
+	Capabilities                 CapabilityRepository
+	BusinessServices             BusinessServiceRepository
+	BusinessServiceCapabilities  BusinessServiceCapabilityRepository
+	BusinessServiceRelationships BusinessServiceRelationshipRepository
+	GovernanceExpectations       GovernanceExpectationRepository
+	ControlAudit                 controlaudit.Repository
 	// Tx, when non-nil, wraps the executor's mutation loop in an
 	// atomic transaction. The callback receives a scoped *RepositorySet
 	// whose repositories are bound to the transaction; on callback-

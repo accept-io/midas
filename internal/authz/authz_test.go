@@ -27,8 +27,9 @@ import (
 // platform.admin bundle.
 func TestAllControlPlaneWritePermissions_Count(t *testing.T) {
 	got := authz.AllControlPlaneWritePermissions()
-	if len(got) != 19 {
-		t.Errorf("want 19 control-plane write permissions, got %d", len(got))
+	// 20 = 19 prior + PermBusinessServiceRelationshipWrite (Epic 1, PR 1).
+	if len(got) != 20 {
+		t.Errorf("want 20 control-plane write permissions, got %d", len(got))
 	}
 }
 
@@ -319,15 +320,16 @@ func TestHasPermission_CaseInsensitiveRoleMatch(t *testing.T) {
 // catches drift when a new Kind is added or a constant is renamed.
 func TestKindToWritePermission_AllKnownKinds(t *testing.T) {
 	want := map[string]authz.Permission{
-		"Capability":                authz.PermCapabilityWrite,
-		"Process":                   authz.PermProcessWrite,
-		"BusinessService":           authz.PermBusinessServiceWrite,
-		"BusinessServiceCapability": authz.PermBusinessServiceCapabilityWrite,
-		"Surface":                   authz.PermSurfaceWrite,
-		"Profile":                   authz.PermProfileWrite,
-		"Agent":                     authz.PermAgentWrite,
-		"Grant":                     authz.PermGrantWrite,
-		"GovernanceExpectation":     authz.PermGovernanceExpectationWrite,
+		"Capability":                  authz.PermCapabilityWrite,
+		"Process":                     authz.PermProcessWrite,
+		"BusinessService":             authz.PermBusinessServiceWrite,
+		"BusinessServiceCapability":   authz.PermBusinessServiceCapabilityWrite,
+		"BusinessServiceRelationship": authz.PermBusinessServiceRelationshipWrite,
+		"Surface":                     authz.PermSurfaceWrite,
+		"Profile":                     authz.PermProfileWrite,
+		"Agent":                       authz.PermAgentWrite,
+		"Grant":                       authz.PermGrantWrite,
+		"GovernanceExpectation":       authz.PermGovernanceExpectationWrite,
 	}
 	for kind, wantPerm := range want {
 		got := authz.KindToWritePermission(kind)

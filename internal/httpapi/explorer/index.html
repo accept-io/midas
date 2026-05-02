@@ -5,47 +5,450 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MIDAS Explorer</title>
 <style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  /* ──────────────────────────────────────────────────────────────────────────
+     MIDAS Explorer — dark workbench theme
+     Single-page shell with four internal views: Services, Evaluate, Records,
+     Settings. No external dependencies (no Tailwind, no Google Fonts, no
+     Material Symbols). Visual language adapted from the Stitch reference
+     mockups using local CSS only.
+     ────────────────────────────────────────────────────────────────────── */
 
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    font-size: 14px;
-    background: #f5f5f5;
-    color: #1a1a1a;
-    line-height: 1.5;
+  :root {
+    /* Stitch palette (M3-inspired dark) */
+    --bg:                          #111125;
+    --surface:                     #111125;
+    --surface-container-lowest:    #0c0c1f;
+    --surface-container-low:       #1a1a2e;
+    --surface-container:           #1e1e32;
+    --surface-container-high:      #28283d;
+    --surface-container-highest:   #333348;
+    --surface-bright:              #37374d;
+    --surface-variant:             #333348;
+
+    --on-surface:                  #e2e0fc;
+    --on-surface-variant:          #c2c6d6;
+
+    --primary:                     #adc6ff;
+    --primary-container:           #4d8eff;
+    --on-primary:                  #002e6a;
+    --on-primary-container:        #00285d;
+
+    --secondary:                   #4edea3;
+    --on-secondary:                #003824;
+    --secondary-container:         #00a572;
+
+    --tertiary:                    #d1c79e;
+    --tertiary-container:          #b5ac84;
+
+    --error:                       #ffb4ab;
+    --error-container:             #93000a;
+    --on-error:                    #690005;
+
+    --outline:                     #8c909f;
+    --outline-variant:             #424754;
+
+    /* Accent surfaces */
+    --slate-900:                   #1A1A2E;
+    --slate-800:                   #1e293b;
+    --slate-700:                   #334155;
+    --slate-500:                   #64748b;
+    --slate-400:                   #94a3b8;
+    --slate-300:                   #cbd5e1;
+    --slate-200:                   #e2e8f0;
+
+    /* Brand colour-coding for resolved authority chain */
+    --chain-surface:   #60a5fa;  /* blue   */
+    --chain-profile:   #c084fc;  /* purple */
+    --chain-grant:     #34d399;  /* emerald */
+    --chain-agent:     var(--primary);
+
+    /* Sizing */
+    --sidebar-width:  256px;
+    --header-height:  56px;
+    --footer-height:  40px;
+
+    /* Type stack — system fallbacks; no Google Fonts CDN */
+    --font-body:    -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, Roboto, sans-serif;
+    --font-display: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, Roboto, sans-serif;
+    --font-mono:    ui-monospace, "SF Mono", "Cascadia Code", "Fira Code", Menlo, Consolas, monospace;
   }
 
-  header {
-    background: #1a1a2e;
-    color: #fff;
-    padding: 14px 24px;
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    background: var(--bg);
+    color: var(--on-surface);
+  }
+  body {
+    font-family: var(--font-body);
+    font-size: 14px;
+    line-height: 1.5;
+    min-height: 100vh;
+  }
+
+  /* ──────────────────────────────────────────────────────────────────────
+     Shell — sidebar + header + main + footer
+     ────────────────────────────────────────────────────────────────────── */
+
+  .shell-sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    height: 100vh;
+    width: var(--sidebar-width);
+    background: var(--slate-900);
+    border-right: 1px solid rgba(255,255,255,0.05);
+    display: flex;
+    flex-direction: column;
+    z-index: 40;
+    font-family: var(--font-display);
+  }
+  .shell-brand {
+    padding: 24px 24px 16px;
+  }
+  .shell-brand-row {
     display: flex;
     align-items: center;
     gap: 12px;
   }
-  header h1 { font-size: 18px; font-weight: 600; letter-spacing: -0.3px; }
-  header .badge {
-    font-size: 11px;
-    background: #3b82f6;
-    color: #fff;
-    padding: 2px 8px;
-    border-radius: 10px;
-    font-weight: 500;
+  .shell-brand-title {
+    color: var(--primary);
+    font-size: 20px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    color: #ffffff;
   }
-  header .spacer { flex: 1; }
-  #runtime-badge {
-    font-size: 12px;
-    color: #94a3b8;
+  .shell-subtitle {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: var(--slate-500);
+    margin-top: 4px;
+    white-space: nowrap;       /* "Decision Authority Workbench" stays on one line */
+  }
+  .shell-control-plane-card {
+    margin-top: 16px;
+    padding: 8px 12px;
+    background: var(--surface-container-low);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .shell-control-plane-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    background: var(--primary-container);
+    color: var(--on-primary-container);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 700;
+  }
+  .shell-control-plane-text {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.25;
+  }
+  .shell-control-plane-name {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--slate-200);
+  }
+  .shell-control-plane-version {
+    font-size: 10px;
+    color: var(--slate-500);
+    font-family: var(--font-mono);
   }
 
+  /* MIDAS logo: four equal white bars; bars 2 & 3 translated down 2px */
+  .midas-logo-mark {
+    height: 24px;
+    display: inline-flex;
+    align-items: flex-start;
+    gap: 4px;
+  }
+  .midas-logo-mark span {
+    width: 5px;
+    height: 20px;
+    background: #ffffff;
+    border-radius: 1px;
+    display: block;
+  }
+  .midas-logo-mark span:nth-child(2),
+  .midas-logo-mark span:nth-child(3) {
+    transform: translateY(2px);
+  }
+
+  .shell-nav {
+    flex: 1;
+    padding: 0 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    overflow-y: auto;
+  }
+  .shell-nav-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 11px 16px;
+    color: var(--slate-400);
+    text-decoration: none;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    border-right: 2px solid transparent;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+    background: transparent;
+    border-top: none;
+    border-bottom: none;
+    border-left: none;
+    width: 100%;
+    text-align: left;
+    font-family: inherit;
+  }
+  .shell-nav-item:hover {
+    background: rgba(30,41,59,0.4);
+    color: var(--slate-200);
+  }
+  .shell-nav-item.active {
+    background: rgba(59,130,246,0.10);
+    color: #3b82f6;
+    border-right-color: #3b82f6;
+  }
+  .shell-nav-glyph {
+    display: inline-block;
+    width: 18px;
+    text-align: center;
+    font-size: 14px;
+    line-height: 1;
+    color: inherit;
+  }
+
+  .shell-sidebar-footer {
+    padding: 18px 24px;
+    border-top: 1px solid rgba(255,255,255,0.05);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    color: var(--secondary);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .shell-sidebar-footer .pulse {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--secondary);
+    animation: midas-pulse 2s ease-in-out infinite;
+  }
+  @keyframes midas-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.4; }
+  }
+
+  .shell-header {
+    position: fixed;
+    top: 0;
+    left: var(--sidebar-width);
+    right: 0;
+    height: var(--header-height);
+    background: var(--slate-900);
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 24px;
+    z-index: 30;
+    font-family: var(--font-display);
+  }
+  .shell-header-left {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    min-width: 0;
+  }
+  .shell-header-brand {
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--slate-200);
+    white-space: nowrap;
+  }
+  .shell-header-divider {
+    width: 1px;
+    height: 16px;
+    background: rgba(255,255,255,0.10);
+  }
+  .shell-header-chips {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: nowrap;
+    min-width: 0;
+  }
+  .shell-header-chip {
+    color: var(--slate-400);
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    white-space: nowrap;
+    padding: 4px 8px;
+    border-radius: 4px;
+    background: transparent;
+    border: 0;
+    font-family: inherit;
+  }
+  .shell-header-chip strong {
+    color: var(--on-surface);
+    font-weight: 600;
+  }
+  .shell-header-right {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  #iam-user-pill {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--slate-400);
+  }
+  #iam-user-pill.visible { display: flex; }
+  #iam-username-display { font-family: var(--font-mono); font-size: 12px; }
+  #iam-logout-btn {
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.12);
+    color: var(--slate-300);
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  #iam-logout-btn:hover { background: rgba(255,255,255,0.06); }
+  #runtime-badge {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--slate-400);
+  }
+
+  .shell-main {
+    margin-left: var(--sidebar-width);
+    margin-top: var(--header-height);
+    margin-bottom: var(--footer-height);
+    min-height: calc(100vh - var(--header-height) - var(--footer-height));
+    background: var(--bg);
+    color: var(--on-surface);
+  }
+
+  .shell-footer {
+    position: fixed;
+    bottom: 0;
+    left: var(--sidebar-width);
+    right: 0;
+    height: var(--footer-height);
+    background: var(--surface-container-lowest);
+    border-top: 1px solid rgba(255,255,255,0.05);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 24px;
+    z-index: 30;
+    font-family: var(--font-mono);
+    font-size: 10px;
+  }
+  .shell-footer-cluster {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+  }
+  .shell-footer-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--slate-500);
+  }
+  .shell-footer-item.ok    { color: var(--secondary); }
+  .shell-footer-item.brand { color: var(--primary); }
+  .shell-footer-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--slate-700);
+  }
+  .shell-footer-item.ok .shell-footer-dot { background: var(--secondary); }
+
+  /* View containers */
+  .app-view { display: none; }
+  .app-view.active { display: block; }
+
+  .view-stub {
+    padding: 48px 32px;
+    color: var(--on-surface-variant);
+    text-align: center;
+  }
+  .view-stub h2 {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    color: var(--on-surface);
+    margin-bottom: 6px;
+    font-family: var(--font-display);
+  }
+  .view-stub p {
+    font-size: 13px;
+    max-width: 520px;
+    margin: 0 auto;
+    color: var(--slate-400);
+  }
+
+  /* Exec mode toggle (Evaluate | Simulate) — header */
+  .exec-mode-tabs {
+    display: inline-flex;
+    background: var(--surface-container);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 6px;
+    padding: 3px;
+    gap: 0;
+  }
+  .exec-mode-tab {
+    padding: 5px 16px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--slate-400);
+    cursor: pointer;
+    font-family: inherit;
+    transition: background 0.12s, color 0.12s;
+  }
+  .exec-mode-tab:hover { color: var(--slate-200); }
+  .exec-mode-tab.active {
+    background: var(--primary-container);
+    color: var(--on-primary-container);
+  }
+
+  /* Warning bar / demo banner / mode banner — keep IDs, dark styling */
   .warning-bar {
-    background: #fef3c7;
-    border-bottom: 1px solid #fcd34d;
+    background: rgba(146, 64, 14, 0.18);
+    border-bottom: 1px solid rgba(252, 211, 77, 0.18);
     padding: 8px 24px;
     font-size: 12px;
-    color: #78350f;
+    color: #fcd34d;
   }
-
   .demo-banner {
     padding: 8px 24px;
     font-size: 12px;
@@ -54,99 +457,157 @@
   }
   .demo-banner.ready {
     display: block;
-    background: #d1fae5;
-    border-bottom: 1px solid #6ee7b7;
-    color: #065f46;
+    background: rgba(78, 222, 163, 0.10);
+    border-bottom: 1px solid rgba(78, 222, 163, 0.28);
+    color: var(--secondary);
   }
   .demo-banner.not-ready {
     display: block;
-    background: #fffbeb;
-    border-bottom: 1px solid #fcd34d;
-    color: #92400e;
+    background: rgba(252, 211, 77, 0.10);
+    border-bottom: 1px solid rgba(252, 211, 77, 0.28);
+    color: #fcd34d;
   }
+
+  .mode-banner { font-size: 11px; line-height: 1.5; }
+  .mode-banner-evaluate {
+    padding: 6px 24px;
+    background: rgba(78, 222, 163, 0.08);
+    border-bottom: 1px solid rgba(78, 222, 163, 0.20);
+    color: var(--secondary);
+  }
+  .mode-banner-simulate {
+    padding: 6px 24px;
+    background: rgba(252, 211, 77, 0.10);
+    border-bottom: 1px solid rgba(252, 211, 77, 0.24);
+    color: #fcd34d;
+  }
+  .mode-bar-hint { display: none; }   /* hint is conveyed via .mode-banner */
+
+  /* Auth-gate blur — toggled on .shell-main when an overlay is shown */
+  .layout-gated {
+    filter: blur(3px);
+    pointer-events: none;
+    user-select: none;
+  }
+
+  /* ──────────────────────────────────────────────────────────────────────
+     Existing-content components, restyled for dark
+     IDs and class names below are referenced by the JavaScript and MUST be
+     preserved. The existing two-panel "layout" markup is used inside
+     view-evaluate during Cluster 1; later clusters move sub-blocks into
+     the Services / Records / Settings views.
+     ────────────────────────────────────────────────────────────────────── */
 
   .layout {
     display: grid;
     grid-template-columns: 420px 1fr;
     gap: 0;
-    min-height: calc(100vh - 80px);
+    min-height: calc(100vh - var(--header-height) - var(--footer-height) - 60px);
   }
-
   .panel {
     padding: 20px;
     overflow-y: auto;
   }
   .panel-left {
-    background: #fff;
-    border-right: 1px solid #e5e7eb;
+    background: var(--surface-container-low);
+    border-right: 1px solid rgba(255,255,255,0.05);
   }
   .panel-right {
-    background: #f9fafb;
+    background: var(--bg);
   }
 
   .section { margin-bottom: 20px; }
   .section-title {
-    font-size: 11px;
-    font-weight: 600;
+    font-size: 10px;
+    font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.6px;
-    color: #6b7280;
+    letter-spacing: 0.10em;
+    color: var(--slate-500);
     margin-bottom: 10px;
   }
 
-  label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 4px; color: #374151; }
-  .label-hint { font-size: 11px; font-weight: 400; color: #9ca3af; margin-left: 6px; }
-  input[type=text], input[type=password], textarea, select {
+  label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 4px;
+    color: var(--slate-400);
+  }
+  .label-hint {
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--slate-500);
+    margin-left: 6px;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+
+  input[type=text], input[type=password], input[type=number], textarea, select {
     width: 100%;
-    padding: 7px 10px;
-    border: 1px solid #d1d5db;
-    border-radius: 6px;
+    padding: 8px 10px;
+    border: 1px solid var(--outline-variant);
+    border-radius: 4px;
     font-size: 13px;
     font-family: inherit;
-    background: #fff;
-    color: #1a1a1a;
-    transition: border-color 0.15s;
+    background: var(--surface-container-lowest);
+    color: var(--on-surface);
+    transition: border-color 0.12s, box-shadow 0.12s;
   }
-  input[type=text]:focus, input[type=password]:focus, textarea:focus, select:focus {
+  input[type=text]:focus,
+  input[type=password]:focus,
+  input[type=number]:focus,
+  textarea:focus,
+  select:focus {
     outline: none;
-    border-color: #3b82f6;
-    box-shadow: 0 0 0 3px rgba(59,130,246,0.1);
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px rgba(173,198,255,0.18);
   }
-  textarea { resize: vertical; font-family: "SF Mono", "Fira Code", monospace; font-size: 12px; }
+  textarea {
+    resize: vertical;
+    font-family: var(--font-mono);
+    font-size: 12px;
+  }
+  input::placeholder, textarea::placeholder { color: var(--slate-500); }
 
   .field { margin-bottom: 12px; }
 
   .token-row { display: flex; gap: 6px; }
   .token-row input { flex: 1; }
 
-  .token-status { font-size: 11px; margin-top: 4px; }
-  .token-status.neutral { color: #9ca3af; }
-  .token-status.info    { color: #3b82f6; }
-  .token-status.success { color: #10b981; }
-  .token-status.error   { color: #ef4444; }
+  .token-status { font-size: 11px; margin-top: 4px; font-family: var(--font-mono); }
+  .token-status.neutral { color: var(--slate-500); }
+  .token-status.info    { color: var(--primary); }
+  .token-status.success { color: var(--secondary); }
+  .token-status.error   { color: var(--error); }
 
   /* Authority Scenarios picker */
   .scenario-search {
     width: 100%;
-    padding: 6px 10px;
-    border: 1px solid #d1d5db;
-    border-radius: 6px;
+    padding: 7px 10px;
+    border: 1px solid var(--outline-variant);
+    border-radius: 4px;
     font-size: 12px;
     font-family: inherit;
-    background: #fff;
-    color: #1a1a1a;
-    margin-bottom: 6px;
+    background: var(--surface-container-lowest);
+    color: var(--on-surface);
+    margin-bottom: 8px;
   }
-  .scenario-search:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
+  .scenario-search:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px rgba(173,198,255,0.18);
+  }
 
   .scenario-category-header {
-    font-size: 10px;
+    font-size: 9px;
     font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.7px;
-    color: #9ca3af;
+    letter-spacing: 0.10em;
+    color: var(--slate-500);
     padding: 8px 2px 3px;
-    border-top: 1px solid #f3f4f6;
+    border-top: 1px solid rgba(255,255,255,0.05);
     margin-top: 4px;
   }
   .scenario-category-header:first-child { border-top: none; margin-top: 0; padding-top: 0; }
@@ -156,137 +617,209 @@
     align-items: center;
     gap: 8px;
     width: 100%;
-    padding: 6px 8px;
+    padding: 8px 10px;
     border: 1px solid transparent;
-    border-radius: 5px;
+    border-radius: 4px;
     background: transparent;
     cursor: pointer;
     text-align: left;
     transition: background 0.12s, border-color 0.12s;
     margin-bottom: 1px;
+    color: inherit;
   }
-  .scenario-item:hover { background: #f3f4f6; border-color: #e5e7eb; }
-  .scenario-item.active { background: #eff6ff; border-color: #bfdbfe; }
+  .scenario-item:hover {
+    background: rgba(255,255,255,0.03);
+    border-color: var(--outline-variant);
+  }
+  .scenario-item.active {
+    background: rgba(173,198,255,0.08);
+    border-color: rgba(173,198,255,0.25);
+  }
 
   .scenario-item-text { flex: 1; min-width: 0; }
-  .scenario-item-title { display: block; font-size: 12px; font-weight: 600; color: #1a1a1a; }
-  .scenario-item-desc  { display: block; font-size: 11px; color: #6b7280; }
+  .scenario-item-title {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--on-surface);
+  }
+  .scenario-item-desc {
+    display: block;
+    font-size: 11px;
+    color: var(--slate-500);
+  }
 
   .scenario-item-badge {
     flex-shrink: 0;
-    font-size: 10px;
-    padding: 2px 6px;
-    border-radius: 8px;
-    font-weight: 600;
+    font-size: 9px;
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
     white-space: nowrap;
   }
-  .badge-accept  { background: #d1fae5; color: #065f46; }
-  .badge-escalate { background: #fef3c7; color: #92400e; }
-  .badge-reject  { background: #fee2e2; color: #991b1b; }
+  .badge-accept   { background: rgba(78, 222, 163, 0.12); color: var(--secondary); }
+  .badge-escalate { background: rgba(252, 211, 77, 0.12); color: #fcd34d; }
+  .badge-reject   { background: rgba(255, 180, 171, 0.12); color: var(--error); }
+  .badge-clarify  { background: rgba(192, 132, 252, 0.12); color: #c084fc; }
 
-  .scenario-no-results { font-size: 12px; color: #9ca3af; padding: 8px 2px; }
+  .scenario-no-results { font-size: 12px; color: var(--slate-500); padding: 8px 2px; }
 
-  /* Scenario microcopy info block */
   .scenario-info-box {
-    background: #f0f7ff;
-    border: 1px solid #bfdbfe;
-    border-radius: 6px;
+    background: rgba(173,198,255,0.06);
+    border: 1px solid rgba(173,198,255,0.18);
+    border-radius: 4px;
     padding: 10px 12px;
     margin-top: 8px;
     font-size: 12px;
   }
-  .scenario-info-title { font-weight: 700; color: #1e3a8a; margin-bottom: 3px; }
+  .scenario-info-title {
+    font-weight: 700;
+    color: var(--primary);
+    margin-bottom: 3px;
+  }
   .scenario-info-expected {
-    font-family: "SF Mono", "Fira Code", monospace;
+    font-family: var(--font-mono);
     font-size: 11px;
-    color: #374151;
+    color: var(--on-surface-variant);
     margin-bottom: 6px;
   }
-  .scenario-info-explanation { color: #374151; line-height: 1.55; }
+  .scenario-info-explanation {
+    color: var(--on-surface-variant);
+    line-height: 1.55;
+  }
 
-  .mode-tabs { display: flex; gap: 0; margin-bottom: 12px; border: 1px solid #d1d5db; border-radius: 6px; overflow: hidden; }
+  /* Form / JSON tabs */
+  .mode-tabs {
+    display: flex;
+    margin-bottom: 12px;
+    border: 1px solid var(--outline-variant);
+    border-radius: 4px;
+    overflow: hidden;
+    background: var(--surface-container-lowest);
+  }
   .mode-tab {
     flex: 1;
-    padding: 6px;
+    padding: 7px;
     text-align: center;
     cursor: pointer;
-    font-size: 12px;
-    font-weight: 500;
-    background: #fff;
-    color: #6b7280;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    background: transparent;
+    color: var(--slate-500);
     border: none;
-    transition: background 0.15s, color 0.15s;
+    transition: background 0.12s, color 0.12s;
+    font-family: inherit;
   }
-  .mode-tab.active { background: #3b82f6; color: #fff; }
+  .mode-tab.active {
+    background: var(--primary-container);
+    color: var(--on-primary-container);
+  }
 
   .form-fields { display: none; }
   .form-fields.visible { display: block; }
   .json-editor { display: none; }
   .json-editor.visible { display: block; }
 
-  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-
-  .btn-row { display: flex; gap: 8px; margin-top: 14px; }
-  .btn {
-    padding: 8px 16px;
-    border-radius: 6px;
-    border: none;
-    font-size: 13px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: opacity 0.15s;
+  .form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
   }
-  .btn:hover { opacity: 0.85; }
-  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-  .btn-primary { background: #3b82f6; color: #fff; }
-  .btn-secondary { background: #e5e7eb; color: #374151; }
-  .btn-ghost { background: transparent; color: #6b7280; border: 1px solid #d1d5db; }
 
-  /* Right panel */
+  .btn-row { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+  .btn {
+    padding: 9px 18px;
+    border-radius: 4px;
+    border: 1px solid transparent;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+    font-family: inherit;
+    transition: opacity 0.12s, transform 0.05s;
+  }
+  .btn:hover { opacity: 0.9; }
+  .btn:active { transform: scale(0.98); }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .btn-primary {
+    background: var(--primary);
+    color: var(--on-primary);
+  }
+  .btn-secondary {
+    background: var(--surface-container-high);
+    color: var(--on-surface);
+    border-color: var(--outline-variant);
+  }
+  .btn-ghost {
+    background: transparent;
+    color: var(--on-surface-variant);
+    border: 1px solid var(--outline-variant);
+  }
+  .btn-ghost:hover { background: var(--surface-container); }
+
+  /* Outcome card */
   .outcome-card {
-    background: #fff;
-    border: 1px solid #e5e7eb;
-    border-radius: 8px;
-    padding: 16px;
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    border-left-width: 4px;
+    border-radius: 6px;
+    padding: 16px 18px;
     margin-bottom: 16px;
   }
-  .outcome-card.execute   { border-left: 4px solid #10b981; }
-  .outcome-card.escalate  { border-left: 4px solid #f59e0b; }
-  .outcome-card.reject    { border-left: 4px solid #ef4444; }
-  .outcome-card.clarify   { border-left: 4px solid #8b5cf6; }
-  .outcome-card.empty     { border-left: 4px solid #d1d5db; }
-  .outcome-card.error     { border-left: 4px solid #ef4444; }
+  .outcome-card.execute   { border-left-color: var(--secondary); }
+  .outcome-card.escalate  { border-left-color: #fcd34d; }
+  .outcome-card.reject    { border-left-color: var(--error); }
+  .outcome-card.clarify   { border-left-color: #c084fc; }
+  .outcome-card.empty     { border-left-color: var(--outline-variant); }
+  .outcome-card.error     { border-left-color: var(--error); }
 
   .outcome-label {
-    font-size: 20px;
-    font-weight: 700;
-    margin-bottom: 4px;
+    font-size: 22px;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    margin-bottom: 6px;
+    font-family: var(--font-display);
   }
-  .outcome-label.execute  { color: #065f46; }
-  .outcome-label.escalate { color: #92400e; }
-  .outcome-label.reject   { color: #991b1b; }
-  .outcome-label.clarify  { color: #4c1d95; }
-  .outcome-label.empty    { color: #9ca3af; }
-  .outcome-label.error    { color: #991b1b; }
+  .outcome-label.execute  { color: var(--secondary); }
+  .outcome-label.escalate { color: #fcd34d; }
+  .outcome-label.reject   { color: var(--error); }
+  .outcome-label.clarify  { color: #c084fc; }
+  .outcome-label.empty    { color: var(--slate-500); }
+  .outcome-label.error    { color: var(--error); }
 
-  .meta-row { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 10px; }
-  .meta-item { }
-  .meta-key { font-size: 11px; color: #6b7280; font-weight: 500; }
-  .meta-val { font-size: 13px; color: #1a1a1a; font-family: "SF Mono", "Fira Code", monospace; }
+  .meta-row { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 10px; }
+  .meta-key {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--slate-500);
+  }
+  .meta-val {
+    font-size: 12px;
+    color: var(--on-surface);
+    font-family: var(--font-mono);
+  }
 
   .explanation-box {
-    background: #fff;
-    border: 1px solid #e5e7eb;
-    border-radius: 8px;
-    padding: 14px 16px;
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    border-radius: 6px;
+    padding: 12px 16px;
     margin-bottom: 16px;
     font-size: 13px;
-    color: #374151;
+    color: var(--on-surface-variant);
     line-height: 1.6;
     display: none;
   }
   .explanation-box.visible { display: block; }
 
+  /* Raw / curl / envelope blocks */
   .raw-section { margin-bottom: 16px; }
   .raw-header {
     display: flex;
@@ -294,18 +827,25 @@
     justify-content: space-between;
     margin-bottom: 6px;
   }
-  .raw-label { font-size: 12px; font-weight: 600; color: #6b7280; }
+  .raw-label {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--slate-500);
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+  }
   pre {
-    background: #1e293b;
-    color: #e2e8f0;
+    background: var(--surface-container-lowest);
+    color: var(--slate-200);
     padding: 14px;
-    border-radius: 8px;
+    border-radius: 6px;
+    border: 1px solid var(--outline-variant);
     font-size: 12px;
-    font-family: "SF Mono", "Fira Code", monospace;
+    font-family: var(--font-mono);
     overflow-x: auto;
     white-space: pre-wrap;
     word-break: break-word;
-    max-height: 400px;
+    max-height: 380px;
     overflow-y: auto;
   }
 
@@ -317,54 +857,68 @@
     margin-bottom: 6px;
   }
 
+  /* Runtime card — canonical home moves to Settings in Cluster 5; for now,
+     the existing right-panel home is restyled. */
   .runtime-card {
-    background: #fff;
-    border: 1px solid #e5e7eb;
-    border-radius: 8px;
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    border-radius: 6px;
     padding: 12px 16px;
     font-size: 12px;
   }
-  .runtime-row { display: flex; gap: 8px; margin-bottom: 4px; }
+  .runtime-row { display: flex; gap: 8px; margin-bottom: 4px; align-items: baseline; }
   .runtime-row:last-child { margin-bottom: 0; }
-  .runtime-key { color: #6b7280; width: 90px; flex-shrink: 0; }
-  .runtime-val { color: #1a1a1a; font-family: "SF Mono", "Fira Code", monospace; }
+  .runtime-key {
+    color: var(--slate-500);
+    width: 96px;
+    flex-shrink: 0;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .runtime-val {
+    color: var(--on-surface);
+    font-family: var(--font-mono);
+    font-size: 12px;
+  }
 
+  /* Coverage panel */
   .coverage-card {
-    background: #fff;
-    border: 1px solid #e5e7eb;
-    border-radius: 8px;
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    border-radius: 6px;
     padding: 12px 16px;
     font-size: 12px;
   }
-  .coverage-empty { color: #6b7280; font-style: italic; }
+  .coverage-empty { color: var(--slate-500); font-style: italic; }
   .coverage-record {
-    border-top: 1px solid #f1f5f9;
+    border-top: 1px solid rgba(255,255,255,0.06);
     padding: 8px 0;
   }
   .coverage-record:first-child { border-top: 0; padding-top: 0; }
-  .coverage-record:last-child { padding-bottom: 0; }
+  .coverage-record:last-child  { padding-bottom: 0; }
   .coverage-status {
     display: inline-block;
-    padding: 1px 7px;
-    border-radius: 10px;
-    font-size: 10px;
-    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 9px;
+    font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.06em;
     margin-right: 6px;
   }
-  .coverage-status.covered { background: #dcfce7; color: #166534; }
-  .coverage-status.gap { background: #fee2e2; color: #991b1b; }
-  .coverage-status.partial { background: #fef3c7; color: #92400e; }
+  .coverage-status.covered { background: rgba(78, 222, 163, 0.12); color: var(--secondary); }
+  .coverage-status.gap     { background: rgba(255, 180, 171, 0.12); color: var(--error); }
+  .coverage-status.partial { background: rgba(252, 211, 77, 0.12); color: #fcd34d; }
   .coverage-meta {
-    color: #6b7280;
-    font-family: "SF Mono", "Fira Code", monospace;
+    color: var(--slate-500);
+    font-family: var(--font-mono);
     font-size: 11px;
   }
   .coverage-detail {
     margin-top: 4px;
-    font-family: "SF Mono", "Fira Code", monospace;
-    color: #1a1a1a;
+    font-family: var(--font-mono);
+    color: var(--on-surface);
     font-size: 11px;
     line-height: 1.5;
     word-break: break-all;
@@ -372,58 +926,80 @@
   .coverage-limitations {
     margin-top: 10px;
     padding-top: 8px;
-    border-top: 1px dashed #e5e7eb;
-    color: #6b7280;
+    border-top: 1px dashed var(--outline-variant);
+    color: var(--slate-500);
     font-size: 11px;
   }
   .coverage-limit-token {
     display: inline-block;
-    padding: 1px 6px;
+    padding: 2px 7px;
     margin-right: 4px;
     margin-bottom: 2px;
-    background: #f1f5f9;
+    background: var(--surface-container-high);
     border-radius: 4px;
-    font-family: "SF Mono", "Fira Code", monospace;
+    font-family: var(--font-mono);
     font-size: 10px;
-    color: #475569;
+    color: var(--slate-300);
   }
-  .coverage-limit-footer { margin-top: 4px; font-size: 10px; color: #6b7280; }
+  .coverage-limit-footer {
+    margin-top: 4px;
+    font-size: 10px;
+    color: var(--slate-500);
+  }
 
   .status-dot {
     display: inline-block;
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: #10b981;
-    margin-right: 4px;
+    background: var(--secondary);
+    margin-right: 6px;
   }
 
-  .placeholder-text { color: #9ca3af; font-style: italic; font-size: 13px; padding: 20px 0; text-align: center; }
+  .placeholder-text {
+    color: var(--slate-500);
+    font-style: italic;
+    font-size: 13px;
+    padding: 20px 0;
+    text-align: center;
+  }
 
   .http-status {
     display: inline-block;
     padding: 2px 8px;
     border-radius: 4px;
-    font-size: 12px;
-    font-family: monospace;
-    font-weight: 600;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    font-weight: 700;
   }
-  .http-2xx { background: #d1fae5; color: #065f46; }
-  .http-4xx { background: #fee2e2; color: #991b1b; }
-  .http-5xx { background: #fee2e2; color: #991b1b; }
+  .http-2xx { background: rgba(78, 222, 163, 0.14); color: var(--secondary); }
+  .http-4xx { background: rgba(255, 180, 171, 0.14); color: var(--error); }
+  .http-5xx { background: rgba(255, 180, 171, 0.18); color: var(--error); }
 
   .copy-btn {
-    font-size: 11px;
-    padding: 3px 10px;
-    border: 1px solid #d1d5db;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 4px 10px;
+    border: 1px solid var(--outline-variant);
     border-radius: 4px;
-    background: #fff;
+    background: transparent;
     cursor: pointer;
-    color: #6b7280;
+    color: var(--slate-400);
+    font-family: inherit;
+    transition: background 0.12s, color 0.12s, border-color 0.12s;
   }
-  .copy-btn:hover { background: #f3f4f6; }
-  .copy-btn.copied { color: #10b981; border-color: #10b981; }
+  .copy-btn:hover {
+    background: var(--surface-container);
+    color: var(--on-surface);
+  }
+  .copy-btn.copied {
+    color: var(--secondary);
+    border-color: var(--secondary);
+  }
 
+  /* Envelope inspector */
   .envelope-section { margin-bottom: 16px; }
   .envelope-bar {
     display: flex;
@@ -432,121 +1008,107 @@
     margin-bottom: 6px;
   }
   .envelope-summary {
-    background: #fff;
-    border: 1px solid #e5e7eb;
-    border-radius: 8px;
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    border-radius: 6px;
     padding: 10px 14px;
     font-size: 12px;
     margin-bottom: 8px;
     display: grid;
-    grid-template-columns: 90px 1fr;
+    grid-template-columns: 96px 1fr;
     gap: 4px 8px;
   }
-  .envelope-summary-key { color: #6b7280; }
-  .envelope-summary-val { color: #1a1a1a; font-family: "SF Mono", "Fira Code", monospace; }
-  .envelope-status-msg { font-size: 12px; color: #6b7280; padding: 4px 0; }
-
-  /* ── Mode selector bar (sits above layout, always visible on load) ────── */
-  .mode-selector-bar {
-    background: #fff;
-    border-bottom: 2px solid #e5e7eb;
-    padding: 10px 24px;
-    display: flex;
-    align-items: center;
-    gap: 16px;
+  .envelope-summary-key {
+    color: var(--slate-500);
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 0.08em;
   }
-  .mode-selector-bar .exec-mode-tabs {
-    border: 1px solid #d1d5db;
-    border-radius: 6px;
-    overflow: hidden;
-    display: flex;
+  .envelope-summary-val {
+    color: var(--on-surface);
+    font-family: var(--font-mono);
   }
-  .exec-mode-tab {
-    padding: 7px 22px;
-    text-align: center;
-    cursor: pointer;
-    font-size: 13px;
-    font-weight: 500;
-    background: #fff;
-    color: #6b7280;
-    border: none;
-    transition: background 0.15s, color 0.15s;
-  }
-  .exec-mode-tab:not(:last-child) { border-right: 1px solid #d1d5db; }
-  .exec-mode-tab.active { background: #3b82f6; color: #fff; }
-  .mode-bar-hint {
+  .envelope-status-msg {
     font-size: 12px;
-    color: #6b7280;
+    color: var(--slate-500);
+    padding: 4px 0;
   }
 
-  /* ── Contextual mode banner (green = evaluate, amber = simulate) ─────── */
-  .mode-banner { font-size: 12px; line-height: 1.5; }
-  .mode-banner-evaluate {
-    padding: 7px 24px;
-    background: #d1fae5;
-    border-bottom: 1px solid #6ee7b7;
-    color: #065f46;
-  }
-  .mode-banner-simulate {
-    padding: 7px 24px;
-    background: #fef3c7;
-    border-bottom: 1px solid #fcd34d;
-    color: #92400e;
-  }
+  /* The pre-existing top mode-selector-bar is dropped — Evaluate/Simulate
+     toggle now lives in the shell header. The .mode-banner element below
+     remains and is still ID-referenced by JS. */
 
-  /* ── Simulate CTA card ───────────────────────────────────────────────── */
+  /* Simulate-from-this CTA */
   .simulate-cta {
-    background: #eff6ff;
-    border: 2px solid #3b82f6;
-    border-radius: 8px;
+    background: rgba(173, 198, 255, 0.08);
+    border: 1px solid rgba(173, 198, 255, 0.25);
+    border-radius: 6px;
     padding: 12px 14px;
     display: flex;
     align-items: center;
     gap: 12px;
   }
   .simulate-cta-text { flex: 1; min-width: 0; }
-  .simulate-cta-text strong { display: block; font-size: 13px; color: #1e40af; margin-bottom: 2px; }
-  .simulate-cta-text span { font-size: 11px; color: #1e3a8a; }
+  .simulate-cta-text strong {
+    display: block;
+    font-size: 12px;
+    color: var(--primary);
+    margin-bottom: 2px;
+  }
+  .simulate-cta-text span {
+    font-size: 11px;
+    color: var(--on-surface-variant);
+  }
   .simulate-cta-btn { white-space: nowrap; flex-shrink: 0; }
 
-  /* ── Tabbed curl output ──────────────────────────────────────────────── */
+  /* Curl tabs */
   .curl-tabs {
     display: flex;
-    gap: 0;
-    border-bottom: 2px solid #334155;
+    border-bottom: 1px solid var(--outline-variant);
     margin-bottom: 0;
   }
   .curl-tab {
-    padding: 5px 14px;
-    font-size: 11px;
-    font-weight: 600;
+    padding: 6px 14px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
     background: transparent;
-    color: #94a3b8;
-    border: none;
+    color: var(--slate-500);
+    border: 0;
     cursor: pointer;
     border-bottom: 2px solid transparent;
-    margin-bottom: -2px;
-    transition: color 0.15s;
+    margin-bottom: -1px;
+    font-family: inherit;
+    transition: color 0.12s;
   }
-  .curl-tab:hover { color: #e2e8f0; }
-  .curl-tab.active { color: #e2e8f0; border-bottom-color: #3b82f6; }
-  .curl-panel { display: none; border-radius: 0 0 8px 8px; margin-top: 0; }
+  .curl-tab:hover { color: var(--slate-200); }
+  .curl-tab.active { color: var(--slate-200); border-bottom-color: var(--primary); }
+  .curl-panel {
+    display: none;
+    border-radius: 0 0 6px 6px;
+    margin-top: 0;
+  }
   .curl-panel.active { display: block; }
 
-  /* ── Quick-start list ────────────────────────────────────────────────── */
+  /* Quick-start list */
   .quick-start-list { list-style: none; padding: 0; margin: 6px 0 0; }
-  .quick-start-list li { font-size: 12px; color: #6b7280; padding: 2px 0; }
-  .quick-start-list strong { color: #374151; }
+  .quick-start-list li {
+    font-size: 12px;
+    color: var(--on-surface-variant);
+    padding: 2px 0;
+  }
+  .quick-start-list strong { color: var(--on-surface); font-weight: 600; }
 
-  /* Simulated result banner */
+  /* Simulated banner */
   .simulated-banner {
-    font-size: 11px;
-    font-weight: 600;
+    font-size: 10px;
+    font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
-    color: #6b7280;
-    background: #f3f4f6;
-    border: 1px solid #e5e7eb;
+    letter-spacing: 0.10em;
+    color: var(--slate-400);
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
     border-radius: 4px;
     padding: 4px 10px;
     margin-bottom: 8px;
@@ -554,7 +1116,7 @@
   }
   .simulated-banner.visible { display: block; }
 
-  /* Baseline comparison section */
+  /* Comparison */
   .comparison-section { margin-bottom: 16px; }
   .comparison-header {
     display: flex;
@@ -563,187 +1125,74 @@
     margin-bottom: 6px;
   }
   .comparison-card {
-    background: #fff;
-    border: 1px solid #e5e7eb;
-    border-radius: 8px;
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    border-radius: 6px;
     padding: 12px 16px;
     font-size: 12px;
   }
   .cmp-row {
     display: grid;
-    grid-template-columns: 90px 1fr;
+    grid-template-columns: 96px 1fr;
     gap: 4px 10px;
     margin-bottom: 8px;
     align-items: baseline;
   }
   .cmp-row:last-child { margin-bottom: 0; }
-  .cmp-key { color: #6b7280; font-weight: 500; }
-  .cmp-val { font-family: "SF Mono", "Fira Code", monospace; }
-  .cmp-same { color: #9ca3af; font-style: italic; font-family: inherit; }
+  .cmp-key {
+    color: var(--slate-500);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .cmp-val { font-family: var(--font-mono); }
+  .cmp-same { color: var(--slate-500); font-style: italic; font-family: inherit; }
   .cmp-change { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
-  .cmp-from { color: #ef4444; }
-  .cmp-arrow { color: #9ca3af; }
-  .cmp-to { color: #10b981; }
+  .cmp-from  { color: var(--error); }
+  .cmp-arrow { color: var(--slate-500); }
+  .cmp-to    { color: var(--secondary); }
 
-  @media (max-width: 900px) {
-    .layout { grid-template-columns: 1fr; }
-    .panel-left { border-right: none; border-bottom: 1px solid #e5e7eb; }
-  }
-  @media (max-width: 640px) {
-    .mode-selector-bar { padding: 8px 16px; flex-wrap: wrap; gap: 8px; }
-    .mode-bar-hint { font-size: 11px; }
-    .simulate-cta { flex-direction: column; align-items: flex-start; gap: 8px; }
-    .simulate-cta-btn { width: 100%; }
-    .curl-tabs { overflow-x: auto; }
-  }
-
-  /* ── Local IAM overlays ─────────────────────────────────────────────────── */
-  .iam-overlay {
-    display: none;
-    position: fixed;
-    inset: 0;
-    background: rgba(0,0,0,0.55);
-    z-index: 1000;
-    align-items: center;
-    justify-content: center;
-  }
-  .iam-overlay.visible { display: flex; }
-
-  .iam-card {
-    background: #fff;
-    border-radius: 10px;
-    padding: 32px 36px;
-    width: 100%;
-    max-width: 380px;
-    box-shadow: 0 20px 60px rgba(0,0,0,0.2);
-  }
-  .iam-card h2 {
-    font-size: 18px;
-    font-weight: 700;
-    color: #1a1a2e;
-    margin-bottom: 6px;
-  }
-  .iam-card p {
-    font-size: 13px;
-    color: #6b7280;
-    margin-bottom: 20px;
-  }
-  .iam-field { margin-bottom: 14px; }
-  .iam-field label { display: block; font-size: 13px; font-weight: 500; color: #374151; margin-bottom: 4px; }
-  .iam-field input {
-    width: 100%;
-    padding: 8px 10px;
-    border: 1px solid #d1d5db;
-    border-radius: 6px;
-    font-size: 13px;
-    font-family: inherit;
-    background: #fff;
-    color: #1a1a1a;
-    transition: border-color 0.15s;
-  }
-  .iam-field input:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
-  .iam-submit {
-    width: 100%;
-    padding: 9px 0;
-    background: #1a1a2e;
-    color: #fff;
-    font-size: 14px;
-    font-weight: 600;
-    border: none;
-    border-radius: 6px;
-    cursor: pointer;
-    margin-top: 4px;
-    transition: background 0.15s;
-  }
-  .iam-submit:hover { background: #2d2d4e; }
-  .iam-submit:disabled { background: #9ca3af; cursor: not-allowed; }
-  .iam-error {
-    margin-top: 12px;
-    padding: 8px 12px;
-    background: #fee2e2;
-    border: 1px solid #fca5a5;
-    border-radius: 6px;
-    font-size: 12px;
-    color: #991b1b;
-    display: none;
-  }
-  .iam-error.visible { display: block; }
-  .iam-login-hint {
-    margin-top: 14px;
-    padding: 10px 12px;
-    background: #f0f9ff;
-    border: 1px solid #bae6fd;
-    border-radius: 6px;
-    font-size: 11px;
-    color: #0369a1;
-    line-height: 1.6;
-    display: none;
-  }
-  .iam-login-hint.visible { display: block; }
-  .iam-login-hint strong { display: block; font-weight: 600; margin-bottom: 2px; }
-  .iam-login-hint .iam-hint-entry + .iam-hint-entry { margin-top: 8px; border-top: 1px solid #bae6fd; padding-top: 8px; }
-
-  /* user pill in header */
-  #iam-user-pill {
-    display: none;
-    align-items: center;
-    gap: 8px;
-    font-size: 12px;
-    color: #94a3b8;
-  }
-  #iam-user-pill.visible { display: flex; }
-  #iam-logout-btn {
-    background: transparent;
-    border: 1px solid #4b5563;
-    color: #d1d5db;
-    font-size: 11px;
-    padding: 3px 8px;
-    border-radius: 4px;
-    cursor: pointer;
-  }
-  #iam-logout-btn:hover { background: rgba(255,255,255,0.1); }
-
-  .badge-clarify { background: #ede9fe; color: #4c1d95; }
-
-  /* ── Auth gate blur ─────────────────────────────────────────────────────── */
-  .layout-gated {
-    filter: blur(3px);
-    pointer-events: none;
-    user-select: none;
-  }
-
-  /* ── Decision explanation panel ─────────────────────────────────────────── */
+  /* Decision-explanation / authority-chain panels */
   .decision-panel {
-    background: #fff;
-    border: 1px solid #e5e7eb;
-    border-radius: 8px;
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    border-radius: 6px;
     padding: 12px 16px;
     margin-bottom: 16px;
     font-size: 12px;
   }
   .decision-panel-title {
-    font-size: 11px;
-    font-weight: 600;
+    font-size: 10px;
+    font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.6px;
-    color: #6b7280;
+    letter-spacing: 0.10em;
+    color: var(--slate-500);
     margin-bottom: 10px;
   }
   .explain-row {
     display: flex;
     justify-content: space-between;
     align-items: baseline;
-    padding: 5px 0;
-    border-bottom: 1px solid #f3f4f6;
+    padding: 6px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
     gap: 12px;
   }
   .explain-row:last-child { border-bottom: none; }
-  .explain-key { color: #6b7280; flex-shrink: 0; }
-  .explain-val { font-family: "SF Mono", "Fira Code", monospace; color: #1a1a1a; text-align: right; }
-  .explain-pass { color: #10b981; font-weight: 700; margin-left: 6px; }
-  .explain-fail { color: #ef4444; font-weight: 700; margin-left: 6px; }
+  .explain-key {
+    color: var(--slate-400);
+    flex-shrink: 0;
+    font-size: 11px;
+  }
+  .explain-val {
+    font-family: var(--font-mono);
+    color: var(--on-surface);
+    text-align: right;
+    font-size: 11px;
+  }
+  .explain-pass { color: var(--secondary); font-weight: 700; margin-left: 6px; }
+  .explain-fail { color: var(--error);    font-weight: 700; margin-left: 6px; }
 
-  /* ── Authority chain ─────────────────────────────────────────────────────── */
+  /* Authority chain — flow nodes */
   .chain-flow {
     display: flex;
     align-items: center;
@@ -752,67 +1201,72 @@
     margin-top: 4px;
   }
   .chain-node {
-    background: #f3f4f6;
-    border: 1px solid #e5e7eb;
+    background: var(--surface-container-high);
+    border: 1px solid var(--outline-variant);
     border-radius: 5px;
-    padding: 5px 9px;
+    padding: 6px 10px;
   }
   .chain-node-label {
     font-size: 9px;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
-    color: #9ca3af;
-    font-weight: 600;
-    margin-bottom: 1px;
+    letter-spacing: 0.06em;
+    color: var(--slate-500);
+    font-weight: 700;
+    margin-bottom: 2px;
   }
   .chain-node-id {
-    font-family: "SF Mono", "Fira Code", monospace;
+    font-family: var(--font-mono);
     font-size: 11px;
-    color: #1a1a1a;
+    color: var(--on-surface);
     word-break: break-all;
   }
-  .chain-node-version { font-size: 10px; color: #9ca3af; margin-left: 4px; }
-  .chain-arrow { color: #9ca3af; font-size: 14px; padding: 0 2px; }
+  .chain-node-version { font-size: 10px; color: var(--slate-500); margin-left: 4px; }
+  .chain-arrow { color: var(--slate-500); font-size: 14px; padding: 0 2px; }
 
-  /* ── Resource reference cards ────────────────────────────────────────────── */
+  /* Resource cards */
   .resource-cards-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 6px;
   }
   .resource-card {
-    background: #f9fafb;
-    border: 1px solid #e5e7eb;
-    border-radius: 6px;
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    border-radius: 5px;
     padding: 8px 10px;
     font-size: 11px;
   }
   .resource-card-type {
     font-size: 9px;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
-    color: #9ca3af;
+    letter-spacing: 0.06em;
+    color: var(--slate-500);
     font-weight: 700;
     margin-bottom: 2px;
   }
   .resource-card-name {
     font-weight: 600;
-    color: #1a1a1a;
+    color: var(--on-surface);
     font-size: 12px;
     margin-bottom: 2px;
   }
   .resource-card-id {
-    font-family: "SF Mono", "Fira Code", monospace;
-    color: #6b7280;
+    font-family: var(--font-mono);
+    color: var(--slate-400);
     word-break: break-all;
     font-size: 10px;
   }
+  .resource-card-detail {
+    color: var(--slate-500);
+    margin-top: 2px;
+    font-size: 10px;
+  }
 
-  /* ── Structural context: BusinessService-grouped display ──────────────── */
+  /* Structural-context blocks */
   .structural-svc-block {
-    background: #f0f7ff;
-    border: 1px solid #bfdbfe;
-    border-radius: 6px;
+    background: rgba(173, 198, 255, 0.04);
+    border: 1px solid rgba(173, 198, 255, 0.18);
+    border-radius: 5px;
     padding: 10px 12px;
     margin-bottom: 8px;
   }
@@ -827,25 +1281,25 @@
     font-size: 9px;
     font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
-    color: #1e40af;
+    letter-spacing: 0.06em;
+    color: var(--primary);
   }
   .structural-svc-header-name {
     font-size: 13px;
     font-weight: 700;
-    color: #1e3a8a;
+    color: var(--on-surface);
   }
   .structural-svc-header-id {
-    font-family: "SF Mono", "Fira Code", monospace;
+    font-family: var(--font-mono);
     font-size: 10px;
-    color: #64748b;
+    color: var(--slate-500);
   }
   .structural-svc-section-label {
     font-size: 9px;
-    font-weight: 600;
+    font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.4px;
-    color: #64748b;
+    letter-spacing: 0.06em;
+    color: var(--slate-500);
     margin-top: 6px;
     margin-bottom: 3px;
   }
@@ -856,8 +1310,8 @@
     margin-bottom: 4px;
   }
   .structural-svc-cap-pill {
-    background: #fff;
-    border: 1px solid #bfdbfe;
+    background: var(--surface-container-high);
+    border: 1px solid var(--outline-variant);
     border-radius: 999px;
     padding: 2px 8px;
     display: inline-flex;
@@ -867,19 +1321,19 @@
   .structural-svc-cap-pill-name {
     font-size: 11px;
     font-weight: 600;
-    color: #1e3a8a;
+    color: var(--on-surface);
   }
   .structural-svc-cap-pill-id {
-    font-family: "SF Mono", "Fira Code", monospace;
+    font-family: var(--font-mono);
     font-size: 9px;
-    color: #64748b;
+    color: var(--slate-500);
   }
   .structural-svc-empty-caps {
     font-size: 11px;
     font-style: italic;
-    color: #92400e;
-    background: #fef3c7;
-    border: 1px solid #fcd34d;
+    color: #fcd34d;
+    background: rgba(252, 211, 77, 0.08);
+    border: 1px solid rgba(252, 211, 77, 0.20);
     border-radius: 4px;
     padding: 3px 8px;
     display: inline-block;
@@ -890,10 +1344,10 @@
     gap: 4px;
   }
   .structural-svc-process {
-    background: #fff;
-    border: 1px solid #bfdbfe;
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
     border-radius: 4px;
-    padding: 5px 8px;
+    padding: 6px 9px;
   }
   .structural-svc-process-header {
     display: flex;
@@ -904,20 +1358,20 @@
   }
   .structural-svc-process-label {
     font-size: 9px;
-    font-weight: 600;
+    font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.4px;
-    color: #64748b;
+    letter-spacing: 0.06em;
+    color: var(--slate-500);
   }
   .structural-svc-process-name {
     font-size: 11px;
     font-weight: 600;
-    color: #1e3a8a;
+    color: var(--on-surface);
   }
   .structural-svc-process-id {
-    font-family: "SF Mono", "Fira Code", monospace;
+    font-family: var(--font-mono);
     font-size: 9px;
-    color: #64748b;
+    color: var(--slate-500);
   }
   .structural-svc-surface {
     display: flex;
@@ -931,18 +1385,1453 @@
   .structural-svc-surface-label {
     font-size: 9px;
     text-transform: uppercase;
-    letter-spacing: 0.4px;
-    color: #64748b;
+    letter-spacing: 0.06em;
+    color: var(--slate-500);
   }
-  .structural-svc-surface-name {
-    color: #1e3a8a;
-  }
+  .structural-svc-surface-name { color: var(--on-surface); }
   .structural-svc-surface-id {
-    font-family: "SF Mono", "Fira Code", monospace;
+    font-family: var(--font-mono);
     font-size: 9px;
-    color: #64748b;
+    color: var(--slate-500);
   }
-  .resource-card-detail { color: #9ca3af; margin-top: 2px; font-size: 10px; }
+
+  /* ──────────────────────────────────────────────────────────────────────
+     Local IAM overlays
+     ────────────────────────────────────────────────────────────────────── */
+
+  .iam-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.65);
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
+  }
+  .iam-overlay.visible { display: flex; }
+
+  .iam-card {
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    border-radius: 8px;
+    padding: 32px 36px;
+    width: 100%;
+    max-width: 380px;
+    box-shadow: 0 24px 64px rgba(0,0,0,0.4);
+    color: var(--on-surface);
+  }
+  .iam-card h2 {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--on-surface);
+    margin-bottom: 6px;
+    font-family: var(--font-display);
+  }
+  .iam-card p {
+    font-size: 13px;
+    color: var(--on-surface-variant);
+    margin-bottom: 20px;
+  }
+  .iam-field { margin-bottom: 14px; }
+  .iam-field label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--on-surface-variant);
+    margin-bottom: 4px;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .iam-field input {
+    width: 100%;
+    padding: 9px 12px;
+    border: 1px solid var(--outline-variant);
+    border-radius: 4px;
+    font-size: 13px;
+    font-family: inherit;
+    background: var(--surface-container-lowest);
+    color: var(--on-surface);
+    transition: border-color 0.12s;
+  }
+  .iam-field input:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px rgba(173,198,255,0.18);
+  }
+  .iam-submit {
+    width: 100%;
+    padding: 10px 0;
+    background: var(--primary);
+    color: var(--on-primary);
+    font-size: 14px;
+    font-weight: 700;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-top: 4px;
+    font-family: inherit;
+    transition: opacity 0.12s;
+  }
+  .iam-submit:hover { opacity: 0.9; }
+  .iam-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+  .iam-error {
+    margin-top: 12px;
+    padding: 8px 12px;
+    background: rgba(255, 180, 171, 0.12);
+    border: 1px solid rgba(255, 180, 171, 0.30);
+    border-radius: 4px;
+    font-size: 12px;
+    color: var(--error);
+    display: none;
+  }
+  .iam-error.visible { display: block; }
+  .iam-login-hint {
+    margin-top: 14px;
+    padding: 10px 12px;
+    background: rgba(173, 198, 255, 0.06);
+    border: 1px solid rgba(173, 198, 255, 0.20);
+    border-radius: 4px;
+    font-size: 11px;
+    color: var(--on-surface-variant);
+    line-height: 1.6;
+    display: none;
+  }
+  .iam-login-hint.visible { display: block; }
+  .iam-login-hint strong { display: block; font-weight: 700; color: var(--primary); margin-bottom: 2px; }
+  .iam-login-hint .iam-hint-entry + .iam-hint-entry {
+    margin-top: 8px;
+    border-top: 1px solid rgba(173, 198, 255, 0.18);
+    padding-top: 8px;
+  }
+
+  /* ──────────────────────────────────────────────────────────────────────
+     Evaluate view (Cluster 3)
+     Three-column workbench layout: request builder | governed decision |
+     decision evidence. Each column is a card on the dark canvas. Existing
+     IDs are preserved verbatim — only their parent containers change.
+     ────────────────────────────────────────────────────────────────────── */
+
+  .evaluate-view {
+    padding: 24px;
+  }
+  .evaluate-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 24px;
+    align-items: start;
+  }
+  .evaluate-col {
+    background: var(--surface-container-low);
+    border: 1px solid var(--outline-variant);
+    border-radius: 8px;
+    padding: 22px;
+    min-width: 0;
+  }
+  .evaluate-col-request  { border-left: 2px solid var(--primary); }
+  .evaluate-col-decision { background: var(--surface-container-high); }
+
+  .evaluate-col-header { margin-bottom: 18px; }
+  .evaluate-col-header h2 {
+    font-size: 20px;
+    font-weight: 700;
+    font-family: var(--font-display);
+    letter-spacing: -0.01em;
+    color: var(--primary);
+    margin-bottom: 4px;
+  }
+  .evaluate-col-header p {
+    font-size: 12px;
+    color: var(--on-surface-variant);
+  }
+  .evaluate-col-decision .evaluate-col-header h2 { color: var(--on-surface); }
+
+  /* Decision column — centre-aligned hero outcome */
+  .evaluate-col-decision .outcome-card {
+    text-align: center;
+  }
+  .evaluate-col-decision .outcome-card .outcome-label {
+    font-size: 36px;
+    margin-bottom: 8px;
+  }
+  .evaluate-col-decision .meta-row {
+    justify-content: center;
+  }
+
+  /* Technical Details — demoted block at the bottom of the evidence column */
+  .evaluate-tech-section {
+    margin-top: 24px;
+    padding-top: 18px;
+    border-top: 1px solid var(--outline-variant);
+  }
+  .evaluate-tech-title {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--slate-500);
+    margin-bottom: 12px;
+  }
+
+  .evaluate-coverage-row {
+    margin-top: 24px;
+  }
+  .evaluate-coverage-row .section-title {
+    margin-bottom: 8px;
+  }
+
+  @media (max-width: 1280px) {
+    .evaluate-grid { grid-template-columns: 1fr; }
+  }
+
+  /* ──────────────────────────────────────────────────────────────────────
+     Settings view (Cluster 5)
+     Two-column grid: left has Environment / Demo Data / Decision Records;
+     right has Authentication / Runtime Context / Danger Zone. Every
+     destructive action is disabled with a "not wired yet" tooltip — no
+     fake mutations, no invented backend.
+     ────────────────────────────────────────────────────────────────────── */
+
+  .settings-view { padding: 24px; }
+
+  .settings-grid {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 24px;
+    align-items: start;
+  }
+  .settings-col-main,
+  .settings-col-side {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  .settings-card {
+    background: var(--surface-container-low);
+    border: 1px solid rgba(255,255,255,0.05);
+    border-radius: 8px;
+    padding: 22px;
+  }
+  .settings-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 18px;
+    gap: 12px;
+  }
+  .settings-card-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 18px;
+    font-weight: 700;
+    font-family: var(--font-display);
+    letter-spacing: -0.01em;
+    color: var(--on-surface);
+    margin: 0;
+  }
+  .settings-card-title-glyph {
+    color: var(--primary);
+    font-size: 16px;
+    width: 18px;
+    text-align: center;
+  }
+  .settings-version-chip {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--slate-500);
+    background: var(--surface-container-highest);
+    padding: 4px 10px;
+    border-radius: 4px;
+  }
+
+  .settings-env-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+  }
+  .settings-env-cell {
+    background: var(--surface-container-lowest);
+    border: 1px solid rgba(255,255,255,0.05);
+    border-radius: 4px;
+    padding: 14px;
+  }
+  .settings-env-cell-label {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--slate-500);
+    margin-bottom: 6px;
+  }
+  .settings-env-cell-value {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--on-surface);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .settings-env-cell-value.ok        { color: var(--secondary); }
+  .settings-env-cell-value.primary   { color: var(--primary); }
+  .settings-env-cell-value.tertiary  { color: var(--tertiary); }
+  .settings-env-cell-value.warn      { color: #fcd34d; }
+  .settings-env-cell-value.muted     { color: var(--slate-500); font-style: italic; text-transform: none; }
+  .settings-env-cell-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .settings-counts {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px 16px;
+    margin-bottom: 22px;
+  }
+  .settings-count-item {
+    border-left: 2px solid var(--primary);
+    padding: 4px 0 4px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .settings-count-value {
+    font-family: var(--font-display);
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--on-surface);
+    letter-spacing: -0.01em;
+    line-height: 1.1;
+  }
+  .settings-count-label {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--slate-500);
+    font-weight: 700;
+  }
+
+  .settings-explanatory {
+    font-size: 13px;
+    color: var(--on-surface-variant);
+    margin-bottom: 18px;
+    line-height: 1.55;
+  }
+
+  .settings-actions {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .btn-error {
+    background: transparent;
+    border: 1px solid var(--error);
+    color: var(--error);
+  }
+  .btn-error:hover:not(:disabled) {
+    background: rgba(255, 180, 171, 0.08);
+  }
+  .btn-danger {
+    width: 100%;
+    background: var(--error);
+    color: var(--on-error);
+    font-size: 12px;
+  }
+  .btn-danger:disabled {
+    background: rgba(255, 180, 171, 0.18);
+    color: var(--error);
+    border-color: rgba(255, 180, 171, 0.20);
+  }
+
+  .settings-warning {
+    margin-top: 16px;
+    padding: 12px 14px;
+    background: rgba(255, 180, 171, 0.06);
+    border-left: 3px solid var(--error);
+    border-radius: 0 4px 4px 0;
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+  }
+  .settings-warning-glyph {
+    color: var(--error);
+    font-size: 16px;
+    flex-shrink: 0;
+  }
+  .settings-warning-text {
+    font-size: 11px;
+    color: var(--error);
+    opacity: 0.92;
+    line-height: 1.55;
+  }
+  .settings-warning-text strong {
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-right: 4px;
+  }
+
+  .settings-records-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+  .settings-records-stat {
+    background: var(--surface-container);
+    border: 1px solid rgba(255,255,255,0.05);
+    border-radius: 4px;
+    padding: 18px 14px;
+    text-align: center;
+  }
+  .settings-records-stat-value {
+    font-family: var(--font-display);
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--on-surface);
+    letter-spacing: -0.01em;
+    display: block;
+    margin-bottom: 4px;
+    line-height: 1.1;
+  }
+  .settings-records-stat-label {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--slate-500);
+  }
+
+  .settings-last-update {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 700;
+    color: var(--slate-300);
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    padding: 4px 10px;
+    border-radius: 999px;
+  }
+  .settings-last-update-glyph { color: var(--secondary); }
+
+  .settings-records-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  .settings-records-actions .btn-ghost {
+    width: 100%;
+    text-align: center;
+    font-size: 11px;
+  }
+
+  .settings-auth-rows {
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 22px;
+  }
+  .settings-auth-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+  }
+  .settings-auth-row:last-child { border-bottom: 0; }
+  .settings-auth-key {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--slate-500);
+    font-weight: 700;
+  }
+  .settings-auth-val {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--on-surface);
+  }
+  .settings-auth-val.ok    { color: var(--secondary); }
+  .settings-auth-val.muted { color: var(--slate-500); font-style: italic; }
+  .settings-auth-val.warn  { color: #fcd34d; }
+
+  .settings-signout {
+    width: 100%;
+    padding: 11px 0;
+    background: var(--surface-container-highest);
+    color: var(--slate-500);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    font-size: 11px;
+    border: 1px solid var(--outline-variant);
+    border-radius: 4px;
+    cursor: not-allowed;
+    font-family: inherit;
+  }
+  .settings-signout:not(:disabled) {
+    color: var(--on-surface);
+    background: var(--surface-container-high);
+    cursor: pointer;
+  }
+  .settings-signout:not(:disabled):hover {
+    background: var(--surface-bright);
+  }
+  .settings-signout-note {
+    margin-top: 10px;
+    font-size: 10px;
+    text-align: center;
+    color: var(--slate-500);
+    font-style: italic;
+  }
+
+  .settings-danger {
+    border-color: rgba(255, 180, 171, 0.25);
+    background: rgba(255, 180, 171, 0.04);
+  }
+  .settings-danger .settings-card-title         { color: var(--error); }
+  .settings-danger .settings-card-title-glyph   { color: var(--error); }
+  .settings-danger-copy {
+    font-size: 12px;
+    color: var(--error);
+    opacity: 0.88;
+    margin-bottom: 18px;
+    line-height: 1.55;
+  }
+
+  /* Make runtime-card look at home inside the Runtime Context card */
+  .settings-card .runtime-card {
+    border: 0;
+    background: var(--surface-container-lowest);
+    padding: 12px 14px;
+  }
+
+  @media (max-width: 1280px) {
+    .settings-counts { grid-template-columns: repeat(3, 1fr); }
+  }
+  @media (max-width: 1100px) {
+    .settings-grid { grid-template-columns: 1fr; }
+    .settings-records-stats { grid-template-columns: 1fr; }
+    .settings-records-actions { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 720px) {
+    .settings-env-grid { grid-template-columns: 1fr 1fr; }
+    .settings-counts   { grid-template-columns: 1fr 1fr; }
+  }
+
+  /* ──────────────────────────────────────────────────────────────────────
+     Records view (Cluster 4)
+     Header + 6-cell metrics row + 2-column body (records table | detail
+     rail) + canonical coverage panel below. Demo data only — no list
+     endpoint yet; demo state is clearly badged.
+     ────────────────────────────────────────────────────────────────────── */
+
+  .records-view { padding: 24px; }
+
+  .records-page-header {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    margin-bottom: 18px;
+    gap: 12px;
+  }
+  .records-page-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 4px;
+  }
+  .records-page-title h2 {
+    font-size: 22px;
+    font-weight: 700;
+    font-family: var(--font-display);
+    letter-spacing: -0.01em;
+    color: var(--on-surface);
+  }
+  .records-page-title-badge {
+    font-size: 8px;
+    background: rgba(78, 222, 163, 0.10);
+    color: var(--secondary);
+    border: 1px solid rgba(78, 222, 163, 0.20);
+    padding: 2px 7px;
+    border-radius: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    font-weight: 700;
+  }
+  .records-page-subtitle {
+    font-size: 12px;
+    color: var(--slate-500);
+  }
+
+  .records-metrics {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .records-metric {
+    background: var(--surface-container-low);
+    border: 1px solid rgba(255,255,255,0.05);
+    border-left: 2px solid var(--outline-variant);
+    border-radius: 4px;
+    padding: 14px 16px;
+  }
+  .records-metric-label {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--slate-500);
+    margin-bottom: 4px;
+  }
+  .records-metric-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .records-metric-value {
+    font-family: var(--font-display);
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--on-surface);
+    letter-spacing: -0.01em;
+    line-height: 1.1;
+  }
+  .records-metric-glyph {
+    font-size: 18px;
+    opacity: 0.30;
+  }
+  .records-metric.accept   { border-left-color: var(--secondary); }
+  .records-metric.accept .records-metric-value,
+  .records-metric.accept .records-metric-glyph   { color: var(--secondary); }
+  .records-metric.escalate { border-left-color: #fcd34d; }
+  .records-metric.escalate .records-metric-value,
+  .records-metric.escalate .records-metric-glyph { color: #fcd34d; }
+  .records-metric.reject   { border-left-color: var(--error); }
+  .records-metric.reject .records-metric-value,
+  .records-metric.reject .records-metric-glyph   { color: var(--error); }
+  .records-metric.clarify  { border-left-color: #c084fc; }
+  .records-metric.clarify .records-metric-value,
+  .records-metric.clarify .records-metric-glyph  { color: #c084fc; }
+  .records-metric.gap {
+    background: rgba(255, 180, 171, 0.06);
+    border: 1px solid rgba(255, 180, 171, 0.20);
+    border-left: 1px solid rgba(255, 180, 171, 0.20);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+  }
+  .records-metric.gap .records-metric-label { color: var(--error); margin-bottom: 4px; }
+  .records-metric.gap .records-metric-value { color: var(--error); }
+
+  .records-grid {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 24px;
+    align-items: start;
+  }
+
+  .records-table-card {
+    background: var(--surface-container-low);
+    border: 1px solid rgba(255,255,255,0.05);
+    border-radius: 4px;
+    overflow: hidden;
+    box-shadow: 0 12px 32px rgba(0,0,0,0.20);
+  }
+  .records-table-toolbar {
+    padding: 12px 16px;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    background: rgba(255,255,255,0.01);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+  }
+  .records-toolbar-left {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .records-search {
+    width: 240px;
+    padding: 6px 10px;
+    background: var(--bg);
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 4px;
+    color: var(--slate-200);
+    font-size: 11px;
+    font-family: inherit;
+  }
+  .records-toolbar-btn {
+    padding: 6px 12px;
+    background: var(--bg);
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 4px;
+    color: var(--slate-400);
+    font-size: 10px;
+    font-family: inherit;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 700;
+  }
+  .records-toolbar-btn:hover { color: var(--on-surface); }
+  .records-toolbar-icon-btn {
+    padding: 6px 8px;
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 4px;
+    color: var(--slate-400);
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .records-toolbar-icon-btn:hover { background: rgba(255,255,255,0.05); }
+
+  .records-table-scroll {
+    max-height: 480px;
+    overflow-y: auto;
+  }
+  .records-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+    text-align: left;
+  }
+  .records-table thead th {
+    position: sticky;
+    top: 0;
+    background: var(--surface-container-low);
+    border-bottom: 1px solid rgba(255,255,255,0.10);
+    padding: 10px 12px;
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--slate-500);
+  }
+  .records-table tbody tr {
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    cursor: pointer;
+    transition: background 0.10s;
+    border-left: 2px solid transparent;
+  }
+  .records-table tbody tr:hover { background: rgba(255,255,255,0.03); }
+  .records-table tbody tr.selected {
+    background: rgba(173,198,255,0.05);
+    border-left-color: var(--secondary);
+  }
+  .records-table tbody td {
+    padding: 10px 12px;
+    vertical-align: middle;
+  }
+  .records-table .col-mono         { font-family: var(--font-mono); color: var(--slate-300); }
+  .records-table .col-mono-primary { font-family: var(--font-mono); color: var(--primary); }
+  .records-table .col-meta         { color: var(--slate-400); }
+  .records-table .col-reason       { font-family: var(--font-mono); color: var(--slate-500); text-transform: uppercase; }
+  .records-table .col-time         { color: var(--slate-500); }
+  .records-table .col-integrity    { text-align: center; color: var(--secondary); }
+
+  .records-outcome-badge {
+    display: inline-block;
+    font-size: 9px;
+    padding: 2px 7px;
+    border-radius: 3px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    border: 1px solid;
+    background: transparent;
+    white-space: nowrap;
+  }
+  .records-outcome-badge.accept   { background: rgba(78, 222, 163, 0.10); color: var(--secondary); border-color: rgba(78, 222, 163, 0.20); }
+  .records-outcome-badge.escalate { background: rgba(252, 211, 77, 0.10); color: #fcd34d; border-color: rgba(252, 211, 77, 0.20); }
+  .records-outcome-badge.reject   { background: rgba(255, 180, 171, 0.10); color: var(--error); border-color: rgba(255, 180, 171, 0.20); }
+  .records-outcome-badge.clarify  { background: rgba(192, 132, 252, 0.10); color: #c084fc; border-color: rgba(192, 132, 252, 0.20); }
+
+  .records-detail {
+    background: var(--surface-container-high);
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 4px;
+    overflow: hidden;
+    position: sticky;
+    top: calc(var(--header-height) + 16px);
+    box-shadow: 0 16px 40px rgba(0,0,0,0.30);
+  }
+  .records-detail-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    background: rgba(255,255,255,0.02);
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .records-detail-id {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--on-surface);
+  }
+  .records-detail-subtitle {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--slate-500);
+    font-weight: 700;
+    margin-top: 2px;
+  }
+  .records-detail-close {
+    background: transparent;
+    border: 0;
+    color: var(--slate-500);
+    font-size: 18px;
+    cursor: pointer;
+    padding: 0 4px;
+    line-height: 1;
+  }
+  .records-detail-close:hover { color: var(--on-surface); }
+  .records-detail-body {
+    padding: 18px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    max-height: calc(100vh - var(--header-height) - var(--footer-height) - 140px);
+    overflow-y: auto;
+  }
+  .records-detail-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+  }
+  .records-detail-cell-key {
+    font-size: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--slate-500);
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+  .records-detail-cell-val {
+    font-size: 11px;
+    color: var(--on-surface);
+    font-family: var(--font-mono);
+  }
+  .records-detail-cell-text { font-family: inherit; font-size: 11px; color: var(--on-surface); }
+  .records-detail-section-label {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--slate-500);
+    font-weight: 700;
+    margin-bottom: 12px;
+  }
+
+  .records-authority-path {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    position: relative;
+    padding-left: 4px;
+  }
+  .records-authority-path::before {
+    content: '';
+    position: absolute;
+    left: 11px;
+    top: 8px;
+    bottom: 8px;
+    width: 1px;
+    background: rgba(255,255,255,0.10);
+  }
+  .records-authority-node {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    position: relative;
+  }
+  .records-authority-node-dot {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    z-index: 1;
+    box-shadow: 0 0 0 4px var(--surface-container-high);
+  }
+  .records-authority-node.agent      .records-authority-node-dot { background: var(--primary); color: var(--on-primary); }
+  .records-authority-node.grant      .records-authority-node-dot { background: rgba(52,211,153,0.20); border: 1px solid rgba(52,211,153,0.50); color: var(--chain-grant); }
+  .records-authority-node.profile    .records-authority-node-dot { background: rgba(192,132,252,0.20); border: 1px solid rgba(192,132,252,0.50); color: var(--chain-profile); }
+  .records-authority-node.surface    .records-authority-node-dot { background: rgba(96,165,250,0.20); border: 1px solid rgba(96,165,250,0.50); color: var(--chain-surface); }
+  .records-authority-node.process    .records-authority-node-dot,
+  .records-authority-node.capability .records-authority-node-dot,
+  .records-authority-node.bs         .records-authority-node-dot { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.15); color: var(--slate-400); }
+  .records-authority-node.bs         .records-authority-node-dot { background: rgba(78,222,163,0.10); border-color: rgba(78,222,163,0.30); color: var(--secondary); }
+  .records-authority-node-text {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .records-authority-node-label {
+    font-size: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--slate-500);
+    font-weight: 700;
+  }
+  .records-authority-node-id { font-family: var(--font-mono); font-size: 11px; }
+  .records-authority-node.agent   .records-authority-node-id { color: var(--primary); }
+  .records-authority-node.grant   .records-authority-node-id { color: var(--chain-grant); }
+  .records-authority-node.profile .records-authority-node-id { color: var(--chain-profile); }
+  .records-authority-node.surface .records-authority-node-id { color: var(--chain-surface); }
+  .records-authority-node.process .records-authority-node-id,
+  .records-authority-node.capability .records-authority-node-id,
+  .records-authority-node.bs .records-authority-node-id {
+    color: var(--on-surface);
+    font-family: inherit;
+  }
+
+  .records-evidence {
+    background: var(--surface-container);
+    border: 1px solid rgba(255,255,255,0.05);
+    border-radius: 4px;
+    padding: 14px;
+  }
+  .records-evidence-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    font-size: 11px;
+    align-items: center;
+  }
+  .records-evidence-row:last-child { border-bottom: 0; }
+  .records-evidence-key { color: var(--slate-400); }
+  .records-evidence-val { font-family: var(--font-mono); color: var(--on-surface); }
+  .records-evidence-pass {
+    color: var(--secondary);
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 9px;
+    letter-spacing: 0.06em;
+    margin-left: 8px;
+  }
+  .records-evidence-note {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(255,255,255,0.05);
+    font-size: 10px;
+    color: var(--slate-500);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .records-coverage-limit {
+    background: rgba(173, 198, 255, 0.04);
+    border-left: 2px solid rgba(173, 198, 255, 0.30);
+    padding: 12px 14px;
+    border-radius: 0 4px 4px 0;
+  }
+  .records-coverage-limit-label {
+    font-size: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--slate-500);
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+  .records-coverage-limit-text {
+    font-size: 11px;
+    color: var(--slate-400);
+    font-style: italic;
+    line-height: 1.5;
+  }
+
+  .records-resources-title {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--slate-500);
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+  .records-resource-action {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+    padding: 10px 12px;
+    background: var(--bg);
+    border: 1px solid rgba(255,255,255,0.05);
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--slate-400);
+    cursor: pointer;
+    font-family: inherit;
+    margin-bottom: 8px;
+    transition: border-color 0.12s, color 0.12s;
+  }
+  .records-resource-action:last-child { margin-bottom: 0; }
+  .records-resource-action:hover:not(:disabled) {
+    border-color: rgba(173, 198, 255, 0.30);
+    color: var(--primary);
+  }
+  .records-resource-action:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+  .records-resource-action-glyph { color: var(--slate-500); font-size: 12px; }
+
+  .records-coverage-section {
+    margin-top: 24px;
+  }
+  .records-coverage-section .section-title {
+    margin-bottom: 8px;
+  }
+
+  @media (max-width: 1280px) {
+    .records-metrics { grid-template-columns: repeat(3, 1fr); }
+  }
+  @media (max-width: 1100px) {
+    .records-grid { grid-template-columns: 1fr; }
+    .records-detail { position: static; }
+    .records-detail-body { max-height: none; }
+  }
+  @media (max-width: 720px) {
+    .records-metrics { grid-template-columns: repeat(2, 1fr); }
+  }
+
+  /* ──────────────────────────────────────────────────────────────────────
+     Services view (Cluster 2)
+     Three-column layout: BS selector | selected service overview | summary
+     stack. All content driven by STRUCTURAL_CONTEXT plus the small explicit
+     SERVICE_PATH_OVERLAY for the Merchant Services authority paths.
+     ────────────────────────────────────────────────────────────────────── */
+
+  .services-view {
+    padding: 24px;
+  }
+  .services-grid {
+    display: grid;
+    grid-template-columns: 280px 1fr 320px;
+    gap: 24px;
+    align-items: start;
+  }
+
+  .services-bs-search {
+    width: 100%;
+    padding: 9px 12px;
+    background: var(--surface-container-lowest);
+    border: 0;
+    border-bottom: 2px solid var(--outline-variant);
+    color: var(--on-surface);
+    font-size: 12px;
+    font-family: inherit;
+    margin-bottom: 12px;
+    border-radius: 0;
+  }
+  .services-bs-search:focus {
+    outline: none;
+    border-bottom-color: var(--primary);
+    box-shadow: none;
+  }
+  .services-bs-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .services-bs-card {
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    border-radius: 6px;
+    padding: 14px 16px;
+    cursor: pointer;
+    transition: background 0.12s, border-color 0.12s, opacity 0.12s;
+    text-align: left;
+    font-family: inherit;
+    color: inherit;
+    width: 100%;
+    display: block;
+  }
+  .services-bs-card:hover {
+    background: var(--surface-container-high);
+  }
+  .services-bs-card.active {
+    background: var(--surface-container-high);
+    border-left: 4px solid var(--primary);
+    padding-left: 13px;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.25);
+  }
+  .services-bs-card.inactive {
+    opacity: 0.75;
+  }
+  .services-bs-card.inactive:hover { opacity: 1; }
+  .services-bs-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+  .services-bs-card-id {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--primary);
+    background: rgba(173,198,255,0.10);
+    padding: 2px 8px;
+    border-radius: 4px;
+  }
+  .services-bs-card.inactive .services-bs-card-id {
+    color: var(--slate-500);
+    background: rgba(255,255,255,0.04);
+  }
+  .services-bs-card-badge {
+    font-size: 9px;
+    background: rgba(78, 222, 163, 0.10);
+    color: var(--secondary);
+    border: 1px solid rgba(78, 222, 163, 0.20);
+    border-radius: 3px;
+    padding: 2px 7px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .services-bs-card-name {
+    font-size: 16px;
+    font-weight: 700;
+    font-family: var(--font-display);
+    color: var(--on-surface);
+    margin-bottom: 8px;
+    letter-spacing: -0.01em;
+  }
+  .services-bs-card-counts {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px 12px;
+    font-size: 11px;
+    color: var(--slate-400);
+    font-family: var(--font-mono);
+  }
+  .services-bs-card-count-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .services-bs-card-count-glyph {
+    color: var(--slate-500);
+    width: 12px;
+    display: inline-block;
+    text-align: center;
+  }
+
+  .services-center {
+    background: var(--surface-container-low);
+    border: 1px solid var(--outline-variant);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .services-overview-header {
+    padding: 18px 22px;
+    border-bottom: 1px solid var(--outline-variant);
+    background: var(--surface-container-lowest);
+  }
+  .services-overview-header h2 {
+    font-size: 20px;
+    font-weight: 700;
+    font-family: var(--font-display);
+    color: var(--on-surface);
+    letter-spacing: -0.01em;
+    margin-bottom: 4px;
+  }
+  .services-overview-header p {
+    font-size: 12px;
+    color: var(--slate-500);
+  }
+  .services-overview-body {
+    padding: 24px;
+  }
+
+  .services-overview-bs-card {
+    background: var(--surface-container);
+    border-left: 4px solid var(--primary);
+    padding: 14px 18px;
+    border-radius: 0 4px 4px 0;
+    margin-bottom: 24px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  .services-overview-bs-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: rgba(173, 198, 255, 0.15);
+    color: var(--primary);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    flex-shrink: 0;
+  }
+  .services-overview-bs-text { flex: 1; }
+  .services-overview-bs-label {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--primary);
+    margin-bottom: 2px;
+  }
+  .services-overview-bs-name {
+    font-size: 17px;
+    font-weight: 700;
+    font-family: var(--font-display);
+    color: var(--on-surface);
+  }
+
+  .services-paths-header {
+    text-align: center;
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: var(--slate-500);
+    margin: 0 0 16px;
+  }
+  .services-paths-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+  }
+  .services-path {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: stretch;
+  }
+  .services-path-step {
+    background: var(--surface-container-high);
+    border: 1px solid var(--outline-variant);
+    border-radius: 4px;
+    padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .services-path-step-label {
+    font-size: 8px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--slate-500);
+  }
+  .services-path-step-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--on-surface);
+  }
+  .services-path-connector {
+    width: 1px;
+    height: 12px;
+    margin: 0 auto;
+    background-image: linear-gradient(180deg, var(--outline-variant) 50%, transparent 50%);
+    background-size: 1px 4px;
+    background-repeat: repeat-y;
+  }
+  .services-path-chain {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 4px;
+  }
+  .services-path-chain-row {
+    background: var(--surface-container-lowest);
+    padding: 6px 10px;
+    border-radius: 4px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 10px;
+    border-left: 2px solid;
+  }
+  .services-path-chain-row.surface  { border-left-color: var(--chain-surface); }
+  .services-path-chain-row.profile  { border-left-color: var(--chain-profile); }
+  .services-path-chain-row.grant    { border-left-color: var(--chain-grant); }
+  .services-path-chain-row.agent    { border-left-color: var(--primary); }
+  .services-path-chain-key {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--slate-500);
+  }
+  .services-path-chain-val { font-family: var(--font-mono); font-size: 11px; }
+  .services-path-chain-row.surface .services-path-chain-val { color: var(--chain-surface); }
+  .services-path-chain-row.profile .services-path-chain-val { color: var(--chain-profile); }
+  .services-path-chain-row.grant   .services-path-chain-val { color: var(--chain-grant); }
+  .services-path-chain-row.agent   .services-path-chain-val { color: var(--primary); }
+
+  .services-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .services-card {
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    border-radius: 8px;
+    padding: 18px;
+  }
+  .services-card-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 14px;
+  }
+  .services-card-title {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--slate-500);
+    flex: 1;
+  }
+  .services-card-demo-badge {
+    font-size: 8px;
+    background: rgba(78, 222, 163, 0.10);
+    color: var(--secondary);
+    border: 1px solid rgba(78, 222, 163, 0.20);
+    padding: 2px 6px;
+    border-radius: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 700;
+  }
+  .services-summary-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    font-size: 12px;
+  }
+  .services-summary-row:last-child { border-bottom: 0; }
+  .services-summary-key { color: var(--slate-400); }
+  .services-summary-val {
+    font-family: var(--font-mono);
+    color: var(--on-surface);
+  }
+  .services-summary-val.ok { color: var(--secondary); }
+
+  .services-coverage-pct {
+    font-size: 32px;
+    font-weight: 800;
+    font-family: var(--font-display);
+    color: var(--on-surface);
+    letter-spacing: -0.02em;
+    line-height: 1;
+  }
+  .services-coverage-bar {
+    margin-top: 12px;
+    width: 100%;
+    height: 4px;
+    background: rgba(255,255,255,0.05);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .services-coverage-bar-fill {
+    height: 100%;
+    background: var(--secondary);
+    transition: width 0.3s ease;
+  }
+  .services-coverage-note {
+    margin-top: 8px;
+    font-size: 10px;
+    color: var(--slate-500);
+  }
+
+  .services-recent-decision {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 4px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    gap: 12px;
+  }
+  .services-recent-decision:last-child { border-bottom: 0; }
+  .services-recent-id {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--slate-300);
+  }
+  .services-recent-time {
+    font-size: 10px;
+    color: var(--slate-500);
+    margin-top: 2px;
+  }
+  .services-recent-badge {
+    font-size: 9px;
+    font-weight: 700;
+    padding: 2px 7px;
+    border-radius: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .services-runtime-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 12px;
+  }
+  .services-runtime-item {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .services-runtime-key {
+    font-size: 10px;
+    color: var(--slate-500);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .services-runtime-val {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--on-surface);
+  }
+
+  /* Responsive collapse */
+  @media (max-width: 1100px) {
+    .layout { grid-template-columns: 1fr; }
+    .panel-left { border-right: none; border-bottom: 1px solid rgba(255,255,255,0.05); }
+    .services-grid { grid-template-columns: 1fr 1fr; }
+    .services-summary { grid-column: 1 / -1; flex-direction: row; flex-wrap: wrap; }
+    .services-summary > .services-card { flex: 1 1 240px; }
+  }
+  @media (max-width: 720px) {
+    :root { --sidebar-width: 0px; }
+    .shell-sidebar { display: none; }
+    .shell-header,
+    .shell-footer { left: 0; }
+    .shell-main   { margin-left: 0; }
+    .shell-header-chips { display: none; }
+    .services-grid       { grid-template-columns: 1fr; }
+    .services-paths-grid { grid-template-columns: 1fr; }
+  }
 </style>
 </head>
 <body>
@@ -1000,140 +2889,245 @@
   </div>
 </div>
 
-<header>
-  <h1>MIDAS Explorer</h1>
-  <span class="badge">v1</span>
-  <span class="spacer"></span>
-  <div id="iam-user-pill">
-    <span id="iam-username-display"></span>
-    <button id="iam-logout-btn" type="button">Sign out</button>
+<!-- ─────────────────────────────────────────────────────────────────────────
+     Persistent shell — sidebar / header / main / footer
+     The four internal views (services / evaluate / records / settings) live
+     inside <main class="shell-main">. Only one view has class="active" at a
+     time; navigation is hash-based and never triggers a full page reload.
+     ───────────────────────────────────────────────────────────────────── -->
+
+<aside class="shell-sidebar" aria-label="Primary navigation">
+  <div class="shell-brand">
+    <div class="shell-brand-row">
+      <div class="midas-logo-mark" aria-hidden="true">
+        <span></span><span></span><span></span><span></span>
+      </div>
+      <span class="shell-brand-title">MIDAS Explorer</span>
+    </div>
+    <p class="shell-subtitle">Decision Authority Workbench</p>
+    <div class="shell-control-plane-card">
+      <span class="shell-control-plane-icon" aria-hidden="true">&gt;_</span>
+      <span class="shell-control-plane-text">
+        <span class="shell-control-plane-name">Control Plane</span>
+        <span class="shell-control-plane-version">midas-explorer</span>
+      </span>
+    </div>
   </div>
-  <span id="runtime-badge">loading...</span>
+  <nav class="shell-nav" role="navigation">
+    <button type="button" class="shell-nav-item active" data-nav-view="services">
+      <span class="shell-nav-glyph" aria-hidden="true">&#9622;</span>
+      <span>Services</span>
+    </button>
+    <button type="button" class="shell-nav-item" data-nav-view="evaluate">
+      <span class="shell-nav-glyph" aria-hidden="true">&#9783;</span>
+      <span>Evaluate</span>
+    </button>
+    <button type="button" class="shell-nav-item" data-nav-view="records">
+      <span class="shell-nav-glyph" aria-hidden="true">&#9636;</span>
+      <span>Records</span>
+    </button>
+    <button type="button" class="shell-nav-item" data-nav-view="settings">
+      <span class="shell-nav-glyph" aria-hidden="true">&#9881;</span>
+      <span>Settings</span>
+    </button>
+  </nav>
+  <div class="shell-sidebar-footer">
+    <span class="pulse" aria-hidden="true"></span>
+    <span>SYSTEM OPERATIONAL</span>
+  </div>
+</aside>
+
+<header class="shell-header" role="banner">
+  <div class="shell-header-left">
+    <span class="shell-header-brand">Accept Explorer</span>
+    <span class="shell-header-divider" aria-hidden="true"></span>
+    <nav class="shell-header-chips" aria-label="Runtime context">
+      <span class="shell-header-chip" id="header-sandbox-chip">Sandbox</span>
+      <span class="shell-header-chip" id="header-auth-chip">Auth: <strong>—</strong></span>
+      <span class="shell-header-chip" id="header-store-chip">Store: <strong>—</strong></span>
+      <span class="shell-header-chip" id="header-policy-chip">Policy: <strong>—</strong></span>
+    </nav>
+  </div>
+  <div class="shell-header-right">
+    <div class="exec-mode-tabs" role="tablist" aria-label="Execution mode">
+      <button class="exec-mode-tab active" data-exec-mode="evaluate" role="tab">Evaluate</button>
+      <button class="exec-mode-tab" data-exec-mode="simulate" role="tab">Simulate</button>
+    </div>
+    <div id="iam-user-pill">
+      <span id="iam-username-display"></span>
+      <button id="iam-logout-btn" type="button">Sign out</button>
+    </div>
+    <span id="runtime-badge">loading...</span>
+  </div>
 </header>
 
-<div class="warning-bar">
-  &#9888;&#65039; Developer sandbox only. Use test tokens only — do not paste production credentials.
-</div>
+<main class="shell-main" id="shell-main">
 
-<div class="demo-banner" id="demo-banner"></div>
-
-<!-- Mode selector bar — always visible above the fold -->
-<div class="mode-selector-bar">
-  <div class="exec-mode-tabs">
-    <button class="exec-mode-tab active" data-exec-mode="evaluate">Evaluate</button>
-    <button class="exec-mode-tab" data-exec-mode="simulate">Simulate</button>
+  <div class="warning-bar">
+    &#9888;&#65039; Developer sandbox only. Use test tokens only — do not paste production credentials.
   </div>
-  <span class="mode-bar-hint" id="mode-bar-hint">Decisions are persisted and audited</span>
-</div>
-<div class="mode-banner mode-banner-evaluate" id="mode-banner">Result persisted &mdash; envelope created, audit logged, sandbox store</div>
 
-<div class="layout">
-  <!-- LEFT: Request builder -->
-  <div class="panel panel-left">
+  <div class="demo-banner" id="demo-banner"></div>
 
-    <div class="section">
-      <div class="section-title">Quick Start</div>
-      <p style="font-size:12px;color:#6b7280">MIDAS governs whether an autonomous actor has authority to execute a decision. Pick a scenario to see how the authority chain, thresholds, and context requirements interact.</p>
-      <ul class="quick-start-list">
-        <li><strong>Evaluate</strong> &mdash; persists the decision, creates a tamper-evident audit record</li>
-        <li><strong>Simulate</strong> &mdash; test threshold changes safely, nothing written</li>
-        <li><strong>Scenarios</strong> &mdash; pre-built payloads covering every outcome type</li>
-      </ul>
+  <div class="mode-banner mode-banner-evaluate" id="mode-banner">Result persisted &mdash; envelope created, audit logged, sandbox store</div>
+  <span class="mode-bar-hint" id="mode-bar-hint" hidden>Decisions are persisted and audited</span>
+
+  <!-- ─── View 1: Services ─────────────────────────────────────────────── -->
+  <section id="view-services" class="app-view active services-view" data-view="services" aria-labelledby="view-services-title">
+    <h2 id="view-services-title" style="position:absolute;left:-9999px">Services</h2>
+
+    <div class="services-grid">
+      <!-- LEFT: Business Service selector -->
+      <aside aria-label="Business services">
+        <input type="text" id="services-bs-search" class="services-bs-search"
+               placeholder="Search Business Services..." autocomplete="off">
+        <div id="services-bs-list" class="services-bs-list"></div>
+      </aside>
+
+      <!-- CENTER: selected service overview -->
+      <section class="services-center" aria-labelledby="services-overview-title">
+        <header class="services-overview-header">
+          <h3 id="services-overview-title">Service Overview</h3>
+          <p>Business-service context for capabilities, processes, decision surfaces, authority grants, and recent decisions.</p>
+        </header>
+        <div id="services-overview-body" class="services-overview-body"></div>
+      </section>
+
+      <!-- RIGHT: stack of summary cards -->
+      <aside class="services-summary" aria-label="Service summary">
+        <div class="services-card">
+          <div class="services-card-header">
+            <span class="services-card-title">Service Authority Summary</span>
+          </div>
+          <div id="services-authority-summary"></div>
+        </div>
+
+        <div class="services-card">
+          <div class="services-card-header">
+            <span class="services-card-title">Coverage Summary</span>
+            <span class="services-card-demo-badge">Demo sample</span>
+          </div>
+          <div id="services-coverage-summary"></div>
+        </div>
+
+        <div class="services-card">
+          <div class="services-card-header">
+            <span class="services-card-title">Recent Decisions</span>
+            <span class="services-card-demo-badge">Demo sample</span>
+          </div>
+          <div id="services-recent-decisions"></div>
+        </div>
+
+        <div class="services-card">
+          <div class="services-card-header">
+            <span class="services-card-title">Runtime Context</span>
+          </div>
+          <div id="services-runtime-context"></div>
+        </div>
+      </aside>
     </div>
+  </section>
 
-    <div class="section" id="resource-ref-section" style="display:none">
-      <div class="section-title">Demo Resources</div>
-      <div id="resource-cards" class="resource-cards-grid"></div>
-      <div class="section-title" style="margin-top:14px">Structural Context</div>
-      <div id="structural-context-cards"></div>
-    </div>
+  <!-- ─── View 2: Evaluate ─────────────────────────────────────────────── -->
+  <section id="view-evaluate" class="app-view evaluate-view" data-view="evaluate" aria-labelledby="view-evaluate-title">
+  <h2 id="view-evaluate-title" style="position:absolute;left:-9999px">Evaluate</h2>
 
-    <div class="section" id="auth-bearer-section">
-      <div class="section-title">Authentication</div>
-      <div class="field">
-        <label for="token-input">Bearer Token</label>
-        <div class="token-row">
-          <input type="password" id="token-input" placeholder="Paste token (Enter or Apply to validate)" autocomplete="off">
-          <button class="btn btn-ghost" id="token-toggle-btn" type="button">Show</button>
-          <button class="btn btn-primary" id="token-apply-btn" type="button">Apply Token</button>
-        </div>
-        <div class="token-status neutral" id="token-status">Not set</div>
-        <div style="font-size:11px;color:#9ca3af;margin-top:4px" id="auth-mode-hint"></div>
-      </div>
-    </div>
+  <div class="evaluate-grid">
 
-    <div class="section">
-      <div class="section-title">Authority Scenarios</div>
-      <input type="text" class="scenario-search" id="scenario-search" placeholder="Filter scenarios&#x2026;" autocomplete="off">
-      <div id="scenario-list"></div>
-      <div class="scenario-info-box" id="scenario-info-box" style="display:none">
-        <div class="scenario-info-title" id="scenario-info-title"></div>
-        <div class="scenario-info-expected" id="scenario-info-expected"></div>
-        <div class="scenario-info-explanation" id="scenario-info-explanation"></div>
-      </div>
-    </div>
+    <!-- ─── Column 1: Evaluation Request ─────────────────────────────── -->
+    <section class="evaluate-col evaluate-col-request" aria-label="Evaluation request">
+      <header class="evaluate-col-header">
+        <h2>Evaluation Request</h2>
+        <p>Build or load a request to test authority at a decision surface.</p>
+      </header>
 
-    <div class="section">
-      <div class="section-title">Request Builder</div>
-      <div class="mode-tabs">
-        <button class="mode-tab active" data-mode="form">Form</button>
-        <button class="mode-tab" data-mode="json">JSON</button>
-      </div>
-
-      <div class="form-fields visible" id="form-fields">
+      <div class="section" id="auth-bearer-section">
+        <div class="section-title">Authentication</div>
         <div class="field">
-          <label for="f-surface">Surface ID <span style="color:#ef4444">*</span></label>
-          <input type="text" id="f-surface" placeholder="e.g. surf-v2-merchant-payment">
-        </div>
-        <div class="field">
-          <label for="f-agent">Agent ID <span style="color:#ef4444">*</span></label>
-          <input type="text" id="f-agent" placeholder="e.g. agent-v2-evaluator">
-        </div>
-        <div class="field">
-          <label for="f-confidence">
-            Confidence (0–1) <span style="color:#ef4444">*</span>
-            <span class="label-hint" id="confidence-hint"></span>
-          </label>
-          <input type="text" id="f-confidence" placeholder="0.95">
-        </div>
-        <div class="field">
-          <label for="f-consequence">
-            Consequence (optional JSON)
-            <span class="label-hint" id="consequence-hint"></span>
-          </label>
-          <input type="text" id="f-consequence" placeholder='{"type":"monetary","amount":500,"currency":"GBP"}'>
-        </div>
-        <div class="field">
-          <label for="f-context">Context (optional JSON object)</label>
-          <input type="text" id="f-context" placeholder='{"action":"approve","amount":500}'>
+          <label for="token-input">Bearer Token</label>
+          <div class="token-row">
+            <input type="password" id="token-input" placeholder="Paste token (Enter or Apply to validate)" autocomplete="off">
+            <button class="btn btn-ghost" id="token-toggle-btn" type="button">Show</button>
+            <button class="btn btn-primary" id="token-apply-btn" type="button">Apply Token</button>
+          </div>
+          <div class="token-status neutral" id="token-status">Not set</div>
+          <div style="font-size:11px;color:var(--slate-500);margin-top:4px" id="auth-mode-hint"></div>
         </div>
       </div>
 
-      <div class="json-editor" id="json-editor">
-        <div class="field">
-          <label for="json-body">Request JSON</label>
-          <textarea id="json-body" rows="10" spellcheck="false">{
+      <div class="section">
+        <div class="section-title">Request Builder</div>
+        <div class="mode-tabs">
+          <button class="mode-tab active" data-mode="form">Form</button>
+          <button class="mode-tab" data-mode="json">JSON</button>
+        </div>
+
+        <div class="form-fields visible" id="form-fields">
+          <div class="field">
+            <label for="f-surface">Surface ID <span style="color:var(--error)">*</span></label>
+            <input type="text" id="f-surface" placeholder="e.g. surf-v2-merchant-payment">
+          </div>
+          <div class="field">
+            <label for="f-agent">Agent ID <span style="color:var(--error)">*</span></label>
+            <input type="text" id="f-agent" placeholder="e.g. agent-v2-evaluator">
+          </div>
+          <div class="field">
+            <label for="f-confidence">
+              Confidence (0–1) <span style="color:var(--error)">*</span>
+              <span class="label-hint" id="confidence-hint"></span>
+            </label>
+            <input type="text" id="f-confidence" placeholder="0.95">
+          </div>
+          <div class="field">
+            <label for="f-consequence">
+              Consequence (optional JSON)
+              <span class="label-hint" id="consequence-hint"></span>
+            </label>
+            <input type="text" id="f-consequence" placeholder='{"type":"monetary","amount":500,"currency":"GBP"}'>
+          </div>
+          <div class="field">
+            <label for="f-context">Context (optional JSON object)</label>
+            <input type="text" id="f-context" placeholder='{"action":"approve","amount":500}'>
+          </div>
+        </div>
+
+        <div class="json-editor" id="json-editor">
+          <div class="field">
+            <label for="json-body">Request JSON</label>
+            <textarea id="json-body" rows="10" spellcheck="false">{
   "surface_id": "",
   "agent_id": "",
   "confidence": 0.95
 }</textarea>
+          </div>
+        </div>
+
+        <div class="btn-row">
+          <button class="btn btn-primary" id="submit-btn">Submit</button>
+          <button class="btn btn-secondary" id="reset-btn">Reset</button>
+          <button class="btn btn-ghost" id="curl-copy-btn">Copy as curl</button>
         </div>
       </div>
 
-      <div class="btn-row">
-        <button class="btn btn-primary" id="submit-btn">Submit</button>
-        <button class="btn btn-secondary" id="reset-btn">Reset</button>
-        <button class="btn btn-ghost" id="curl-copy-btn">Copy as curl</button>
+      <!-- Scenarios are a secondary helper inside Evaluate; the existing
+           categorised list + search is preserved verbatim. -->
+      <div class="section">
+        <div class="section-title">Scenario Shortcuts</div>
+        <input type="text" class="scenario-search" id="scenario-search" placeholder="Filter scenarios&#x2026;" autocomplete="off">
+        <div id="scenario-list"></div>
+        <div class="scenario-info-box" id="scenario-info-box" style="display:none">
+          <div class="scenario-info-title" id="scenario-info-title"></div>
+          <div class="scenario-info-expected" id="scenario-info-expected"></div>
+          <div class="scenario-info-explanation" id="scenario-info-explanation"></div>
+        </div>
       </div>
-    </div>
+    </section>
 
-  </div>
-
-  <!-- RIGHT: Response -->
-  <div class="panel panel-right">
-
-    <div class="section">
-      <div class="section-title" id="result-section-title">Result</div>
+    <!-- ─── Column 2: Governed Decision ──────────────────────────────── -->
+    <section class="evaluate-col evaluate-col-decision" aria-label="Governed decision">
+      <header class="evaluate-col-header">
+        <h2 id="result-section-title">Result</h2>
+      </header>
 
       <div class="comparison-section" id="comparison-section" style="display:none">
         <div class="comparison-header">
@@ -1163,75 +3157,1086 @@
       </div>
 
       <div class="explanation-box" id="explanation-box"></div>
-    </div>
+    </section>
 
-    <div id="decision-explanation-panel" class="decision-panel" style="display:none"></div>
-    <div id="authority-chain-panel" class="decision-panel" style="display:none"></div>
+    <!-- ─── Column 3: Decision Evidence ──────────────────────────────── -->
+    <section class="evaluate-col evaluate-col-evidence" aria-label="Decision evidence">
+      <header class="evaluate-col-header">
+        <h2>Decision Evidence</h2>
+      </header>
 
-    <div class="raw-section" id="raw-section" style="display:none">
-      <div class="raw-header">
-        <span class="raw-label">Response JSON</span>
-        <div style="display:flex;align-items:center;gap:8px">
-          <span id="http-status-badge"></span>
-          <button class="copy-btn" id="raw-copy-btn">Copy</button>
+      <!-- Threshold evaluation panel (populated when envelope.evaluation.explanation is present) -->
+      <div id="decision-explanation-panel" class="decision-panel" style="display:none"></div>
+
+      <!-- Authority chain panel (populated when envelope.resolved.authority is present) -->
+      <div id="authority-chain-panel" class="decision-panel" style="display:none"></div>
+
+      <!-- Decision record / envelope inspector -->
+      <div class="envelope-section" id="envelope-section" style="display:none">
+        <div class="envelope-bar">
+          <span class="raw-label">Decision Record</span>
+          <button class="copy-btn" id="envelope-inspect-btn">View decision record</button>
+        </div>
+        <div id="envelope-detail" style="display:none">
+          <div class="envelope-summary" id="envelope-summary"></div>
+          <div class="raw-header">
+            <span class="raw-label">Envelope JSON</span>
+            <button class="copy-btn" id="envelope-copy-btn">Copy</button>
+          </div>
+          <pre id="envelope-json"></pre>
+        </div>
+        <div class="envelope-status-msg" id="envelope-loading" style="display:none">Loading envelope…</div>
+        <div class="envelope-status-msg" id="envelope-error" style="display:none"></div>
+      </div>
+
+      <!-- Technical Details — demoted; raw JSON / curl live here as
+           secondary content. The elements below remain ID-stable so
+           showResult / updateCurlPanels / copy handlers continue to
+           operate without change. -->
+      <div class="evaluate-tech-section">
+        <div class="evaluate-tech-title">Technical Details</div>
+
+        <div class="raw-section" id="raw-section" style="display:none">
+          <div class="raw-header">
+            <span class="raw-label">Response JSON</span>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span id="http-status-badge"></span>
+              <button class="copy-btn" id="raw-copy-btn">Copy</button>
+            </div>
+          </div>
+          <pre id="raw-json"></pre>
+        </div>
+
+        <div class="curl-section" id="curl-section" style="display:none">
+          <div class="curl-header">
+            <span class="raw-label">Equivalent curl</span>
+            <button class="copy-btn" id="curl-pre-copy-btn">Copy</button>
+          </div>
+          <div class="curl-tabs" id="curl-tab-bar">
+            <button class="curl-tab active" data-curl-tab="sandbox">Sandbox</button>
+            <button class="curl-tab" data-curl-tab="production" id="curl-tab-production">Production</button>
+          </div>
+          <pre id="curl-sandbox" class="curl-panel active"></pre>
+          <pre id="curl-production" class="curl-panel"></pre>
         </div>
       </div>
-      <pre id="raw-json"></pre>
-    </div>
+    </section>
 
-    <div class="curl-section" id="curl-section" style="display:none">
-      <div class="curl-header">
-        <span class="raw-label">Equivalent curl</span>
-        <button class="copy-btn" id="curl-pre-copy-btn">Copy</button>
-      </div>
-      <div class="curl-tabs" id="curl-tab-bar">
-        <button class="curl-tab active" data-curl-tab="sandbox">Sandbox</button>
-        <button class="curl-tab" data-curl-tab="production" id="curl-tab-production">Production</button>
-      </div>
-      <pre id="curl-sandbox" class="curl-panel active"></pre>
-      <pre id="curl-production" class="curl-panel"></pre>
-    </div>
+  </div>
 
-    <div class="envelope-section" id="envelope-section" style="display:none">
-      <div class="envelope-bar">
-        <span class="raw-label">Decision Record</span>
-        <button class="copy-btn" id="envelope-inspect-btn">View decision record</button>
-      </div>
-      <div id="envelope-detail" style="display:none">
-        <div class="envelope-summary" id="envelope-summary"></div>
-        <div class="raw-header">
-          <span class="raw-label">Envelope JSON</span>
-          <button class="copy-btn" id="envelope-copy-btn">Copy</button>
+  <!-- Coverage panel moved to the Records view in Cluster 4 — its
+       canonical home. refreshCoverage() / renderCoverage() / the
+       updateServicesCoverageSummary hook continue to operate against
+       #coverage-card without change. -->
+
+  <!-- runtime-card moved to Settings (Cluster 5) — its canonical home.
+       The /explorer/config block continues to populate it by ID. -->
+
+  <!-- Hidden legacy demo-resources block — preserved verbatim because
+       renderResourcePanel() still writes into resource-cards and
+       structural-context-cards. The Services view consumes the same
+       source data via its own visible markup. -->
+  <div class="section" id="resource-ref-section" style="display:none">
+    <div class="section-title">Demo Resources</div>
+    <div id="resource-cards" class="resource-cards-grid"></div>
+    <div class="section-title" style="margin-top:14px">Structural Context</div>
+    <div id="structural-context-cards"></div>
+  </div>
+
+  </section>
+  <!-- /view-evaluate -->
+
+  <!-- ─── View 3: Records ──────────────────────────────────────────────── -->
+  <section id="view-records" class="app-view records-view" data-view="records" aria-labelledby="view-records-title">
+    <h2 id="view-records-title" style="position:absolute;left:-9999px">Records</h2>
+
+    <header class="records-page-header">
+      <div>
+        <div class="records-page-title">
+          <h2>Decision Records</h2>
+          <span class="records-page-title-badge">Demo sample</span>
         </div>
-        <pre id="envelope-json"></pre>
+        <p class="records-page-subtitle">Recent governed decisions recorded by the Explorer sandbox.</p>
       </div>
-      <div class="envelope-status-msg" id="envelope-loading" style="display:none">Loading envelope…</div>
-      <div class="envelope-status-msg" id="envelope-error" style="display:none"></div>
-    </div>
+    </header>
 
-    <div class="section">
-      <div class="section-title">Runtime</div>
-      <div class="runtime-card" id="runtime-card">
-        <div class="runtime-row">
-          <span class="runtime-key">status</span>
-          <span class="runtime-val"><span class="status-dot"></span>loading...</span>
+    <!-- Metrics row — demo counts; no list endpoint exists yet -->
+    <div class="records-metrics" aria-label="Decision metrics">
+      <div class="records-metric">
+        <div class="records-metric-label">Decision Records</div>
+        <div class="records-metric-value">142</div>
+      </div>
+      <div class="records-metric accept">
+        <div class="records-metric-label">Accepted</div>
+        <div class="records-metric-row">
+          <span class="records-metric-value">96</span>
+          <span class="records-metric-glyph" aria-hidden="true">✓</span>
         </div>
       </div>
+      <div class="records-metric escalate">
+        <div class="records-metric-label">Escalated</div>
+        <div class="records-metric-row">
+          <span class="records-metric-value">28</span>
+          <span class="records-metric-glyph" aria-hidden="true">!</span>
+        </div>
+      </div>
+      <div class="records-metric reject">
+        <div class="records-metric-label">Rejected</div>
+        <div class="records-metric-row">
+          <span class="records-metric-value">12</span>
+          <span class="records-metric-glyph" aria-hidden="true">✕</span>
+        </div>
+      </div>
+      <div class="records-metric clarify">
+        <div class="records-metric-label">Clarifications</div>
+        <div class="records-metric-row">
+          <span class="records-metric-value">6</span>
+          <span class="records-metric-glyph" aria-hidden="true">?</span>
+        </div>
+      </div>
+      <div class="records-metric gap">
+        <div class="records-metric-label">Coverage Gaps</div>
+        <div class="records-metric-value">3</div>
+      </div>
     </div>
 
-    <div class="section">
+    <!-- Two-column body: records table + selected record detail rail -->
+    <div class="records-grid">
+      <div class="records-table-card">
+        <div class="records-table-toolbar">
+          <div class="records-toolbar-left">
+            <input type="text" class="records-search" id="records-search" placeholder="Search records..." autocomplete="off">
+            <button type="button" class="records-toolbar-btn">Filter</button>
+          </div>
+          <button type="button" class="records-toolbar-icon-btn" aria-label="Download" title="Records export not yet wired" disabled>↓</button>
+        </div>
+        <div class="records-table-scroll">
+          <table class="records-table" aria-label="Decision records">
+            <thead>
+              <tr>
+                <th scope="col">Outcome</th>
+                <th scope="col">Envelope ID</th>
+                <th scope="col">Business Service</th>
+                <th scope="col">Surface</th>
+                <th scope="col">Agent</th>
+                <th scope="col">Reason</th>
+                <th scope="col">Timestamp</th>
+                <th scope="col" style="text-align:center">Integrity</th>
+              </tr>
+            </thead>
+            <tbody id="records-table-body"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <aside class="records-detail" aria-labelledby="records-detail-id">
+        <div class="records-detail-header">
+          <div>
+            <div class="records-detail-id" id="records-detail-id">env-demo-merchant-001</div>
+            <div class="records-detail-subtitle">Transactional authority trace</div>
+          </div>
+          <button type="button" class="records-detail-close" id="records-detail-close" aria-label="Close detail" title="Close">×</button>
+        </div>
+        <div class="records-detail-body" id="records-detail-body"></div>
+      </aside>
+    </div>
+
+    <!-- Canonical Governance Coverage panel (moved from Evaluate in Cluster 4) -->
+    <div class="records-coverage-section">
       <div class="section-title">Governance Coverage</div>
       <div class="coverage-card" id="coverage-card">
         <div class="coverage-empty">loading...</div>
       </div>
     </div>
+  </section>
 
+  <!-- ─── View 4: Settings ─────────────────────────────────────────────── -->
+  <section id="view-settings" class="app-view settings-view" data-view="settings" aria-labelledby="view-settings-title">
+    <h2 id="view-settings-title" style="position:absolute;left:-9999px">Settings</h2>
+
+    <div class="settings-grid">
+
+      <!-- LEFT COLUMN: Environment / Demo Data / Decision Records -->
+      <div class="settings-col-main">
+
+        <!-- Environment -->
+        <section class="settings-card" aria-label="Environment configuration">
+          <div class="settings-card-header">
+            <h3 class="settings-card-title">
+              <span class="settings-card-title-glyph" aria-hidden="true">⌘</span>
+              Environment Configuration
+            </h3>
+            <span class="settings-version-chip" id="settings-version-chip">midas-explorer</span>
+          </div>
+          <div class="settings-env-grid">
+            <div class="settings-env-cell">
+              <div class="settings-env-cell-label">Runtime Status</div>
+              <div class="settings-env-cell-row">
+                <span class="status-dot"></span>
+                <span class="settings-env-cell-value ok" id="settings-env-status">running</span>
+              </div>
+            </div>
+            <div class="settings-env-cell">
+              <div class="settings-env-cell-label">Auth Mode</div>
+              <span class="settings-env-cell-value muted" id="settings-env-auth">—</span>
+            </div>
+            <div class="settings-env-cell">
+              <div class="settings-env-cell-label">Store / Backend</div>
+              <span class="settings-env-cell-value muted" id="settings-env-store">—</span>
+            </div>
+            <div class="settings-env-cell">
+              <div class="settings-env-cell-label">Policy Mode</div>
+              <span class="settings-env-cell-value muted" id="settings-env-policy">—</span>
+            </div>
+            <div class="settings-env-cell">
+              <div class="settings-env-cell-label">Explorer Sandbox</div>
+              <span class="settings-env-cell-value muted" id="settings-env-sandbox">—</span>
+            </div>
+            <div class="settings-env-cell">
+              <div class="settings-env-cell-label">Version</div>
+              <span class="settings-env-cell-value" id="settings-env-version">midas-explorer</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- Demo Data -->
+        <section class="settings-card" aria-label="Demo data">
+          <div class="settings-card-header">
+            <h3 class="settings-card-title">
+              <span class="settings-card-title-glyph" aria-hidden="true">▦</span>
+              Demo Data
+            </h3>
+          </div>
+          <div class="settings-counts">
+            <div class="settings-count-item"><span class="settings-count-value" id="settings-count-services">—</span><span class="settings-count-label">Services</span></div>
+            <div class="settings-count-item"><span class="settings-count-value" id="settings-count-capabilities">—</span><span class="settings-count-label">Capabilities</span></div>
+            <div class="settings-count-item"><span class="settings-count-value" id="settings-count-processes">—</span><span class="settings-count-label">Processes</span></div>
+            <div class="settings-count-item"><span class="settings-count-value" id="settings-count-surfaces">—</span><span class="settings-count-label">Surfaces</span></div>
+            <div class="settings-count-item"><span class="settings-count-value" id="settings-count-profiles">—</span><span class="settings-count-label">Profiles</span></div>
+            <div class="settings-count-item"><span class="settings-count-value" id="settings-count-grants">—</span><span class="settings-count-label">Grants</span></div>
+            <div class="settings-count-item"><span class="settings-count-value" id="settings-count-agents">—</span><span class="settings-count-label">Agents</span></div>
+          </div>
+          <p class="settings-explanatory">
+            Demo data includes seeded services, capabilities, processes, decision surfaces, authority profiles, grants, and agents.
+          </p>
+          <div class="settings-actions">
+            <button class="btn btn-primary" disabled title="Reset endpoint not yet wired">Reset demo data</button>
+            <button class="btn btn-error"   disabled title="Purge endpoint not yet wired">Purge demo data</button>
+          </div>
+          <div class="settings-warning">
+            <span class="settings-warning-glyph" aria-hidden="true">⚠</span>
+            <p class="settings-warning-text">
+              <strong>Warning:</strong>
+              This removes seeded demo services and related demo authority objects from the Explorer environment. Decision records are not removed unless selected separately.
+            </p>
+          </div>
+        </section>
+
+        <!-- Decision Records -->
+        <section class="settings-card" aria-label="Decision records lifecycle">
+          <div class="settings-card-header">
+            <h3 class="settings-card-title">
+              <span class="settings-card-title-glyph" aria-hidden="true">≡</span>
+              Decision Records
+            </h3>
+            <span class="settings-last-update">
+              <span class="settings-last-update-glyph" aria-hidden="true">⟳</span>
+              <span id="settings-last-update-text">Last: never</span>
+            </span>
+          </div>
+          <div class="settings-records-stats">
+            <div class="settings-records-stat">
+              <span class="settings-records-stat-value" id="settings-decision-count">—</span>
+              <span class="settings-records-stat-label">Decision Records</span>
+            </div>
+            <div class="settings-records-stat">
+              <span class="settings-records-stat-value" id="settings-coverage-count">—</span>
+              <span class="settings-records-stat-label">Coverage Records</span>
+            </div>
+            <div class="settings-records-stat">
+              <span class="settings-records-stat-value" id="settings-audit-count">—</span>
+              <span class="settings-records-stat-label">Audit Events</span>
+            </div>
+          </div>
+          <div class="settings-records-actions">
+            <button class="btn btn-ghost" disabled title="Records-clear endpoint not yet wired">Clear sandbox records</button>
+            <button class="btn btn-ghost" disabled title="Coverage-clear endpoint not yet wired">Clear coverage records</button>
+          </div>
+        </section>
+
+      </div>
+
+      <!-- RIGHT COLUMN: Authentication / Runtime Context / Danger Zone -->
+      <div class="settings-col-side">
+
+        <!-- Authentication -->
+        <section class="settings-card" aria-label="Authentication state">
+          <div class="settings-card-header">
+            <h3 class="settings-card-title">
+              <span class="settings-card-title-glyph" aria-hidden="true">⚷</span>
+              Authentication
+            </h3>
+          </div>
+          <div class="settings-auth-rows">
+            <div class="settings-auth-row">
+              <span class="settings-auth-key">Current Auth</span>
+              <span class="settings-auth-val muted" id="settings-auth-current">—</span>
+            </div>
+            <div class="settings-auth-row">
+              <span class="settings-auth-key">Session State</span>
+              <span class="settings-auth-val muted" id="settings-session-state">—</span>
+            </div>
+            <div class="settings-auth-row">
+              <span class="settings-auth-key">Bearer</span>
+              <span class="settings-auth-val muted" id="settings-bearer-state">not set</span>
+            </div>
+            <div class="settings-auth-row">
+              <span class="settings-auth-key">Local IAM</span>
+              <span class="settings-auth-val muted" id="settings-localiam-state">disabled</span>
+            </div>
+            <div class="settings-auth-row">
+              <span class="settings-auth-key">OIDC</span>
+              <span class="settings-auth-val muted" id="settings-oidc-state">disabled</span>
+            </div>
+          </div>
+          <button type="button" class="settings-signout" id="settings-signout-btn" disabled>Sign out</button>
+          <p class="settings-signout-note" id="settings-signout-note">Sign-out is available only when an IAM or OIDC session is active.</p>
+        </section>
+
+        <!-- Runtime Context — wraps the canonical runtime-card -->
+        <section class="settings-card" aria-label="Runtime context">
+          <div class="settings-card-header">
+            <h3 class="settings-card-title">
+              <span class="settings-card-title-glyph" aria-hidden="true">$_</span>
+              Runtime Context
+            </h3>
+          </div>
+          <!-- Canonical runtime-card moved here from the hidden Evaluate slot.
+               Rendered by the existing /explorer/config block — no JS change. -->
+          <div class="runtime-card" id="runtime-card">
+            <div class="runtime-row">
+              <span class="runtime-key">status</span>
+              <span class="runtime-val"><span class="status-dot"></span>loading...</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- Danger Zone -->
+        <section class="settings-card settings-danger" aria-label="Danger zone">
+          <div class="settings-card-header">
+            <h3 class="settings-card-title">
+              <span class="settings-card-title-glyph" aria-hidden="true">⚠</span>
+              Danger Zone
+            </h3>
+          </div>
+          <p class="settings-danger-copy">
+            Resetting the sandbox clears demo model data and sandbox decision records. Use Reset demo data if you only want to restore seeded services and authority objects.
+          </p>
+          <button class="btn btn-danger" disabled title="Sandbox-reset endpoint not yet wired">Reset entire sandbox</button>
+        </section>
+
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="shell-footer" role="contentinfo">
+  <div class="shell-footer-cluster">
+    <span class="shell-footer-item ok">
+      <span class="shell-footer-dot" aria-hidden="true"></span>
+      <span>System operational</span>
+    </span>
+    <span class="shell-footer-item">
+      <span class="shell-footer-dot" aria-hidden="true"></span>
+      <span>Sandbox store active</span>
+    </span>
+    <span class="shell-footer-item">
+      <span class="shell-footer-dot" aria-hidden="true"></span>
+      <span>Decision records available</span>
+    </span>
   </div>
-</div>
+  <span class="shell-footer-item brand">
+    <span aria-hidden="true">&#10003;</span>
+    <span>Envelope integrity enabled</span>
+  </span>
+</footer>
 
 <script>
 (function () {
   'use strict';
+
+  // ── Internal view router ───────────────────────────────────────────────────
+  // The Explorer is a single-page workbench with four hash-routed views:
+  // services, evaluate, records, settings. Switching never reloads the page.
+  // Hidden views remain in the DOM so existing handlers that look up element
+  // IDs (e.g. submitRequest reading f-surface) keep working regardless of
+  // which view is currently visible.
+
+  const VALID_VIEWS = ['services', 'evaluate', 'records', 'settings'];
+  const DEFAULT_VIEW = 'services';
+
+  function showView(viewName) {
+    if (!VALID_VIEWS.includes(viewName)) viewName = DEFAULT_VIEW;
+    document.querySelectorAll('.app-view').forEach(v => {
+      v.classList.toggle('active', v.dataset.view === viewName);
+    });
+    document.querySelectorAll('[data-nav-view]').forEach(item => {
+      item.classList.toggle('active', item.dataset.navView === viewName);
+    });
+    if (window.location.hash !== '#' + viewName) {
+      try { history.replaceState(null, '', '#' + viewName); } catch { /* ignore */ }
+    }
+  }
+
+  function viewFromHash() {
+    const h = (window.location.hash || '').replace(/^#/, '');
+    return VALID_VIEWS.includes(h) ? h : DEFAULT_VIEW;
+  }
+
+  // Wire sidebar nav items
+  document.querySelectorAll('[data-nav-view]').forEach(item => {
+    item.addEventListener('click', e => {
+      e.preventDefault();
+      showView(item.dataset.navView);
+    });
+  });
+
+  // Respond to browser back/forward and external hash changes
+  window.addEventListener('hashchange', () => showView(viewFromHash()));
+
+  // Initial view
+  showView(viewFromHash());
+
+  // ── Services view ──────────────────────────────────────────────────────────
+  // Source-of-truth for the selected-service overview is STRUCTURAL_CONTEXT
+  // (defined later — referenced lazily by name). Authority chain overlays
+  // (profile / grant / agent per surface) come from SERVICE_PATH_OVERLAY,
+  // a small map mirroring the seeded demo grants. Services with no overlay
+  // entry render a structural-only path (capability → process → surface).
+
+  const SERVICE_PATH_OVERLAY = {
+    'bs-merchant-services': [
+      {
+        capability: { id: 'cap-payment-authorization',  name: 'Payment Authorization' },
+        process:    { id: 'proc-merchant-payment-auth', name: 'Merchant Payment Authorization' },
+        surface:    { id: 'surf-v2-merchant-payment',   name: 'Merchant Payment Authorization' },
+        profile: 'profile-v2-standard',
+        grant:   'grant-v2-standard',
+        agent:   'agent-v2-evaluator',
+      },
+      {
+        capability: { id: 'cap-fraud-detection',         name: 'Fraud Detection' },
+        process:    { id: 'proc-merchant-risk-screen',   name: 'Merchant Risk Screening' },
+        surface:    { id: 'surf-v2-merchant-risk',       name: 'Merchant Risk Screening' },
+        profile: 'profile-v2-standard',
+        grant:   'grant-v2-standard',
+        agent:   'agent-v2-evaluator',
+      },
+    ],
+  };
+
+  let currentSelectedService = 'bs-merchant-services';
+
+  function renderServicesView() {
+    renderServicesBSList();
+    renderServicesOverview();
+    renderServicesSummary();
+  }
+
+  function renderServicesBSList(filter) {
+    const list = document.getElementById('services-bs-list');
+    if (!list) return;
+    if (typeof STRUCTURAL_CONTEXT === 'undefined') return; // not yet defined
+    const q = (filter || '').toLowerCase().trim();
+
+    const filtered = STRUCTURAL_CONTEXT.filter(svc =>
+      !q ||
+      svc.businessService.name.toLowerCase().includes(q) ||
+      svc.businessService.id.toLowerCase().includes(q)
+    );
+
+    if (filtered.length === 0) {
+      list.innerHTML = '<div class="scenario-no-results">No services match “' + escHtml(q) + '”</div>';
+      return;
+    }
+
+    list.innerHTML = filtered.map(svc => {
+      const id = svc.businessService.id;
+      const isActive = id === currentSelectedService;
+      const surfaceCount = svc.processes.reduce((acc, p) => acc + (p.surfaces || []).length, 0);
+      const counts = [
+        ['⚙', svc.capabilities.length, svc.capabilities.length === 1 ? 'Capability' : 'Capabilities'],
+        ['⇄', svc.processes.length,    svc.processes.length === 1    ? 'Process'    : 'Processes'],
+        ['▤', surfaceCount,            surfaceCount === 1            ? 'Surface'    : 'Surfaces'],
+      ];
+      const countsHtml = counts.map(([g, n, lbl]) =>
+        '<span class="services-bs-card-count-item">' +
+          '<span class="services-bs-card-count-glyph" aria-hidden="true">' + g + '</span>' +
+          n + ' ' + escHtml(lbl) +
+        '</span>'
+      ).join('');
+      return (
+        '<button type="button" class="services-bs-card ' + (isActive ? 'active' : 'inactive') + '" data-service-id="' + escHtml(id) + '">' +
+          '<div class="services-bs-card-header">' +
+            '<span class="services-bs-card-id">' + escHtml(id) + '</span>' +
+            '<span class="services-bs-card-badge">Demo seeded</span>' +
+          '</div>' +
+          '<div class="services-bs-card-name">' + escHtml(svc.businessService.name) + '</div>' +
+          '<div class="services-bs-card-counts">' + countsHtml + '</div>' +
+        '</button>'
+      );
+    }).join('');
+
+    list.querySelectorAll('.services-bs-card').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (btn.dataset.serviceId === currentSelectedService) return;
+        currentSelectedService = btn.dataset.serviceId;
+        renderServicesView();
+      });
+    });
+  }
+
+  function renderServicesOverview() {
+    const titleEl = document.getElementById('services-overview-title');
+    const bodyEl  = document.getElementById('services-overview-body');
+    if (!titleEl || !bodyEl) return;
+    if (typeof STRUCTURAL_CONTEXT === 'undefined') return;
+
+    const svc = STRUCTURAL_CONTEXT.find(s => s.businessService.id === currentSelectedService);
+    if (!svc) {
+      titleEl.textContent = 'Service Overview';
+      bodyEl.innerHTML = '<div class="placeholder-text">Select a business service to see its authority context</div>';
+      return;
+    }
+    titleEl.textContent = svc.businessService.name + ' Overview';
+
+    const bsCard =
+      '<div class="services-overview-bs-card">' +
+        '<div class="services-overview-bs-icon" aria-hidden="true">⌘</div>' +
+        '<div class="services-overview-bs-text">' +
+          '<div class="services-overview-bs-label">Business Service</div>' +
+          '<div class="services-overview-bs-name">' + escHtml(svc.businessService.name) + '</div>' +
+        '</div>' +
+      '</div>';
+
+    const overlay = SERVICE_PATH_OVERLAY[svc.businessService.id];
+    let pathsHtml;
+    if (overlay && overlay.length) {
+      pathsHtml =
+        '<div class="services-paths-header">Service Authority Paths</div>' +
+        '<div class="services-paths-grid">' + overlay.map(renderServicesAuthorityPath).join('') + '</div>';
+    } else {
+      // No authority-chain overlay seeded for this service; render structural
+      // context only (capability + process + surface). This keeps Consumer
+      // Lending visible without inventing profile/grant/agent values.
+      pathsHtml =
+        '<div class="services-paths-header">Structural Context</div>' +
+        '<div class="services-paths-grid">' + svc.processes.map(p => renderServicesStructuralPath(p, svc)).join('') + '</div>';
+    }
+
+    bodyEl.innerHTML = bsCard + pathsHtml;
+  }
+
+  function renderServicesAuthorityPath(path) {
+    return (
+      '<div class="services-path">' +
+        '<div class="services-path-step">' +
+          '<span class="services-path-step-label">Capability</span>' +
+          '<span class="services-path-step-name">' + escHtml(path.capability.name) + '</span>' +
+        '</div>' +
+        '<div class="services-path-connector" aria-hidden="true"></div>' +
+        '<div class="services-path-step">' +
+          '<span class="services-path-step-label">Process</span>' +
+          '<span class="services-path-step-name">' + escHtml(path.process.name) + '</span>' +
+        '</div>' +
+        '<div class="services-path-chain">' +
+          '<div class="services-path-chain-row surface">' +
+            '<span class="services-path-chain-key">Surface</span>' +
+            '<span class="services-path-chain-val">' + escHtml(path.surface.id) + '</span>' +
+          '</div>' +
+          '<div class="services-path-chain-row profile">' +
+            '<span class="services-path-chain-key">Profile</span>' +
+            '<span class="services-path-chain-val">' + escHtml(path.profile) + '</span>' +
+          '</div>' +
+          '<div class="services-path-chain-row grant">' +
+            '<span class="services-path-chain-key">Grant</span>' +
+            '<span class="services-path-chain-val">' + escHtml(path.grant) + '</span>' +
+          '</div>' +
+          '<div class="services-path-chain-row agent">' +
+            '<span class="services-path-chain-key">Agent</span>' +
+            '<span class="services-path-chain-val">' + escHtml(path.agent) + '</span>' +
+          '</div>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
+  function renderServicesStructuralPath(proc, svc) {
+    // Without an explicit M:N capability→process linkage in the seed data we
+    // pick the first capability of the service as the representative
+    // capability for each process — accurate for the current demo shape and
+    // honest about its limit.
+    const cap = svc.capabilities[0];
+    const surfacesHtml = (proc.surfaces || []).map(s =>
+      '<div class="services-path-chain-row surface">' +
+        '<span class="services-path-chain-key">Surface</span>' +
+        '<span class="services-path-chain-val">' + escHtml(s.id) + '</span>' +
+      '</div>'
+    ).join('');
+    return (
+      '<div class="services-path">' +
+        '<div class="services-path-step">' +
+          '<span class="services-path-step-label">Capability</span>' +
+          '<span class="services-path-step-name">' + escHtml(cap ? cap.name : '—') + '</span>' +
+        '</div>' +
+        '<div class="services-path-connector" aria-hidden="true"></div>' +
+        '<div class="services-path-step">' +
+          '<span class="services-path-step-label">Process</span>' +
+          '<span class="services-path-step-name">' + escHtml(proc.name) + '</span>' +
+        '</div>' +
+        '<div class="services-path-chain">' + surfacesHtml + '</div>' +
+      '</div>'
+    );
+  }
+
+  function renderServicesSummary() {
+    // Authority Summary — pulled from existing /explorer/config when available.
+    const auth = document.getElementById('services-authority-summary');
+    if (auth) {
+      auth.innerHTML =
+        '<div class="services-summary-row">' +
+          '<span class="services-summary-key">Authority model</span>' +
+          '<span class="services-summary-val">Service scoped</span>' +
+        '</div>' +
+        '<div class="services-summary-row">' +
+          '<span class="services-summary-key">Policy mode</span>' +
+          '<span class="services-summary-val" id="services-summary-policy-mode">—</span>' +
+        '</div>' +
+        '<div class="services-summary-row">' +
+          '<span class="services-summary-key">Recent decision latency</span>' +
+          '<span class="services-summary-val ok">—</span>' +
+        '</div>';
+    }
+
+    // Coverage Summary — backed by /explorer/coverage records count via
+    // updateServicesCoverageSummary(). Initial state shows a placeholder.
+    const cov = document.getElementById('services-coverage-summary');
+    if (cov) {
+      cov.innerHTML =
+        '<div class="services-coverage-pct" id="services-coverage-pct">—</div>' +
+        '<div class="services-coverage-bar"><div class="services-coverage-bar-fill" id="services-coverage-bar-fill" style="width:0%"></div></div>' +
+        '<div class="services-coverage-note" id="services-coverage-note">Coverage refreshes after evaluations.</div>';
+    }
+
+    // Recent Decisions — demo sample only (no list endpoint exists yet).
+    const recent = document.getElementById('services-recent-decisions');
+    if (recent) {
+      const samples = [
+        { id: '#AC-7281', time: '2 mins ago',  label: 'ACCEPT',   cls: 'badge-accept'   },
+        { id: '#ES-7280', time: '5 mins ago',  label: 'ESCALATE', cls: 'badge-escalate' },
+        { id: '#RE-7279', time: '12 mins ago', label: 'REJECT',   cls: 'badge-reject'   },
+      ];
+      recent.innerHTML = samples.map(s =>
+        '<div class="services-recent-decision">' +
+          '<div>' +
+            '<div class="services-recent-id">' + escHtml(s.id) + '</div>' +
+            '<div class="services-recent-time">' + escHtml(s.time) + '</div>' +
+          '</div>' +
+          '<span class="services-recent-badge ' + s.cls + '">' + escHtml(s.label) + '</span>' +
+        '</div>'
+      ).join('');
+    }
+
+    // Runtime Context — populated by the /explorer/config block via the
+    // services-runtime-* IDs below.
+    const rt = document.getElementById('services-runtime-context');
+    if (rt) {
+      rt.innerHTML =
+        '<div class="services-runtime-grid">' +
+          '<div class="services-runtime-item"><span class="services-runtime-key">Sandbox</span><span class="services-runtime-val">active</span></div>' +
+          '<div class="services-runtime-item"><span class="services-runtime-key">Auth</span><span class="services-runtime-val" id="services-runtime-auth">—</span></div>' +
+          '<div class="services-runtime-item"><span class="services-runtime-key">Store</span><span class="services-runtime-val" id="services-runtime-store">—</span></div>' +
+          '<div class="services-runtime-item"><span class="services-runtime-key">Policy</span><span class="services-runtime-val" id="services-runtime-policy">—</span></div>' +
+        '</div>';
+    }
+  }
+
+  // updateServicesCoverageSummary is called from refreshCoverage() after each
+  // /explorer/coverage fetch so the Services-view summary card stays in sync
+  // with whatever Records shows.
+  function updateServicesCoverageSummary(records) {
+    const pctEl  = document.getElementById('services-coverage-pct');
+    const barEl  = document.getElementById('services-coverage-bar-fill');
+    const noteEl = document.getElementById('services-coverage-note');
+    if (!pctEl || !barEl || !noteEl) return;
+    const count = Array.isArray(records) ? records.length : 0;
+    pctEl.textContent = String(count);
+    barEl.style.width = count > 0 ? '100%' : '0%';
+    noteEl.textContent = count === 0
+      ? 'No coverage records yet — run an evaluation to populate.'
+      : 'Records visible in the Records view.';
+  }
+
+  // Wire search
+  const servicesBSSearch = document.getElementById('services-bs-search');
+  if (servicesBSSearch) {
+    servicesBSSearch.addEventListener('input', e => renderServicesBSList(e.target.value));
+  }
+
+  // ── Records view ───────────────────────────────────────────────────────────
+  // Demo-sample-only records table — there is no historical-records endpoint
+  // yet, so rows are static and clearly badged. Selecting a row updates the
+  // detail rail; only the ACCEPT merchant record carries full authority +
+  // evidence detail. All technical resource actions either work locally
+  // (Copy envelope ID) or are disabled with a "not wired yet" tooltip
+  // (View envelope JSON, View audit events).
+
+  const RECORDS_DEMO_ROWS = [
+    { id: 'env-demo-merchant-001', outcome: 'ACCEPT',   bs: 'Merchant Services', surface: 'surf-v2-merchant-payment', agent: 'agent-v2-evaluator', reason: 'WITHIN_AUTHORITY',         time: '2 mins ago',  outcomeClass: 'accept'   },
+    { id: 'env-demo-merchant-002', outcome: 'ESCALATE', bs: 'Merchant Services', surface: 'surf-v2-merchant-payment', agent: 'agent-v2-evaluator', reason: 'CONSEQUENCE_EXCEEDS_LIMIT', time: '5 mins ago',  outcomeClass: 'escalate' },
+    { id: 'env-demo-lending-001',  outcome: 'CLARIFY',  bs: 'Consumer Lending',  surface: 'surf-v2-id-verify',        agent: 'agent-v2-evaluator', reason: 'INSUFFICIENT_CONTEXT',     time: '9 mins ago',  outcomeClass: 'clarify'  },
+    { id: 'env-demo-reject-001',   outcome: 'REJECT',   bs: 'Unknown',           surface: 'surf-unknown-xyz',         agent: 'agent-v2-evaluator', reason: 'SURFACE_NOT_FOUND',         time: '12 mins ago', outcomeClass: 'reject'   },
+  ];
+
+  // Full detail seeded only for the ACCEPT merchant record per the brief.
+  const RECORDS_FULL_DETAIL = {
+    'env-demo-merchant-001': {
+      authority: [
+        { label: 'Agent',            id: 'agent-v2-evaluator',             cls: 'agent',      glyph: 'A' },
+        { label: 'Grant',            id: 'grant-v2-standard',              cls: 'grant',      glyph: 'G' },
+        { label: 'Profile',          id: 'profile-v2-standard',            cls: 'profile',    glyph: 'P' },
+        { label: 'Surface',          id: 'surf-v2-merchant-payment',       cls: 'surface',    glyph: 'S' },
+        { label: 'Process',          id: 'Merchant Payment Authorization', cls: 'process',    glyph: '·' },
+        { label: 'Capability',       id: 'Payment Authorization',          cls: 'capability', glyph: '·' },
+        { label: 'Business Service', id: 'Merchant Services',              cls: 'bs',         glyph: 'B' },
+      ],
+      evidence: [
+        { key: 'Confidence',  val: '0.95 ≥ 0.85',  pass: 'PASSED'    },
+        { key: 'Consequence', val: '£100 ≤ £5,000', pass: 'PASSED' },
+        { key: 'Context',                               pass: 'SATISFIED' },
+        { key: 'Policy',      val: 'noop'                                 },
+      ],
+    },
+  };
+
+  let recordsSelectedId = 'env-demo-merchant-001';
+
+  function renderRecordsView() {
+    renderRecordsTable();
+    renderRecordsDetail();
+  }
+
+  function renderRecordsTable(filter) {
+    const tbody = document.getElementById('records-table-body');
+    if (!tbody) return;
+    const q = (filter || '').toLowerCase().trim();
+
+    const rows = RECORDS_DEMO_ROWS.filter(r =>
+      !q ||
+      r.id.toLowerCase().includes(q) ||
+      r.bs.toLowerCase().includes(q) ||
+      r.surface.toLowerCase().includes(q) ||
+      r.agent.toLowerCase().includes(q) ||
+      r.reason.toLowerCase().includes(q) ||
+      r.outcome.toLowerCase().includes(q)
+    );
+
+    if (rows.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="8" style="padding:20px;text-align:center;color:var(--slate-500)">No records match “' + escHtml(q) + '”</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = rows.map(r => {
+      const sel = r.id === recordsSelectedId ? ' selected' : '';
+      return (
+        '<tr data-record-id="' + escHtml(r.id) + '" class="' + sel + '">' +
+          '<td><span class="records-outcome-badge ' + r.outcomeClass + '">' + escHtml(r.outcome) + '</span></td>' +
+          '<td class="col-mono">' + escHtml(r.id) + '</td>' +
+          '<td class="col-meta">' + escHtml(r.bs) + '</td>' +
+          '<td class="col-mono-primary">' + escHtml(r.surface) + '</td>' +
+          '<td class="col-mono-primary">' + escHtml(r.agent) + '</td>' +
+          '<td class="col-reason">' + escHtml(r.reason) + '</td>' +
+          '<td class="col-time">' + escHtml(r.time) + '</td>' +
+          '<td class="col-integrity" title="verified" aria-label="verified">✓</td>' +
+        '</tr>'
+      );
+    }).join('');
+
+    tbody.querySelectorAll('tr').forEach(tr => {
+      tr.addEventListener('click', () => {
+        if (!tr.dataset.recordId) return;
+        recordsSelectedId = tr.dataset.recordId;
+        renderRecordsView();
+      });
+    });
+  }
+
+  function renderRecordsDetail() {
+    const idEl   = document.getElementById('records-detail-id');
+    const bodyEl = document.getElementById('records-detail-body');
+    if (!idEl || !bodyEl) return;
+
+    const row = RECORDS_DEMO_ROWS.find(r => r.id === recordsSelectedId) || RECORDS_DEMO_ROWS[0];
+    idEl.textContent = row.id;
+
+    const detail = RECORDS_FULL_DETAIL[row.id] || null;
+
+    // Detail grid — always rendered from the row metadata
+    const grid =
+      '<div class="records-detail-grid">' +
+        '<div>' +
+          '<div class="records-detail-cell-key">Outcome</div>' +
+          '<span class="records-outcome-badge ' + row.outcomeClass + '">' + escHtml(row.outcome) + '</span>' +
+        '</div>' +
+        '<div>' +
+          '<div class="records-detail-cell-key">Reason</div>' +
+          '<div class="records-detail-cell-val">' + escHtml(row.reason) + '</div>' +
+        '</div>' +
+        '<div>' +
+          '<div class="records-detail-cell-key">Business Service</div>' +
+          '<div class="records-detail-cell-text">' + escHtml(row.bs) + '</div>' +
+        '</div>' +
+        '<div>' +
+          '<div class="records-detail-cell-key">Evaluated</div>' +
+          '<div class="records-detail-cell-text">' + escHtml(row.time) + '</div>' +
+        '</div>' +
+        '<div>' +
+          '<div class="records-detail-cell-key">Integrity</div>' +
+          '<div class="records-detail-cell-text"><span style="color:var(--secondary)">✓</span> verified</div>' +
+        '</div>' +
+      '</div>';
+
+    // Authority Path — only seeded for the ACCEPT merchant record
+    let authority = '';
+    if (detail) {
+      const nodes = detail.authority.map(n =>
+        '<div class="records-authority-node ' + n.cls + '">' +
+          '<span class="records-authority-node-dot" aria-hidden="true">' + escHtml(n.glyph || '') + '</span>' +
+          '<span class="records-authority-node-text">' +
+            '<span class="records-authority-node-label">' + escHtml(n.label) + '</span>' +
+            '<span class="records-authority-node-id">' + escHtml(n.id) + '</span>' +
+          '</span>' +
+        '</div>'
+      ).join('');
+      authority =
+        '<div>' +
+          '<p class="records-detail-section-label">Authority Path</p>' +
+          '<div class="records-authority-path">' + nodes + '</div>' +
+        '</div>';
+    } else {
+      authority =
+        '<div>' +
+          '<p class="records-detail-section-label">Authority Path</p>' +
+          '<div class="placeholder-text" style="text-align:left;font-size:11px">Authority chain detail not seeded for this demo record.</div>' +
+        '</div>';
+    }
+
+    // Evidence Summary — only seeded for the ACCEPT merchant record
+    let evidence = '';
+    if (detail) {
+      const erows = detail.evidence.map(e =>
+        '<div class="records-evidence-row">' +
+          '<span class="records-evidence-key">' + escHtml(e.key) + '</span>' +
+          '<span>' +
+            (e.val  ? '<span class="records-evidence-val">' + escHtml(e.val) + '</span>'   : '') +
+            (e.pass ? '<span class="records-evidence-pass">' + escHtml(e.pass) + '</span>' : '') +
+          '</span>' +
+        '</div>'
+      ).join('');
+      evidence =
+        '<div class="records-evidence">' +
+          '<p class="records-detail-section-label">Evidence Summary</p>' +
+          erows +
+          '<div class="records-evidence-note"><span aria-hidden="true">ⓘ</span> Decision recorded in Explorer sandbox</div>' +
+        '</div>';
+    }
+
+    // Coverage limitation — verbatim per brief
+    const coverageLimit =
+      '<div class="records-coverage-limit">' +
+        '<div class="records-coverage-limit-label">Coverage Limitation</div>' +
+        '<div class="records-coverage-limit-text">"Read-model scope. Process-scoped, same-evaluation correlation only."</div>' +
+      '</div>';
+
+    // Resources — Copy envelope ID works locally; the other two are disabled
+    // with explanatory tooltips. No fake destructive behaviour.
+    const resources =
+      '<div>' +
+        '<p class="records-resources-title">Resources</p>' +
+        '<button type="button" class="records-resource-action" id="records-view-envelope-btn" disabled' +
+          ' title="Demo records — submit a real evaluation in Evaluate to inspect a live envelope">' +
+          '<span>View envelope JSON</span>' +
+          '<span class="records-resource-action-glyph" aria-hidden="true">¤</span>' +
+        '</button>' +
+        '<button type="button" class="records-resource-action" id="records-view-audit-btn" disabled' +
+          ' title="Audit events list endpoint not yet wired">' +
+          '<span>View audit events</span>' +
+          '<span class="records-resource-action-glyph" aria-hidden="true">⧖</span>' +
+        '</button>' +
+        '<button type="button" class="records-resource-action" id="records-copy-id-btn">' +
+          '<span>Copy envelope ID</span>' +
+          '<span class="records-resource-action-glyph" aria-hidden="true">⧉</span>' +
+        '</button>' +
+      '</div>';
+
+    bodyEl.innerHTML = grid + authority + evidence + coverageLimit + resources;
+
+    // Wire the only enabled action — Copy envelope ID
+    const copyBtn = document.getElementById('records-copy-id-btn');
+    if (copyBtn) {
+      copyBtn.addEventListener('click', () => copyToClipboard(row.id, copyBtn));
+    }
+  }
+
+  // Wire search
+  const recordsSearch = document.getElementById('records-search');
+  if (recordsSearch) {
+    recordsSearch.addEventListener('input', e => renderRecordsTable(e.target.value));
+  }
+
+  // Wire close button — keeps the header bar minimal; clears nothing visible
+  // since the rail is always populated, but blurs focus for keyboard users.
+  const recordsCloseBtn = document.getElementById('records-detail-close');
+  if (recordsCloseBtn) {
+    recordsCloseBtn.addEventListener('click', () => recordsCloseBtn.blur());
+  }
+
+  // ── Settings view ──────────────────────────────────────────────────────────
+  // Demo-data counts are derived from STRUCTURAL_CONTEXT and DEMO_RESOURCES.
+  // Auth state is populated from /explorer/config via setSettingsAuthFromConfig
+  // (called inside the existing config-fetch block). Coverage record count is
+  // updated by refreshCoverage via updateSettingsCoverageCount. Last-recorded
+  // decision is updated by submitRequest's success path.
+  //
+  // No new endpoints are introduced. Every destructive button is `disabled`
+  // and carries an explanatory tooltip.
+
+  function renderSettingsDemoCounts() {
+    if (typeof STRUCTURAL_CONTEXT === 'undefined' || typeof DEMO_RESOURCES === 'undefined') return;
+
+    const capIds = new Set();
+    const procIds = new Set();
+    const surfIds = new Set();
+    for (const svc of STRUCTURAL_CONTEXT) {
+      for (const c of svc.capabilities || []) capIds.add(c.id);
+      for (const p of svc.processes || []) {
+        procIds.add(p.id);
+        for (const s of p.surfaces || []) surfIds.add(s.id);
+      }
+    }
+    const countByType = (type) => DEMO_RESOURCES.filter(r => r.type === type).length;
+
+    const counts = {
+      'settings-count-services':     STRUCTURAL_CONTEXT.length,
+      'settings-count-capabilities': capIds.size,
+      'settings-count-processes':    procIds.size,
+      'settings-count-surfaces':     surfIds.size,
+      'settings-count-profiles':     countByType('Profile'),
+      'settings-count-grants':       countByType('Grant'),
+      'settings-count-agents':       countByType('Agent'),
+    };
+    for (const id in counts) {
+      const el = document.getElementById(id);
+      if (el) el.textContent = String(counts[id]);
+    }
+  }
+
+  // setSettingsAuthFromConfig is invoked from the /explorer/config .then()
+  // block alongside the existing chip + runtime-card population.
+  function setSettingsAuthFromConfig(cfg) {
+    const setVal = (id, value, cls) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.textContent = value;
+      if (cls !== undefined) el.className = 'settings-auth-val' + (cls ? ' ' + cls : '');
+    };
+    const setEnv = (id, value, cls) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.textContent = value;
+      if (cls !== undefined) el.className = 'settings-env-cell-value' + (cls ? ' ' + cls : '');
+    };
+
+    // Authentication card
+    if (cfg.authMode) {
+      const cls = cfg.authMode === 'open' ? 'ok' : 'warn';
+      setVal('settings-auth-current', cfg.authMode, cls);
+    }
+    let sessionLabel = 'not required';
+    let sessionCls = 'muted';
+    if (cfg.localiam || cfg.oidc) {
+      sessionLabel = 'session-cookie auth';
+      sessionCls = '';
+    } else if (cfg.authMode === 'required') {
+      const tokenSet = !!getToken();
+      sessionLabel = tokenSet ? 'token set' : 'token required';
+      sessionCls = tokenSet ? 'ok' : 'warn';
+    }
+    setVal('settings-session-state',  sessionLabel, sessionCls);
+    setVal('settings-bearer-state',   getToken() ? 'set' : 'not set', getToken() ? 'ok' : 'muted');
+    setVal('settings-localiam-state', cfg.localiam ? 'enabled' : 'disabled', cfg.localiam ? 'ok' : 'muted');
+    setVal('settings-oidc-state',     cfg.oidc     ? 'enabled' : 'disabled', cfg.oidc     ? 'ok' : 'muted');
+
+    // Environment card
+    if (cfg.authMode) {
+      const cls = cfg.authMode === 'open' ? 'primary' : 'warn';
+      setEnv('settings-env-auth', cfg.authMode, cls);
+    }
+    if (cfg.store)      setEnv('settings-env-store',  cfg.store, '');
+    if (cfg.policyMode) setEnv('settings-env-policy', cfg.policyMode, 'tertiary');
+    if (cfg.explorerStore !== undefined) {
+      const isMem = cfg.explorerStore === 'memory';
+      setEnv('settings-env-sandbox', isMem ? 'active' : (cfg.explorerStore || 'inactive'), isMem ? 'ok' : 'muted');
+    }
+    if (cfg.version) {
+      const vEl = document.getElementById('settings-env-version');
+      if (vEl) vEl.textContent = cfg.version;
+      const chip = document.getElementById('settings-version-chip');
+      if (chip) chip.textContent = cfg.version;
+    }
+
+    // Sign-out enable/disable — only meaningful when an IAM/OIDC session
+    // applies. The button delegates to the header logout (same /auth/logout
+    // POST flow) so we don't duplicate the implementation.
+    const signoutBtn = document.getElementById('settings-signout-btn');
+    const signoutNote = document.getElementById('settings-signout-note');
+    if (signoutBtn) {
+      const hasIAMSession = !!(cfg.localiam || cfg.oidc);
+      signoutBtn.disabled = !hasIAMSession;
+      if (signoutNote) {
+        signoutNote.textContent = hasIAMSession
+          ? 'Signs out of the active IAM session.'
+          : 'Sign-out is available only when an IAM or OIDC session is active.';
+      }
+    }
+  }
+
+  // updateSettingsCoverageCount is wired from refreshCoverage so the
+  // Decision-Records-card stat stays in sync with whatever Records shows.
+  function updateSettingsCoverageCount(records) {
+    const el = document.getElementById('settings-coverage-count');
+    if (!el) return;
+    el.textContent = String(Array.isArray(records) ? records.length : 0);
+  }
+
+  // markSettingsLastDecision is wired from submitRequest's success path —
+  // updates the chip in the Decision Records card header.
+  function markSettingsLastDecision() {
+    const el = document.getElementById('settings-last-update-text');
+    if (el) el.textContent = 'Last: just now';
+  }
+
+  // Wire sign-out button to the existing header logout handler. Delegating
+  // means there is exactly one implementation of the logout flow.
+  const settingsSignoutBtn = document.getElementById('settings-signout-btn');
+  if (settingsSignoutBtn) {
+    settingsSignoutBtn.addEventListener('click', () => {
+      if (settingsSignoutBtn.disabled) return;
+      const headerLogout = document.getElementById('iam-logout-btn');
+      if (headerLogout) headerLogout.click();
+    });
+  }
 
   // ── Local IAM helpers ──────────────────────────────────────────────────────
   // These functions handle session-cookie auth (localiam mode). They are no-ops
@@ -1243,32 +4248,33 @@
   const usernameDisp  = document.getElementById('iam-username-display');
   const logoutBtn     = document.getElementById('iam-logout-btn');
 
+  // Cluster 1: gating now applies to a single shell-main container instead
+  // of the previous trio (.layout, .mode-selector-bar, #mode-banner). The
+  // sidebar and runtime header stay un-gated so the user retains visual
+  // orientation while the overlay is up.
+  function gateShell()   { document.getElementById('shell-main').classList.add('layout-gated'); }
+  function ungateShell() { document.getElementById('shell-main').classList.remove('layout-gated'); }
+
   function showLoginOverlay() {
     loginOverlay.removeAttribute('aria-hidden');
     loginOverlay.classList.add('visible');
     chpwOverlay.classList.remove('visible');
     document.getElementById('iam-username').focus();
-    document.querySelector('.layout').classList.add('layout-gated');
-    document.querySelector('.mode-selector-bar').classList.add('layout-gated');
-    document.getElementById('mode-banner').classList.add('layout-gated');
+    gateShell();
   }
   function showChpwOverlay() {
     chpwOverlay.removeAttribute('aria-hidden');
     chpwOverlay.classList.add('visible');
     loginOverlay.classList.remove('visible');
     document.getElementById('iam-current-pw').focus();
-    document.querySelector('.layout').classList.add('layout-gated');
-    document.querySelector('.mode-selector-bar').classList.add('layout-gated');
-    document.getElementById('mode-banner').classList.add('layout-gated');
+    gateShell();
   }
   function hideOverlays() {
     loginOverlay.classList.remove('visible');
     loginOverlay.setAttribute('aria-hidden', 'true');
     chpwOverlay.classList.remove('visible');
     chpwOverlay.setAttribute('aria-hidden', 'true');
-    document.querySelector('.layout').classList.remove('layout-gated');
-    document.querySelector('.mode-selector-bar').classList.remove('layout-gated');
-    document.getElementById('mode-banner').classList.remove('layout-gated');
+    ungateShell();
   }
   function setIAMUser(username) {
     usernameDisp.textContent = username;
@@ -1540,6 +4546,33 @@
         `<div class="runtime-row"><span class="runtime-key">${k}</span><span class="runtime-val">${v}</span></div>`
       ).join('');
 
+      // Cluster 1: also populate the new shell-header chips so the runtime
+      // context is visible across all four views without consulting the
+      // right-panel runtime card.
+      const setChip = (id, label, value) => {
+        const el = document.getElementById(id);
+        if (el && value) el.innerHTML = `${label}: <strong>${value}</strong>`;
+      };
+      if (cfg.authMode)   setChip('header-auth-chip',   'Auth',   cfg.authMode);
+      if (cfg.store)      setChip('header-store-chip',  'Store',  cfg.store);
+      if (cfg.policyMode) setChip('header-policy-chip', 'Policy', cfg.policyMode);
+
+      // Cluster 2: populate the Services view's authority-summary policy-mode
+      // and runtime-context cells from the same config response.
+      const setText = (id, value) => {
+        const el = document.getElementById(id);
+        if (el && value) el.textContent = value;
+      };
+      setText('services-summary-policy-mode', cfg.policyMode);
+      setText('services-runtime-auth',        cfg.authMode);
+      setText('services-runtime-store',       cfg.store);
+      setText('services-runtime-policy',      cfg.policyMode);
+
+      // Cluster 5: populate the Settings view from the same config response.
+      if (typeof setSettingsAuthFromConfig === 'function') {
+        setSettingsAuthFromConfig(cfg);
+      }
+
       runtimeBadge.textContent = cfg.authMode ? `auth: ${cfg.authMode}` : 'running';
 
       if (cfg.authMode === 'open') {
@@ -1671,6 +4704,15 @@
       }
       const payload = await res.json();
       renderCoverage(payload);
+      // Cluster 2: keep the Services-view coverage summary in sync with
+      // whatever Records / the right-panel coverage card shows.
+      if (typeof updateServicesCoverageSummary === 'function') {
+        updateServicesCoverageSummary(payload && payload.records);
+      }
+      // Cluster 5: keep the Settings Decision-Records-card stat in sync.
+      if (typeof updateSettingsCoverageCount === 'function') {
+        updateSettingsCoverageCount(payload && payload.records);
+      }
     } catch (e) {
       coverageCard.innerHTML = '<div class="coverage-empty">coverage fetch failed</div>';
     }
@@ -2063,6 +5105,10 @@
         // Refresh the governance coverage panel — a new evaluation may have
         // emitted detected/gap audit events that change what we display.
         refreshCoverage();
+        // Cluster 5: update Settings "last recorded decision" indicator.
+        if (typeof markSettingsLastDecision === 'function') {
+          markSettingsLastDecision();
+        }
       }
     } catch (e) {
       showError('Network error: ' + e.message, null);
@@ -2666,6 +5712,19 @@
 
   // Initialise resource panel after a short delay so it appears after config fetch
   setTimeout(renderResourcePanel, 0);
+
+  // Initialise the Services view content (Cluster 2). STRUCTURAL_CONTEXT and
+  // DEMO_RESOURCES are now in scope — renderServicesView reads from them.
+  setTimeout(renderServicesView, 0);
+
+  // Initialise the Records view content (Cluster 4) — demo rows + selected
+  // record detail rail. No backend calls; all data is local.
+  setTimeout(renderRecordsView, 0);
+
+  // Initialise the Settings view content (Cluster 5) — demo-data counts.
+  // Auth/env/coverage values arrive asynchronously via setSettingsAuthFromConfig
+  // and updateSettingsCoverageCount; the demo counts are static and run once.
+  setTimeout(renderSettingsDemoCounts, 0);
 
   // ── Copy helpers ───────────────────────────────────────────────────────────
   document.getElementById('raw-copy-btn').addEventListener('click', () => {

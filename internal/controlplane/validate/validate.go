@@ -74,6 +74,8 @@ func ValidateDocument(doc parser.ParsedDocument) []types.ValidationError {
 		errs = append(errs, validateBusinessService(d)...)
 	case types.BusinessServiceCapabilityDocument:
 		errs = append(errs, validateBusinessServiceCapability(d)...)
+	case types.BusinessServiceRelationshipDocument:
+		errs = append(errs, validateBusinessServiceRelationship(d)...)
 	case types.CapabilityDocument:
 		errs = append(errs, validateCapability(d)...)
 	case types.ProcessDocument:
@@ -145,6 +147,41 @@ func ValidateBundle(docs []parser.ParsedDocument) []types.ValidationError {
 			// prevent adding duplicates repeatedly for same key
 			delete(occurrences, key)
 		}
+	}
+
+	// BusinessServiceRelationship: duplicate (source, target, relationship_type)
+	// triple within the bundle. Mirrors the schema's uniq_bsr_triple UNIQUE
+	// constraint so the operator gets a validator-level message rather than
+	// a Postgres constraint-failure surface at apply time.
+	bsrTripleFirstIdx := make(map[string]int)
+	for i, doc := range docs {
+		if doc.Kind != types.KindBusinessServiceRelationship {
+			continue
+		}
+		bsrDoc, ok := doc.Doc.(types.BusinessServiceRelationshipDocument)
+		if !ok {
+			continue
+		}
+		source := strings.TrimSpace(bsrDoc.Spec.SourceBusinessServiceID)
+		target := strings.TrimSpace(bsrDoc.Spec.TargetBusinessServiceID)
+		relType := strings.TrimSpace(bsrDoc.Spec.RelationshipType)
+		// Only meaningful when all three fields are present and well-formed —
+		// the per-document validator already flagged anything missing.
+		if source == "" || target == "" || relType == "" {
+			continue
+		}
+		key := source + "\x00" + target + "\x00" + relType
+		if firstIdx, seen := bsrTripleFirstIdx[key]; seen {
+			errs = append(errs, types.ValidationError{
+				Kind:          doc.Kind,
+				ID:            doc.ID,
+				Field:         "spec",
+				Message:       fmt.Sprintf("duplicate business-service relationship triple: (source=%q, target=%q, relationship_type=%q) already declared in document %d", source, target, relType, firstIdx),
+				DocumentIndex: i + 1,
+			})
+			continue
+		}
+		bsrTripleFirstIdx[key] = i + 1
 	}
 
 	return errs
@@ -233,6 +270,69 @@ func validateBusinessServiceCapability(doc types.BusinessServiceCapabilityDocume
 		errs = append(errs, fieldErr(doc, "spec.capability_id", err.Error()))
 	}
 	return errs
+}
+
+// validateBusinessServiceRelationship validates a BusinessServiceRelationship
+// document — the directed junction between two BusinessServices (Epic 1, PR 1).
+//
+// Per the same posture as BusinessServiceCapability, junction rows have no
+// lifecycle. The spec carries source / target / relationship_type / description.
+// Field-level rules:
+//
+//   - source_business_service_id required, ID-format compliant
+//   - target_business_service_id required, ID-format compliant
+//   - source_business_service_id != target_business_service_id (self-ref)
+//   - relationship_type ∈ {depends_on, supports, part_of}
+//
+// Cross-bundle resolution (do the referenced BSes exist in the bundle or
+// in the persisted store?) is the apply planner's concern, not this
+// validator's — mirroring BSC. Bundle-uniqueness rules (duplicate id,
+// duplicate triple) live in ValidateBundle.
+//
+// Cycle detection scope: only direct self-reference is rejected here.
+// TODO(epic-1, future PR): implement recursive cycle detection across the
+// BSR graph (depends_on chains in particular). The schema accepts cyclic
+// links today; the validator does not yet reject them.
+func validateBusinessServiceRelationship(doc types.BusinessServiceRelationshipDocument) []types.ValidationError {
+	var errs []types.ValidationError
+
+	source := strings.TrimSpace(doc.Spec.SourceBusinessServiceID)
+	target := strings.TrimSpace(doc.Spec.TargetBusinessServiceID)
+	relType := strings.TrimSpace(doc.Spec.RelationshipType)
+
+	if source == "" {
+		errs = append(errs, requiredFieldErr(doc, "spec.source_business_service_id"))
+	} else if err := validateIDFormat(source); err != nil {
+		errs = append(errs, fieldErr(doc, "spec.source_business_service_id", err.Error()))
+	}
+	if target == "" {
+		errs = append(errs, requiredFieldErr(doc, "spec.target_business_service_id"))
+	} else if err := validateIDFormat(target); err != nil {
+		errs = append(errs, fieldErr(doc, "spec.target_business_service_id", err.Error()))
+	}
+
+	// Self-reference is rejected even when the IDs are otherwise well-formed.
+	if source != "" && target != "" && source == target {
+		errs = append(errs, fieldErr(doc, "spec.target_business_service_id",
+			"source_business_service_id and target_business_service_id must differ"))
+	}
+
+	if relType == "" {
+		errs = append(errs, requiredFieldErr(doc, "spec.relationship_type"))
+	} else if !isValidBSRRelationshipType(relType) {
+		errs = append(errs, enumErr(doc, "spec.relationship_type", relType,
+			[]string{"depends_on", "supports", "part_of"}))
+	}
+
+	return errs
+}
+
+func isValidBSRRelationshipType(t string) bool {
+	switch t {
+	case "depends_on", "supports", "part_of":
+		return true
+	}
+	return false
 }
 
 func validateCapability(doc types.CapabilityDocument) []types.ValidationError {

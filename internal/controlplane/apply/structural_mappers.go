@@ -70,3 +70,22 @@ func mapBusinessServiceCapabilityDocumentToBusinessServiceCapability(doc types.B
 		CreatedAt:         now.UTC(),
 	}
 }
+
+// mapBusinessServiceRelationshipDocumentToBusinessServiceRelationship converts
+// a validated BusinessServiceRelationshipDocument into the domain
+// BusinessServiceRelationship ready for persistence (Epic 1, PR 1).
+//
+// Defaults: relationship_type is taken verbatim from the spec (validated
+// upstream against the {depends_on, supports, part_of} enum). The junction
+// has no lifecycle to default — this mapper is a thin field-mover.
+func mapBusinessServiceRelationshipDocumentToBusinessServiceRelationship(doc types.BusinessServiceRelationshipDocument, now time.Time, createdBy string) *businessservice.BusinessServiceRelationship {
+	return &businessservice.BusinessServiceRelationship{
+		ID:                    strings.TrimSpace(doc.Metadata.ID),
+		SourceBusinessService: strings.TrimSpace(doc.Spec.SourceBusinessServiceID),
+		TargetBusinessService: strings.TrimSpace(doc.Spec.TargetBusinessServiceID),
+		RelationshipType:      strings.TrimSpace(doc.Spec.RelationshipType),
+		Description:           strings.TrimSpace(doc.Spec.Description),
+		CreatedAt:             now.UTC(),
+		CreatedBy:             strings.TrimSpace(createdBy),
+	}
+}

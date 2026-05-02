@@ -177,17 +177,18 @@ func main() {
 	}
 
 	applyService := apply.NewServiceWithRepos(apply.RepositorySet{
-		Surfaces:                    repos.Surfaces,
-		Agents:                      repos.Agents,
-		Profiles:                    repos.Profiles,
-		Grants:                      repos.Grants,
-		ControlAudit:                repos.ControlAudit,
-		Processes:                   repos.Processes,
-		Capabilities:                repos.Capabilities,
-		BusinessServices:            repos.BusinessServices,
-		BusinessServiceCapabilities: repos.BusinessServiceCapabilities,
-		GovernanceExpectations:      repos.GovernanceExpectations,
-		Tx:                          applyTx,
+		Surfaces:                     repos.Surfaces,
+		Agents:                       repos.Agents,
+		Profiles:                     repos.Profiles,
+		Grants:                       repos.Grants,
+		ControlAudit:                 repos.ControlAudit,
+		Processes:                    repos.Processes,
+		Capabilities:                 repos.Capabilities,
+		BusinessServices:             repos.BusinessServices,
+		BusinessServiceCapabilities:  repos.BusinessServiceCapabilities,
+		BusinessServiceRelationships: repos.BusinessServiceRelationships,
+		GovernanceExpectations:       repos.GovernanceExpectations,
+		Tx:                           applyTx,
 	})
 
 	approvalSvc := approval.NewServiceWithProfileAndOutbox(
@@ -200,7 +201,8 @@ func main() {
 
 	introspectionSvc := httpapi.NewIntrospectionServiceFull(repos.Surfaces, repos.Profiles, repos.Agents, repos.Grants)
 	structuralSvc := httpapi.NewStructuralService(repos.Capabilities, repos.Processes, repos.Surfaces).
-		WithBusinessServices(repos.BusinessServices)
+		WithBusinessServices(repos.BusinessServices).
+		WithBusinessServiceRelationships(repos.BusinessServiceRelationships)
 	explicitValidationSvc := httpapi.NewExplicitValidationService(repos.Processes, repos.Surfaces)
 
 	var controlAuditSvc *httpapi.ControlAuditReadService

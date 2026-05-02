@@ -51,6 +51,7 @@ type Service struct {
 	capabilityRepo                CapabilityRepository
 	businessServiceRepo           BusinessServiceRepository
 	businessServiceCapabilityRepo BusinessServiceCapabilityRepository
+	bsRelationshipRepo            BusinessServiceRelationshipRepository
 	governanceExpectationRepo     GovernanceExpectationRepository
 	controlAuditRepo              controlaudit.Repository
 	tx                            TxRunner
@@ -85,6 +86,7 @@ func NewServiceWithRepos(repos RepositorySet) *Service {
 		capabilityRepo:                repos.Capabilities,
 		businessServiceRepo:           repos.BusinessServices,
 		businessServiceCapabilityRepo: repos.BusinessServiceCapabilities,
+		bsRelationshipRepo:            repos.BusinessServiceRelationships,
 		governanceExpectationRepo:     repos.GovernanceExpectations,
 		controlAuditRepo:              repos.ControlAudit,
 		tx:                            repos.Tx,
@@ -475,6 +477,8 @@ func (s *Service) buildApplyPlan(ctx context.Context, docs []parser.ParsedDocume
 					entry.DecisionSource = DecisionSourceValidation
 					entry.CreateKind = CreateKindNew
 				}
+			case types.KindBusinessServiceRelationship:
+				s.planBusinessServiceRelationshipEntry(ctx, doc, bundleBusinessServiceIDs, &entry)
 			case types.KindGovernanceExpectation:
 				if s.governanceExpectationRepo != nil {
 					s.planGovernanceExpectationEntry(ctx, doc, bundleProcessIDs, bundleSurfaceIDs, bundleSurfaceProcessIDs, &entry)
@@ -2113,6 +2117,12 @@ func (s *Service) applyCreateEntry(
 			return nil
 		}
 		return s.applyBusinessServiceCapability(ctx, repos, entry.Doc, now, result)
+	case types.KindBusinessServiceRelationship:
+		if repos.BusinessServiceRelationships == nil {
+			result.AddCreated(entry.Kind, entry.ID)
+			return nil
+		}
+		return s.applyBusinessServiceRelationship(ctx, repos, entry.Doc, now, actor, result)
 	case types.KindSurface:
 		if repos.Surfaces == nil {
 			result.AddCreated(entry.Kind, entry.ID)
@@ -2155,15 +2165,16 @@ func (s *Service) applyCreateEntry(
 // regardless of whether a TxRunner is wired.
 func (s *Service) ownRepositorySet() *RepositorySet {
 	return &RepositorySet{
-		Surfaces:                    s.surfaceRepo,
-		Agents:                      s.agentRepo,
-		Profiles:                    s.profileRepo,
-		Grants:                      s.grantRepo,
-		Processes:                   s.processRepo,
-		Capabilities:                s.capabilityRepo,
-		BusinessServices:            s.businessServiceRepo,
-		BusinessServiceCapabilities: s.businessServiceCapabilityRepo,
-		GovernanceExpectations:      s.governanceExpectationRepo,
+		Surfaces:                     s.surfaceRepo,
+		Agents:                       s.agentRepo,
+		Profiles:                     s.profileRepo,
+		Grants:                       s.grantRepo,
+		Processes:                    s.processRepo,
+		Capabilities:                 s.capabilityRepo,
+		BusinessServices:             s.businessServiceRepo,
+		BusinessServiceCapabilities:  s.businessServiceCapabilityRepo,
+		BusinessServiceRelationships: s.bsRelationshipRepo,
+		GovernanceExpectations:       s.governanceExpectationRepo,
 	}
 }
 
@@ -2199,6 +2210,7 @@ func (s *Service) appendControlAudit(ctx context.Context, rec *controlaudit.Cont
 //  7. Profile                   — depends on Surface
 //  8. Grant                     — depends on Agent and Profile
 //  9. GovernanceExpectation     — depends on Process and Surface
+//
 // 10. Other                     — unknown kinds, emitted after known kinds
 //
 // Within each tier, relative document order is preserved. Conflict and unchanged
@@ -2206,19 +2218,20 @@ func (s *Service) appendControlAudit(ctx context.Context, rec *controlaudit.Cont
 // because they produce no persisted output and carry no dependency implications.
 func orderedEntries(entries []ApplyPlanEntry) []ApplyPlanEntry {
 	kindOrder := map[string]int{
-		types.KindBusinessService:           0,
-		types.KindCapability:                1,
-		types.KindBusinessServiceCapability: 2,
-		types.KindProcess:                   3,
-		types.KindSurface:                   4,
-		types.KindAgent:                     5,
-		types.KindProfile:                   6,
-		types.KindGrant:                     7,
-		types.KindGovernanceExpectation:     8,
+		types.KindBusinessService:             0,
+		types.KindCapability:                  1,
+		types.KindBusinessServiceCapability:   2,
+		types.KindBusinessServiceRelationship: 3, // after BS so source/target FK rows already exist
+		types.KindProcess:                     4,
+		types.KindSurface:                     5,
+		types.KindAgent:                       6,
+		types.KindProfile:                     7,
+		types.KindGrant:                       8,
+		types.KindGovernanceExpectation:       9,
 	}
 
 	// Separate create entries (must respect order) from non-create entries.
-	creates := make([][]ApplyPlanEntry, 10) // 9 known tiers + 1 unknown
+	creates := make([][]ApplyPlanEntry, 11) // 10 known tiers + 1 unknown
 	var nonCreates []ApplyPlanEntry
 
 	for _, e := range entries {
@@ -2228,7 +2241,7 @@ func orderedEntries(entries []ApplyPlanEntry) []ApplyPlanEntry {
 		}
 		tier, known := kindOrder[e.Kind]
 		if !known {
-			tier = 9
+			tier = 10
 		}
 		creates[tier] = append(creates[tier], e)
 	}

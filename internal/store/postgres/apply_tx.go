@@ -42,15 +42,16 @@ func (a *ApplyTxRunner) WithTx(
 ) error {
 	return a.store.WithTx(ctx, operation, func(repos *store.Repositories) error {
 		return fn(&apply.RepositorySet{
-			Surfaces:                    repos.Surfaces,
-			Agents:                      repos.Agents,
-			Profiles:                    repos.Profiles,
-			Grants:                      repos.Grants,
-			Processes:                   repos.Processes,
-			Capabilities:                repos.Capabilities,
-			BusinessServices:            repos.BusinessServices,
-			BusinessServiceCapabilities: repos.BusinessServiceCapabilities,
-			GovernanceExpectations:      repos.GovernanceExpectations,
+			Surfaces:                     repos.Surfaces,
+			Agents:                       repos.Agents,
+			Profiles:                     repos.Profiles,
+			Grants:                       repos.Grants,
+			Processes:                    repos.Processes,
+			Capabilities:                 repos.Capabilities,
+			BusinessServices:             repos.BusinessServices,
+			BusinessServiceCapabilities:  repos.BusinessServiceCapabilities,
+			BusinessServiceRelationships: repos.BusinessServiceRelationships,
+			GovernanceExpectations:       repos.GovernanceExpectations,
 		})
 	})
 }

@@ -117,6 +117,13 @@ func ParseYAML(data []byte) (ParsedDocument, error) {
 		}
 		return wrapDocument(doc), nil
 
+	case types.KindBusinessServiceRelationship:
+		var doc types.BusinessServiceRelationshipDocument
+		if err := strictUnmarshal(data, &doc); err != nil {
+			return ParsedDocument{}, fmt.Errorf("failed to parse BusinessServiceRelationship document: %w", err)
+		}
+		return wrapDocument(doc), nil
+
 	case types.KindGovernanceExpectation:
 		var doc types.GovernanceExpectationDocument
 		if err := strictUnmarshal(data, &doc); err != nil {
@@ -125,7 +132,7 @@ func ParseYAML(data []byte) (ParsedDocument, error) {
 		return wrapDocument(doc), nil
 
 	default:
-		return ParsedDocument{}, fmt.Errorf("unsupported kind: %q (must be Surface, Agent, Profile, Grant, Capability, Process, BusinessService, BusinessServiceCapability, or GovernanceExpectation)", meta.Kind)
+		return ParsedDocument{}, fmt.Errorf("unsupported kind: %q (must be Surface, Agent, Profile, Grant, Capability, Process, BusinessService, BusinessServiceCapability, BusinessServiceRelationship, or GovernanceExpectation)", meta.Kind)
 	}
 }
 

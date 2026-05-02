@@ -30,6 +30,16 @@ spec:
   business_service_id: bs-consumer-lending
   capability_id: cap-fraud-detection`
 
+	validBusinessServiceRelationshipYAML = `apiVersion: midas.accept.io/v1
+kind: BusinessServiceRelationship
+metadata:
+  id: rel-mortgage-depends-on-onboarding
+spec:
+  source_business_service_id: bs-mortgage-origination
+  target_business_service_id: bs-customer-onboarding
+  relationship_type: depends_on
+  description: Mortgage origination depends on customer onboarding.`
+
 	validSurfaceYAML = `apiVersion: midas.accept.io/v1
 kind: Surface
 metadata:
@@ -227,6 +237,30 @@ func TestParseYAML_AllKinds(t *testing.T) {
 				}
 				if bscDoc.Spec.CapabilityID != "cap-fraud-detection" {
 					t.Errorf("expected capability_id %q, got %q", "cap-fraud-detection", bscDoc.Spec.CapabilityID)
+				}
+			},
+		},
+		{
+			name:         "BusinessServiceRelationship",
+			yaml:         validBusinessServiceRelationshipYAML,
+			expectedKind: types.KindBusinessServiceRelationship,
+			expectedID:   "rel-mortgage-depends-on-onboarding",
+			validateDoc: func(t *testing.T, doc ParsedDocument) {
+				bsrDoc, ok := doc.Doc.(types.BusinessServiceRelationshipDocument)
+				if !ok {
+					t.Fatalf("expected doc type BusinessServiceRelationshipDocument, got %T", doc.Doc)
+				}
+				if bsrDoc.Spec.SourceBusinessServiceID != "bs-mortgage-origination" {
+					t.Errorf("source: got %q", bsrDoc.Spec.SourceBusinessServiceID)
+				}
+				if bsrDoc.Spec.TargetBusinessServiceID != "bs-customer-onboarding" {
+					t.Errorf("target: got %q", bsrDoc.Spec.TargetBusinessServiceID)
+				}
+				if bsrDoc.Spec.RelationshipType != "depends_on" {
+					t.Errorf("relationship_type: got %q", bsrDoc.Spec.RelationshipType)
+				}
+				if bsrDoc.Spec.Description == "" {
+					t.Error("description should round-trip non-empty")
 				}
 			},
 		},

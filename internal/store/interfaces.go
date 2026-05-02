@@ -42,6 +42,11 @@ type Repositories struct {
 	Processes                   process.ProcessRepository
 	BusinessServices            businessservice.BusinessServiceRepository
 	BusinessServiceCapabilities businessservicecapability.BusinessServiceCapabilityRepository
+	// BusinessServiceRelationships is the repository for the directed
+	// junction between two BusinessServices (Epic 1, PR 1). Like the
+	// other junctions it has no lifecycle of its own; nil-safe at apply
+	// time so unconfigured deployments degrade gracefully.
+	BusinessServiceRelationships businessservice.RelationshipRepository
 
 	// GovernanceExpectations is the repository for declared
 	// governance-coverage rules (Issue #51). Used by the matching engine

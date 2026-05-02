@@ -48,6 +48,35 @@ func TestExplorer_Enabled_ReturnsHTML(t *testing.T) {
 	if !strings.Contains(body, "Governance Coverage") {
 		t.Error("want Explorer shell to include the Governance Coverage section title")
 	}
+
+	// Explorer redesign: the shell is a single-page workbench with four
+	// internal hash-routed views. Pin the four view containers and the
+	// matching sidebar-nav data attributes so a refactor that drops a view
+	// (or breaks navigation) surfaces as a test failure rather than a
+	// silent regression in the UI.
+	for _, viewID := range []string{
+		`id="view-services"`,
+		`id="view-evaluate"`,
+		`id="view-records"`,
+		`id="view-settings"`,
+	} {
+		if !strings.Contains(body, viewID) {
+			t.Errorf("want Explorer shell to include %s", viewID)
+		}
+	}
+	for _, navAttr := range []string{
+		`data-nav-view="services"`,
+		`data-nav-view="evaluate"`,
+		`data-nav-view="records"`,
+		`data-nav-view="settings"`,
+	} {
+		if !strings.Contains(body, navAttr) {
+			t.Errorf("want Explorer shell to include sidebar nav %s", navAttr)
+		}
+	}
+	if !strings.Contains(body, "Decision Authority Workbench") {
+		t.Error("want Explorer shell to include the 'Decision Authority Workbench' subtitle")
+	}
 }
 
 func TestExplorer_Config_ReturnsJSON(t *testing.T) {

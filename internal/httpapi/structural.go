@@ -32,13 +32,21 @@ type BusinessServiceReader interface {
 	List(ctx context.Context) ([]*businessservice.BusinessService, error)
 }
 
+// BusinessServiceRelationshipReader is the BSR repository subset needed for
+// the read-side governance-map endpoint introduced in Epic 1, PR 1.
+type BusinessServiceRelationshipReader interface {
+	ListBySourceBusinessService(ctx context.Context, sourceID string) ([]*businessservice.BusinessServiceRelationship, error)
+	ListByTargetBusinessService(ctx context.Context, targetID string) ([]*businessservice.BusinessServiceRelationship, error)
+}
+
 // StructuralService satisfies the structuralService interface by delegating
 // to the underlying repository implementations.
 type StructuralService struct {
-	capabilities    CapabilityReader
-	processes       ProcessReader
-	surfaces        ProcessSurfaceReader
+	capabilities     CapabilityReader
+	processes        ProcessReader
+	surfaces         ProcessSurfaceReader
 	businessServices BusinessServiceReader
+	bsRelationships  BusinessServiceRelationshipReader
 }
 
 // NewStructuralService constructs a StructuralService.
@@ -55,6 +63,14 @@ func NewStructuralService(caps CapabilityReader, procs ProcessReader, surfs Proc
 // enabling the /v1/businessservices endpoints. Returns the receiver for chaining.
 func (s *StructuralService) WithBusinessServices(bs BusinessServiceReader) *StructuralService {
 	s.businessServices = bs
+	return s
+}
+
+// WithBusinessServiceRelationships attaches a BSR reader, enabling the
+// /v1/businessservices/{id}/relationships endpoint (Epic 1, PR 1).
+// Returns the receiver for chaining.
+func (s *StructuralService) WithBusinessServiceRelationships(r BusinessServiceRelationshipReader) *StructuralService {
+	s.bsRelationships = r
 	return s
 }
 
@@ -118,6 +134,57 @@ func (s *StructuralService) ListSurfacesByProcess(ctx context.Context, processID
 		surfs = []*surface.DecisionSurface{}
 	}
 	return surfs, true, nil
+}
+
+// ListRelationshipsForBusinessService returns the outgoing and incoming BSR
+// rows for the given business service, partitioned by direction.
+//
+// Returns:
+//   - found = false when the queried business_service_id does not exist
+//     (so the handler can map to 404)
+//   - empty slices (never nil) for outgoing / incoming when no rows match
+//   - error wrapping the first repo error encountered
+//
+// When the BSR reader has not been configured, returns
+// ([]{}, []{}, true, nil) — the absent reader is treated as "no
+// relationships exist for any service" rather than a separate error path.
+// The /v1/businessservices/{id}/relationships handler decides whether to
+// return 501 based on whether the reader is configured at all (via
+// HasBusinessServiceRelationships).
+func (s *StructuralService) ListRelationshipsForBusinessService(ctx context.Context, businessServiceID string) (outgoing, incoming []*businessservice.BusinessServiceRelationship, found bool, err error) {
+	bs, err := s.GetBusinessService(ctx, businessServiceID)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if bs == nil {
+		return nil, nil, false, nil
+	}
+	if s.bsRelationships == nil {
+		return []*businessservice.BusinessServiceRelationship{}, []*businessservice.BusinessServiceRelationship{}, true, nil
+	}
+	outgoing, err = s.bsRelationships.ListBySourceBusinessService(ctx, businessServiceID)
+	if err != nil {
+		return nil, nil, true, err
+	}
+	if outgoing == nil {
+		outgoing = []*businessservice.BusinessServiceRelationship{}
+	}
+	incoming, err = s.bsRelationships.ListByTargetBusinessService(ctx, businessServiceID)
+	if err != nil {
+		return nil, nil, true, err
+	}
+	if incoming == nil {
+		incoming = []*businessservice.BusinessServiceRelationship{}
+	}
+	return outgoing, incoming, true, nil
+}
+
+// HasBusinessServiceRelationships reports whether the BSR reader has been
+// wired. The /v1/businessservices/{id}/relationships handler uses this to
+// distinguish "endpoint not configured" (501) from "no relationships exist"
+// (200 with empty arrays).
+func (s *StructuralService) HasBusinessServiceRelationships() bool {
+	return s.bsRelationships != nil
 }
 
 // ---------------------------------------------------------------------------

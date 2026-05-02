@@ -128,6 +128,16 @@ type structuralService interface {
 	GetBusinessService(ctx context.Context, id string) (*businessservice.BusinessService, error)
 	// ListBusinessServices returns an empty slice when BS reader not configured.
 	ListBusinessServices(ctx context.Context) ([]*businessservice.BusinessService, error)
+
+	// ListRelationshipsForBusinessService partitions BSR rows for the given
+	// service into outgoing (source) and incoming (target). Returns
+	// found=false when the BS does not exist (→ 404 in the handler).
+	// (Epic 1, PR 1)
+	ListRelationshipsForBusinessService(ctx context.Context, businessServiceID string) (outgoing, incoming []*businessservice.BusinessServiceRelationship, found bool, err error)
+	// HasBusinessServiceRelationships reports whether the BSR reader is
+	// wired — used to distinguish 501 (not configured) from 200-with-empty
+	// (configured but no rows). (Epic 1, PR 1)
+	HasBusinessServiceRelationships() bool
 }
 
 // explicitModeValidator is the narrow interface required for explicit-mode
@@ -329,6 +339,28 @@ type businessServiceResponse struct {
 	Status          string    `json:"status"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+// businessServiceRelationshipResponse is one item in the
+// GET /v1/businessservices/{id}/relationships response (Epic 1, PR 1).
+type businessServiceRelationshipResponse struct {
+	ID                      string    `json:"id"`
+	SourceBusinessServiceID string    `json:"source_business_service_id"`
+	TargetBusinessServiceID string    `json:"target_business_service_id"`
+	RelationshipType        string    `json:"relationship_type"`
+	Description             string    `json:"description,omitempty"`
+	CreatedAt               time.Time `json:"created_at"`
+	CreatedBy               string    `json:"created_by,omitempty"`
+}
+
+// businessServiceRelationshipsResponse is the top-level wire format for the
+// /v1/businessservices/{id}/relationships endpoint. Outgoing and Incoming
+// arrays are always present (never null) so callers can iterate without
+// nil checks.
+type businessServiceRelationshipsResponse struct {
+	BusinessServiceID string                                `json:"business_service_id"`
+	Outgoing          []businessServiceRelationshipResponse `json:"outgoing"`
+	Incoming          []businessServiceRelationshipResponse `json:"incoming"`
 }
 
 // agentResponse is the wire format for GET /v1/agents/{id}.
@@ -2742,6 +2774,38 @@ func toBusinessServiceResponse(s *businessservice.BusinessService) businessServi
 	}
 }
 
+// toBusinessServiceRelationshipResponse maps one domain BSR row into the
+// wire shape (Epic 1, PR 1).
+func toBusinessServiceRelationshipResponse(rel *businessservice.BusinessServiceRelationship) businessServiceRelationshipResponse {
+	return businessServiceRelationshipResponse{
+		ID:                      rel.ID,
+		SourceBusinessServiceID: rel.SourceBusinessService,
+		TargetBusinessServiceID: rel.TargetBusinessService,
+		RelationshipType:        rel.RelationshipType,
+		Description:             rel.Description,
+		CreatedAt:               rel.CreatedAt,
+		CreatedBy:               rel.CreatedBy,
+	}
+}
+
+// toBusinessServiceRelationshipsResponse builds the top-level response for
+// GET /v1/businessservices/{id}/relationships. Outgoing/Incoming are always
+// non-nil arrays so callers can iterate without nil checks (Epic 1, PR 1).
+func toBusinessServiceRelationshipsResponse(businessServiceID string, outgoing, incoming []*businessservice.BusinessServiceRelationship) businessServiceRelationshipsResponse {
+	resp := businessServiceRelationshipsResponse{
+		BusinessServiceID: businessServiceID,
+		Outgoing:          make([]businessServiceRelationshipResponse, 0, len(outgoing)),
+		Incoming:          make([]businessServiceRelationshipResponse, 0, len(incoming)),
+	}
+	for _, rel := range outgoing {
+		resp.Outgoing = append(resp.Outgoing, toBusinessServiceRelationshipResponse(rel))
+	}
+	for _, rel := range incoming {
+		resp.Incoming = append(resp.Incoming, toBusinessServiceRelationshipResponse(rel))
+	}
+	return resp
+}
+
 // ---------------------------------------------------------------------------
 // Structural handlers — /v1/capabilities and /v1/processes
 // ---------------------------------------------------------------------------
@@ -2927,7 +2991,12 @@ func (s *Server) handleListBusinessServices(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, out)
 }
 
-// handleGetBusinessService serves GET /v1/businessservices/{id}.
+// handleGetBusinessService serves GET /v1/businessservices/{id} and the
+// sub-path GET /v1/businessservices/{id}/relationships (Epic 1, PR 1).
+//
+// Sub-path routing mirrors handleGetSurfaceOrVersions / handleGetProcessOrSurfaces:
+// the path tail after /{id}/ is matched against a small, explicit set of
+// supported sub-paths. Unknown sub-paths return 404.
 func (s *Server) handleGetBusinessService(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		methodNotAllowed(w, http.MethodGet)
@@ -2938,12 +3007,25 @@ func (s *Server) handleGetBusinessService(w http.ResponseWriter, r *http.Request
 		return
 	}
 	const prefix = "/v1/businessservices/"
-	id := strings.TrimPrefix(r.URL.Path, prefix)
-	id = strings.Trim(id, "/")
-	if id == "" {
+	tail := strings.TrimPrefix(r.URL.Path, prefix)
+	tail = strings.Trim(tail, "/")
+	if tail == "" {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 		return
 	}
+
+	parts := strings.Split(tail, "/")
+	id := parts[0]
+
+	if len(parts) == 2 && parts[1] == "relationships" {
+		s.handleGetBusinessServiceRelationships(w, r, id)
+		return
+	}
+	if len(parts) > 1 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+
 	svc, err := s.structural.GetBusinessService(r.Context(), id)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -2954,6 +3036,40 @@ func (s *Server) handleGetBusinessService(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, toBusinessServiceResponse(svc))
+}
+
+// handleGetBusinessServiceRelationships serves
+// GET /v1/businessservices/{id}/relationships.
+//
+// Response shape: { business_service_id, outgoing[], incoming[] }. Outgoing
+// rows are those where the queried service is the source; incoming rows are
+// those where it is the target. Both arrays are always present (never null).
+//
+// Status codes:
+//   - 200 OK on success (including empty outgoing/incoming arrays)
+//   - 404 Not Found when the queried business_service_id does not exist
+//   - 500 Internal Server Error on repository failure
+//   - 501 Not Implemented when the BSR reader is not configured
+//
+// Auth: enforced by the same middleware as the parent endpoint
+// (requireAuth + requireRole(PlatformViewer | PlatformOperator | PlatformAdmin)).
+func (s *Server) handleGetBusinessServiceRelationships(w http.ResponseWriter, r *http.Request, businessServiceID string) {
+	if !s.structural.HasBusinessServiceRelationships() {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{
+			"error": "business service relationships reader not configured",
+		})
+		return
+	}
+	outgoing, incoming, found, err := s.structural.ListRelationshipsForBusinessService(r.Context(), businessServiceID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "business service not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, toBusinessServiceRelationshipsResponse(businessServiceID, outgoing, incoming))
 }
 
 // ---------------------------------------------------------------------------

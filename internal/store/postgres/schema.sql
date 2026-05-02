@@ -1097,6 +1097,48 @@ CREATE TABLE IF NOT EXISTS business_service_capabilities (
 CREATE INDEX IF NOT EXISTS idx_bsc_capability
     ON business_service_capabilities (capability_id);
 
+-- business_service_relationships: directed link between two BusinessServices.
+-- Epic 1, PR 1 — the BSR foundation for the Service-Centric AI Governance Map.
+--
+-- Junction-style (mirrors business_service_capabilities): no lifecycle fields.
+-- Description is the only mutable field; all other fields are write-once at
+-- Create time. ON DELETE CASCADE on the source and ON DELETE RESTRICT on the
+-- target match the BSC posture: deleting a service deletes its outgoing
+-- relationships, but a service cannot be deleted while another service still
+-- references it.
+--
+-- Self-reference is rejected by chk_bsr_no_self_reference. The (source, target,
+-- type) triple is unique — a service cannot depend_on the same target twice,
+-- but it may depend_on AND support the same target. Recursive cycle detection
+-- across the BSR graph is deferred to a follow-up PR; the current schema
+-- accepts a depends_on cycle (A→B, B→A) and the validator does not yet reject
+-- it. Documented as a known limitation in the PR 1 implementation report.
+CREATE TABLE IF NOT EXISTS business_service_relationships (
+    id                         TEXT PRIMARY KEY,
+    source_business_service_id TEXT NOT NULL
+        REFERENCES business_services(business_service_id) ON DELETE CASCADE,
+    target_business_service_id TEXT NOT NULL
+        REFERENCES business_services(business_service_id) ON DELETE RESTRICT,
+    relationship_type          TEXT NOT NULL,
+    description                TEXT,
+    created_at                 TIMESTAMPTZ NOT NULL,
+    created_by                 TEXT,
+
+    CONSTRAINT chk_bsr_relationship_type
+        CHECK (relationship_type IN ('depends_on','supports','part_of')),
+    CONSTRAINT chk_bsr_no_self_reference
+        CHECK (source_business_service_id <> target_business_service_id),
+    CONSTRAINT uniq_bsr_triple
+        UNIQUE (source_business_service_id, target_business_service_id, relationship_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_bsr_source
+    ON business_service_relationships (source_business_service_id);
+CREATE INDEX IF NOT EXISTS idx_bsr_target
+    ON business_service_relationships (target_business_service_id);
+CREATE INDEX IF NOT EXISTS idx_bsr_type
+    ON business_service_relationships (relationship_type);
+
 -- =============================================================================
 -- VIEWS
 -- =============================================================================

@@ -6,15 +6,16 @@ import "time"
 const (
 	APIVersionV1 = "midas.accept.io/v1"
 
-	KindSurface                   = "Surface"
-	KindAgent                     = "Agent"
-	KindProfile                   = "Profile"
-	KindGrant                     = "Grant"
-	KindCapability                = "Capability"
-	KindProcess                   = "Process"
-	KindBusinessService           = "BusinessService"
-	KindBusinessServiceCapability = "BusinessServiceCapability"
-	KindGovernanceExpectation     = "GovernanceExpectation"
+	KindSurface                     = "Surface"
+	KindAgent                       = "Agent"
+	KindProfile                     = "Profile"
+	KindGrant                       = "Grant"
+	KindCapability                  = "Capability"
+	KindProcess                     = "Process"
+	KindBusinessService             = "BusinessService"
+	KindBusinessServiceCapability   = "BusinessServiceCapability"
+	KindBusinessServiceRelationship = "BusinessServiceRelationship"
+	KindGovernanceExpectation       = "GovernanceExpectation"
 )
 
 // Document is the common interface implemented by all control plane documents.
@@ -382,6 +383,40 @@ type BusinessServiceCapabilitySpec struct {
 
 func (bsc BusinessServiceCapabilityDocument) GetKind() string { return bsc.Kind }
 func (bsc BusinessServiceCapabilityDocument) GetID() string   { return bsc.Metadata.ID }
+
+// ---------------------------------------------------------------------------
+// BusinessServiceRelationship (Epic 1, PR 1)
+// ---------------------------------------------------------------------------
+//
+// BusinessServiceRelationship declares a directed link between two
+// BusinessServices. The relationship_type is one of {depends_on, supports,
+// part_of}. The metadata.id is the synthetic control-plane handle used for
+// bundle identity and duplicate detection.
+//
+// Like BusinessServiceCapability, this is a junction with no lifecycle of
+// its own — no status, no effective dates, no review/approval. Apply
+// creates the relationship directly in the active state. Description is
+// the only mutable field.
+
+type BusinessServiceRelationshipDocument struct {
+	APIVersion string                          `json:"apiVersion" yaml:"apiVersion"`
+	Kind       string                          `json:"kind" yaml:"kind"`
+	Metadata   DocumentMetadata                `json:"metadata" yaml:"metadata"`
+	Spec       BusinessServiceRelationshipSpec `json:"spec" yaml:"spec"`
+}
+
+// BusinessServiceRelationshipSpec carries the directed link payload. Both
+// IDs are required and must reference distinct business services. The
+// relationship_type must be one of {depends_on, supports, part_of}.
+type BusinessServiceRelationshipSpec struct {
+	SourceBusinessServiceID string `json:"source_business_service_id" yaml:"source_business_service_id"`
+	TargetBusinessServiceID string `json:"target_business_service_id" yaml:"target_business_service_id"`
+	RelationshipType        string `json:"relationship_type" yaml:"relationship_type"`
+	Description             string `json:"description,omitempty" yaml:"description,omitempty"`
+}
+
+func (bsr BusinessServiceRelationshipDocument) GetKind() string { return bsr.Kind }
+func (bsr BusinessServiceRelationshipDocument) GetID() string   { return bsr.Metadata.ID }
 
 // ---------------------------------------------------------------------------
 // GovernanceExpectation
