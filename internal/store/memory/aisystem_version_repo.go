@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/accept-io/midas/internal/aisystem"
+	"github.com/accept-io/midas/internal/externalref"
 )
 
 // AISystemVersionRepo is an in-memory implementation of
@@ -49,6 +50,9 @@ func (r *AISystemVersionRepo) Create(ctx context.Context, ver *aisystem.AISystem
 	}
 	if ver.EffectiveUntil != nil && !ver.EffectiveUntil.After(ver.EffectiveFrom) {
 		return aisystem.ErrInvalidEffectiveRange
+	}
+	if err := ver.ExternalRef.Validate(); err != nil {
+		return err
 	}
 
 	if r.aiSystems != nil {
@@ -131,6 +135,9 @@ func (r *AISystemVersionRepo) Update(_ context.Context, ver *aisystem.AISystemVe
 	if ver.EffectiveUntil != nil && !ver.EffectiveUntil.After(ver.EffectiveFrom) {
 		return aisystem.ErrInvalidEffectiveRange
 	}
+	if err := ver.ExternalRef.Validate(); err != nil {
+		return err
+	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -158,6 +165,7 @@ func cloneAISystemVersion(in *aisystem.AISystemVersion) *aisystem.AISystemVersio
 		copy(frameworks, in.ComplianceFrameworks)
 		cp.ComplianceFrameworks = frameworks
 	}
+	cp.ExternalRef = externalref.Canonicalise(in.ExternalRef).Clone()
 	return &cp
 }
 

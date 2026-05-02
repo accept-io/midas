@@ -48,9 +48,10 @@ func (r *BusinessServiceRelationshipRepo) Create(ctx context.Context, rel *busin
 			relationship_type,
 			description,
 			created_at,
-			created_by
-		) VALUES ($1, $2, $3, $4, $5, $6, $7)`
-	_, err := r.db.ExecContext(ctx, q,
+			created_by,
+			ext_source_system, ext_source_id, ext_source_url, ext_source_version, ext_last_synced_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`
+	args := append([]any{
 		rel.ID,
 		rel.SourceBusinessService,
 		rel.TargetBusinessService,
@@ -58,14 +59,16 @@ func (r *BusinessServiceRelationshipRepo) Create(ctx context.Context, rel *busin
 		nullableString(rel.Description),
 		rel.CreatedAt,
 		nullableString(rel.CreatedBy),
-	)
+	}, extRefInsertValues(rel.ExternalRef)...)
+	_, err := r.db.ExecContext(ctx, q, args...)
 	return mapRelationshipCreateErr(err)
 }
 
 func (r *BusinessServiceRelationshipRepo) GetByID(ctx context.Context, id string) (*businessservice.BusinessServiceRelationship, error) {
 	const q = `
 		SELECT id, source_business_service_id, target_business_service_id,
-		       relationship_type, description, created_at, created_by
+		       relationship_type, description, created_at, created_by,
+		       ` + extRefSelectColumns + `
 		FROM business_service_relationships
 		WHERE id = $1`
 	row := r.db.QueryRowContext(ctx, q, id)
@@ -79,7 +82,8 @@ func (r *BusinessServiceRelationshipRepo) GetByID(ctx context.Context, id string
 func (r *BusinessServiceRelationshipRepo) List(ctx context.Context) ([]*businessservice.BusinessServiceRelationship, error) {
 	const q = `
 		SELECT id, source_business_service_id, target_business_service_id,
-		       relationship_type, description, created_at, created_by
+		       relationship_type, description, created_at, created_by,
+		       ` + extRefSelectColumns + `
 		FROM business_service_relationships
 		ORDER BY created_at DESC, id ASC`
 	rows, err := r.db.QueryContext(ctx, q)
@@ -93,7 +97,8 @@ func (r *BusinessServiceRelationshipRepo) List(ctx context.Context) ([]*business
 func (r *BusinessServiceRelationshipRepo) ListBySourceBusinessService(ctx context.Context, sourceID string) ([]*businessservice.BusinessServiceRelationship, error) {
 	const q = `
 		SELECT id, source_business_service_id, target_business_service_id,
-		       relationship_type, description, created_at, created_by
+		       relationship_type, description, created_at, created_by,
+		       ` + extRefSelectColumns + `
 		FROM business_service_relationships
 		WHERE source_business_service_id = $1
 		ORDER BY created_at DESC, id ASC`
@@ -108,7 +113,8 @@ func (r *BusinessServiceRelationshipRepo) ListBySourceBusinessService(ctx contex
 func (r *BusinessServiceRelationshipRepo) ListByTargetBusinessService(ctx context.Context, targetID string) ([]*businessservice.BusinessServiceRelationship, error) {
 	const q = `
 		SELECT id, source_business_service_id, target_business_service_id,
-		       relationship_type, description, created_at, created_by
+		       relationship_type, description, created_at, created_by,
+		       ` + extRefSelectColumns + `
 		FROM business_service_relationships
 		WHERE target_business_service_id = $1
 		ORDER BY created_at DESC, id ASC`
@@ -120,15 +126,24 @@ func (r *BusinessServiceRelationshipRepo) ListByTargetBusinessService(ctx contex
 	return scanRelationshipRows(rows)
 }
 
-// Update mutates the description field only — the only mutable column on
+// Update mutates description and ExternalRef — the mutable columns on
 // the BSR junction. Returns ErrRelationshipNotFound when no row matches.
 func (r *BusinessServiceRelationshipRepo) Update(ctx context.Context, rel *businessservice.BusinessServiceRelationship) error {
 	const q = `
 		UPDATE business_service_relationships
-		   SET description = $2
+		   SET description = $2,
+		       ext_source_system = $3,
+		       ext_source_id = $4,
+		       ext_source_url = $5,
+		       ext_source_version = $6,
+		       ext_last_synced_at = $7
 		 WHERE id = $1`
-	res, err := r.db.ExecContext(ctx, q, rel.ID, nullableString(rel.Description))
+	args := append([]any{rel.ID, nullableString(rel.Description)}, extRefInsertValues(rel.ExternalRef)...)
+	res, err := r.db.ExecContext(ctx, q, args...)
 	if err != nil {
+		if mapped := mapExtRefError(err); mapped != err {
+			return mapped
+		}
 		return fmt.Errorf("update business service relationship: %w", err)
 	}
 	rows, err := res.RowsAffected()
@@ -168,7 +183,8 @@ func scanRelationship(row rowScanner) (*businessservice.BusinessServiceRelations
 	var rel businessservice.BusinessServiceRelationship
 	var description sql.NullString
 	var createdBy sql.NullString
-	if err := row.Scan(
+	var extScan extRefScan
+	dests := append([]any{
 		&rel.ID,
 		&rel.SourceBusinessService,
 		&rel.TargetBusinessService,
@@ -176,7 +192,8 @@ func scanRelationship(row rowScanner) (*businessservice.BusinessServiceRelations
 		&description,
 		&rel.CreatedAt,
 		&createdBy,
-	); err != nil {
+	}, extScan.Dests()...)
+	if err := row.Scan(dests...); err != nil {
 		return nil, err
 	}
 	if description.Valid {
@@ -185,6 +202,7 @@ func scanRelationship(row rowScanner) (*businessservice.BusinessServiceRelations
 	if createdBy.Valid {
 		rel.CreatedBy = createdBy.String
 	}
+	rel.ExternalRef = extScan.ToExternalRef()
 	return &rel, nil
 }
 
@@ -227,6 +245,8 @@ func mapRelationshipCreateErr(err error) error {
 			return businessservice.ErrRelationshipInvalidType
 		case "chk_bsr_no_self_reference":
 			return businessservice.ErrRelationshipSelfReference
+		case "chk_business_service_relationships_ext_consistency":
+			return mapExtRefError(err)
 		}
 	case "23503": // foreign_key_violation
 		// Constraint name is auto-generated by Postgres; the message

@@ -2544,7 +2544,10 @@ func (s *Service) applyBusinessService(
 		return fmt.Errorf("%w: invalid document payload for kind %q", ErrInvalidBundle, types.KindBusinessService)
 	}
 
-	bs := mapBusinessServiceDocumentToBusinessService(bsDoc, now)
+	bs, err := mapBusinessServiceDocumentToBusinessService(bsDoc, now)
+	if err != nil {
+		return fmt.Errorf("map business service document: %w", err)
+	}
 
 	if err := repos.BusinessServices.Create(ctx, bs); err != nil {
 		return fmt.Errorf("create business service: %w", err)

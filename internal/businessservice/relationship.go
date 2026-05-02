@@ -17,6 +17,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/accept-io/midas/internal/externalref"
 )
 
 // Relationship type constants. Mirror the schema CHECK list in
@@ -61,6 +63,11 @@ type BusinessServiceRelationship struct {
 
 	CreatedAt time.Time
 	CreatedBy string
+
+	// ExternalRef is optional structured metadata about the relationship
+	// in an external system (Epic 1, PR 3). Nil when no external
+	// reference is recorded.
+	ExternalRef *externalref.ExternalRef
 }
 
 // Sentinel errors. Repository implementations return these where the

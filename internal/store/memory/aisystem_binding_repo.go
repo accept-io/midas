@@ -8,6 +8,7 @@ import (
 	"github.com/accept-io/midas/internal/aisystem"
 	"github.com/accept-io/midas/internal/businessservice"
 	"github.com/accept-io/midas/internal/capability"
+	"github.com/accept-io/midas/internal/externalref"
 	"github.com/accept-io/midas/internal/process"
 )
 
@@ -57,6 +58,9 @@ func (r *AISystemBindingRepo) Create(ctx context.Context, b *aisystem.AISystemBi
 	}
 	if !b.HasContextReference() {
 		return aisystem.ErrBindingMissingContext
+	}
+	if err := b.ExternalRef.Validate(); err != nil {
+		return err
 	}
 
 	if r.aiSystems != nil {
@@ -182,6 +186,7 @@ func cloneAISystemBinding(in *aisystem.AISystemBinding) *aisystem.AISystemBindin
 		v := *in.AISystemVersion
 		cp.AISystemVersion = &v
 	}
+	cp.ExternalRef = externalref.Canonicalise(in.ExternalRef).Clone()
 	return &cp
 }
 

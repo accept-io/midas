@@ -13,7 +13,10 @@ import (
 // domain type. Apply is status-honouring: spec.status flows through verbatim.
 // origin defaults to "manual" when unset (mirrors the BusinessService /
 // Capability default).
-func mapAISystemDocumentToAISystem(doc types.AISystemDocument, now time.Time, createdBy string) *aisystem.AISystem {
+//
+// Returns an error only on RFC3339 parse failure for ExternalRef.LastSyncedAt,
+// which the validator should have caught upstream.
+func mapAISystemDocumentToAISystem(doc types.AISystemDocument, now time.Time, createdBy string) (*aisystem.AISystem, error) {
 	now = now.UTC()
 	status := strings.TrimSpace(doc.Spec.Status)
 	if status == "" {
@@ -22,6 +25,10 @@ func mapAISystemDocumentToAISystem(doc types.AISystemDocument, now time.Time, cr
 	origin := strings.TrimSpace(doc.Spec.Origin)
 	if origin == "" {
 		origin = aisystem.AISystemOriginManual
+	}
+	ref, err := mapExternalRefSpec(doc.Spec.ExternalRef)
+	if err != nil {
+		return nil, fmt.Errorf("ai system %s: parse external_ref.last_synced_at: %w", doc.Metadata.ID, err)
 	}
 	return &aisystem.AISystem{
 		ID:          strings.TrimSpace(doc.Metadata.ID),
@@ -37,7 +44,8 @@ func mapAISystemDocumentToAISystem(doc types.AISystemDocument, now time.Time, cr
 		CreatedAt:   now,
 		UpdatedAt:   now,
 		CreatedBy:   strings.TrimSpace(createdBy),
-	}
+		ExternalRef: ref,
+	}, nil
 }
 
 // mapAISystemVersionDocumentToAISystemVersion maps a validated
@@ -83,6 +91,11 @@ func mapAISystemVersionDocumentToAISystemVersion(doc types.AISystemVersionDocume
 		}
 	}
 
+	ref, err := mapExternalRefSpec(doc.Spec.ExternalRef)
+	if err != nil {
+		return nil, fmt.Errorf("ai system version %s v%d: parse external_ref.last_synced_at: %w", doc.Spec.AISystemID, doc.Spec.Version, err)
+	}
+
 	return &aisystem.AISystemVersion{
 		AISystemID:           strings.TrimSpace(doc.Spec.AISystemID),
 		Version:              doc.Spec.Version,
@@ -99,6 +112,7 @@ func mapAISystemVersionDocumentToAISystemVersion(doc types.AISystemVersionDocume
 		CreatedAt:            now,
 		UpdatedAt:            now,
 		CreatedBy:            strings.TrimSpace(createdBy),
+		ExternalRef:          ref,
 	}, nil
 }
 
@@ -106,12 +120,18 @@ func mapAISystemVersionDocumentToAISystemVersion(doc types.AISystemVersionDocume
 // AISystemBindingDocument into the domain type. Junction posture: no
 // status, no lifecycle. AISystemVersion is preserved as a *int so the
 // "no version pin" case is distinguishable from version 0.
-func mapAISystemBindingDocumentToAISystemBinding(doc types.AISystemBindingDocument, now time.Time, createdBy string) *aisystem.AISystemBinding {
+//
+// Returns an error only on RFC3339 parse failure for ExternalRef.LastSyncedAt.
+func mapAISystemBindingDocumentToAISystemBinding(doc types.AISystemBindingDocument, now time.Time, createdBy string) (*aisystem.AISystemBinding, error) {
 	now = now.UTC()
 	var version *int
 	if doc.Spec.AISystemVersion != nil {
 		v := *doc.Spec.AISystemVersion
 		version = &v
+	}
+	ref, err := mapExternalRefSpec(doc.Spec.ExternalRef)
+	if err != nil {
+		return nil, fmt.Errorf("ai system binding %s: parse external_ref.last_synced_at: %w", doc.Metadata.ID, err)
 	}
 	return &aisystem.AISystemBinding{
 		ID:                strings.TrimSpace(doc.Metadata.ID),
@@ -125,7 +145,8 @@ func mapAISystemBindingDocumentToAISystemBinding(doc types.AISystemBindingDocume
 		Description:       strings.TrimSpace(doc.Spec.Description),
 		CreatedAt:         now,
 		CreatedBy:         strings.TrimSpace(createdBy),
-	}
+		ExternalRef:       ref,
+	}, nil
 }
 
 func utcPtr(t *time.Time) *time.Time {

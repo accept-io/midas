@@ -104,7 +104,10 @@ func TestMapper_BusinessServiceRelationship_HappyPath(t *testing.T) {
 		},
 	}
 	now := time.Now()
-	rel := mapBusinessServiceRelationshipDocumentToBusinessServiceRelationship(doc, now, "operator:test")
+	rel, err := mapBusinessServiceRelationshipDocumentToBusinessServiceRelationship(doc, now, "operator:test")
+	if err != nil {
+		t.Fatalf("mapper: %v", err)
+	}
 	if rel.ID != "rel-map-1" || rel.SourceBusinessService != "bs-a" || rel.TargetBusinessService != "bs-b" {
 		t.Errorf("mapper field mismatch: %+v", rel)
 	}
@@ -129,7 +132,10 @@ func TestMapper_BusinessServiceRelationship_TrimsWhitespace(t *testing.T) {
 			Description:             "  desc  ",
 		},
 	}
-	rel := mapBusinessServiceRelationshipDocumentToBusinessServiceRelationship(doc, time.Now(), "  user  ")
+	rel, err := mapBusinessServiceRelationshipDocumentToBusinessServiceRelationship(doc, time.Now(), "  user  ")
+	if err != nil {
+		t.Fatalf("mapper: %v", err)
+	}
 	if rel.ID != "rel-trim" || rel.SourceBusinessService != "bs-a" || rel.TargetBusinessService != "bs-b" {
 		t.Errorf("trim mismatch: %+v", rel)
 	}

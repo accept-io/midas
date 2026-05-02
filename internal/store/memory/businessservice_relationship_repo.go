@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/accept-io/midas/internal/businessservice"
+	"github.com/accept-io/midas/internal/externalref"
 )
 
 // BusinessServiceRelationshipRepo is an in-memory implementation of
@@ -47,6 +48,9 @@ func (r *BusinessServiceRelationshipRepo) Create(ctx context.Context, rel *busin
 	}
 	if !businessservice.IsValidRelationshipType(rel.RelationshipType) {
 		return businessservice.ErrRelationshipInvalidType
+	}
+	if err := rel.ExternalRef.Validate(); err != nil {
+		return err
 	}
 
 	if r.businessSvcs != nil {
@@ -132,14 +136,18 @@ func (r *BusinessServiceRelationshipRepo) ListByTargetBusinessService(_ context.
 }
 
 func (r *BusinessServiceRelationshipRepo) Update(_ context.Context, rel *businessservice.BusinessServiceRelationship) error {
+	if err := rel.ExternalRef.Validate(); err != nil {
+		return err
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	existing, ok := r.items[rel.ID]
 	if !ok {
 		return businessservice.ErrRelationshipNotFound
 	}
-	// Only Description is mutable. Other fields are write-once.
+	// Only Description and ExternalRef are mutable. Other fields are write-once.
 	existing.Description = rel.Description
+	existing.ExternalRef = externalref.Canonicalise(rel.ExternalRef).Clone()
 	return nil
 }
 
@@ -154,9 +162,12 @@ func (r *BusinessServiceRelationshipRepo) Delete(_ context.Context, id string) e
 }
 
 // cloneRelationship returns a defensive copy. Time and string fields are
-// value types so a struct copy suffices.
+// value types so a struct copy suffices; ExternalRef is canonicalised
+// (IsZero values become nil) and deep-copied so the LastSyncedAt pointer
+// is independent of the caller's.
 func cloneRelationship(in *businessservice.BusinessServiceRelationship) *businessservice.BusinessServiceRelationship {
 	cp := *in
+	cp.ExternalRef = externalref.Canonicalise(in.ExternalRef).Clone()
 	return &cp
 }
 

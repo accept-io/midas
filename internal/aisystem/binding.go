@@ -3,6 +3,8 @@ package aisystem
 import (
 	"context"
 	"time"
+
+	"github.com/accept-io/midas/internal/externalref"
 )
 
 // AISystemBinding is the immediate-apply junction linking an AISystem
@@ -45,6 +47,11 @@ type AISystemBinding struct {
 
 	CreatedAt time.Time
 	CreatedBy string
+
+	// ExternalRef is optional structured metadata about the binding in
+	// an external system (Epic 1, PR 3). Nil when no external reference
+	// is recorded.
+	ExternalRef *externalref.ExternalRef
 }
 
 // HasContextReference reports whether at least one of the four context

@@ -31,6 +31,8 @@ package aisystem
 import (
 	"context"
 	"time"
+
+	"github.com/accept-io/midas/internal/externalref"
 )
 
 // Allowed AISystem status values. AISystem status is status-honouring:
@@ -89,6 +91,11 @@ type AISystem struct {
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	CreatedBy string
+
+	// ExternalRef is optional structured metadata about the AI system in
+	// an external system (Epic 1, PR 3). Nil when no external reference
+	// is recorded.
+	ExternalRef *externalref.ExternalRef
 }
 
 // SystemRepository is the persistence interface for AISystem.

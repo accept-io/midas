@@ -3,6 +3,8 @@ package aisystem
 import (
 	"context"
 	"time"
+
+	"github.com/accept-io/midas/internal/externalref"
 )
 
 // Allowed AISystemVersion status values. The set is identical to the
@@ -59,6 +61,11 @@ type AISystemVersion struct {
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	CreatedBy string
+
+	// ExternalRef is optional structured metadata about the version in
+	// an external system (Epic 1, PR 3). Nil when no external reference
+	// is recorded.
+	ExternalRef *externalref.ExternalRef
 }
 
 // VersionRepository is the persistence interface for AISystemVersion.

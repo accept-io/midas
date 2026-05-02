@@ -41,22 +41,26 @@ func (r *BusinessServiceRepo) GetByID(ctx context.Context, id string) (*business
 		SELECT business_service_id, name, COALESCE(description, ''),
 		       service_type, COALESCE(regulatory_scope, ''),
 		       status, origin, managed, COALESCE(replaces, ''), COALESCE(owner_id, ''),
-		       created_at, updated_at
+		       created_at, updated_at,
+		       ` + extRefSelectColumns + `
 		FROM business_services
 		WHERE business_service_id = $1`
 	var s businessservice.BusinessService
-	err := r.db.QueryRowContext(ctx, q, id).Scan(
+	var extScan extRefScan
+	dests := append([]any{
 		&s.ID, &s.Name, &s.Description,
 		&s.ServiceType, &s.RegulatoryScope,
 		&s.Status, &s.Origin, &s.Managed, &s.Replaces, &s.OwnerID,
 		&s.CreatedAt, &s.UpdatedAt,
-	)
+	}, extScan.Dests()...)
+	err := r.db.QueryRowContext(ctx, q, id).Scan(dests...)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, err
 	}
+	s.ExternalRef = extScan.ToExternalRef()
 	return &s, nil
 }
 
@@ -66,7 +70,8 @@ func (r *BusinessServiceRepo) List(ctx context.Context) ([]*businessservice.Busi
 		SELECT business_service_id, name, COALESCE(description, ''),
 		       service_type, COALESCE(regulatory_scope, ''),
 		       status, origin, managed, COALESCE(replaces, ''), COALESCE(owner_id, ''),
-		       created_at, updated_at
+		       created_at, updated_at,
+		       ` + extRefSelectColumns + `
 		FROM business_services
 		ORDER BY business_service_id`
 	rows, err := r.db.QueryContext(ctx, q)
@@ -77,14 +82,17 @@ func (r *BusinessServiceRepo) List(ctx context.Context) ([]*businessservice.Busi
 	var out []*businessservice.BusinessService
 	for rows.Next() {
 		var s businessservice.BusinessService
-		if err := rows.Scan(
+		var extScan extRefScan
+		dests := append([]any{
 			&s.ID, &s.Name, &s.Description,
 			&s.ServiceType, &s.RegulatoryScope,
 			&s.Status, &s.Origin, &s.Managed, &s.Replaces, &s.OwnerID,
 			&s.CreatedAt, &s.UpdatedAt,
-		); err != nil {
+		}, extScan.Dests()...)
+		if err := rows.Scan(dests...); err != nil {
 			return nil, err
 		}
+		s.ExternalRef = extScan.ToExternalRef()
 		out = append(out, &s)
 	}
 	return out, rows.Err()
@@ -95,15 +103,17 @@ func (r *BusinessServiceRepo) Create(ctx context.Context, s *businessservice.Bus
 	const q = `
 		INSERT INTO business_services
 		  (business_service_id, name, description, service_type, regulatory_scope,
-		   status, origin, managed, replaces, owner_id, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`
-	_, err := r.db.ExecContext(ctx, q,
+		   status, origin, managed, replaces, owner_id, created_at, updated_at,
+		   ext_source_system, ext_source_id, ext_source_url, ext_source_version, ext_last_synced_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`
+	args := append([]any{
 		s.ID, s.Name, s.Description, s.ServiceType, s.RegulatoryScope,
 		s.Status, s.Origin, s.Managed,
 		sql.NullString{Valid: s.Replaces != "", String: s.Replaces},
 		s.OwnerID, s.CreatedAt, s.UpdatedAt,
-	)
-	return err
+	}, extRefInsertValues(s.ExternalRef)...)
+	_, err := r.db.ExecContext(ctx, q, args...)
+	return mapExtRefError(err)
 }
 
 // Update modifies the mutable fields of an existing business service record.
@@ -111,11 +121,14 @@ func (r *BusinessServiceRepo) Update(ctx context.Context, s *businessservice.Bus
 	const q = `
 		UPDATE business_services
 		SET name=$2, description=$3, service_type=$4, regulatory_scope=$5,
-		    status=$6, owner_id=$7, updated_at=$8
+		    status=$6, owner_id=$7, updated_at=$8,
+		    ext_source_system=$9, ext_source_id=$10, ext_source_url=$11,
+		    ext_source_version=$12, ext_last_synced_at=$13
 		WHERE business_service_id=$1`
-	_, err := r.db.ExecContext(ctx, q,
+	args := append([]any{
 		s.ID, s.Name, s.Description, s.ServiceType, s.RegulatoryScope,
 		s.Status, s.OwnerID, s.UpdatedAt,
-	)
-	return err
+	}, extRefInsertValues(s.ExternalRef)...)
+	_, err := r.db.ExecContext(ctx, q, args...)
+	return mapExtRefError(err)
 }

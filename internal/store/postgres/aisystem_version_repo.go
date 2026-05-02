@@ -49,9 +49,10 @@ func (r *AISystemVersionRepo) Create(ctx context.Context, ver *aisystem.AISystem
 			ai_system_id, version, release_label, model_artifact, model_hash, endpoint,
 			status, effective_from, effective_until, retired_at,
 			compliance_frameworks, documentation_url,
-			created_at, updated_at, created_by
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`
-	_, err = r.db.ExecContext(ctx, q,
+			created_at, updated_at, created_by,
+			ext_source_system, ext_source_id, ext_source_url, ext_source_version, ext_last_synced_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`
+	args := append([]any{
 		ver.AISystemID,
 		ver.Version,
 		nullableString(ver.ReleaseLabel),
@@ -67,7 +68,8 @@ func (r *AISystemVersionRepo) Create(ctx context.Context, ver *aisystem.AISystem
 		ver.CreatedAt,
 		ver.UpdatedAt,
 		nullableString(ver.CreatedBy),
-	)
+	}, extRefInsertValues(ver.ExternalRef)...)
+	_, err = r.db.ExecContext(ctx, q, args...)
 	return mapAIVersionCreateErr(err)
 }
 
@@ -78,7 +80,8 @@ func (r *AISystemVersionRepo) GetByIDAndVersion(ctx context.Context, aiSystemID 
 		       COALESCE(model_hash, ''), COALESCE(endpoint, ''),
 		       status, effective_from, effective_until, retired_at,
 		       compliance_frameworks, COALESCE(documentation_url, ''),
-		       created_at, updated_at, COALESCE(created_by, '')
+		       created_at, updated_at, COALESCE(created_by, ''),
+		       ` + extRefSelectColumns + `
 		FROM ai_system_versions
 		WHERE ai_system_id = $1 AND version = $2`
 	row := r.db.QueryRowContext(ctx, q, aiSystemID, version)
@@ -96,7 +99,8 @@ func (r *AISystemVersionRepo) ListBySystem(ctx context.Context, aiSystemID strin
 		       COALESCE(model_hash, ''), COALESCE(endpoint, ''),
 		       status, effective_from, effective_until, retired_at,
 		       compliance_frameworks, COALESCE(documentation_url, ''),
-		       created_at, updated_at, COALESCE(created_by, '')
+		       created_at, updated_at, COALESCE(created_by, ''),
+		       ` + extRefSelectColumns + `
 		FROM ai_system_versions
 		WHERE ai_system_id = $1
 		ORDER BY version DESC`
@@ -115,7 +119,8 @@ func (r *AISystemVersionRepo) GetActiveBySystem(ctx context.Context, aiSystemID 
 		       COALESCE(model_hash, ''), COALESCE(endpoint, ''),
 		       status, effective_from, effective_until, retired_at,
 		       compliance_frameworks, COALESCE(documentation_url, ''),
-		       created_at, updated_at, COALESCE(created_by, '')
+		       created_at, updated_at, COALESCE(created_by, ''),
+		       ` + extRefSelectColumns + `
 		FROM ai_system_versions
 		WHERE ai_system_id = $1
 		  AND status = 'active'
@@ -151,9 +156,14 @@ func (r *AISystemVersionRepo) Update(ctx context.Context, ver *aisystem.AISystem
 		       retired_at = $10,
 		       compliance_frameworks = $11,
 		       documentation_url = $12,
-		       updated_at = $13
+		       updated_at = $13,
+		       ext_source_system = $14,
+		       ext_source_id = $15,
+		       ext_source_url = $16,
+		       ext_source_version = $17,
+		       ext_last_synced_at = $18
 		 WHERE ai_system_id = $1 AND version = $2`
-	res, err := r.db.ExecContext(ctx, q,
+	args := append([]any{
 		ver.AISystemID,
 		ver.Version,
 		nullableString(ver.ReleaseLabel),
@@ -167,7 +177,8 @@ func (r *AISystemVersionRepo) Update(ctx context.Context, ver *aisystem.AISystem
 		frameworksJSON,
 		nullableString(ver.DocumentationURL),
 		ver.UpdatedAt,
-	)
+	}, extRefInsertValues(ver.ExternalRef)...)
+	res, err := r.db.ExecContext(ctx, q, args...)
 	if err != nil {
 		return mapAIVersionUpdateErr(err)
 	}
@@ -186,16 +197,19 @@ func scanAIVersion(row rowScanner) (*aisystem.AISystemVersion, error) {
 	var effectiveUntil sql.NullTime
 	var retiredAt sql.NullTime
 	var frameworksRaw []byte
-	if err := row.Scan(
+	var extScan extRefScan
+	dests := append([]any{
 		&ver.AISystemID, &ver.Version,
 		&ver.ReleaseLabel, &ver.ModelArtifact,
 		&ver.ModelHash, &ver.Endpoint,
 		&ver.Status, &ver.EffectiveFrom, &effectiveUntil, &retiredAt,
 		&frameworksRaw, &ver.DocumentationURL,
 		&ver.CreatedAt, &ver.UpdatedAt, &ver.CreatedBy,
-	); err != nil {
+	}, extScan.Dests()...)
+	if err := row.Scan(dests...); err != nil {
 		return nil, err
 	}
+	ver.ExternalRef = extScan.ToExternalRef()
 	if effectiveUntil.Valid {
 		t := effectiveUntil.Time
 		ver.EffectiveUntil = &t
@@ -249,6 +263,8 @@ func mapAIVersionCreateErr(err error) error {
 			return aisystem.ErrInvalidVersion
 		case "chk_ai_versions_effective_range":
 			return aisystem.ErrInvalidEffectiveRange
+		case "chk_ai_system_versions_ext_consistency":
+			return mapExtRefError(err)
 		}
 	case "23503": // foreign_key_violation — ai_system_id missing
 		return fmt.Errorf("create ai system version: %w: %s", aisystem.ErrAISystemNotFound, pqErr.Detail)
@@ -271,6 +287,8 @@ func mapAIVersionUpdateErr(err error) error {
 			return aisystem.ErrInvalidStatus
 		case "chk_ai_versions_effective_range":
 			return aisystem.ErrInvalidEffectiveRange
+		case "chk_ai_system_versions_ext_consistency":
+			return mapExtRefError(err)
 		}
 	}
 	return fmt.Errorf("update ai system version: %w", err)

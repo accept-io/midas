@@ -40,9 +40,10 @@ func (r *AISystemRepo) Create(ctx context.Context, sys *aisystem.AISystem) error
 		INSERT INTO ai_systems (
 			id, name, description, owner, vendor, system_type,
 			status, origin, managed, replaces,
-			created_at, updated_at, created_by
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`
-	_, err := r.db.ExecContext(ctx, q,
+			created_at, updated_at, created_by,
+			ext_source_system, ext_source_id, ext_source_url, ext_source_version, ext_last_synced_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`
+	args := append([]any{
 		sys.ID,
 		sys.Name,
 		nullableString(sys.Description),
@@ -56,7 +57,8 @@ func (r *AISystemRepo) Create(ctx context.Context, sys *aisystem.AISystem) error
 		sys.CreatedAt,
 		sys.UpdatedAt,
 		nullableString(sys.CreatedBy),
-	)
+	}, extRefInsertValues(sys.ExternalRef)...)
+	_, err := r.db.ExecContext(ctx, q, args...)
 	return mapAISystemCreateErr(err)
 }
 
@@ -65,22 +67,26 @@ func (r *AISystemRepo) GetByID(ctx context.Context, id string) (*aisystem.AISyst
 		SELECT id, name, COALESCE(description, ''),
 		       COALESCE(owner, ''), COALESCE(vendor, ''), COALESCE(system_type, ''),
 		       status, origin, managed, COALESCE(replaces, ''),
-		       created_at, updated_at, COALESCE(created_by, '')
+		       created_at, updated_at, COALESCE(created_by, ''),
+		       ` + extRefSelectColumns + `
 		FROM ai_systems
 		WHERE id = $1`
 	var sys aisystem.AISystem
-	err := r.db.QueryRowContext(ctx, q, id).Scan(
+	var extScan extRefScan
+	dests := append([]any{
 		&sys.ID, &sys.Name, &sys.Description,
 		&sys.Owner, &sys.Vendor, &sys.SystemType,
 		&sys.Status, &sys.Origin, &sys.Managed, &sys.Replaces,
 		&sys.CreatedAt, &sys.UpdatedAt, &sys.CreatedBy,
-	)
+	}, extScan.Dests()...)
+	err := r.db.QueryRowContext(ctx, q, id).Scan(dests...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, aisystem.ErrAISystemNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get ai system: %w", err)
 	}
+	sys.ExternalRef = extScan.ToExternalRef()
 	return &sys, nil
 }
 
@@ -102,7 +108,8 @@ func (r *AISystemRepo) List(ctx context.Context) ([]*aisystem.AISystem, error) {
 		SELECT id, name, COALESCE(description, ''),
 		       COALESCE(owner, ''), COALESCE(vendor, ''), COALESCE(system_type, ''),
 		       status, origin, managed, COALESCE(replaces, ''),
-		       created_at, updated_at, COALESCE(created_by, '')
+		       created_at, updated_at, COALESCE(created_by, ''),
+		       ` + extRefSelectColumns + `
 		FROM ai_systems
 		ORDER BY created_at DESC, id ASC`
 	rows, err := r.db.QueryContext(ctx, q)
@@ -113,14 +120,17 @@ func (r *AISystemRepo) List(ctx context.Context) ([]*aisystem.AISystem, error) {
 	out := make([]*aisystem.AISystem, 0)
 	for rows.Next() {
 		var sys aisystem.AISystem
-		if err := rows.Scan(
+		var extScan extRefScan
+		dests := append([]any{
 			&sys.ID, &sys.Name, &sys.Description,
 			&sys.Owner, &sys.Vendor, &sys.SystemType,
 			&sys.Status, &sys.Origin, &sys.Managed, &sys.Replaces,
 			&sys.CreatedAt, &sys.UpdatedAt, &sys.CreatedBy,
-		); err != nil {
+		}, extScan.Dests()...)
+		if err := rows.Scan(dests...); err != nil {
 			return nil, err
 		}
+		sys.ExternalRef = extScan.ToExternalRef()
 		out = append(out, &sys)
 	}
 	return out, rows.Err()
@@ -138,9 +148,14 @@ func (r *AISystemRepo) Update(ctx context.Context, sys *aisystem.AISystem) error
 		       origin = $8,
 		       managed = $9,
 		       replaces = $10,
-		       updated_at = $11
+		       updated_at = $11,
+		       ext_source_system = $12,
+		       ext_source_id = $13,
+		       ext_source_url = $14,
+		       ext_source_version = $15,
+		       ext_last_synced_at = $16
 		 WHERE id = $1`
-	res, err := r.db.ExecContext(ctx, q,
+	args := append([]any{
 		sys.ID,
 		sys.Name,
 		nullableString(sys.Description),
@@ -152,7 +167,8 @@ func (r *AISystemRepo) Update(ctx context.Context, sys *aisystem.AISystem) error
 		sys.Managed,
 		nullableString(sys.Replaces),
 		sys.UpdatedAt,
-	)
+	}, extRefInsertValues(sys.ExternalRef)...)
+	res, err := r.db.ExecContext(ctx, q, args...)
 	if err != nil {
 		return mapAISystemUpdateErr(err)
 	}
@@ -185,6 +201,8 @@ func mapAISystemCreateErr(err error) error {
 			return aisystem.ErrInvalidOrigin
 		case "chk_ai_systems_no_self_replace":
 			return aisystem.ErrSelfReplace
+		case "chk_ai_systems_ext_consistency":
+			return mapExtRefError(err)
 		}
 	case "23503": // foreign_key_violation
 		// replaces FK to ai_systems(id): the referenced predecessor system
@@ -212,6 +230,8 @@ func mapAISystemUpdateErr(err error) error {
 			return aisystem.ErrInvalidOrigin
 		case "chk_ai_systems_no_self_replace":
 			return aisystem.ErrSelfReplace
+		case "chk_ai_systems_ext_consistency":
+			return mapExtRefError(err)
 		}
 	}
 	return fmt.Errorf("update ai system: %w", err)

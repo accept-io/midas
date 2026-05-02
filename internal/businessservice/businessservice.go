@@ -4,6 +4,8 @@ package businessservice
 import (
 	"context"
 	"time"
+
+	"github.com/accept-io/midas/internal/externalref"
 )
 
 // ServiceType classifies what kind of service a BusinessService is.
@@ -29,6 +31,11 @@ type BusinessService struct {
 	OwnerID         string
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
+
+	// ExternalRef is optional structured metadata about the entity in an
+	// external system (Epic 1, PR 3). Nil when no external reference is
+	// recorded. Carries no lifecycle behaviour and does not gate apply.
+	ExternalRef *externalref.ExternalRef
 }
 
 // BusinessServiceRepository defines persistence operations for business services.

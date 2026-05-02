@@ -32,6 +32,7 @@ import (
 	"github.com/accept-io/midas/internal/decision"
 	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/eval"
+	"github.com/accept-io/midas/internal/externalref"
 	"github.com/accept-io/midas/internal/governancecoverage"
 	"github.com/accept-io/midas/internal/governanceexpectation"
 	"github.com/accept-io/midas/internal/identity"
@@ -345,26 +346,28 @@ type processResponse struct {
 
 // businessServiceResponse is the wire format for GET /v1/businessservices/{id} and list items.
 type businessServiceResponse struct {
-	ID              string    `json:"id"`
-	Name            string    `json:"name"`
-	Description     string    `json:"description,omitempty"`
-	ServiceType     string    `json:"service_type"`
-	RegulatoryScope string    `json:"regulatory_scope,omitempty"`
-	Status          string    `json:"status"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID              string               `json:"id"`
+	Name            string               `json:"name"`
+	Description     string               `json:"description,omitempty"`
+	ServiceType     string               `json:"service_type"`
+	RegulatoryScope string               `json:"regulatory_scope,omitempty"`
+	Status          string               `json:"status"`
+	CreatedAt       time.Time            `json:"created_at"`
+	UpdatedAt       time.Time            `json:"updated_at"`
+	ExternalRef     *externalRefResponse `json:"external_ref"`
 }
 
 // businessServiceRelationshipResponse is one item in the
 // GET /v1/businessservices/{id}/relationships response (Epic 1, PR 1).
 type businessServiceRelationshipResponse struct {
-	ID                      string    `json:"id"`
-	SourceBusinessServiceID string    `json:"source_business_service_id"`
-	TargetBusinessServiceID string    `json:"target_business_service_id"`
-	RelationshipType        string    `json:"relationship_type"`
-	Description             string    `json:"description,omitempty"`
-	CreatedAt               time.Time `json:"created_at"`
-	CreatedBy               string    `json:"created_by,omitempty"`
+	ID                      string               `json:"id"`
+	SourceBusinessServiceID string               `json:"source_business_service_id"`
+	TargetBusinessServiceID string               `json:"target_business_service_id"`
+	RelationshipType        string               `json:"relationship_type"`
+	Description             string               `json:"description,omitempty"`
+	CreatedAt               time.Time            `json:"created_at"`
+	CreatedBy               string               `json:"created_by,omitempty"`
+	ExternalRef             *externalRefResponse `json:"external_ref"`
 }
 
 // businessServiceRelationshipsResponse is the top-level wire format for the
@@ -377,25 +380,46 @@ type businessServiceRelationshipsResponse struct {
 	Incoming          []businessServiceRelationshipResponse `json:"incoming"`
 }
 
+// externalRefResponse is the wire format for the optional ExternalRef
+// field that five entity responses gained in Epic 1, PR 3.
+//
+// Posture: parent responses include `external_ref` as a *pointer* —
+// rendering as JSON null when no external reference is recorded. Mirrors
+// PR 2's nullable binding context fields.
+//
+// SourceURL, SourceVersion, and LastSyncedAt use `omitempty` because
+// each is independently optional; SourceSystem and SourceID are required
+// once the field is non-nil (enforced by the consistency CHECK upstream).
+// LastSyncedAt is rendered as RFC3339 in UTC. A *string pointer keeps
+// "no timestamp" distinguishable from "the zero time" on the wire.
+type externalRefResponse struct {
+	SourceSystem  string  `json:"source_system"`
+	SourceID      string  `json:"source_id"`
+	SourceURL     string  `json:"source_url,omitempty"`
+	SourceVersion string  `json:"source_version,omitempty"`
+	LastSyncedAt  *string `json:"last_synced_at,omitempty"`
+}
+
 // ---------------------------------------------------------------------------
 // AI System Registration wire formats (Epic 1, PR 2)
 // ---------------------------------------------------------------------------
 
 // aiSystemResponse is the wire format for GET /v1/aisystems/{id} and list items.
 type aiSystemResponse struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description,omitempty"`
-	Owner       string    `json:"owner,omitempty"`
-	Vendor      string    `json:"vendor,omitempty"`
-	SystemType  string    `json:"system_type,omitempty"`
-	Status      string    `json:"status"`
-	Origin      string    `json:"origin"`
-	Managed     bool      `json:"managed"`
-	Replaces    *string   `json:"replaces"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-	CreatedBy   string    `json:"created_by,omitempty"`
+	ID          string               `json:"id"`
+	Name        string               `json:"name"`
+	Description string               `json:"description,omitempty"`
+	Owner       string               `json:"owner,omitempty"`
+	Vendor      string               `json:"vendor,omitempty"`
+	SystemType  string               `json:"system_type,omitempty"`
+	Status      string               `json:"status"`
+	Origin      string               `json:"origin"`
+	Managed     bool                 `json:"managed"`
+	Replaces    *string              `json:"replaces"`
+	CreatedAt   time.Time            `json:"created_at"`
+	UpdatedAt   time.Time            `json:"updated_at"`
+	CreatedBy   string               `json:"created_by,omitempty"`
+	ExternalRef *externalRefResponse `json:"external_ref"`
 }
 
 // aiSystemsResponse wraps the list endpoint payload. The `ai_systems`
@@ -408,21 +432,22 @@ type aiSystemsResponse struct {
 // EffectiveUntil and RetiredAt are pointer-typed so JSON null marks
 // "still effective" / "not retired" cleanly.
 type aiSystemVersionResponse struct {
-	AISystemID           string     `json:"ai_system_id"`
-	Version              int        `json:"version"`
-	ReleaseLabel         string     `json:"release_label,omitempty"`
-	ModelArtifact        string     `json:"model_artifact,omitempty"`
-	ModelHash            string     `json:"model_hash,omitempty"`
-	Endpoint             string     `json:"endpoint,omitempty"`
-	Status               string     `json:"status"`
-	EffectiveFrom        time.Time  `json:"effective_from"`
-	EffectiveUntil       *time.Time `json:"effective_until"`
-	RetiredAt            *time.Time `json:"retired_at"`
-	ComplianceFrameworks []string   `json:"compliance_frameworks"`
-	DocumentationURL     string     `json:"documentation_url,omitempty"`
-	CreatedAt            time.Time  `json:"created_at"`
-	UpdatedAt            time.Time  `json:"updated_at"`
-	CreatedBy            string     `json:"created_by,omitempty"`
+	AISystemID           string               `json:"ai_system_id"`
+	Version              int                  `json:"version"`
+	ReleaseLabel         string               `json:"release_label,omitempty"`
+	ModelArtifact        string               `json:"model_artifact,omitempty"`
+	ModelHash            string               `json:"model_hash,omitempty"`
+	Endpoint             string               `json:"endpoint,omitempty"`
+	Status               string               `json:"status"`
+	EffectiveFrom        time.Time            `json:"effective_from"`
+	EffectiveUntil       *time.Time           `json:"effective_until"`
+	RetiredAt            *time.Time           `json:"retired_at"`
+	ComplianceFrameworks []string             `json:"compliance_frameworks"`
+	DocumentationURL     string               `json:"documentation_url,omitempty"`
+	CreatedAt            time.Time            `json:"created_at"`
+	UpdatedAt            time.Time            `json:"updated_at"`
+	CreatedBy            string               `json:"created_by,omitempty"`
+	ExternalRef          *externalRefResponse `json:"external_ref"`
 }
 
 // aiSystemVersionsResponse is the top-level wire format for the
@@ -438,17 +463,18 @@ type aiSystemVersionsResponse struct {
 // JSON null distinguishes "field unset" from "empty string".
 // AISystemVersion is an int pointer for the same reason.
 type aiSystemBindingResponse struct {
-	ID                string    `json:"id"`
-	AISystemID        string    `json:"ai_system_id"`
-	AISystemVersion   *int      `json:"ai_system_version"`
-	BusinessServiceID *string   `json:"business_service_id"`
-	CapabilityID      *string   `json:"capability_id"`
-	ProcessID         *string   `json:"process_id"`
-	SurfaceID         *string   `json:"surface_id"`
-	Role              string    `json:"role,omitempty"`
-	Description       string    `json:"description,omitempty"`
-	CreatedAt         time.Time `json:"created_at"`
-	CreatedBy         string    `json:"created_by,omitempty"`
+	ID                string               `json:"id"`
+	AISystemID        string               `json:"ai_system_id"`
+	AISystemVersion   *int                 `json:"ai_system_version"`
+	BusinessServiceID *string              `json:"business_service_id"`
+	CapabilityID      *string              `json:"capability_id"`
+	ProcessID         *string              `json:"process_id"`
+	SurfaceID         *string              `json:"surface_id"`
+	Role              string               `json:"role,omitempty"`
+	Description       string               `json:"description,omitempty"`
+	CreatedAt         time.Time            `json:"created_at"`
+	CreatedBy         string               `json:"created_by,omitempty"`
+	ExternalRef       *externalRefResponse `json:"external_ref"`
 }
 
 // aiSystemBindingsResponse is the top-level wire format for the
@@ -2860,6 +2886,31 @@ func toProcessResponse(p *process.Process) processResponse {
 	}
 }
 
+// toExternalRefResponse maps a domain *externalref.ExternalRef into the
+// wire shape (Epic 1, PR 3). The fourth canonicalisation point: returns
+// nil for nil-or-IsZero refs, matching the contract enforced by the
+// memory and Postgres storage layers and the apply mapper.
+//
+// LastSyncedAt is rendered as RFC3339 in UTC. The pointer wrapper keeps
+// "no timestamp recorded" distinguishable from the zero time on the
+// wire — callers can branch on the field's presence.
+func toExternalRefResponse(ref *externalref.ExternalRef) *externalRefResponse {
+	if ref.IsZero() {
+		return nil
+	}
+	out := &externalRefResponse{
+		SourceSystem:  ref.SourceSystem,
+		SourceID:      ref.SourceID,
+		SourceURL:     ref.SourceURL,
+		SourceVersion: ref.SourceVersion,
+	}
+	if ref.LastSyncedAt != nil {
+		s := ref.LastSyncedAt.UTC().Format(time.RFC3339)
+		out.LastSyncedAt = &s
+	}
+	return out
+}
+
 // toBusinessServiceResponse maps a BusinessService to its wire format.
 func toBusinessServiceResponse(s *businessservice.BusinessService) businessServiceResponse {
 	return businessServiceResponse{
@@ -2871,6 +2922,7 @@ func toBusinessServiceResponse(s *businessservice.BusinessService) businessServi
 		Status:          s.Status,
 		CreatedAt:       s.CreatedAt,
 		UpdatedAt:       s.UpdatedAt,
+		ExternalRef:     toExternalRefResponse(s.ExternalRef),
 	}
 }
 
@@ -2885,6 +2937,7 @@ func toBusinessServiceRelationshipResponse(rel *businessservice.BusinessServiceR
 		Description:             rel.Description,
 		CreatedAt:               rel.CreatedAt,
 		CreatedBy:               rel.CreatedBy,
+		ExternalRef:             toExternalRefResponse(rel.ExternalRef),
 	}
 }
 
@@ -2924,6 +2977,7 @@ func toAISystemResponse(sys *aisystem.AISystem) aiSystemResponse {
 		CreatedAt:   sys.CreatedAt,
 		UpdatedAt:   sys.UpdatedAt,
 		CreatedBy:   sys.CreatedBy,
+		ExternalRef: toExternalRefResponse(sys.ExternalRef),
 	}
 	if sys.Replaces != "" {
 		s := sys.Replaces
@@ -2961,6 +3015,7 @@ func toAISystemVersionResponse(ver *aisystem.AISystemVersion) aiSystemVersionRes
 		CreatedAt:            ver.CreatedAt,
 		UpdatedAt:            ver.UpdatedAt,
 		CreatedBy:            ver.CreatedBy,
+		ExternalRef:          toExternalRefResponse(ver.ExternalRef),
 	}
 }
 
@@ -3004,6 +3059,7 @@ func toAISystemBindingResponse(b *aisystem.AISystemBinding) aiSystemBindingRespo
 		Description:       b.Description,
 		CreatedAt:         b.CreatedAt,
 		CreatedBy:         b.CreatedBy,
+		ExternalRef:       toExternalRefResponse(b.ExternalRef),
 	}
 }
 

@@ -537,6 +537,46 @@ components:
           type: string
           format: date-time
 
+    # ------------------------------------------------------------------
+    # ExternalRef shared metadata (Epic 1, PR 3)
+    # ------------------------------------------------------------------
+
+    ExternalRef:
+      type: object
+      description: >
+        Structured reference to an entity in an external system
+        (ServiceNow, LeanIX, GitHub, internal catalogues, custom). MIDAS
+        records the reference but never validates the source_system
+        against an enum and never resolves the reference by calling the
+        external system. source_system and source_id must either both
+        be present or both be absent — the consistency rule is enforced
+        by a CHECK constraint on each consuming table. Wire-format
+        nullability: the parent response renders `external_ref: null`
+        when no external reference is recorded.
+      required:
+        - source_system
+        - source_id
+      properties:
+        source_system:
+          type: string
+          description: |
+            Caller-asserted label identifying the external system that
+            produced this reference. Vendor-neutral; MIDAS does not
+            validate or resolve this value.
+        source_id:
+          type: string
+          description: Identifier of the entity in the source system.
+        source_url:
+          type: string
+          description: Optional deep link to the entity in the source system.
+        source_version:
+          type: string
+          description: Optional version label assigned by the source system.
+        last_synced_at:
+          type: string
+          format: date-time
+          description: Optional timestamp of the last sync from the source system.
+
     BusinessService:
       type: object
       description: >
@@ -567,6 +607,14 @@ components:
         updated_at:
           type: string
           format: date-time
+        external_ref:
+          allOf:
+            - $ref: "#/components/schemas/ExternalRef"
+          nullable: true
+          description: >
+            Optional structured reference to an external system. Always
+            present in the response; rendered as null when no external
+            reference is recorded (Epic 1, PR 3).
 
     BusinessServiceRelationship:
       type: object
@@ -595,6 +643,11 @@ components:
         created_by:
           type: string
           description: Optional. Actor that created the row.
+        external_ref:
+          allOf:
+            - $ref: "#/components/schemas/ExternalRef"
+          nullable: true
+          description: Optional structured external reference. See ExternalRef (Epic 1, PR 3).
 
     BusinessServiceRelationshipsResponse:
       type: object
@@ -669,6 +722,11 @@ components:
           format: date-time
         created_by:
           type: string
+        external_ref:
+          allOf:
+            - $ref: "#/components/schemas/ExternalRef"
+          nullable: true
+          description: Optional structured external reference. See ExternalRef (Epic 1, PR 3).
 
     AISystemsResponse:
       type: object
@@ -737,6 +795,11 @@ components:
           format: date-time
         created_by:
           type: string
+        external_ref:
+          allOf:
+            - $ref: "#/components/schemas/ExternalRef"
+          nullable: true
+          description: Optional structured external reference. See ExternalRef (Epic 1, PR 3).
 
     AISystemVersionsResponse:
       type: object
@@ -796,6 +859,11 @@ components:
           format: date-time
         created_by:
           type: string
+        external_ref:
+          allOf:
+            - $ref: "#/components/schemas/ExternalRef"
+          nullable: true
+          description: Optional structured external reference. See ExternalRef (Epic 1, PR 3).
 
     AISystemBindingsResponse:
       type: object

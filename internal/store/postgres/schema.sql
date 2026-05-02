@@ -1671,3 +1671,116 @@ DO $$ BEGIN
             'ai_system_version'
         ));
 END $$;
+
+-- =============================================================================
+-- ExternalRef shared metadata foundation (Epic 1, PR 3)
+-- =============================================================================
+-- Five flat columns per consuming table, all nullable, prefixed `ext_`.
+-- The chk_<table>_ext_consistency CHECK enforces the invariant that
+-- ext_source_system and ext_source_id must either both be NULL or both
+-- be NOT NULL.
+--
+-- Five entities receive ExternalRef:
+--   - business_services
+--   - business_service_relationships (PR 1)
+--   - ai_systems (PR 2)
+--   - ai_system_versions (PR 2)
+--   - ai_system_bindings (PR 2)
+--
+-- The ALTER TABLE ADD COLUMN IF NOT EXISTS form is idempotent on every
+-- startup. The accompanying DO $$ ... $$ block uses DROP CONSTRAINT IF
+-- EXISTS / ADD CONSTRAINT (mirroring PR 2's #57 precedent for
+-- controlplane_audit_events) so legacy dev DBs gain the constraint
+-- without rebuild.
+--
+-- No (ext_source_system, ext_source_id) indexes are added in PR 3.
+-- The governance map endpoint (PR 7) and any future "find by external
+-- reference" surfaces will add indexes when the query patterns are
+-- known. Defer to point of need.
+
+ALTER TABLE business_services ADD COLUMN IF NOT EXISTS ext_source_system  TEXT;
+ALTER TABLE business_services ADD COLUMN IF NOT EXISTS ext_source_id      TEXT;
+ALTER TABLE business_services ADD COLUMN IF NOT EXISTS ext_source_url     TEXT;
+ALTER TABLE business_services ADD COLUMN IF NOT EXISTS ext_source_version TEXT;
+ALTER TABLE business_services ADD COLUMN IF NOT EXISTS ext_last_synced_at TIMESTAMPTZ;
+
+ALTER TABLE business_service_relationships ADD COLUMN IF NOT EXISTS ext_source_system  TEXT;
+ALTER TABLE business_service_relationships ADD COLUMN IF NOT EXISTS ext_source_id      TEXT;
+ALTER TABLE business_service_relationships ADD COLUMN IF NOT EXISTS ext_source_url     TEXT;
+ALTER TABLE business_service_relationships ADD COLUMN IF NOT EXISTS ext_source_version TEXT;
+ALTER TABLE business_service_relationships ADD COLUMN IF NOT EXISTS ext_last_synced_at TIMESTAMPTZ;
+
+ALTER TABLE ai_systems ADD COLUMN IF NOT EXISTS ext_source_system  TEXT;
+ALTER TABLE ai_systems ADD COLUMN IF NOT EXISTS ext_source_id      TEXT;
+ALTER TABLE ai_systems ADD COLUMN IF NOT EXISTS ext_source_url     TEXT;
+ALTER TABLE ai_systems ADD COLUMN IF NOT EXISTS ext_source_version TEXT;
+ALTER TABLE ai_systems ADD COLUMN IF NOT EXISTS ext_last_synced_at TIMESTAMPTZ;
+
+ALTER TABLE ai_system_versions ADD COLUMN IF NOT EXISTS ext_source_system  TEXT;
+ALTER TABLE ai_system_versions ADD COLUMN IF NOT EXISTS ext_source_id      TEXT;
+ALTER TABLE ai_system_versions ADD COLUMN IF NOT EXISTS ext_source_url     TEXT;
+ALTER TABLE ai_system_versions ADD COLUMN IF NOT EXISTS ext_source_version TEXT;
+ALTER TABLE ai_system_versions ADD COLUMN IF NOT EXISTS ext_last_synced_at TIMESTAMPTZ;
+
+ALTER TABLE ai_system_bindings ADD COLUMN IF NOT EXISTS ext_source_system  TEXT;
+ALTER TABLE ai_system_bindings ADD COLUMN IF NOT EXISTS ext_source_id      TEXT;
+ALTER TABLE ai_system_bindings ADD COLUMN IF NOT EXISTS ext_source_url     TEXT;
+ALTER TABLE ai_system_bindings ADD COLUMN IF NOT EXISTS ext_source_version TEXT;
+ALTER TABLE ai_system_bindings ADD COLUMN IF NOT EXISTS ext_last_synced_at TIMESTAMPTZ;
+
+DO $$ BEGIN
+    -- business_services
+    ALTER TABLE business_services
+        DROP CONSTRAINT IF EXISTS chk_business_services_ext_consistency;
+    ALTER TABLE business_services
+        ADD CONSTRAINT chk_business_services_ext_consistency
+        CHECK (
+            (ext_source_system IS NULL AND ext_source_id IS NULL)
+            OR
+            (ext_source_system IS NOT NULL AND ext_source_id IS NOT NULL)
+        );
+
+    -- business_service_relationships
+    ALTER TABLE business_service_relationships
+        DROP CONSTRAINT IF EXISTS chk_business_service_relationships_ext_consistency;
+    ALTER TABLE business_service_relationships
+        ADD CONSTRAINT chk_business_service_relationships_ext_consistency
+        CHECK (
+            (ext_source_system IS NULL AND ext_source_id IS NULL)
+            OR
+            (ext_source_system IS NOT NULL AND ext_source_id IS NOT NULL)
+        );
+
+    -- ai_systems
+    ALTER TABLE ai_systems
+        DROP CONSTRAINT IF EXISTS chk_ai_systems_ext_consistency;
+    ALTER TABLE ai_systems
+        ADD CONSTRAINT chk_ai_systems_ext_consistency
+        CHECK (
+            (ext_source_system IS NULL AND ext_source_id IS NULL)
+            OR
+            (ext_source_system IS NOT NULL AND ext_source_id IS NOT NULL)
+        );
+
+    -- ai_system_versions
+    ALTER TABLE ai_system_versions
+        DROP CONSTRAINT IF EXISTS chk_ai_system_versions_ext_consistency;
+    ALTER TABLE ai_system_versions
+        ADD CONSTRAINT chk_ai_system_versions_ext_consistency
+        CHECK (
+            (ext_source_system IS NULL AND ext_source_id IS NULL)
+            OR
+            (ext_source_system IS NOT NULL AND ext_source_id IS NOT NULL)
+        );
+
+    -- ai_system_bindings
+    ALTER TABLE ai_system_bindings
+        DROP CONSTRAINT IF EXISTS chk_ai_system_bindings_ext_consistency;
+    ALTER TABLE ai_system_bindings
+        ADD CONSTRAINT chk_ai_system_bindings_ext_consistency
+        CHECK (
+            (ext_source_system IS NULL AND ext_source_id IS NULL)
+            OR
+            (ext_source_system IS NOT NULL AND ext_source_id IS NOT NULL)
+        );
+END $$;

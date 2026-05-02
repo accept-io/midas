@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/accept-io/midas/internal/aisystem"
+	"github.com/accept-io/midas/internal/externalref"
 )
 
 // AISystemRepo is an in-memory implementation of aisystem.SystemRepository.
@@ -41,6 +42,9 @@ func (r *AISystemRepo) Create(_ context.Context, sys *aisystem.AISystem) error {
 	}
 	if sys.Replaces != "" && sys.Replaces == sys.ID {
 		return aisystem.ErrSelfReplace
+	}
+	if err := sys.ExternalRef.Validate(); err != nil {
+		return err
 	}
 
 	r.mu.Lock()
@@ -99,6 +103,9 @@ func (r *AISystemRepo) Update(_ context.Context, sys *aisystem.AISystem) error {
 	if sys.Replaces != "" && sys.Replaces == sys.ID {
 		return aisystem.ErrSelfReplace
 	}
+	if err := sys.ExternalRef.Validate(); err != nil {
+		return err
+	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -112,6 +119,7 @@ func (r *AISystemRepo) Update(_ context.Context, sys *aisystem.AISystem) error {
 
 func cloneAISystem(in *aisystem.AISystem) *aisystem.AISystem {
 	cp := *in
+	cp.ExternalRef = externalref.Canonicalise(in.ExternalRef).Clone()
 	return &cp
 }
 

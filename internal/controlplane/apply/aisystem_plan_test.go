@@ -185,7 +185,10 @@ func TestMapper_AISystem_TrimsAndDefaults(t *testing.T) {
 		},
 	}
 	now := time.Now()
-	sys := mapAISystemDocumentToAISystem(doc, now, "  user  ")
+	sys, err := mapAISystemDocumentToAISystem(doc, now, "  user  ")
+	if err != nil {
+		t.Fatalf("mapper: %v", err)
+	}
 	if sys.ID != "ai-1" || sys.Name != "AI 1" || sys.Owner != "team" {
 		t.Errorf("trim mismatch: %+v", sys)
 	}
@@ -208,7 +211,10 @@ func TestMapper_AISystem_HonoursDeclaredStatus(t *testing.T) {
 		Metadata: types.DocumentMetadata{ID: "ai-1", Name: "AI 1"},
 		Spec:     types.AISystemSpec{Status: "deprecated", Origin: "inferred"},
 	}
-	sys := mapAISystemDocumentToAISystem(doc, time.Now(), "u")
+	sys, err := mapAISystemDocumentToAISystem(doc, time.Now(), "u")
+	if err != nil {
+		t.Fatalf("mapper: %v", err)
+	}
 	if sys.Status != "deprecated" || sys.Origin != "inferred" {
 		t.Errorf("status-honour mismatch: %+v", sys)
 	}
@@ -256,7 +262,10 @@ func TestMapper_AISystemBinding_PreservesVersionPointer(t *testing.T) {
 			BusinessServiceID: "bs-x",
 		},
 	}
-	b := mapAISystemBindingDocumentToAISystemBinding(doc, time.Now(), "u")
+	b, err := mapAISystemBindingDocumentToAISystemBinding(doc, time.Now(), "u")
+	if err != nil {
+		t.Fatalf("mapper: %v", err)
+	}
 	if b.AISystemVersion == nil || *b.AISystemVersion != 7 {
 		t.Errorf("version pointer not preserved: %v", b.AISystemVersion)
 	}

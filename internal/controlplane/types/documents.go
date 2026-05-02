@@ -34,6 +34,27 @@ type DocumentMetadata struct {
 	Labels map[string]string `json:"labels,omitempty" yaml:"labels,omitempty"`
 }
 
+// ExternalRefSpec is the YAML/JSON shape of a structured reference to an
+// external system (Epic 1, PR 3). All fields are strings at the document
+// layer — `last_synced_at` is parsed as RFC3339 in the mapper layer,
+// mirroring the Profile/AISystemVersion lifecycle-date pattern.
+//
+// The consistency rule (source_system and source_id must both be set or
+// both be empty) is enforced by the validator before the document
+// reaches the mapper. The mapper canonicalises "all-empty" to nil so
+// the storage layer never sees an empty-but-non-nil ExternalRef.
+//
+// Five document specs embed this type as an optional pointer field:
+// BusinessServiceSpec, BusinessServiceRelationshipSpec, AISystemSpec,
+// AISystemVersionSpec, AISystemBindingSpec.
+type ExternalRefSpec struct {
+	SourceSystem  string `json:"source_system,omitempty" yaml:"source_system,omitempty"`
+	SourceID      string `json:"source_id,omitempty" yaml:"source_id,omitempty"`
+	SourceURL     string `json:"source_url,omitempty" yaml:"source_url,omitempty"`
+	SourceVersion string `json:"source_version,omitempty" yaml:"source_version,omitempty"`
+	LastSyncedAt  string `json:"last_synced_at,omitempty" yaml:"last_synced_at,omitempty"` // RFC3339
+}
+
 // ---------------------------------------------------------------------------
 // Surface
 // ---------------------------------------------------------------------------
@@ -352,6 +373,10 @@ type BusinessServiceSpec struct {
 	RegulatoryScope string `json:"regulatory_scope,omitempty" yaml:"regulatory_scope,omitempty"`
 	Status          string `json:"status" yaml:"status"`
 	OwnerID         string `json:"owner_id,omitempty" yaml:"owner_id,omitempty"`
+
+	// ExternalRef is optional structured metadata about the entity in an
+	// external system (Epic 1, PR 3). Nil when the YAML omits the field.
+	ExternalRef *ExternalRefSpec `json:"external_ref,omitempty" yaml:"external_ref,omitempty"`
 }
 
 func (b BusinessServiceDocument) GetKind() string { return b.Kind }
@@ -416,6 +441,9 @@ type BusinessServiceRelationshipSpec struct {
 	TargetBusinessServiceID string `json:"target_business_service_id" yaml:"target_business_service_id"`
 	RelationshipType        string `json:"relationship_type" yaml:"relationship_type"`
 	Description             string `json:"description,omitempty" yaml:"description,omitempty"`
+
+	// ExternalRef — see BusinessServiceSpec.ExternalRef.
+	ExternalRef *ExternalRefSpec `json:"external_ref,omitempty" yaml:"external_ref,omitempty"`
 }
 
 func (bsr BusinessServiceRelationshipDocument) GetKind() string { return bsr.Kind }
@@ -506,6 +534,9 @@ type AISystemSpec struct {
 	Status      string `json:"status,omitempty" yaml:"status,omitempty"` // active | deprecated | retired
 	Origin      string `json:"origin,omitempty" yaml:"origin,omitempty"` // manual | inferred (defaults to manual)
 	Replaces    string `json:"replaces,omitempty" yaml:"replaces,omitempty"`
+
+	// ExternalRef — see BusinessServiceSpec.ExternalRef.
+	ExternalRef *ExternalRefSpec `json:"external_ref,omitempty" yaml:"external_ref,omitempty"`
 }
 
 func (a AISystemDocument) GetKind() string { return a.Kind }
@@ -545,6 +576,9 @@ type AISystemVersionSpec struct {
 	RetiredAt            string   `json:"retired_at,omitempty" yaml:"retired_at,omitempty"`           // RFC3339
 	ComplianceFrameworks []string `json:"compliance_frameworks,omitempty" yaml:"compliance_frameworks,omitempty"`
 	DocumentationURL     string   `json:"documentation_url,omitempty" yaml:"documentation_url,omitempty"`
+
+	// ExternalRef — see BusinessServiceSpec.ExternalRef.
+	ExternalRef *ExternalRefSpec `json:"external_ref,omitempty" yaml:"external_ref,omitempty"`
 }
 
 func (v AISystemVersionDocument) GetKind() string { return v.Kind }
@@ -582,6 +616,9 @@ type AISystemBindingSpec struct {
 	SurfaceID         string `json:"surface_id,omitempty" yaml:"surface_id,omitempty"`
 	Role              string `json:"role,omitempty" yaml:"role,omitempty"`
 	Description       string `json:"description,omitempty" yaml:"description,omitempty"`
+
+	// ExternalRef — see BusinessServiceSpec.ExternalRef.
+	ExternalRef *ExternalRefSpec `json:"external_ref,omitempty" yaml:"external_ref,omitempty"`
 }
 
 func (b AISystemBindingDocument) GetKind() string { return b.Kind }

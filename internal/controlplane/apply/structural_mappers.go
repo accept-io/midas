@@ -46,8 +46,12 @@ func mapProcessDocumentToProcess(doc types.ProcessDocument, now time.Time, creat
 	}
 }
 
-func mapBusinessServiceDocumentToBusinessService(doc types.BusinessServiceDocument, now time.Time) *businessservice.BusinessService {
+func mapBusinessServiceDocumentToBusinessService(doc types.BusinessServiceDocument, now time.Time) (*businessservice.BusinessService, error) {
 	now = now.UTC()
+	ref, err := mapExternalRefSpec(doc.Spec.ExternalRef)
+	if err != nil {
+		return nil, err
+	}
 	return &businessservice.BusinessService{
 		ID:              strings.TrimSpace(doc.Metadata.ID),
 		Name:            strings.TrimSpace(doc.Metadata.Name),
@@ -60,7 +64,8 @@ func mapBusinessServiceDocumentToBusinessService(doc types.BusinessServiceDocume
 		Managed:         true,
 		CreatedAt:       now,
 		UpdatedAt:       now,
-	}
+		ExternalRef:     ref,
+	}, nil
 }
 
 func mapBusinessServiceCapabilityDocumentToBusinessServiceCapability(doc types.BusinessServiceCapabilityDocument, now time.Time) *businessservicecapability.BusinessServiceCapability {
@@ -78,7 +83,11 @@ func mapBusinessServiceCapabilityDocumentToBusinessServiceCapability(doc types.B
 // Defaults: relationship_type is taken verbatim from the spec (validated
 // upstream against the {depends_on, supports, part_of} enum). The junction
 // has no lifecycle to default — this mapper is a thin field-mover.
-func mapBusinessServiceRelationshipDocumentToBusinessServiceRelationship(doc types.BusinessServiceRelationshipDocument, now time.Time, createdBy string) *businessservice.BusinessServiceRelationship {
+func mapBusinessServiceRelationshipDocumentToBusinessServiceRelationship(doc types.BusinessServiceRelationshipDocument, now time.Time, createdBy string) (*businessservice.BusinessServiceRelationship, error) {
+	ref, err := mapExternalRefSpec(doc.Spec.ExternalRef)
+	if err != nil {
+		return nil, err
+	}
 	return &businessservice.BusinessServiceRelationship{
 		ID:                    strings.TrimSpace(doc.Metadata.ID),
 		SourceBusinessService: strings.TrimSpace(doc.Spec.SourceBusinessServiceID),
@@ -87,5 +96,6 @@ func mapBusinessServiceRelationshipDocumentToBusinessServiceRelationship(doc typ
 		Description:           strings.TrimSpace(doc.Spec.Description),
 		CreatedAt:             now.UTC(),
 		CreatedBy:             strings.TrimSpace(createdBy),
-	}
+		ExternalRef:           ref,
+	}, nil
 }

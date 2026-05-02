@@ -295,6 +295,7 @@ func validateBusinessService(doc types.BusinessServiceDocument) []types.Validati
 	} else if !contains(ValidBusinessServiceStatuses, doc.Spec.Status) {
 		errs = append(errs, enumErr(doc, "spec.status", doc.Spec.Status, ValidBusinessServiceStatuses))
 	}
+	errs = append(errs, validateExternalRefSpec(doc, doc.Spec.ExternalRef)...)
 	return errs
 }
 
@@ -373,6 +374,8 @@ func validateBusinessServiceRelationship(doc types.BusinessServiceRelationshipDo
 		errs = append(errs, enumErr(doc, "spec.relationship_type", relType,
 			[]string{"depends_on", "supports", "part_of"}))
 	}
+
+	errs = append(errs, validateExternalRefSpec(doc, doc.Spec.ExternalRef)...)
 
 	return errs
 }
@@ -849,6 +852,8 @@ func validateAISystem(doc types.AISystemDocument) []types.ValidationError {
 			fmt.Sprintf("exceeds maximum length of %d characters", MaxFieldLength)))
 	}
 
+	errs = append(errs, validateExternalRefSpec(doc, doc.Spec.ExternalRef)...)
+
 	return errs
 }
 
@@ -916,6 +921,8 @@ func validateAISystemVersion(doc types.AISystemVersionDocument) []types.Validati
 		}
 	}
 
+	errs = append(errs, validateExternalRefSpec(doc, doc.Spec.ExternalRef)...)
+
 	return errs
 }
 
@@ -974,6 +981,41 @@ func validateAISystemBinding(doc types.AISystemBindingDocument) []types.Validati
 			fmt.Sprintf("exceeds maximum length of %d characters", MaxFieldLength)))
 	}
 
+	errs = append(errs, validateExternalRefSpec(doc, doc.Spec.ExternalRef)...)
+
+	return errs
+}
+
+// validateExternalRefSpec runs document-level validation on an optional
+// ExternalRef field (Epic 1, PR 3). Errors are returned with field
+// paths prefixed by `spec.external_ref.` so operators can pinpoint the
+// offending sub-field without scanning surrounding context.
+//
+// Rules enforced:
+//
+//   - source_system and source_id must either both be set or both be empty
+//     (mirrors the chk_<table>_ext_consistency Postgres CHECK)
+//   - last_synced_at, when present, must be a valid RFC3339 timestamp
+//
+// Other fields are independently optional and never error here. A nil
+// ref is silently accepted (no external reference declared).
+func validateExternalRefSpec(doc document, ref *types.ExternalRefSpec) []types.ValidationError {
+	if ref == nil {
+		return nil
+	}
+	var errs []types.ValidationError
+	system := strings.TrimSpace(ref.SourceSystem)
+	id := strings.TrimSpace(ref.SourceID)
+	if (system == "") != (id == "") {
+		errs = append(errs, fieldErr(doc, "spec.external_ref",
+			"source_system and source_id must both be set or both be empty"))
+	}
+	if s := strings.TrimSpace(ref.LastSyncedAt); s != "" {
+		if _, err := time.Parse(time.RFC3339, s); err != nil {
+			errs = append(errs, fieldErr(doc, "spec.external_ref.last_synced_at",
+				"must be a valid RFC3339 timestamp"))
+		}
+	}
 	return errs
 }
 

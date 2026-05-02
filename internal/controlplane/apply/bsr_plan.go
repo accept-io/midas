@@ -152,7 +152,10 @@ func (s *Service) applyBusinessServiceRelationship(
 		return fmt.Errorf("%w: invalid document payload for kind %q", ErrInvalidBundle, types.KindBusinessServiceRelationship)
 	}
 
-	rel := mapBusinessServiceRelationshipDocumentToBusinessServiceRelationship(bsrDoc, now, actor)
+	rel, err := mapBusinessServiceRelationshipDocumentToBusinessServiceRelationship(bsrDoc, now, actor)
+	if err != nil {
+		return fmt.Errorf("map business service relationship document: %w", err)
+	}
 	if err := repos.BusinessServiceRelationships.Create(ctx, rel); err != nil {
 		return fmt.Errorf("create business service relationship: %w", err)
 	}

@@ -673,7 +673,10 @@ func (s *Service) applyAISystem(
 	if !ok {
 		return fmt.Errorf("%w: invalid document payload for kind %q", ErrInvalidBundle, types.KindAISystem)
 	}
-	sys := mapAISystemDocumentToAISystem(aiDoc, now, actor)
+	sys, err := mapAISystemDocumentToAISystem(aiDoc, now, actor)
+	if err != nil {
+		return fmt.Errorf("map ai system document: %w", err)
+	}
 	if err := repos.AISystems.Create(ctx, sys); err != nil {
 		return fmt.Errorf("create ai system: %w", err)
 	}
@@ -725,7 +728,10 @@ func (s *Service) applyAISystemBinding(
 	if !ok {
 		return fmt.Errorf("%w: invalid document payload for kind %q", ErrInvalidBundle, types.KindAISystemBinding)
 	}
-	binding := mapAISystemBindingDocumentToAISystemBinding(bDoc, now, actor)
+	binding, err := mapAISystemBindingDocumentToAISystemBinding(bDoc, now, actor)
+	if err != nil {
+		return fmt.Errorf("map ai system binding document: %w", err)
+	}
 	if err := repos.AISystemBindings.Create(ctx, binding); err != nil {
 		return fmt.Errorf("create ai system binding: %w", err)
 	}

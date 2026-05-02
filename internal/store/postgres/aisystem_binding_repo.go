@@ -38,13 +38,14 @@ func (r *AISystemBindingRepo) Create(ctx context.Context, b *aisystem.AISystemBi
 			id, ai_system_id, ai_system_version,
 			business_service_id, capability_id, process_id, surface_id,
 			role, description,
-			created_at, created_by
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`
+			created_at, created_by,
+			ext_source_system, ext_source_id, ext_source_url, ext_source_version, ext_last_synced_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`
 	var version any
 	if b.AISystemVersion != nil {
 		version = *b.AISystemVersion
 	}
-	_, err := r.db.ExecContext(ctx, q,
+	args := append([]any{
 		b.ID,
 		b.AISystemID,
 		version,
@@ -56,7 +57,8 @@ func (r *AISystemBindingRepo) Create(ctx context.Context, b *aisystem.AISystemBi
 		nullableString(b.Description),
 		b.CreatedAt,
 		nullableString(b.CreatedBy),
-	)
+	}, extRefInsertValues(b.ExternalRef)...)
+	_, err := r.db.ExecContext(ctx, q, args...)
 	return mapAIBindingCreateErr(err)
 }
 
@@ -146,23 +148,27 @@ const bindingSelectColumns = `
 	       COALESCE(role, ''),
 	       COALESCE(description, ''),
 	       created_at,
-	       COALESCE(created_by, '')`
+	       COALESCE(created_by, ''),
+	       ` + extRefSelectColumns
 
 func scanAIBinding(row rowScanner) (*aisystem.AISystemBinding, error) {
 	var b aisystem.AISystemBinding
 	var version sql.NullInt64
-	if err := row.Scan(
+	var extScan extRefScan
+	dests := append([]any{
 		&b.ID, &b.AISystemID, &version,
 		&b.BusinessServiceID, &b.CapabilityID, &b.ProcessID, &b.SurfaceID,
 		&b.Role, &b.Description,
 		&b.CreatedAt, &b.CreatedBy,
-	); err != nil {
+	}, extScan.Dests()...)
+	if err := row.Scan(dests...); err != nil {
 		return nil, err
 	}
 	if version.Valid {
 		v := int(version.Int64)
 		b.AISystemVersion = &v
 	}
+	b.ExternalRef = extScan.ToExternalRef()
 	return &b, nil
 }
 
@@ -178,8 +184,11 @@ func mapAIBindingCreateErr(err error) error {
 	case "23505": // unique_violation
 		return aisystem.ErrAISystemBindingAlreadyExists
 	case "23514": // check_violation
-		if pqErr.Constraint == "chk_ai_bindings_at_least_one_target" {
+		switch pqErr.Constraint {
+		case "chk_ai_bindings_at_least_one_target":
 			return aisystem.ErrBindingMissingContext
+		case "chk_ai_system_bindings_ext_consistency":
+			return mapExtRefError(err)
 		}
 	case "23503": // foreign_key_violation
 		// Surface verbatim — the constraint name in pqErr.Constraint and the
