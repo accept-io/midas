@@ -80,9 +80,9 @@ func TestApplyProfile_SetsStatusToReview(t *testing.T) {
 					Authority: types.ProfileAuthority{
 						DecisionConfidenceThreshold: 0.85,
 						ConsequenceThreshold: types.ConsequenceThreshold{
-							Type:       "monetary",
-							Amount:     10000,
-							Currency:   "USD",
+							Type:     "monetary",
+							Amount:   10000,
+							Currency: "USD",
 						},
 					},
 					Policy: types.ProfilePolicy{
@@ -144,9 +144,9 @@ func TestApplyProfile_IncrementsVersion(t *testing.T) {
 					Authority: types.ProfileAuthority{
 						DecisionConfidenceThreshold: 0.90,
 						ConsequenceThreshold: types.ConsequenceThreshold{
-							Type:       "monetary",
-							Amount:     20000,
-							Currency:   "USD",
+							Type:     "monetary",
+							Amount:   20000,
+							Currency: "USD",
 						},
 					},
 					Policy: types.ProfilePolicy{
@@ -197,9 +197,9 @@ func TestApplyProfile_WithoutRepo_FallsBackToCreated(t *testing.T) {
 					Authority: types.ProfileAuthority{
 						DecisionConfidenceThreshold: 0.85,
 						ConsequenceThreshold: types.ConsequenceThreshold{
-							Type:       "monetary",
-							Amount:     10000,
-							Currency:   "USD",
+							Type:     "monetary",
+							Amount:   10000,
+							Currency: "USD",
 						},
 					},
 					Policy: types.ProfilePolicy{

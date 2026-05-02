@@ -29,6 +29,19 @@ var (
 	ValidConsequenceTypes = []string{"monetary", "risk_rating"}
 	ValidServiceTypes     = []string{"customer_facing", "internal", "technical"}
 
+	// ValidAISystemStatuses mirrors the chk_ai_systems_status CHECK list.
+	// AISystem is status-honouring at apply time: this list controls only
+	// per-document field validation, not lifecycle gating.
+	ValidAISystemStatuses = []string{"active", "deprecated", "retired"}
+
+	// ValidAISystemOrigins mirrors the chk_ai_systems_origin CHECK list.
+	ValidAISystemOrigins = []string{"manual", "inferred"}
+
+	// ValidAISystemVersionStatuses mirrors the chk_ai_versions_status CHECK
+	// list. AISystemVersion is status-honouring (deliberate divergence from
+	// Surface/Profile): apply persists whatever status the bundle declares.
+	ValidAISystemVersionStatuses = []string{"review", "active", "deprecated", "retired"}
+
 	// ValidBusinessServiceStatuses is narrower than ValidStatuses: the business_services
 	// schema CHECK constraint allows only 'active' and 'deprecated' (not 'inactive').
 	// Using ValidStatuses here would let 'inactive' pass validation and then fail
@@ -90,6 +103,12 @@ func ValidateDocument(doc parser.ParsedDocument) []types.ValidationError {
 		errs = append(errs, validateGrant(d)...)
 	case types.GovernanceExpectationDocument:
 		errs = append(errs, validateGovernanceExpectation(d)...)
+	case types.AISystemDocument:
+		errs = append(errs, validateAISystem(d)...)
+	case types.AISystemVersionDocument:
+		errs = append(errs, validateAISystemVersion(d)...)
+	case types.AISystemBindingDocument:
+		errs = append(errs, validateAISystemBinding(d)...)
 	default:
 		errs = append(errs, types.ValidationError{
 			Kind:    doc.Kind,
@@ -182,6 +201,37 @@ func ValidateBundle(docs []parser.ParsedDocument) []types.ValidationError {
 			continue
 		}
 		bsrTripleFirstIdx[key] = i + 1
+	}
+
+	// AISystemVersion: duplicate (ai_system_id, version) tuple within the
+	// bundle. Mirrors the schema's composite PK so the operator gets a
+	// validator-level message rather than a Postgres constraint failure
+	// at apply time.
+	aiVersionTupleFirstIdx := make(map[string]int)
+	for i, doc := range docs {
+		if doc.Kind != types.KindAISystemVersion {
+			continue
+		}
+		vDoc, ok := doc.Doc.(types.AISystemVersionDocument)
+		if !ok {
+			continue
+		}
+		sysID := strings.TrimSpace(vDoc.Spec.AISystemID)
+		if sysID == "" || vDoc.Spec.Version < 1 {
+			continue
+		}
+		key := fmt.Sprintf("%s\x00%d", sysID, vDoc.Spec.Version)
+		if firstIdx, seen := aiVersionTupleFirstIdx[key]; seen {
+			errs = append(errs, types.ValidationError{
+				Kind:          doc.Kind,
+				ID:            doc.ID,
+				Field:         "spec",
+				Message:       fmt.Sprintf("duplicate ai system version tuple: (ai_system_id=%q, version=%d) already declared in document %d", sysID, vDoc.Spec.Version, firstIdx),
+				DocumentIndex: i + 1,
+			})
+			continue
+		}
+		aiVersionTupleFirstIdx[key] = i + 1
 	}
 
 	return errs
@@ -751,6 +801,177 @@ func validateGovernanceExpectation(doc types.GovernanceExpectationDocument) []ty
 	if doc.Spec.Lifecycle.Version < 0 {
 		errs = append(errs, fieldErr(doc, "spec.lifecycle.version",
 			"must be >= 1 when supplied"))
+	}
+
+	return errs
+}
+
+// validateAISystem performs per-document validation for AISystem.
+// Apply is status-honouring; cross-reference checks (replaces existence)
+// are deferred to the planner.
+func validateAISystem(doc types.AISystemDocument) []types.ValidationError {
+	var errs []types.ValidationError
+
+	if strings.TrimSpace(doc.Metadata.Name) == "" {
+		errs = append(errs, requiredFieldErr(doc, "metadata.name"))
+	} else if len(doc.Metadata.Name) > MaxNameLength {
+		errs = append(errs, fieldErr(doc, "metadata.name",
+			fmt.Sprintf("exceeds maximum length of %d characters", MaxNameLength)))
+	}
+
+	if status := strings.TrimSpace(doc.Spec.Status); status != "" {
+		if !contains(ValidAISystemStatuses, status) {
+			errs = append(errs, enumErr(doc, "spec.status", status, ValidAISystemStatuses))
+		}
+	}
+
+	if origin := strings.TrimSpace(doc.Spec.Origin); origin != "" {
+		if !contains(ValidAISystemOrigins, origin) {
+			errs = append(errs, enumErr(doc, "spec.origin", origin, ValidAISystemOrigins))
+		}
+	}
+
+	// Self-replace is rejected at the schema layer (chk_ai_systems_no_self_replace);
+	// surface a clean validator-level message rather than a constraint error
+	// at apply time.
+	if replaces := strings.TrimSpace(doc.Spec.Replaces); replaces != "" {
+		if err := validateIDFormat(replaces); err != nil {
+			errs = append(errs, fieldErr(doc, "spec.replaces", err.Error()))
+		}
+		if replaces == strings.TrimSpace(doc.Metadata.ID) {
+			errs = append(errs, fieldErr(doc, "spec.replaces",
+				"ai system cannot replace itself"))
+		}
+	}
+
+	if len(doc.Spec.Description) > MaxFieldLength {
+		errs = append(errs, fieldErr(doc, "spec.description",
+			fmt.Sprintf("exceeds maximum length of %d characters", MaxFieldLength)))
+	}
+
+	return errs
+}
+
+// validateAISystemVersion performs per-document validation for
+// AISystemVersion. Status is honoured (no review-forcing). RFC3339
+// timestamp parsing is enforced here so the mapper can rely on
+// well-formed input.
+func validateAISystemVersion(doc types.AISystemVersionDocument) []types.ValidationError {
+	var errs []types.ValidationError
+
+	aiSystemID := strings.TrimSpace(doc.Spec.AISystemID)
+	if aiSystemID == "" {
+		errs = append(errs, requiredFieldErr(doc, "spec.ai_system_id"))
+	} else if err := validateIDFormat(aiSystemID); err != nil {
+		errs = append(errs, fieldErr(doc, "spec.ai_system_id", err.Error()))
+	}
+
+	if doc.Spec.Version < 1 {
+		errs = append(errs, fieldErr(doc, "spec.version",
+			"must be an integer >= 1"))
+	}
+
+	if status := strings.TrimSpace(doc.Spec.Status); status != "" {
+		if !contains(ValidAISystemVersionStatuses, status) {
+			errs = append(errs, enumErr(doc, "spec.status", status, ValidAISystemVersionStatuses))
+		}
+	}
+
+	var effectiveFrom, effectiveUntil time.Time
+	var effectiveFromOK, effectiveUntilOK bool
+
+	if s := strings.TrimSpace(doc.Spec.EffectiveFrom); s == "" {
+		errs = append(errs, requiredFieldErr(doc, "spec.effective_from"))
+	} else {
+		parsed, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			errs = append(errs, fieldErr(doc, "spec.effective_from",
+				"must be a valid RFC3339 timestamp"))
+		} else {
+			effectiveFrom = parsed
+			effectiveFromOK = true
+		}
+	}
+
+	if s := strings.TrimSpace(doc.Spec.EffectiveUntil); s != "" {
+		parsed, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			errs = append(errs, fieldErr(doc, "spec.effective_until",
+				"must be a valid RFC3339 timestamp"))
+		} else {
+			effectiveUntil = parsed
+			effectiveUntilOK = true
+		}
+	}
+
+	if effectiveFromOK && effectiveUntilOK && !effectiveUntil.After(effectiveFrom) {
+		errs = append(errs, fieldErr(doc, "spec.effective_until",
+			"must be strictly after spec.effective_from"))
+	}
+
+	if s := strings.TrimSpace(doc.Spec.RetiredAt); s != "" {
+		if _, err := time.Parse(time.RFC3339, s); err != nil {
+			errs = append(errs, fieldErr(doc, "spec.retired_at",
+				"must be a valid RFC3339 timestamp"))
+		}
+	}
+
+	return errs
+}
+
+// validateAISystemBinding performs per-document validation for
+// AISystemBinding. Implements rule 1 of the five cross-reference rules
+// (at-least-one-context-reference); the remaining four rules require
+// bundle + repo access and live in the apply planner.
+func validateAISystemBinding(doc types.AISystemBindingDocument) []types.ValidationError {
+	var errs []types.ValidationError
+
+	aiSystemID := strings.TrimSpace(doc.Spec.AISystemID)
+	if aiSystemID == "" {
+		errs = append(errs, requiredFieldErr(doc, "spec.ai_system_id"))
+	} else if err := validateIDFormat(aiSystemID); err != nil {
+		errs = append(errs, fieldErr(doc, "spec.ai_system_id", err.Error()))
+	}
+
+	if doc.Spec.AISystemVersion != nil && *doc.Spec.AISystemVersion < 1 {
+		errs = append(errs, fieldErr(doc, "spec.ai_system_version",
+			"must be an integer >= 1 when supplied"))
+	}
+
+	bs := strings.TrimSpace(doc.Spec.BusinessServiceID)
+	cap := strings.TrimSpace(doc.Spec.CapabilityID)
+	proc := strings.TrimSpace(doc.Spec.ProcessID)
+	surf := strings.TrimSpace(doc.Spec.SurfaceID)
+
+	if bs == "" && cap == "" && proc == "" && surf == "" {
+		errs = append(errs, fieldErr(doc, "spec",
+			"binding requires at least one of business_service_id, capability_id, process_id, surface_id"))
+	}
+
+	if bs != "" {
+		if err := validateIDFormat(bs); err != nil {
+			errs = append(errs, fieldErr(doc, "spec.business_service_id", err.Error()))
+		}
+	}
+	if cap != "" {
+		if err := validateIDFormat(cap); err != nil {
+			errs = append(errs, fieldErr(doc, "spec.capability_id", err.Error()))
+		}
+	}
+	if proc != "" {
+		if err := validateIDFormat(proc); err != nil {
+			errs = append(errs, fieldErr(doc, "spec.process_id", err.Error()))
+		}
+	}
+	if surf != "" {
+		if err := validateIDFormat(surf); err != nil {
+			errs = append(errs, fieldErr(doc, "spec.surface_id", err.Error()))
+		}
+	}
+
+	if len(doc.Spec.Description) > MaxFieldLength {
+		errs = append(errs, fieldErr(doc, "spec.description",
+			fmt.Sprintf("exceeds maximum length of %d characters", MaxFieldLength)))
 	}
 
 	return errs

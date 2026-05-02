@@ -616,6 +616,201 @@ components:
           items:
             $ref: "#/components/schemas/BusinessServiceRelationship"
 
+    # ------------------------------------------------------------------
+    # AI System Registration (Epic 1, PR 2)
+    # ------------------------------------------------------------------
+
+    AISystem:
+      type: object
+      description: >
+        AI System registry entry. Identity-only; risk classification and
+        external references are deferred to follow-up epics. Status is
+        honoured at apply time (no review-forcing).
+      required:
+        - id
+        - name
+        - status
+        - origin
+        - managed
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          description: Logical AI system identifier.
+        name:
+          type: string
+        description:
+          type: string
+        owner:
+          type: string
+        vendor:
+          type: string
+        system_type:
+          type: string
+          description: Free-form classifier (e.g. "llm", "classifier").
+        status:
+          type: string
+          enum: [active, deprecated, retired]
+        origin:
+          type: string
+          enum: [manual, inferred]
+        managed:
+          type: boolean
+        replaces:
+          type: string
+          nullable: true
+          description: Logical ID of the AI system this one supersedes, if any.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        created_by:
+          type: string
+
+    AISystemsResponse:
+      type: object
+      description: >
+        Top-level response shape for GET /v1/aisystems. The `ai_systems`
+        array is always present (never null).
+      required: [ai_systems]
+      properties:
+        ai_systems:
+          type: array
+          items:
+            $ref: "#/components/schemas/AISystem"
+
+    AISystemVersion:
+      type: object
+      description: >
+        Versioned snapshot of an AISystem. Identified by composite
+        (ai_system_id, version). Status is honoured at apply time.
+      required:
+        - ai_system_id
+        - version
+        - status
+        - effective_from
+        - compliance_frameworks
+        - created_at
+        - updated_at
+      properties:
+        ai_system_id:
+          type: string
+        version:
+          type: integer
+          minimum: 1
+        release_label:
+          type: string
+        model_artifact:
+          type: string
+        model_hash:
+          type: string
+        endpoint:
+          type: string
+        status:
+          type: string
+          enum: [review, active, deprecated, retired]
+        effective_from:
+          type: string
+          format: date-time
+        effective_until:
+          type: string
+          format: date-time
+          nullable: true
+        retired_at:
+          type: string
+          format: date-time
+          nullable: true
+        compliance_frameworks:
+          type: array
+          items:
+            type: string
+        documentation_url:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        created_by:
+          type: string
+
+    AISystemVersionsResponse:
+      type: object
+      description: >
+        Top-level response shape for
+        GET /v1/aisystems/{id}/versions. The `versions` array is always
+        present (never null).
+      required: [ai_system_id, versions]
+      properties:
+        ai_system_id:
+          type: string
+        versions:
+          type: array
+          items:
+            $ref: "#/components/schemas/AISystemVersion"
+
+    AISystemBinding:
+      type: object
+      description: >
+        Immediate-apply junction linking an AI system (optionally pinned
+        to a specific version) to one or more existing MIDAS context
+        entities (BusinessService, Capability, Process, DecisionSurface).
+        At least one of business_service_id, capability_id, process_id,
+        or surface_id is set; unset fields are returned as JSON null
+        rather than empty strings.
+      required:
+        - id
+        - ai_system_id
+        - created_at
+      properties:
+        id:
+          type: string
+        ai_system_id:
+          type: string
+        ai_system_version:
+          type: integer
+          nullable: true
+          minimum: 1
+        business_service_id:
+          type: string
+          nullable: true
+        capability_id:
+          type: string
+          nullable: true
+        process_id:
+          type: string
+          nullable: true
+        surface_id:
+          type: string
+          nullable: true
+        role:
+          type: string
+        description:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        created_by:
+          type: string
+
+    AISystemBindingsResponse:
+      type: object
+      description: >
+        Top-level response shape for GET /v1/aisystems/{id}/bindings.
+        The `bindings` array is always present (never null).
+      required: [ai_system_id, bindings]
+      properties:
+        ai_system_id:
+          type: string
+        bindings:
+          type: array
+          items:
+            $ref: "#/components/schemas/AISystemBinding"
+
     AdminAuditDetails:
       type: object
       description: >
@@ -2766,6 +2961,258 @@ paths:
                 $ref: "#/components/schemas/Error"
         "501":
           description: BSR reader or structural service not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/aisystems:
+    get:
+      operationId: listAISystems
+      summary: List AI systems
+      description: >
+        Returns all registered AI systems. The `ai_systems` array is always
+        present (possibly empty). Requires platform.viewer or above.
+        See Epic 1, PR 2 (AI System Registration Foundation).
+      responses:
+        "200":
+          description: AI systems
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AISystemsResponse"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Repository error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: AI system reader or structural service not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/aisystems/{id}:
+    get:
+      operationId: getAISystem
+      summary: Get an AI system by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: AI system
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AISystem"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: AI system not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Repository error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: AI system reader not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/aisystems/{id}/versions:
+    get:
+      operationId: listAISystemVersions
+      summary: List versions for an AI system
+      description: >
+        Returns all versions for the AI system, ordered by version DESC
+        (latest first). The `versions` array is always present (possibly
+        empty).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Versions list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AISystemVersionsResponse"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: AI system not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Repository error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: AI system version reader not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/aisystems/{id}/versions/{version}:
+    get:
+      operationId: getAISystemVersion
+      summary: Get a specific AI system version
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: version
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: Version detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AISystemVersion"
+        "400":
+          description: Version path segment is not a positive integer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: AI system or version not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Repository error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: AI system version reader not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/aisystems/{id}/bindings:
+    get:
+      operationId: listAISystemBindings
+      summary: List bindings for an AI system
+      description: >
+        Returns all bindings linking the AI system to existing MIDAS
+        context entities. The `bindings` array is always present
+        (possibly empty).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Bindings list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AISystemBindingsResponse"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: AI system not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Repository error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: AI system binding reader not configured
           content:
             application/json:
               schema:

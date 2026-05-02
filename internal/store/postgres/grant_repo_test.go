@@ -8,7 +8,6 @@ import (
 	"github.com/accept-io/midas/internal/authority"
 )
 
-
 func TestGrantRepo_Create_GrantReasonRoundTrip(t *testing.T) {
 	db := openTestDB(t)
 	defer db.Close()

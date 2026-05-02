@@ -32,7 +32,7 @@ func TestVerifyAuditIntegrity_ValidChain(t *testing.T) {
 	ctx := context.Background()
 	env := &envelope.Envelope{
 		Identity: envelope.Identity{ID: "env-1"},
-		State: envelope.EnvelopeStateClosed,
+		State:    envelope.EnvelopeStateClosed,
 	}
 
 	t1 := baseTime
@@ -95,7 +95,7 @@ func TestVerifyAuditIntegrity_HashMismatch(t *testing.T) {
 	ctx := context.Background()
 	env := &envelope.Envelope{
 		Identity: envelope.Identity{ID: "env-1"},
-		State: envelope.EnvelopeStateClosed,
+		State:    envelope.EnvelopeStateClosed,
 	}
 
 	t1 := baseTime
@@ -158,7 +158,7 @@ func TestVerifyAuditIntegrity_StateMismatch(t *testing.T) {
 	ctx := context.Background()
 	env := &envelope.Envelope{
 		Identity: envelope.Identity{ID: "env-1"},
-		State: envelope.EnvelopeStateEscalated,
+		State:    envelope.EnvelopeStateEscalated,
 	}
 
 	t1 := baseTime
@@ -225,7 +225,7 @@ func TestVerifyAuditIntegrity_FirstEventWrongSequence(t *testing.T) {
 	ctx := context.Background()
 	env := &envelope.Envelope{
 		Identity: envelope.Identity{ID: "env-1"},
-		State: envelope.EnvelopeStateClosed,
+		State:    envelope.EnvelopeStateClosed,
 	}
 
 	t1 := baseTime
@@ -266,7 +266,7 @@ func TestVerifyAuditIntegrity_FirstEventNonEmptyPrevHash(t *testing.T) {
 	ctx := context.Background()
 	env := &envelope.Envelope{
 		Identity: envelope.Identity{ID: "env-1"},
-		State: envelope.EnvelopeStateClosed,
+		State:    envelope.EnvelopeStateClosed,
 	}
 
 	t1 := baseTime
@@ -307,7 +307,7 @@ func TestVerifyAuditIntegrity_SequenceGap(t *testing.T) {
 	ctx := context.Background()
 	env := &envelope.Envelope{
 		Identity: envelope.Identity{ID: "env-1"},
-		State: envelope.EnvelopeStateClosed,
+		State:    envelope.EnvelopeStateClosed,
 	}
 
 	t1 := baseTime
@@ -371,7 +371,7 @@ func TestVerifyAuditIntegrity_ChainBreak(t *testing.T) {
 	ctx := context.Background()
 	env := &envelope.Envelope{
 		Identity: envelope.Identity{ID: "env-1"},
-		State: envelope.EnvelopeStateClosed,
+		State:    envelope.EnvelopeStateClosed,
 	}
 
 	t1 := baseTime
@@ -434,7 +434,7 @@ func TestVerifyAuditIntegrity_FinalEventNotStateTransition(t *testing.T) {
 	ctx := context.Background()
 	env := &envelope.Envelope{
 		Identity: envelope.Identity{ID: "env-1"},
-		State: envelope.EnvelopeStateClosed,
+		State:    envelope.EnvelopeStateClosed,
 	}
 
 	t1 := baseTime
@@ -498,7 +498,7 @@ func TestVerifyAuditIntegrity_NoAuditTrail(t *testing.T) {
 	ctx := context.Background()
 	env := &envelope.Envelope{
 		Identity: envelope.Identity{ID: "env-1"},
-		State: envelope.EnvelopeStateClosed,
+		State:    envelope.EnvelopeStateClosed,
 	}
 
 	envelopeRepo := stubEnvelopeRepo{items: []*envelope.Envelope{env}}

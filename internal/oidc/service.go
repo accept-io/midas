@@ -15,9 +15,9 @@ import (
 
 // Sentinel errors returned by Service.
 var (
-	ErrNoRolesMapped  = errors.New("oidc: no internal roles mapped for this user")
+	ErrNoRolesMapped   = errors.New("oidc: no internal roles mapped for this user")
 	ErrGroupNotAllowed = errors.New("oidc: user is not a member of any allowed group")
-	ErrInvalidState   = errors.New("oidc: invalid or missing state parameter")
+	ErrInvalidState    = errors.New("oidc: invalid or missing state parameter")
 )
 
 // Claims holds the extracted identity claims from an ID token.

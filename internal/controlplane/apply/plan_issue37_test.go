@@ -53,7 +53,6 @@ func (r *stubCapabilityRepo) Create(_ context.Context, _ *capability.Capability)
 	return nil
 }
 
-
 // findEntry returns the plan entry for (kind, id) or fails.
 func findEntry(t *testing.T, plan ApplyPlan, kind, id string) ApplyPlanEntry {
 	t.Helper()
@@ -238,7 +237,6 @@ func TestPlan_SurfaceReferencesDeprecatedProcess_EmitsWarning(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Warning case 4 — Process → Capability (deprecated)
 // ---------------------------------------------------------------------------
-
 
 // ---------------------------------------------------------------------------
 // Warning regression — non-terminal targets do not emit warnings
@@ -428,14 +426,14 @@ func TestPlan_VersionedProfile_CreateKindNewVersion_EmitsDiff(t *testing.T) {
 	profileRepo := &controlledProfileRepo{
 		findByIDFn: func(_ context.Context, id string) (*authority.AuthorityProfile, error) {
 			return &authority.AuthorityProfile{
-				ID:                   id,
-				Version:              1,
-				Status:               authority.ProfileStatusActive,
-				Name:                 "Old Profile Name",
-				SurfaceID:            "payment.execute",
-				ConfidenceThreshold:  0.5,
-				PolicyReference:      "rego://old",
-				FailMode:             authority.FailModeClosed,
+				ID:                  id,
+				Version:             1,
+				Status:              authority.ProfileStatusActive,
+				Name:                "Old Profile Name",
+				SurfaceID:           "payment.execute",
+				ConfidenceThreshold: 0.5,
+				PolicyReference:     "rego://old",
+				FailMode:            authority.FailModeClosed,
 			}, nil
 		},
 	}

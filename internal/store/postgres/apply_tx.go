@@ -52,6 +52,9 @@ func (a *ApplyTxRunner) WithTx(
 			BusinessServiceCapabilities:  repos.BusinessServiceCapabilities,
 			BusinessServiceRelationships: repos.BusinessServiceRelationships,
 			GovernanceExpectations:       repos.GovernanceExpectations,
+			AISystems:                    repos.AISystems,
+			AISystemVersions:             repos.AISystemVersions,
+			AISystemBindings:             repos.AISystemBindings,
 		})
 	})
 }

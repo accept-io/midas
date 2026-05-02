@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 
 	"github.com/accept-io/midas/internal/adminaudit"
 	"github.com/accept-io/midas/internal/agent"
+	"github.com/accept-io/midas/internal/aisystem"
 	"github.com/accept-io/midas/internal/audit"
 	"github.com/accept-io/midas/internal/auth"
 	"github.com/accept-io/midas/internal/authority"
@@ -138,6 +140,18 @@ type structuralService interface {
 	// wired — used to distinguish 501 (not configured) from 200-with-empty
 	// (configured but no rows). (Epic 1, PR 1)
 	HasBusinessServiceRelationships() bool
+
+	// AI System Registration read endpoints (Epic 1, PR 2). Three
+	// repositories — system, version, binding — back the four (or five)
+	// /v1/aisystems/* paths.
+	HasAISystems() bool
+	HasAISystemVersions() bool
+	HasAISystemBindings() bool
+	GetAISystem(ctx context.Context, id string) (*aisystem.AISystem, error)
+	ListAISystems(ctx context.Context) ([]*aisystem.AISystem, error)
+	GetAISystemVersion(ctx context.Context, aiSystemID string, version int) (*aisystem.AISystemVersion, bool, error)
+	ListAISystemVersions(ctx context.Context, aiSystemID string) ([]*aisystem.AISystemVersion, bool, error)
+	ListAISystemBindings(ctx context.Context, aiSystemID string) ([]*aisystem.AISystemBinding, bool, error)
 }
 
 // explicitModeValidator is the narrow interface required for explicit-mode
@@ -361,6 +375,87 @@ type businessServiceRelationshipsResponse struct {
 	BusinessServiceID string                                `json:"business_service_id"`
 	Outgoing          []businessServiceRelationshipResponse `json:"outgoing"`
 	Incoming          []businessServiceRelationshipResponse `json:"incoming"`
+}
+
+// ---------------------------------------------------------------------------
+// AI System Registration wire formats (Epic 1, PR 2)
+// ---------------------------------------------------------------------------
+
+// aiSystemResponse is the wire format for GET /v1/aisystems/{id} and list items.
+type aiSystemResponse struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description,omitempty"`
+	Owner       string    `json:"owner,omitempty"`
+	Vendor      string    `json:"vendor,omitempty"`
+	SystemType  string    `json:"system_type,omitempty"`
+	Status      string    `json:"status"`
+	Origin      string    `json:"origin"`
+	Managed     bool      `json:"managed"`
+	Replaces    *string   `json:"replaces"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	CreatedBy   string    `json:"created_by,omitempty"`
+}
+
+// aiSystemsResponse wraps the list endpoint payload. The `ai_systems`
+// envelope keeps the response self-describing and matches the brief.
+type aiSystemsResponse struct {
+	AISystems []aiSystemResponse `json:"ai_systems"`
+}
+
+// aiSystemVersionResponse is one item in the versions list.
+// EffectiveUntil and RetiredAt are pointer-typed so JSON null marks
+// "still effective" / "not retired" cleanly.
+type aiSystemVersionResponse struct {
+	AISystemID           string     `json:"ai_system_id"`
+	Version              int        `json:"version"`
+	ReleaseLabel         string     `json:"release_label,omitempty"`
+	ModelArtifact        string     `json:"model_artifact,omitempty"`
+	ModelHash            string     `json:"model_hash,omitempty"`
+	Endpoint             string     `json:"endpoint,omitempty"`
+	Status               string     `json:"status"`
+	EffectiveFrom        time.Time  `json:"effective_from"`
+	EffectiveUntil       *time.Time `json:"effective_until"`
+	RetiredAt            *time.Time `json:"retired_at"`
+	ComplianceFrameworks []string   `json:"compliance_frameworks"`
+	DocumentationURL     string     `json:"documentation_url,omitempty"`
+	CreatedAt            time.Time  `json:"created_at"`
+	UpdatedAt            time.Time  `json:"updated_at"`
+	CreatedBy            string     `json:"created_by,omitempty"`
+}
+
+// aiSystemVersionsResponse is the top-level wire format for the
+// versions list endpoint. The `versions` array is always present
+// (never null).
+type aiSystemVersionsResponse struct {
+	AISystemID string                    `json:"ai_system_id"`
+	Versions   []aiSystemVersionResponse `json:"versions"`
+}
+
+// aiSystemBindingResponse is one item in the bindings list. SurfaceID,
+// CapabilityID, ProcessID and BusinessServiceID are pointer-typed so
+// JSON null distinguishes "field unset" from "empty string".
+// AISystemVersion is an int pointer for the same reason.
+type aiSystemBindingResponse struct {
+	ID                string    `json:"id"`
+	AISystemID        string    `json:"ai_system_id"`
+	AISystemVersion   *int      `json:"ai_system_version"`
+	BusinessServiceID *string   `json:"business_service_id"`
+	CapabilityID      *string   `json:"capability_id"`
+	ProcessID         *string   `json:"process_id"`
+	SurfaceID         *string   `json:"surface_id"`
+	Role              string    `json:"role,omitempty"`
+	Description       string    `json:"description,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
+	CreatedBy         string    `json:"created_by,omitempty"`
+}
+
+// aiSystemBindingsResponse is the top-level wire format for the
+// bindings list endpoint.
+type aiSystemBindingsResponse struct {
+	AISystemID string                    `json:"ai_system_id"`
+	Bindings   []aiSystemBindingResponse `json:"bindings"`
 }
 
 // agentResponse is the wire format for GET /v1/agents/{id}.
@@ -1294,6 +1389,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/v1/processes", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleListProcesses)))
 	s.mux.HandleFunc("/v1/businessservices/", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleGetBusinessService)))
 	s.mux.HandleFunc("/v1/businessservices", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleListBusinessServices)))
+
+	// AI System Registration read endpoints (Epic 1, PR 2). Same auth
+	// posture as the rest of the structural surface: viewer or above.
+	s.mux.HandleFunc("/v1/aisystems/", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleGetAISystemOrSubpath)))
+	s.mux.HandleFunc("/v1/aisystems", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleListAISystems)))
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -2807,6 +2907,118 @@ func toBusinessServiceRelationshipsResponse(businessServiceID string, outgoing, 
 }
 
 // ---------------------------------------------------------------------------
+// AI System Registration response helpers (Epic 1, PR 2)
+// ---------------------------------------------------------------------------
+
+func toAISystemResponse(sys *aisystem.AISystem) aiSystemResponse {
+	out := aiSystemResponse{
+		ID:          sys.ID,
+		Name:        sys.Name,
+		Description: sys.Description,
+		Owner:       sys.Owner,
+		Vendor:      sys.Vendor,
+		SystemType:  sys.SystemType,
+		Status:      sys.Status,
+		Origin:      sys.Origin,
+		Managed:     sys.Managed,
+		CreatedAt:   sys.CreatedAt,
+		UpdatedAt:   sys.UpdatedAt,
+		CreatedBy:   sys.CreatedBy,
+	}
+	if sys.Replaces != "" {
+		s := sys.Replaces
+		out.Replaces = &s
+	}
+	return out
+}
+
+func toAISystemsResponse(systems []*aisystem.AISystem) aiSystemsResponse {
+	resp := aiSystemsResponse{AISystems: make([]aiSystemResponse, 0, len(systems))}
+	for _, sys := range systems {
+		resp.AISystems = append(resp.AISystems, toAISystemResponse(sys))
+	}
+	return resp
+}
+
+func toAISystemVersionResponse(ver *aisystem.AISystemVersion) aiSystemVersionResponse {
+	frameworks := ver.ComplianceFrameworks
+	if frameworks == nil {
+		frameworks = []string{}
+	}
+	return aiSystemVersionResponse{
+		AISystemID:           ver.AISystemID,
+		Version:              ver.Version,
+		ReleaseLabel:         ver.ReleaseLabel,
+		ModelArtifact:        ver.ModelArtifact,
+		ModelHash:            ver.ModelHash,
+		Endpoint:             ver.Endpoint,
+		Status:               ver.Status,
+		EffectiveFrom:        ver.EffectiveFrom,
+		EffectiveUntil:       ver.EffectiveUntil,
+		RetiredAt:            ver.RetiredAt,
+		ComplianceFrameworks: frameworks,
+		DocumentationURL:     ver.DocumentationURL,
+		CreatedAt:            ver.CreatedAt,
+		UpdatedAt:            ver.UpdatedAt,
+		CreatedBy:            ver.CreatedBy,
+	}
+}
+
+func toAISystemVersionsResponse(aiSystemID string, versions []*aisystem.AISystemVersion) aiSystemVersionsResponse {
+	resp := aiSystemVersionsResponse{
+		AISystemID: aiSystemID,
+		Versions:   make([]aiSystemVersionResponse, 0, len(versions)),
+	}
+	for _, ver := range versions {
+		resp.Versions = append(resp.Versions, toAISystemVersionResponse(ver))
+	}
+	return resp
+}
+
+// nullableStringPtr returns nil when the input is empty, otherwise a
+// pointer to a copy. Used by toAISystemBindingResponse so that JSON
+// marshalling produces null for unset context fields rather than "".
+func nullableStringPtr(s string) *string {
+	if s == "" {
+		return nil
+	}
+	cp := s
+	return &cp
+}
+
+func toAISystemBindingResponse(b *aisystem.AISystemBinding) aiSystemBindingResponse {
+	var version *int
+	if b.AISystemVersion != nil {
+		v := *b.AISystemVersion
+		version = &v
+	}
+	return aiSystemBindingResponse{
+		ID:                b.ID,
+		AISystemID:        b.AISystemID,
+		AISystemVersion:   version,
+		BusinessServiceID: nullableStringPtr(b.BusinessServiceID),
+		CapabilityID:      nullableStringPtr(b.CapabilityID),
+		ProcessID:         nullableStringPtr(b.ProcessID),
+		SurfaceID:         nullableStringPtr(b.SurfaceID),
+		Role:              b.Role,
+		Description:       b.Description,
+		CreatedAt:         b.CreatedAt,
+		CreatedBy:         b.CreatedBy,
+	}
+}
+
+func toAISystemBindingsResponse(aiSystemID string, bindings []*aisystem.AISystemBinding) aiSystemBindingsResponse {
+	resp := aiSystemBindingsResponse{
+		AISystemID: aiSystemID,
+		Bindings:   make([]aiSystemBindingResponse, 0, len(bindings)),
+	}
+	for _, b := range bindings {
+		resp.Bindings = append(resp.Bindings, toAISystemBindingResponse(b))
+	}
+	return resp
+}
+
+// ---------------------------------------------------------------------------
 // Structural handlers — /v1/capabilities and /v1/processes
 // ---------------------------------------------------------------------------
 
@@ -3070,6 +3282,184 @@ func (s *Server) handleGetBusinessServiceRelationships(w http.ResponseWriter, r 
 		return
 	}
 	writeJSON(w, http.StatusOK, toBusinessServiceRelationshipsResponse(businessServiceID, outgoing, incoming))
+}
+
+// ---------------------------------------------------------------------------
+// AI System Registration handlers (Epic 1, PR 2)
+// ---------------------------------------------------------------------------
+
+// handleListAISystems serves GET /v1/aisystems.
+//
+// Status codes:
+//   - 200 OK on success (always — empty array when no systems)
+//   - 500 on repository failure
+//   - 501 when the AISystem reader is not configured
+func (s *Server) handleListAISystems(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	if s.structural == nil || !s.structural.HasAISystems() {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{
+			"error": "ai system reader not configured",
+		})
+		return
+	}
+	systems, err := s.structural.ListAISystems(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, toAISystemsResponse(systems))
+}
+
+// handleGetAISystemOrSubpath serves GET /v1/aisystems/{id} and the
+// sub-paths:
+//
+//	GET /v1/aisystems/{id}/versions
+//	GET /v1/aisystems/{id}/versions/{version}
+//	GET /v1/aisystems/{id}/bindings
+//
+// Sub-path routing mirrors handleGetBusinessService. Unknown sub-paths
+// return 404. Method-not-allowed (any non-GET) returns 405.
+func (s *Server) handleGetAISystemOrSubpath(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	if s.structural == nil || !s.structural.HasAISystems() {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{
+			"error": "ai system reader not configured",
+		})
+		return
+	}
+	const prefix = "/v1/aisystems/"
+	tail := strings.TrimPrefix(r.URL.Path, prefix)
+	tail = strings.Trim(tail, "/")
+	if tail == "" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+
+	parts := strings.Split(tail, "/")
+	id := parts[0]
+
+	switch {
+	case len(parts) == 1:
+		s.handleGetAISystem(w, r, id)
+	case len(parts) == 2 && parts[1] == "versions":
+		s.handleListAISystemVersions(w, r, id)
+	case len(parts) == 2 && parts[1] == "bindings":
+		s.handleListAISystemBindings(w, r, id)
+	case len(parts) == 3 && parts[1] == "versions":
+		version, err := strconv.Atoi(parts[2])
+		if err != nil || version < 1 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "version must be a positive integer"})
+			return
+		}
+		s.handleGetAISystemVersion(w, r, id, version)
+	default:
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+	}
+}
+
+// handleGetAISystem serves GET /v1/aisystems/{id}.
+func (s *Server) handleGetAISystem(w http.ResponseWriter, r *http.Request, id string) {
+	sys, err := s.structural.GetAISystem(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if sys == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "ai system not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, toAISystemResponse(sys))
+}
+
+// handleListAISystemVersions serves GET /v1/aisystems/{id}/versions.
+//
+// Status codes:
+//   - 200 OK on success (versions array always present, possibly empty)
+//   - 404 when the parent ai system does not exist
+//   - 500 on repository failure
+//   - 501 when the version reader is not configured (parent reader may
+//     still be wired)
+func (s *Server) handleListAISystemVersions(w http.ResponseWriter, r *http.Request, aiSystemID string) {
+	if !s.structural.HasAISystemVersions() {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{
+			"error": "ai system version reader not configured",
+		})
+		return
+	}
+	versions, found, err := s.structural.ListAISystemVersions(r.Context(), aiSystemID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "ai system not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, toAISystemVersionsResponse(aiSystemID, versions))
+}
+
+// handleGetAISystemVersion serves GET /v1/aisystems/{id}/versions/{version}.
+//
+// Status codes:
+//   - 200 OK on success
+//   - 400 when {version} is not a positive integer (handled upstream)
+//   - 404 when either the parent ai system or the requested version
+//     does not exist (the message distinguishes the two)
+//   - 500 on repository failure
+//   - 501 when the version reader is not configured
+func (s *Server) handleGetAISystemVersion(w http.ResponseWriter, r *http.Request, aiSystemID string, version int) {
+	if !s.structural.HasAISystemVersions() {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{
+			"error": "ai system version reader not configured",
+		})
+		return
+	}
+	ver, parentFound, err := s.structural.GetAISystemVersion(r.Context(), aiSystemID, version)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if !parentFound {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "ai system not found"})
+		return
+	}
+	if ver == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "ai system version not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, toAISystemVersionResponse(ver))
+}
+
+// handleListAISystemBindings serves GET /v1/aisystems/{id}/bindings.
+//
+// Status codes:
+//   - 200 OK on success (bindings array always present, possibly empty)
+//   - 404 when the parent ai system does not exist
+//   - 500 on repository failure
+//   - 501 when the binding reader is not configured
+func (s *Server) handleListAISystemBindings(w http.ResponseWriter, r *http.Request, aiSystemID string) {
+	if !s.structural.HasAISystemBindings() {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{
+			"error": "ai system binding reader not configured",
+		})
+		return
+	}
+	bindings, found, err := s.structural.ListAISystemBindings(r.Context(), aiSystemID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "ai system not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, toAISystemBindingsResponse(aiSystemID, bindings))
 }
 
 // ---------------------------------------------------------------------------

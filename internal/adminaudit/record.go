@@ -89,11 +89,11 @@ type Details struct {
 	ErrorCount     int `json:"error_count,omitempty"`
 
 	// Promote context.
-	FromCapabilityID  string `json:"from_capability_id,omitempty"`
-	FromProcessID     string `json:"from_process_id,omitempty"`
-	ToCapabilityID    string `json:"to_capability_id,omitempty"`
-	ToProcessID       string `json:"to_process_id,omitempty"`
-	SurfacesMigrated  int    `json:"surfaces_migrated,omitempty"`
+	FromCapabilityID string `json:"from_capability_id,omitempty"`
+	FromProcessID    string `json:"from_process_id,omitempty"`
+	ToCapabilityID   string `json:"to_capability_id,omitempty"`
+	ToProcessID      string `json:"to_process_id,omitempty"`
+	SurfacesMigrated int    `json:"surfaces_migrated,omitempty"`
 
 	// Cleanup context.
 	OlderThanDays       int      `json:"older_than_days,omitempty"`

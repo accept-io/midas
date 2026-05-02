@@ -25,15 +25,15 @@ type SurfaceVersionSummary struct {
 // Fields use *int / *string for version/status pairs so the caller can
 // distinguish "no active version" (nil) from "version 0" or "".
 type SurfaceRecoveryResult struct {
-	SurfaceID          string  `json:"surface_id"`
-	LatestVersion      int     `json:"latest_version"`
-	LatestStatus       string  `json:"latest_status"`
-	ActiveVersion      *int    `json:"active_version"`  // null when no active version exists
-	ActiveStatus       *string `json:"active_status"`   // null when no active version exists
-	SuccessorSurfaceID string  `json:"successor_surface_id"`
-	DeprecationReason  string  `json:"deprecation_reason"`
-	VersionCount       int     `json:"version_count"`
-	Warnings           []string `json:"warnings"`
+	SurfaceID              string   `json:"surface_id"`
+	LatestVersion          int      `json:"latest_version"`
+	LatestStatus           string   `json:"latest_status"`
+	ActiveVersion          *int     `json:"active_version"` // null when no active version exists
+	ActiveStatus           *string  `json:"active_status"`  // null when no active version exists
+	SuccessorSurfaceID     string   `json:"successor_surface_id"`
+	DeprecationReason      string   `json:"deprecation_reason"`
+	VersionCount           int      `json:"version_count"`
+	Warnings               []string `json:"warnings"`
 	RecommendedNextActions []string `json:"recommended_next_actions"`
 }
 
@@ -52,16 +52,16 @@ type ProfileRecoveryResult struct {
 	LatestVersion int    `json:"latest_version"`
 	LatestStatus  string `json:"latest_status"`
 	// ActiveVersion is nil when no version is currently effective (e.g. future effective_date).
-	ActiveVersion *int    `json:"active_version"`
-	ActiveStatus  *string `json:"active_status"`
-	VersionCount  int     `json:"version_count"`
+	ActiveVersion *int                  `json:"active_version"`
+	ActiveStatus  *string               `json:"active_status"`
+	VersionCount  int                   `json:"version_count"`
 	Versions      []ProfileVersionEntry `json:"versions"`
 	// ActiveGrantCount is the number of active grants linked to this profile.
 	// -1 means the grant repository is not available.
-	ActiveGrantCount int    `json:"active_grant_count"`
+	ActiveGrantCount int `json:"active_grant_count"`
 	// CapabilityNote is an honest description of the current profile lifecycle behaviour.
-	CapabilityNote string   `json:"capability_note"`
-	Warnings       []string `json:"warnings"`
+	CapabilityNote         string   `json:"capability_note"`
+	Warnings               []string `json:"warnings"`
 	RecommendedNextActions []string `json:"recommended_next_actions"`
 }
 

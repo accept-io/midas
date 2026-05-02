@@ -53,6 +53,9 @@ type Service struct {
 	businessServiceCapabilityRepo BusinessServiceCapabilityRepository
 	bsRelationshipRepo            BusinessServiceRelationshipRepository
 	governanceExpectationRepo     GovernanceExpectationRepository
+	aiSystemRepo                  AISystemRepository
+	aiVersionRepo                 AISystemVersionRepository
+	aiBindingRepo                 AISystemBindingRepository
 	controlAuditRepo              controlaudit.Repository
 	tx                            TxRunner
 }
@@ -88,6 +91,9 @@ func NewServiceWithRepos(repos RepositorySet) *Service {
 		businessServiceCapabilityRepo: repos.BusinessServiceCapabilities,
 		bsRelationshipRepo:            repos.BusinessServiceRelationships,
 		governanceExpectationRepo:     repos.GovernanceExpectations,
+		aiSystemRepo:                  repos.AISystems,
+		aiVersionRepo:                 repos.AISystemVersions,
+		aiBindingRepo:                 repos.AISystemBindings,
 		controlAuditRepo:              repos.ControlAudit,
 		tx:                            repos.Tx,
 	}
@@ -337,6 +343,15 @@ func (s *Service) buildApplyPlan(ctx context.Context, docs []parser.ParsedDocume
 	// BusinessServiceCapability documents within the same bundle so the
 	// second occurrence can be marked invalid.
 	bundleBSCPairs := make(map[string]int)
+	// bundleAISystemIDs tracks AISystem documents declared in the bundle
+	// so that AISystemVersion / AISystemBinding cross-references can be
+	// resolved without a repo round-trip when the system is being created
+	// in the same apply.
+	bundleAISystemIDs := make(map[string]struct{})
+	// bundleAISystemVersionPairs tracks (ai_system_id, version) tuples
+	// declared in the bundle, keyed by "sysID\x00version". Used by
+	// AISystemBinding's pinned-version cross-reference rule.
+	bundleAISystemVersionPairs := make(map[string]struct{})
 	for i, doc := range docs {
 		switch doc.Kind {
 		case types.KindCapability:
@@ -374,6 +389,18 @@ func (s *Service) buildApplyPlan(ctx context.Context, docs []parser.ParsedDocume
 				bundleSurfaceIDs[doc.ID] = struct{}{}
 				if sDoc, ok := doc.Doc.(types.SurfaceDocument); ok {
 					bundleSurfaceProcessIDs[doc.ID] = strings.TrimSpace(sDoc.Spec.ProcessID)
+				}
+			}
+		case types.KindAISystem:
+			if doc.ID != "" {
+				bundleAISystemIDs[doc.ID] = struct{}{}
+			}
+		case types.KindAISystemVersion:
+			if vDoc, ok := doc.Doc.(types.AISystemVersionDocument); ok {
+				sysID := strings.TrimSpace(vDoc.Spec.AISystemID)
+				if sysID != "" && vDoc.Spec.Version >= 1 {
+					key := fmt.Sprintf("%s\x00%d", sysID, vDoc.Spec.Version)
+					bundleAISystemVersionPairs[key] = struct{}{}
 				}
 			}
 		}
@@ -487,6 +514,17 @@ func (s *Service) buildApplyPlan(ctx context.Context, docs []parser.ParsedDocume
 					entry.DecisionSource = DecisionSourceValidation
 					entry.CreateKind = CreateKindNew
 				}
+			case types.KindAISystem:
+				s.planAISystemEntry(ctx, doc, bundleAISystemIDs, &entry)
+			case types.KindAISystemVersion:
+				s.planAISystemVersionEntry(ctx, doc, bundleAISystemIDs, &entry)
+			case types.KindAISystemBinding:
+				s.planAISystemBindingEntry(ctx, doc,
+					bundleAISystemIDs, bundleAISystemVersionPairs,
+					bundleBusinessServiceIDs, bundleCapabilityIDs,
+					bundleProcessIDs, bundleSurfaceIDs,
+					bundleSurfaceProcessIDs, bundleProcessBusinessServiceIDs,
+					bundleBSCPairs, &entry)
 			default:
 				entry.Action = ApplyActionCreate
 				entry.DecisionSource = DecisionSourceValidation
@@ -2153,6 +2191,24 @@ func (s *Service) applyCreateEntry(
 			return nil
 		}
 		return s.applyGovernanceExpectation(ctx, repos, pendingAudit, entry.Doc, now, actor, entry.NewVersion, result)
+	case types.KindAISystem:
+		if repos.AISystems == nil {
+			result.AddCreated(entry.Kind, entry.ID)
+			return nil
+		}
+		return s.applyAISystem(ctx, repos, pendingAudit, entry.Doc, now, actor, result)
+	case types.KindAISystemVersion:
+		if repos.AISystemVersions == nil {
+			result.AddCreated(entry.Kind, entry.ID)
+			return nil
+		}
+		return s.applyAISystemVersion(ctx, repos, pendingAudit, entry.Doc, now, actor, result)
+	case types.KindAISystemBinding:
+		if repos.AISystemBindings == nil {
+			result.AddCreated(entry.Kind, entry.ID)
+			return nil
+		}
+		return s.applyAISystemBinding(ctx, repos, entry.Doc, now, actor, result)
 	default:
 		result.AddCreated(entry.Kind, entry.ID)
 		return nil
@@ -2175,6 +2231,9 @@ func (s *Service) ownRepositorySet() *RepositorySet {
 		BusinessServiceCapabilities:  s.businessServiceCapabilityRepo,
 		BusinessServiceRelationships: s.bsRelationshipRepo,
 		GovernanceExpectations:       s.governanceExpectationRepo,
+		AISystems:                    s.aiSystemRepo,
+		AISystemVersions:             s.aiVersionRepo,
+		AISystemBindings:             s.aiBindingRepo,
 	}
 }
 
@@ -2204,14 +2263,19 @@ func (s *Service) appendControlAudit(ctx context.Context, rec *controlaudit.Cont
 //  1. BusinessService           — no dependencies
 //  2. Capability                — no dependencies
 //  3. BusinessServiceCapability — depends on BusinessService and Capability
-//  4. Process                   — depends on BusinessService (v1 service-led model)
-//  5. Surface                   — depends on Process
-//  6. Agent                     — no dependencies
-//  7. Profile                   — depends on Surface
-//  8. Grant                     — depends on Agent and Profile
-//  9. GovernanceExpectation     — depends on Process and Surface
+//  4. BusinessServiceRelationship — depends on BusinessService (source/target FK)
+//  5. Process                   — depends on BusinessService (v1 service-led model)
+//  6. Surface                   — depends on Process
+//  7. Agent                     — no dependencies
+//  8. Profile                   — depends on Surface
+//  9. Grant                     — depends on Agent and Profile
 //
-// 10. Other                     — unknown kinds, emitted after known kinds
+// 10. GovernanceExpectation     — depends on Process and Surface
+// 11. AISystem                  — depends on BusinessService (logical only — replaces is self-FK; no hard FK)
+// 12. AISystemVersion           — depends on AISystem (composite FK to ai_systems.id)
+// 13. AISystemBinding           — depends on AISystem, AISystemVersion (composite FK), BS, Capability, Process; references logical Surface ID
+//
+// 14. Other                     — unknown kinds, emitted after known kinds
 //
 // Within each tier, relative document order is preserved. Conflict and unchanged
 // entries are emitted after all create entries, in their original document order,
@@ -2228,10 +2292,13 @@ func orderedEntries(entries []ApplyPlanEntry) []ApplyPlanEntry {
 		types.KindProfile:                     7,
 		types.KindGrant:                       8,
 		types.KindGovernanceExpectation:       9,
+		types.KindAISystem:                    10, // after BS (per Epic 1, PR 2 brief)
+		types.KindAISystemVersion:             11, // after AISystem (FK)
+		types.KindAISystemBinding:             12, // after AISystemVersion + all referenced context
 	}
 
 	// Separate create entries (must respect order) from non-create entries.
-	creates := make([][]ApplyPlanEntry, 11) // 10 known tiers + 1 unknown
+	creates := make([][]ApplyPlanEntry, 14) // 13 known tiers + 1 unknown
 	var nonCreates []ApplyPlanEntry
 
 	for _, e := range entries {
@@ -2241,7 +2308,7 @@ func orderedEntries(entries []ApplyPlanEntry) []ApplyPlanEntry {
 		}
 		tier, known := kindOrder[e.Kind]
 		if !known {
-			tier = 10
+			tier = 13
 		}
 		creates[tier] = append(creates[tier], e)
 	}

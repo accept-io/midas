@@ -53,8 +53,8 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	s.localIAM.SetSessionCookie(w, sess.ID, sess.ExpiresAt)
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"username":            user.Username,
-		"roles":               user.Roles,
+		"username":             user.Username,
+		"roles":                user.Roles,
 		"must_change_password": user.MustChangePassword,
 	})
 }
@@ -90,10 +90,10 @@ func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"id":                  p.ID,
-		"username":            p.Name,
-		"roles":               p.Roles,
-		"provider":            p.Provider,
+		"id":                   p.ID,
+		"username":             p.Name,
+		"roles":                p.Roles,
+		"provider":             p.Provider,
 		"must_change_password": localiam.MustChangePasswordFromContext(r.Context()),
 	})
 }

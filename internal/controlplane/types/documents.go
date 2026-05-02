@@ -16,6 +16,9 @@ const (
 	KindBusinessServiceCapability   = "BusinessServiceCapability"
 	KindBusinessServiceRelationship = "BusinessServiceRelationship"
 	KindGovernanceExpectation       = "GovernanceExpectation"
+	KindAISystem                    = "AISystem"
+	KindAISystemVersion             = "AISystemVersion"
+	KindAISystemBinding             = "AISystemBinding"
 )
 
 // Document is the common interface implemented by all control plane documents.
@@ -473,3 +476,113 @@ type GovernanceExpectationLifecycle struct {
 
 func (g GovernanceExpectationDocument) GetKind() string { return g.Kind }
 func (g GovernanceExpectationDocument) GetID() string   { return g.Metadata.ID }
+
+// ---------------------------------------------------------------------------
+// AISystem (Epic 1, PR 2)
+// ---------------------------------------------------------------------------
+//
+// AISystem registers the governance subject — the model behind a runtime
+// Agent. Apply is status-honouring (no review-forcing), mirroring
+// BusinessService and Agent posture: whatever spec.status the bundle
+// declares is persisted directly. Allowed values: active | deprecated |
+// retired (closed enum).
+//
+// Origin (manual | inferred) and Replaces (logical ID of a predecessor)
+// follow the existing capability/process pattern. ExternalRef and
+// risk-classification fields are deliberately excluded from PR 2.
+
+type AISystemDocument struct {
+	APIVersion string           `json:"apiVersion" yaml:"apiVersion"`
+	Kind       string           `json:"kind" yaml:"kind"`
+	Metadata   DocumentMetadata `json:"metadata" yaml:"metadata"`
+	Spec       AISystemSpec     `json:"spec" yaml:"spec"`
+}
+
+type AISystemSpec struct {
+	Description string `json:"description,omitempty" yaml:"description,omitempty"`
+	Owner       string `json:"owner,omitempty" yaml:"owner,omitempty"`
+	Vendor      string `json:"vendor,omitempty" yaml:"vendor,omitempty"`
+	SystemType  string `json:"system_type,omitempty" yaml:"system_type,omitempty"`
+	Status      string `json:"status,omitempty" yaml:"status,omitempty"` // active | deprecated | retired
+	Origin      string `json:"origin,omitempty" yaml:"origin,omitempty"` // manual | inferred (defaults to manual)
+	Replaces    string `json:"replaces,omitempty" yaml:"replaces,omitempty"`
+}
+
+func (a AISystemDocument) GetKind() string { return a.Kind }
+func (a AISystemDocument) GetID() string   { return a.Metadata.ID }
+
+// ---------------------------------------------------------------------------
+// AISystemVersion (Epic 1, PR 2)
+// ---------------------------------------------------------------------------
+//
+// AISystemVersion is a versioned snapshot of an AISystem (model artifact,
+// hash, endpoint, compliance frameworks). Apply is status-honouring:
+// spec.status is persisted verbatim. The (ai_system_id, version) tuple
+// is the composite identity; metadata.id is the synthetic control-plane
+// handle used for bundle identity and duplicate detection.
+//
+// Lifecycle dates are RFC3339 strings parsed in the mapper, mirroring
+// ProfileLifecycle / GovernanceExpectationLifecycle posture. Status enum:
+// review | active | deprecated | retired.
+
+type AISystemVersionDocument struct {
+	APIVersion string              `json:"apiVersion" yaml:"apiVersion"`
+	Kind       string              `json:"kind" yaml:"kind"`
+	Metadata   DocumentMetadata    `json:"metadata" yaml:"metadata"`
+	Spec       AISystemVersionSpec `json:"spec" yaml:"spec"`
+}
+
+type AISystemVersionSpec struct {
+	AISystemID           string   `json:"ai_system_id" yaml:"ai_system_id"`
+	Version              int      `json:"version" yaml:"version"`
+	ReleaseLabel         string   `json:"release_label,omitempty" yaml:"release_label,omitempty"`
+	ModelArtifact        string   `json:"model_artifact,omitempty" yaml:"model_artifact,omitempty"`
+	ModelHash            string   `json:"model_hash,omitempty" yaml:"model_hash,omitempty"`
+	Endpoint             string   `json:"endpoint,omitempty" yaml:"endpoint,omitempty"`
+	Status               string   `json:"status,omitempty" yaml:"status,omitempty"`                   // review | active | deprecated | retired
+	EffectiveFrom        string   `json:"effective_from,omitempty" yaml:"effective_from,omitempty"`   // RFC3339
+	EffectiveUntil       string   `json:"effective_until,omitempty" yaml:"effective_until,omitempty"` // RFC3339
+	RetiredAt            string   `json:"retired_at,omitempty" yaml:"retired_at,omitempty"`           // RFC3339
+	ComplianceFrameworks []string `json:"compliance_frameworks,omitempty" yaml:"compliance_frameworks,omitempty"`
+	DocumentationURL     string   `json:"documentation_url,omitempty" yaml:"documentation_url,omitempty"`
+}
+
+func (v AISystemVersionDocument) GetKind() string { return v.Kind }
+func (v AISystemVersionDocument) GetID() string   { return v.Metadata.ID }
+
+// ---------------------------------------------------------------------------
+// AISystemBinding (Epic 1, PR 2)
+// ---------------------------------------------------------------------------
+//
+// AISystemBinding is the immediate-apply junction linking an AISystem
+// (optionally pinned to a specific AISystemVersion) to one or more
+// existing MIDAS context entities. Mirrors BusinessServiceRelationship
+// and BusinessServiceCapability posture: no Status, no EffectiveFrom,
+// no review. At least one of business_service_id, capability_id,
+// process_id, or surface_id must be set.
+//
+// AISystemVersion is *int (pointer) so that "no pinned version" is
+// distinguishable from "version 0" at the document layer.
+// surface_id has no FK at the schema layer because surfaces are
+// versioned (composite key); bindings reference the logical surface ID.
+
+type AISystemBindingDocument struct {
+	APIVersion string              `json:"apiVersion" yaml:"apiVersion"`
+	Kind       string              `json:"kind" yaml:"kind"`
+	Metadata   DocumentMetadata    `json:"metadata" yaml:"metadata"`
+	Spec       AISystemBindingSpec `json:"spec" yaml:"spec"`
+}
+
+type AISystemBindingSpec struct {
+	AISystemID        string `json:"ai_system_id" yaml:"ai_system_id"`
+	AISystemVersion   *int   `json:"ai_system_version,omitempty" yaml:"ai_system_version,omitempty"`
+	BusinessServiceID string `json:"business_service_id,omitempty" yaml:"business_service_id,omitempty"`
+	CapabilityID      string `json:"capability_id,omitempty" yaml:"capability_id,omitempty"`
+	ProcessID         string `json:"process_id,omitempty" yaml:"process_id,omitempty"`
+	SurfaceID         string `json:"surface_id,omitempty" yaml:"surface_id,omitempty"`
+	Role              string `json:"role,omitempty" yaml:"role,omitempty"`
+	Description       string `json:"description,omitempty" yaml:"description,omitempty"`
+}
+
+func (b AISystemBindingDocument) GetKind() string { return b.Kind }
+func (b AISystemBindingDocument) GetID() string   { return b.Metadata.ID }

@@ -449,4 +449,3 @@ func modActiveSurface(id string) *surface.DecisionSurface {
 		EffectiveFrom: time.Now().UTC().Add(-time.Hour),
 	}
 }
-

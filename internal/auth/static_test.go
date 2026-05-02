@@ -69,9 +69,9 @@ func TestStaticTokenAuthenticator_NonBearerScheme(t *testing.T) {
 
 func TestParseBearerToken(t *testing.T) {
 	tests := []struct {
-		header  string
-		want    string
-		wantOK  bool
+		header string
+		want   string
+		wantOK bool
 	}{
 		{"Bearer tok123", "tok123", true},
 		{"Bearer  tok123  ", "tok123", true},

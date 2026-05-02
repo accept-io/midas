@@ -40,6 +40,49 @@ spec:
   relationship_type: depends_on
   description: Mortgage origination depends on customer onboarding.`
 
+	validAISystemYAML = `apiVersion: midas.accept.io/v1
+kind: AISystem
+metadata:
+  id: ai-mortgage-affordability-assistant
+  name: Mortgage Affordability Assessment Assistant
+spec:
+  description: Internal LLM-based mortgage affordability scorer.
+  owner: lending-platform-team
+  vendor: internal
+  system_type: llm
+  status: active
+  origin: manual`
+
+	validAISystemVersionYAML = `apiVersion: midas.accept.io/v1
+kind: AISystemVersion
+metadata:
+  id: aiv-mortgage-affordability-v1
+spec:
+  ai_system_id: ai-mortgage-affordability-assistant
+  version: 1
+  release_label: 2026.04-r1
+  model_artifact: registry://internal/lending/affordability:v1
+  model_hash: sha256:abc123
+  endpoint: https://internal.lending/affordability/v1
+  status: review
+  effective_from: 2026-04-15T00:00:00Z
+  compliance_frameworks:
+    - iso-42001
+  documentation_url: https://wiki.internal/lending/affordability-v1`
+
+	validAISystemBindingYAML = `apiVersion: midas.accept.io/v1
+kind: AISystemBinding
+metadata:
+  id: bind-mortgage-affordability-on-affordability-surface
+spec:
+  ai_system_id: ai-mortgage-affordability-assistant
+  ai_system_version: 1
+  business_service_id: bs-mortgage-origination
+  process_id: proc-affordability-assessment
+  surface_id: surf-affordability-assessment
+  role: primary-evaluator
+  description: Primary evaluator for the affordability decision surface.`
+
 	validSurfaceYAML = `apiVersion: midas.accept.io/v1
 kind: Surface
 metadata:
@@ -261,6 +304,72 @@ func TestParseYAML_AllKinds(t *testing.T) {
 				}
 				if bsrDoc.Spec.Description == "" {
 					t.Error("description should round-trip non-empty")
+				}
+			},
+		},
+		{
+			name:         "AISystem",
+			yaml:         validAISystemYAML,
+			expectedKind: types.KindAISystem,
+			expectedID:   "ai-mortgage-affordability-assistant",
+			validateDoc: func(t *testing.T, doc ParsedDocument) {
+				aiDoc, ok := doc.Doc.(types.AISystemDocument)
+				if !ok {
+					t.Fatalf("expected AISystemDocument, got %T", doc.Doc)
+				}
+				if aiDoc.Spec.Status != "active" || aiDoc.Spec.Origin != "manual" {
+					t.Errorf("status/origin round-trip mismatch: %+v", aiDoc.Spec)
+				}
+				if aiDoc.Spec.SystemType != "llm" || aiDoc.Spec.Vendor != "internal" {
+					t.Errorf("system_type/vendor round-trip mismatch: %+v", aiDoc.Spec)
+				}
+			},
+		},
+		{
+			name:         "AISystemVersion",
+			yaml:         validAISystemVersionYAML,
+			expectedKind: types.KindAISystemVersion,
+			expectedID:   "aiv-mortgage-affordability-v1",
+			validateDoc: func(t *testing.T, doc ParsedDocument) {
+				vDoc, ok := doc.Doc.(types.AISystemVersionDocument)
+				if !ok {
+					t.Fatalf("expected AISystemVersionDocument, got %T", doc.Doc)
+				}
+				if vDoc.Spec.AISystemID != "ai-mortgage-affordability-assistant" {
+					t.Errorf("ai_system_id round-trip mismatch: %q", vDoc.Spec.AISystemID)
+				}
+				if vDoc.Spec.Version != 1 {
+					t.Errorf("version: got %d", vDoc.Spec.Version)
+				}
+				if vDoc.Spec.Status != "review" {
+					t.Errorf("status round-trip mismatch: %q", vDoc.Spec.Status)
+				}
+				if len(vDoc.Spec.ComplianceFrameworks) != 1 || vDoc.Spec.ComplianceFrameworks[0] != "iso-42001" {
+					t.Errorf("compliance_frameworks round-trip mismatch: %v", vDoc.Spec.ComplianceFrameworks)
+				}
+			},
+		},
+		{
+			name:         "AISystemBinding",
+			yaml:         validAISystemBindingYAML,
+			expectedKind: types.KindAISystemBinding,
+			expectedID:   "bind-mortgage-affordability-on-affordability-surface",
+			validateDoc: func(t *testing.T, doc ParsedDocument) {
+				bDoc, ok := doc.Doc.(types.AISystemBindingDocument)
+				if !ok {
+					t.Fatalf("expected AISystemBindingDocument, got %T", doc.Doc)
+				}
+				if bDoc.Spec.AISystemID != "ai-mortgage-affordability-assistant" {
+					t.Errorf("ai_system_id round-trip mismatch: %q", bDoc.Spec.AISystemID)
+				}
+				if bDoc.Spec.AISystemVersion == nil || *bDoc.Spec.AISystemVersion != 1 {
+					t.Errorf("ai_system_version round-trip mismatch: %v", bDoc.Spec.AISystemVersion)
+				}
+				if bDoc.Spec.SurfaceID != "surf-affordability-assessment" {
+					t.Errorf("surface_id round-trip mismatch: %q", bDoc.Spec.SurfaceID)
+				}
+				if bDoc.Spec.Role != "primary-evaluator" {
+					t.Errorf("role round-trip mismatch: %q", bDoc.Spec.Role)
 				}
 			},
 		},

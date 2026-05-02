@@ -87,15 +87,29 @@ func TestBootstrapAdmin_BundleFlow(t *testing.T) {
 	}
 
 	mockApproval := &mockApprovalService{
-		approveSurfaceFn:   func(_ context.Context, id string, _, _ identity.Principal) (*surface.DecisionSurface, error) { return &surface.DecisionSurface{ID: id, Status: surface.SurfaceStatusActive}, nil },
-		deprecateSurfaceFn: func(_ context.Context, id string, _, _, _ string) (*surface.DecisionSurface, error) { return &surface.DecisionSurface{ID: id, Status: surface.SurfaceStatusDeprecated}, nil },
-		approveProfileFn:   func(_ context.Context, id string, _ int, _ string) (*authority.AuthorityProfile, error) { return &authority.AuthorityProfile{ID: id, Status: authority.ProfileStatusActive}, nil },
-		deprecateProfileFn: func(_ context.Context, id string, _ int, _ string) (*authority.AuthorityProfile, error) { return &authority.AuthorityProfile{ID: id, Status: authority.ProfileStatusDeprecated}, nil },
+		approveSurfaceFn: func(_ context.Context, id string, _, _ identity.Principal) (*surface.DecisionSurface, error) {
+			return &surface.DecisionSurface{ID: id, Status: surface.SurfaceStatusActive}, nil
+		},
+		deprecateSurfaceFn: func(_ context.Context, id string, _, _, _ string) (*surface.DecisionSurface, error) {
+			return &surface.DecisionSurface{ID: id, Status: surface.SurfaceStatusDeprecated}, nil
+		},
+		approveProfileFn: func(_ context.Context, id string, _ int, _ string) (*authority.AuthorityProfile, error) {
+			return &authority.AuthorityProfile{ID: id, Status: authority.ProfileStatusActive}, nil
+		},
+		deprecateProfileFn: func(_ context.Context, id string, _ int, _ string) (*authority.AuthorityProfile, error) {
+			return &authority.AuthorityProfile{ID: id, Status: authority.ProfileStatusDeprecated}, nil
+		},
 	}
 	mockGrants := &mockGrantLifecycleService{
-		suspendGrantFn:   func(_ context.Context, id, _, _ string) (*authority.AuthorityGrant, error) { return &authority.AuthorityGrant{ID: id, Status: authority.GrantStatusSuspended}, nil },
-		revokeGrantFn:    func(_ context.Context, id, _, _ string) (*authority.AuthorityGrant, error) { return &authority.AuthorityGrant{ID: id, Status: authority.GrantStatusRevoked}, nil },
-		reinstateGrantFn: func(_ context.Context, id, _ string) (*authority.AuthorityGrant, error) { return &authority.AuthorityGrant{ID: id, Status: authority.GrantStatusActive}, nil },
+		suspendGrantFn: func(_ context.Context, id, _, _ string) (*authority.AuthorityGrant, error) {
+			return &authority.AuthorityGrant{ID: id, Status: authority.GrantStatusSuspended}, nil
+		},
+		revokeGrantFn: func(_ context.Context, id, _, _ string) (*authority.AuthorityGrant, error) {
+			return &authority.AuthorityGrant{ID: id, Status: authority.GrantStatusRevoked}, nil
+		},
+		reinstateGrantFn: func(_ context.Context, id, _ string) (*authority.AuthorityGrant, error) {
+			return &authority.AuthorityGrant{ID: id, Status: authority.GrantStatusActive}, nil
+		},
 	}
 
 	srv := NewServerFull(&mockOrchestrator{}, mockCP, mockApproval, nil, nil, mockGrants).

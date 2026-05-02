@@ -783,8 +783,8 @@ platform_oidc:
 	result, err := Load(LoadOptions{
 		ConfigFile: cfgPath,
 		EnvOverride: env(
-			"MIDAS_OIDC_CLIENT_ID", "env-client-id",  // direct env override
-			"MY_OIDC_SECRET", "placeholder-secret",   // used for ${VAR} expansion
+			"MIDAS_OIDC_CLIENT_ID", "env-client-id", // direct env override
+			"MY_OIDC_SECRET", "placeholder-secret", // used for ${VAR} expansion
 		),
 	})
 	if err != nil {
@@ -968,4 +968,3 @@ func TestLoad_MIDAS_DEV_SEED_DEMO_USER_DefaultTrue(t *testing.T) {
 		t.Error("dev.seed_demo_user: want true by default, got false")
 	}
 }
-

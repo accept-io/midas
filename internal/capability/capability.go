@@ -6,18 +6,18 @@ import (
 )
 
 type Capability struct {
-	ID                string
-	Name              string
-	Description       string
-	Status            string
-	Origin            string
-	Managed           bool
-	Replaces          string
-	Owner             string
+	ID                 string
+	Name               string
+	Description        string
+	Status             string
+	Origin             string
+	Managed            bool
+	Replaces           string
+	Owner              string
 	ParentCapabilityID string
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
-	CreatedBy         string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	CreatedBy          string
 }
 
 type CapabilityRepository interface {

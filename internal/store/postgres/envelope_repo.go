@@ -439,13 +439,13 @@ func (r *EnvelopeRepo) Update(ctx context.Context, e *envelope.Envelope) error {
 // ---------------------------------------------------------------------------
 
 type envelopeCols struct {
-	submittedRaw          []byte
-	resolvedJSON          []byte
-	enablingCapsJSON      []byte
-	explanationJSON       []byte
-	evaluatedAt           *time.Time
-	integrityJSON         []byte
-	reviewJSON            []byte
+	submittedRaw     []byte
+	resolvedJSON     []byte
+	enablingCapsJSON []byte
+	explanationJSON  []byte
+	evaluatedAt      *time.Time
+	integrityJSON    []byte
+	reviewJSON       []byte
 }
 
 func marshalEnvelopeCols(e *envelope.Envelope) (envelopeCols, error) {
@@ -527,36 +527,36 @@ type envelopeScanner interface {
 
 func scanEnvelopeRow(row envelopeScanner) (*envelope.Envelope, error) {
 	var (
-		e                              envelope.Envelope
-		schemaVersion                  int
-		submittedRaw                   []byte
-		submittedHash                  sql.NullString
-		resolvedJSON                   []byte
-		resolvedSurfaceID              sql.NullString
-		resolvedSurfaceVersion         sql.NullInt64
-		resolvedProfileID              sql.NullString
-		resolvedProfileVersion         sql.NullInt64
-		resolvedGrantID                sql.NullString
-		resolvedAgentID                sql.NullString
-		resolvedSubjectID              sql.NullString
-		resolvedProcessID              sql.NullString
-		resolvedProcessOrigin          sql.NullString
-		resolvedProcessManaged         sql.NullBool
-		resolvedProcessReplaces        sql.NullString
-		resolvedProcessStatus          sql.NullString
-		resolvedBusinessServiceID      sql.NullString
-		resolvedBusinessServiceOrigin  sql.NullString
-		resolvedBusinessServiceManaged sql.NullBool
+		e                               envelope.Envelope
+		schemaVersion                   int
+		submittedRaw                    []byte
+		submittedHash                   sql.NullString
+		resolvedJSON                    []byte
+		resolvedSurfaceID               sql.NullString
+		resolvedSurfaceVersion          sql.NullInt64
+		resolvedProfileID               sql.NullString
+		resolvedProfileVersion          sql.NullInt64
+		resolvedGrantID                 sql.NullString
+		resolvedAgentID                 sql.NullString
+		resolvedSubjectID               sql.NullString
+		resolvedProcessID               sql.NullString
+		resolvedProcessOrigin           sql.NullString
+		resolvedProcessManaged          sql.NullBool
+		resolvedProcessReplaces         sql.NullString
+		resolvedProcessStatus           sql.NullString
+		resolvedBusinessServiceID       sql.NullString
+		resolvedBusinessServiceOrigin   sql.NullString
+		resolvedBusinessServiceManaged  sql.NullBool
 		resolvedBusinessServiceReplaces sql.NullString
-		resolvedBusinessServiceStatus  sql.NullString
-		enablingCapsJSON               []byte
-		outcome                        sql.NullString
-		reasonCode                     sql.NullString
-		explanationJSON                []byte
-		evaluatedAt                    sql.NullTime
-		integrityJSON                  []byte
-		reviewJSON                     []byte
-		closedAt                       sql.NullTime
+		resolvedBusinessServiceStatus   sql.NullString
+		enablingCapsJSON                []byte
+		outcome                         sql.NullString
+		reasonCode                      sql.NullString
+		explanationJSON                 []byte
+		evaluatedAt                     sql.NullTime
+		integrityJSON                   []byte
+		reviewJSON                      []byte
+		closedAt                        sql.NullTime
 	)
 
 	err := row.Scan(

@@ -211,4 +211,3 @@ func eventToMessage(ev *outbox.OutboxEvent) Message {
 		Headers: headers,
 	}
 }
-

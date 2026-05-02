@@ -2,7 +2,9 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 
+	"github.com/accept-io/midas/internal/aisystem"
 	"github.com/accept-io/midas/internal/businessservice"
 	"github.com/accept-io/midas/internal/capability"
 	"github.com/accept-io/midas/internal/process"
@@ -39,6 +41,26 @@ type BusinessServiceRelationshipReader interface {
 	ListByTargetBusinessService(ctx context.Context, targetID string) ([]*businessservice.BusinessServiceRelationship, error)
 }
 
+// AISystemReader is the AISystem repository subset needed for the
+// /v1/aisystems read endpoints (Epic 1, PR 2).
+type AISystemReader interface {
+	GetByID(ctx context.Context, id string) (*aisystem.AISystem, error)
+	List(ctx context.Context) ([]*aisystem.AISystem, error)
+}
+
+// AISystemVersionReader is the version repository subset needed for the
+// /v1/aisystems/{id}/versions read endpoints.
+type AISystemVersionReader interface {
+	GetByIDAndVersion(ctx context.Context, aiSystemID string, version int) (*aisystem.AISystemVersion, error)
+	ListBySystem(ctx context.Context, aiSystemID string) ([]*aisystem.AISystemVersion, error)
+}
+
+// AISystemBindingReader is the binding repository subset needed for the
+// /v1/aisystems/{id}/bindings read endpoint.
+type AISystemBindingReader interface {
+	ListByAISystem(ctx context.Context, aiSystemID string) ([]*aisystem.AISystemBinding, error)
+}
+
 // StructuralService satisfies the structuralService interface by delegating
 // to the underlying repository implementations.
 type StructuralService struct {
@@ -47,6 +69,9 @@ type StructuralService struct {
 	surfaces         ProcessSurfaceReader
 	businessServices BusinessServiceReader
 	bsRelationships  BusinessServiceRelationshipReader
+	aiSystems        AISystemReader
+	aiVersions       AISystemVersionReader
+	aiBindings       AISystemBindingReader
 }
 
 // NewStructuralService constructs a StructuralService.
@@ -71,6 +96,17 @@ func (s *StructuralService) WithBusinessServices(bs BusinessServiceReader) *Stru
 // Returns the receiver for chaining.
 func (s *StructuralService) WithBusinessServiceRelationships(r BusinessServiceRelationshipReader) *StructuralService {
 	s.bsRelationships = r
+	return s
+}
+
+// WithAISystems attaches the three AI System Registration readers
+// (Epic 1, PR 2), enabling the /v1/aisystems/* endpoints. Any of the
+// three readers may be nil — the handler returns 501 when the relevant
+// reader is missing. Returns the receiver for chaining.
+func (s *StructuralService) WithAISystems(systems AISystemReader, versions AISystemVersionReader, bindings AISystemBindingReader) *StructuralService {
+	s.aiSystems = systems
+	s.aiVersions = versions
+	s.aiBindings = bindings
 	return s
 }
 
@@ -185,6 +221,157 @@ func (s *StructuralService) ListRelationshipsForBusinessService(ctx context.Cont
 // (200 with empty arrays).
 func (s *StructuralService) HasBusinessServiceRelationships() bool {
 	return s.bsRelationships != nil
+}
+
+// ---------------------------------------------------------------------------
+// AI System Registration (Epic 1, PR 2)
+// ---------------------------------------------------------------------------
+
+// HasAISystems reports whether the AISystem reader has been wired. The
+// /v1/aisystems list and detail handlers use this to distinguish "endpoint
+// not configured" (501) from "no systems exist" (200 with empty array).
+func (s *StructuralService) HasAISystems() bool {
+	return s.aiSystems != nil
+}
+
+// HasAISystemVersions reports whether the version reader has been wired.
+// Used by the /v1/aisystems/{id}/versions handler to return 501 when the
+// reader is absent even if the parent system reader is configured.
+func (s *StructuralService) HasAISystemVersions() bool {
+	return s.aiVersions != nil
+}
+
+// HasAISystemBindings reports whether the binding reader has been wired.
+func (s *StructuralService) HasAISystemBindings() bool {
+	return s.aiBindings != nil
+}
+
+// GetAISystem returns the AI system with the given ID. Returns
+// (nil, nil) when not found OR when the reader is not configured —
+// the handler distinguishes the two via HasAISystems.
+//
+// The domain repository signals not-found via aisystem.ErrAISystemNotFound;
+// this wrapper translates that to (nil, nil) so the handler can branch on
+// the value rather than the error type.
+func (s *StructuralService) GetAISystem(ctx context.Context, id string) (*aisystem.AISystem, error) {
+	if s.aiSystems == nil {
+		return nil, nil
+	}
+	sys, err := s.aiSystems.GetByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, aisystem.ErrAISystemNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return sys, nil
+}
+
+// ListAISystems returns all AI systems. Returns an empty slice (never
+// nil) when the reader is not configured, matching the
+// ListBusinessServices posture.
+func (s *StructuralService) ListAISystems(ctx context.Context) ([]*aisystem.AISystem, error) {
+	if s.aiSystems == nil {
+		return []*aisystem.AISystem{}, nil
+	}
+	out, err := s.aiSystems.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if out == nil {
+		out = []*aisystem.AISystem{}
+	}
+	return out, nil
+}
+
+// GetAISystemVersion returns the (ai_system_id, version) tuple.
+//
+// Returns:
+//   - (nil, false, nil) when the parent AI system does not exist
+//     (handler maps to 404 on the system).
+//   - (nil, true, nil) when the parent exists but the requested version
+//     does not (handler maps to 404 on the version).
+//   - (ver, true, nil) on success.
+//
+// When the version reader is not configured, returns (nil, true, nil)
+// for any version once the parent is confirmed to exist — the handler
+// uses HasAISystemVersions to return 501 when appropriate before
+// reaching this method.
+func (s *StructuralService) GetAISystemVersion(ctx context.Context, aiSystemID string, version int) (*aisystem.AISystemVersion, bool, error) {
+	sys, err := s.GetAISystem(ctx, aiSystemID)
+	if err != nil {
+		return nil, false, err
+	}
+	if sys == nil {
+		return nil, false, nil
+	}
+	if s.aiVersions == nil {
+		return nil, true, nil
+	}
+	ver, err := s.aiVersions.GetByIDAndVersion(ctx, aiSystemID, version)
+	if err != nil {
+		if errors.Is(err, aisystem.ErrAISystemVersionNotFound) {
+			return nil, true, nil
+		}
+		return nil, true, err
+	}
+	return ver, true, nil
+}
+
+// ListAISystemVersions returns all versions for the given AI system,
+// ordered by version DESC (latest first).
+//
+// Returns:
+//   - (nil, false, nil) when the parent AI system does not exist
+//     (handler maps to 404).
+//   - (versions, true, nil) including empty slice when found.
+//
+// When the version reader is not configured, returns
+// ([]{}, true, nil) once the parent is confirmed — the handler uses
+// HasAISystemVersions for the 501 branch.
+func (s *StructuralService) ListAISystemVersions(ctx context.Context, aiSystemID string) ([]*aisystem.AISystemVersion, bool, error) {
+	sys, err := s.GetAISystem(ctx, aiSystemID)
+	if err != nil {
+		return nil, false, err
+	}
+	if sys == nil {
+		return nil, false, nil
+	}
+	if s.aiVersions == nil {
+		return []*aisystem.AISystemVersion{}, true, nil
+	}
+	versions, err := s.aiVersions.ListBySystem(ctx, aiSystemID)
+	if err != nil {
+		return nil, true, err
+	}
+	if versions == nil {
+		versions = []*aisystem.AISystemVersion{}
+	}
+	return versions, true, nil
+}
+
+// ListAISystemBindings returns all bindings for the given AI system.
+// Returns (nil, false, nil) when the parent AI system does not exist;
+// (bindings, true, nil) including empty slice when found.
+func (s *StructuralService) ListAISystemBindings(ctx context.Context, aiSystemID string) ([]*aisystem.AISystemBinding, bool, error) {
+	sys, err := s.GetAISystem(ctx, aiSystemID)
+	if err != nil {
+		return nil, false, err
+	}
+	if sys == nil {
+		return nil, false, nil
+	}
+	if s.aiBindings == nil {
+		return []*aisystem.AISystemBinding{}, true, nil
+	}
+	bindings, err := s.aiBindings.ListByAISystem(ctx, aiSystemID)
+	if err != nil {
+		return nil, true, err
+	}
+	if bindings == nil {
+		bindings = []*aisystem.AISystemBinding{}
+	}
+	return bindings, true, nil
 }
 
 // ---------------------------------------------------------------------------

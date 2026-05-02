@@ -185,8 +185,8 @@ func TestStructuralEnforced_RejectsEvaluateWithoutProcessID(t *testing.T) {
 
 // mockExplicitValidator is a test double for explicitModeValidator.
 type mockExplicitValidator struct {
-	getProcessFn      func(ctx context.Context, id string) (*process.Process, error)
-	findLatestSurfFn  func(ctx context.Context, id string) (*surface.DecisionSurface, error)
+	getProcessFn     func(ctx context.Context, id string) (*process.Process, error)
+	findLatestSurfFn func(ctx context.Context, id string) (*surface.DecisionSurface, error)
 }
 
 func (m *mockExplicitValidator) GetProcess(ctx context.Context, id string) (*process.Process, error) {
@@ -308,4 +308,3 @@ func TestExplicit_ProceedsToEvaluation_WhenStructureValid(t *testing.T) {
 		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
-

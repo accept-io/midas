@@ -29,7 +29,7 @@ type SurfaceImpactResult struct {
 	Surface  *surface.DecisionSurface
 	Profiles []*authority.AuthorityProfile // sorted by ID ascending
 	Grants   []*authority.AuthorityGrant   // sorted by ID ascending; one row per grant across all profiles
-	Agents   []*agent.Agent               // deduplicated, sorted by ID ascending
+	Agents   []*agent.Agent                // deduplicated, sorted by ID ascending
 	Summary  ImpactSummary
 	Warnings []string
 }

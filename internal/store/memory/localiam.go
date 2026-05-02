@@ -12,8 +12,8 @@ import (
 // LocalUserRepo is the in-memory implementation of localiam.UserRepository.
 // It is safe for concurrent access.
 type LocalUserRepo struct {
-	mu       sync.RWMutex
-	byID     map[string]*localiam.User
+	mu         sync.RWMutex
+	byID       map[string]*localiam.User
 	byUsername map[string]*localiam.User
 }
 

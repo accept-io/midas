@@ -25,10 +25,10 @@ const ProviderLocalIAM = "localiam"
 const SessionCookieName = "midas_session"
 
 const (
-	bootstrapUsername    = "admin"
-	bootstrapPassword    = "admin"
-	defaultSessionTTL    = 8 * time.Hour
-	bcryptCost           = bcrypt.DefaultCost
+	bootstrapUsername = "admin"
+	bootstrapPassword = "admin"
+	defaultSessionTTL = 8 * time.Hour
+	bcryptCost        = bcrypt.DefaultCost
 )
 
 // Sentinel errors returned by Service methods.

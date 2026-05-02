@@ -23,11 +23,11 @@ func TestCapabilityList_ReturnsParentCapabilityID(t *testing.T) {
 	now := time.Now()
 
 	_ = capRepo.Create(context.Background(), &capability.Capability{
-		ID:                 "cap-parent",
-		Name:               "Parent Capability",
-		Status:             "active",
-		CreatedAt:          now,
-		UpdatedAt:          now,
+		ID:        "cap-parent",
+		Name:      "Parent Capability",
+		Status:    "active",
+		CreatedAt: now,
+		UpdatedAt: now,
 	})
 	_ = capRepo.Create(context.Background(), &capability.Capability{
 		ID:                 "cap-child",
@@ -81,11 +81,11 @@ func TestCapabilityGetByID_PreservesParentCapabilityID(t *testing.T) {
 	capRepo := memory.NewCapabilityRepo()
 	now := time.Now()
 	_ = capRepo.Create(context.Background(), &capability.Capability{
-		ID:                 "cap-root",
-		Name:               "Root",
-		Status:             "active",
-		CreatedAt:          now,
-		UpdatedAt:          now,
+		ID:        "cap-root",
+		Name:      "Root",
+		Status:    "active",
+		CreatedAt: now,
+		UpdatedAt: now,
 	})
 
 	ctx := context.Background()

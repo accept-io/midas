@@ -90,11 +90,11 @@ type ProfileApprovedEvent struct {
 // Emitted when DeprecateProfile successfully transitions a profile from active
 // to deprecated.
 type ProfileDeprecatedEvent struct {
-	EventVersion  string `json:"event_version"`
-	ProfileID     string `json:"profile_id"`
-	SurfaceID     string `json:"surface_id"`
-	DeprecatedBy  string `json:"deprecated_by"`
-	Timestamp     string `json:"timestamp"`
+	EventVersion string `json:"event_version"`
+	ProfileID    string `json:"profile_id"`
+	SurfaceID    string `json:"surface_id"`
+	DeprecatedBy string `json:"deprecated_by"`
+	Timestamp    string `json:"timestamp"`
 }
 
 // GrantSuspendedEvent is the payload for EventGrantSuspended.
@@ -125,12 +125,12 @@ type GrantRevokedEvent struct {
 // GrantReinstatedEvent is the payload for EventGrantReinstated.
 // Emitted when ReinstateGrant restores a suspended grant to active.
 type GrantReinstatedEvent struct {
-	EventVersion  string `json:"event_version"`
-	GrantID       string `json:"grant_id"`
-	AgentID       string `json:"agent_id"`
-	ProfileID     string `json:"profile_id"`
-	ReinstatedBy  string `json:"reinstated_by"`
-	Timestamp     string `json:"timestamp"`
+	EventVersion string `json:"event_version"`
+	GrantID      string `json:"grant_id"`
+	AgentID      string `json:"agent_id"`
+	ProfileID    string `json:"profile_id"`
+	ReinstatedBy string `json:"reinstated_by"`
+	Timestamp    string `json:"timestamp"`
 }
 
 // ---------------------------------------------------------------------------

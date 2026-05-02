@@ -334,15 +334,15 @@ type grantScanner interface {
 // Column order must match grantColumns exactly.
 func scanGrantRow(row grantScanner) (*authority.AuthorityGrant, error) {
 	var (
-		g                 authority.AuthorityGrant
-		grantReason       sql.NullString
-		expiresAt         sql.NullTime
-		revokedAt         sql.NullTime
-		revokedBy         sql.NullString
-		revocationReason  sql.NullString
-		suspendedAt       sql.NullTime
-		suspendedBy       sql.NullString
-		suspendReason     sql.NullString
+		g                authority.AuthorityGrant
+		grantReason      sql.NullString
+		expiresAt        sql.NullTime
+		revokedAt        sql.NullTime
+		revokedBy        sql.NullString
+		revocationReason sql.NullString
+		suspendedAt      sql.NullTime
+		suspendedBy      sql.NullString
+		suspendReason    sql.NullString
 	)
 
 	err := row.Scan(

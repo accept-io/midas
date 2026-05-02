@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/accept-io/midas/internal/agent"
+	"github.com/accept-io/midas/internal/aisystem"
 	"github.com/accept-io/midas/internal/authority"
 	"github.com/accept-io/midas/internal/businessservice"
 	"github.com/accept-io/midas/internal/businessservicecapability"
@@ -92,6 +93,38 @@ type GovernanceExpectationRepository interface {
 	Create(ctx context.Context, e *governanceexpectation.GovernanceExpectation) error
 }
 
+// AISystemRepository is the apply-side persistence interface for AISystem
+// (Epic 1, PR 2). The planner uses Exists/GetByID to decide Create vs
+// Update vs NoOp; Create persists a new system; Update mutates the
+// status-honouring fields (name, description, owner, status, vendor,
+// system_type, replaces).
+type AISystemRepository interface {
+	Exists(ctx context.Context, id string) (bool, error)
+	GetByID(ctx context.Context, id string) (*aisystem.AISystem, error)
+	Create(ctx context.Context, sys *aisystem.AISystem) error
+	Update(ctx context.Context, sys *aisystem.AISystem) error
+}
+
+// AISystemVersionRepository is the apply-side persistence interface for
+// AISystemVersion. The planner uses GetByIDAndVersion to detect existing
+// (ai_system_id, version) tuples (NoOp) vs new versions (Create). There
+// is no version-bump logic — version numbers are explicit in the bundle
+// because AISystemVersion is status-honouring registry data, not a
+// review-forced control artefact.
+type AISystemVersionRepository interface {
+	GetByIDAndVersion(ctx context.Context, aiSystemID string, version int) (*aisystem.AISystemVersion, error)
+	Create(ctx context.Context, ver *aisystem.AISystemVersion) error
+}
+
+// AISystemBindingRepository is the apply-side persistence interface for
+// the AISystem ↔ MIDAS-context junction. Mirrors the BSR/BSC posture:
+// GetByID detects ID-collision (Conflict); Create persists a new row.
+// Bindings have no triple-uniqueness rule, so no list-by-triple call.
+type AISystemBindingRepository interface {
+	GetByID(ctx context.Context, id string) (*aisystem.AISystemBinding, error)
+	Create(ctx context.Context, b *aisystem.AISystemBinding) error
+}
+
 type RepositorySet struct {
 	Surfaces                     SurfaceRepository
 	Agents                       AgentRepository
@@ -103,6 +136,9 @@ type RepositorySet struct {
 	BusinessServiceCapabilities  BusinessServiceCapabilityRepository
 	BusinessServiceRelationships BusinessServiceRelationshipRepository
 	GovernanceExpectations       GovernanceExpectationRepository
+	AISystems                    AISystemRepository
+	AISystemVersions             AISystemVersionRepository
+	AISystemBindings             AISystemBindingRepository
 	ControlAudit                 controlaudit.Repository
 	// Tx, when non-nil, wraps the executor's mutation loop in an
 	// atomic transaction. The callback receives a scoped *RepositorySet

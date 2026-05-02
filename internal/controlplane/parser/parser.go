@@ -131,8 +131,29 @@ func ParseYAML(data []byte) (ParsedDocument, error) {
 		}
 		return wrapDocument(doc), nil
 
+	case types.KindAISystem:
+		var doc types.AISystemDocument
+		if err := strictUnmarshal(data, &doc); err != nil {
+			return ParsedDocument{}, fmt.Errorf("failed to parse AISystem document: %w", err)
+		}
+		return wrapDocument(doc), nil
+
+	case types.KindAISystemVersion:
+		var doc types.AISystemVersionDocument
+		if err := strictUnmarshal(data, &doc); err != nil {
+			return ParsedDocument{}, fmt.Errorf("failed to parse AISystemVersion document: %w", err)
+		}
+		return wrapDocument(doc), nil
+
+	case types.KindAISystemBinding:
+		var doc types.AISystemBindingDocument
+		if err := strictUnmarshal(data, &doc); err != nil {
+			return ParsedDocument{}, fmt.Errorf("failed to parse AISystemBinding document: %w", err)
+		}
+		return wrapDocument(doc), nil
+
 	default:
-		return ParsedDocument{}, fmt.Errorf("unsupported kind: %q (must be Surface, Agent, Profile, Grant, Capability, Process, BusinessService, BusinessServiceCapability, BusinessServiceRelationship, or GovernanceExpectation)", meta.Kind)
+		return ParsedDocument{}, fmt.Errorf("unsupported kind: %q (must be Surface, Agent, Profile, Grant, Capability, Process, BusinessService, BusinessServiceCapability, BusinessServiceRelationship, GovernanceExpectation, AISystem, AISystemVersion, or AISystemBinding)", meta.Kind)
 	}
 }
 

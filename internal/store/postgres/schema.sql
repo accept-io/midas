@@ -966,9 +966,20 @@ CREATE TABLE IF NOT EXISTS controlplane_audit_events (
                          -- persist on Postgres until #57 added them here.
                          'governance_expectation.created',
                          'governance_expectation.versioned',
-                         'governance_expectation.approved'
+                         'governance_expectation.approved',
+                         -- AI System Registration substrate (Epic 1, PR 2).
+                         -- AISystem and AISystemVersion mirror Surface/Profile
+                         -- audit emission (governance subjects). AISystemBinding
+                         -- is junction-style and intentionally audit-silent,
+                         -- mirroring BusinessServiceRelationship / BSC.
+                         'ai_system.created',
+                         'ai_system.updated',
+                         'ai_system_version.created'
                      )),
-    resource_kind    TEXT        NOT NULL CHECK (resource_kind IN ('surface', 'profile', 'agent', 'grant', 'governance_expectation')),
+    resource_kind    TEXT        NOT NULL CHECK (resource_kind IN (
+                         'surface', 'profile', 'agent', 'grant', 'governance_expectation',
+                         'ai_system', 'ai_system_version'
+                     )),
     resource_id      TEXT        NOT NULL,
     resource_version INTEGER,
     summary          TEXT        NOT NULL,
@@ -1138,6 +1149,140 @@ CREATE INDEX IF NOT EXISTS idx_bsr_target
     ON business_service_relationships (target_business_service_id);
 CREATE INDEX IF NOT EXISTS idx_bsr_type
     ON business_service_relationships (relationship_type);
+
+-- =============================================================================
+-- AI SYSTEM REGISTRATION (Epic 1, PR 2)
+-- =============================================================================
+-- ai_systems: governance subject (status-honouring, non-versioned).
+-- Mirrors the Agent posture: apply preserves whatever status the bundle
+-- declares; no review workflow, no approval endpoint.
+--
+-- Risk classification, regulatory scope, and external references are
+-- excluded by design — risk is the future risk-classification epic and
+-- ExternalRef is a cross-cutting follow-up PR within Epic 1.
+--
+-- Self-replace is rejected at the schema layer (chk_ai_systems_no_self_replace).
+-- replaces is ON DELETE SET NULL because retiring an AI system that another
+-- one supersedes should not cascade-delete the successor's history.
+CREATE TABLE IF NOT EXISTS ai_systems (
+    id            TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    description   TEXT,
+    owner         TEXT,
+    vendor        TEXT,
+    system_type   TEXT,
+    status        TEXT NOT NULL DEFAULT 'active',
+    origin        TEXT NOT NULL DEFAULT 'manual',
+    managed       BOOLEAN NOT NULL DEFAULT TRUE,
+    replaces      TEXT REFERENCES ai_systems(id) ON DELETE SET NULL,
+    created_at    TIMESTAMPTZ NOT NULL,
+    updated_at    TIMESTAMPTZ NOT NULL,
+    created_by    TEXT,
+
+    CONSTRAINT chk_ai_systems_status
+        CHECK (status IN ('active','deprecated','retired')),
+    CONSTRAINT chk_ai_systems_origin
+        CHECK (origin IN ('manual','inferred')),
+    CONSTRAINT chk_ai_systems_no_self_replace
+        CHECK (replaces IS NULL OR replaces <> id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_systems_status   ON ai_systems(status);
+CREATE INDEX IF NOT EXISTS idx_ai_systems_origin   ON ai_systems(origin);
+CREATE INDEX IF NOT EXISTS idx_ai_systems_replaces ON ai_systems(replaces) WHERE replaces IS NOT NULL;
+
+-- ai_system_versions: versioned snapshot of an AISystem at a point in
+-- time (model artifact, hash, endpoint, compliance frameworks). Composite
+-- PK (ai_system_id, version) mirrors decision_surfaces / authority_profiles.
+--
+-- Status-honouring (deliberate divergence from Surface/Profile, which are
+-- review-forced authority artefacts): apply preserves the bundle-declared
+-- status. The status enum still includes 'review' so operators can model
+-- a review/approval workflow externally if they choose.
+--
+-- ON DELETE RESTRICT on the FK to ai_systems prevents orphaning version
+-- rows; operators must retire versions before deleting the parent system.
+CREATE TABLE IF NOT EXISTS ai_system_versions (
+    ai_system_id          TEXT NOT NULL REFERENCES ai_systems(id) ON DELETE RESTRICT,
+    version               INTEGER NOT NULL,
+    release_label         TEXT,
+    model_artifact        TEXT,
+    model_hash            TEXT,
+    endpoint              TEXT,
+    status                TEXT NOT NULL,
+    effective_from        TIMESTAMPTZ NOT NULL,
+    effective_until       TIMESTAMPTZ,
+    retired_at            TIMESTAMPTZ,
+    compliance_frameworks JSONB NOT NULL DEFAULT '[]',
+    documentation_url     TEXT,
+    created_at            TIMESTAMPTZ NOT NULL,
+    updated_at            TIMESTAMPTZ NOT NULL,
+    created_by            TEXT,
+
+    PRIMARY KEY (ai_system_id, version),
+
+    CONSTRAINT chk_ai_versions_status
+        CHECK (status IN ('review','active','deprecated','retired')),
+    CONSTRAINT chk_ai_versions_version_positive
+        CHECK (version >= 1),
+    CONSTRAINT chk_ai_versions_effective_range
+        CHECK (effective_until IS NULL OR effective_until > effective_from)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_versions_system_version_desc
+    ON ai_system_versions(ai_system_id, version DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_versions_status
+    ON ai_system_versions(status);
+
+-- ai_system_bindings: immediate-apply junction linking an AISystem
+-- (optionally pinned to a specific AISystemVersion) to one or more
+-- existing MIDAS context entities. Mirrors business_service_relationships
+-- and business_service_capabilities (no Status, no EffectiveFrom).
+--
+-- At least one of business_service_id, capability_id, process_id, or
+-- surface_id must be set (chk_ai_bindings_at_least_one_target). Cross-
+-- reference consistency rules across these fields (e.g. that the linked
+-- surface lives in the linked process) are enforced at the application
+-- layer by the apply validator.
+--
+-- surface_id has no FK because surfaces are versioned (composite key);
+-- bindings reference the logical surface ID only.
+--
+-- The composite FK to ai_system_versions(ai_system_id, version) ties the
+-- optional pinned version to the parent system, preventing version drift
+-- (a binding cannot reference v3 of system A if no such row exists).
+CREATE TABLE IF NOT EXISTS ai_system_bindings (
+    id                  TEXT PRIMARY KEY,
+    ai_system_id        TEXT NOT NULL REFERENCES ai_systems(id) ON DELETE RESTRICT,
+    ai_system_version   INTEGER,
+    business_service_id TEXT REFERENCES business_services(business_service_id),
+    capability_id       TEXT REFERENCES capabilities(capability_id),
+    process_id          TEXT REFERENCES processes(process_id),
+    surface_id          TEXT,
+    role                TEXT,
+    description         TEXT,
+    created_at          TIMESTAMPTZ NOT NULL,
+    created_by          TEXT,
+
+    CONSTRAINT fk_ai_bindings_version
+        FOREIGN KEY (ai_system_id, ai_system_version)
+        REFERENCES ai_system_versions(ai_system_id, version)
+        ON DELETE RESTRICT,
+
+    CONSTRAINT chk_ai_bindings_at_least_one_target
+        CHECK (
+            business_service_id IS NOT NULL
+            OR capability_id IS NOT NULL
+            OR process_id IS NOT NULL
+            OR surface_id IS NOT NULL
+        )
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_bindings_ai_system     ON ai_system_bindings(ai_system_id);
+CREATE INDEX IF NOT EXISTS idx_ai_bindings_business_svc  ON ai_system_bindings(business_service_id) WHERE business_service_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_ai_bindings_capability    ON ai_system_bindings(capability_id) WHERE capability_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_ai_bindings_process       ON ai_system_bindings(process_id) WHERE process_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_ai_bindings_surface       ON ai_system_bindings(surface_id) WHERE surface_id IS NOT NULL;
 
 -- =============================================================================
 -- VIEWS
@@ -1469,3 +1614,60 @@ CREATE INDEX IF NOT EXISTS idx_platform_sessions_user_id
     ON platform_sessions (user_id) WHERE user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_platform_sessions_expires_at
     ON platform_sessions (expires_at);
+
+-- =============================================================================
+-- Idempotent CHECK extensions for controlplane_audit_events (Epic 1, PR 2)
+-- =============================================================================
+-- The CHECK lists on action and resource_kind are extended for the AI
+-- System Registration substrate. The CREATE TABLE IF NOT EXISTS above
+-- bakes the new lists into fresh installs; this block migrates dev DBs
+-- that were created against the prior list (without the ai_system /
+-- ai_system_version values).
+--
+-- Mirrors the precedent set by issue #57 for governance_expectation:
+-- omitting these values from the CHECK silently breaks audit emission
+-- via the ADR-041b best-effort swallow, so we extend the list on every
+-- startup rather than relying on operators to rebuild the DB.
+DO $$ BEGIN
+    -- Drop the existing anonymous CHECKs and re-add with the extended
+    -- value lists. Anonymous CHECKs receive default names of the form
+    -- <table>_<column>_check.
+    ALTER TABLE controlplane_audit_events
+        DROP CONSTRAINT IF EXISTS controlplane_audit_events_action_check;
+    ALTER TABLE controlplane_audit_events
+        ADD CONSTRAINT controlplane_audit_events_action_check
+        CHECK (action IN (
+            'surface.created',
+            'profile.created',
+            'profile.versioned',
+            'agent.created',
+            'grant.created',
+            'surface.approved',
+            'surface.deprecated',
+            'profile.approved',
+            'profile.deprecated',
+            'grant.suspended',
+            'grant.revoked',
+            'grant.reinstated',
+            'governance_expectation.created',
+            'governance_expectation.versioned',
+            'governance_expectation.approved',
+            'ai_system.created',
+            'ai_system.updated',
+            'ai_system_version.created'
+        ));
+
+    ALTER TABLE controlplane_audit_events
+        DROP CONSTRAINT IF EXISTS controlplane_audit_events_resource_kind_check;
+    ALTER TABLE controlplane_audit_events
+        ADD CONSTRAINT controlplane_audit_events_resource_kind_check
+        CHECK (resource_kind IN (
+            'surface',
+            'profile',
+            'agent',
+            'grant',
+            'governance_expectation',
+            'ai_system',
+            'ai_system_version'
+        ));
+END $$;

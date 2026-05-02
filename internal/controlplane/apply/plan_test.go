@@ -83,7 +83,7 @@ func invalidSurface(id string) parser.ParsedDocument {
 				Name: "", // required — triggers validation failure
 			},
 			Spec: types.SurfaceSpec{
-				Category: "",  // required — triggers validation failure
+				Category: "", // required — triggers validation failure
 				RiskTier: "high",
 				Status:   "active",
 			},

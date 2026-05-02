@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/accept-io/midas/internal/agent"
+	"github.com/accept-io/midas/internal/aisystem"
 	"github.com/accept-io/midas/internal/audit"
 	"github.com/accept-io/midas/internal/authority"
 	"github.com/accept-io/midas/internal/businessservice"
@@ -597,6 +598,16 @@ func NewRepositories() *store.Repositories {
 	surfRepo := NewSurfaceRepo()
 	surfRepo.processes = procs
 
+	aiSystemRepo := NewAISystemRepo()
+	aiVersionRepo := NewAISystemVersionRepo()
+	aiVersionRepo.aiSystems = aiSystemRepo
+	aiBindingRepo := NewAISystemBindingRepo()
+	aiBindingRepo.aiSystems = aiSystemRepo
+	aiBindingRepo.aiVersions = aiVersionRepo
+	aiBindingRepo.bsvcs = bsvcs
+	aiBindingRepo.capabilities = caps
+	aiBindingRepo.processes = procs
+
 	return &store.Repositories{
 		Surfaces:                     surfRepo,
 		Agents:                       NewAgentRepo(),
@@ -615,6 +626,9 @@ func NewRepositories() *store.Repositories {
 		BusinessServiceCapabilities:  bscRepo,
 		BusinessServiceRelationships: bsrRepo,
 		GovernanceExpectations:       NewGovernanceExpectationRepo(),
+		AISystems:                    aiSystemRepo,
+		AISystemVersions:             aiVersionRepo,
+		AISystemBindings:             aiBindingRepo,
 	}
 }
 
@@ -628,3 +642,6 @@ var _ process.ProcessRepository = (*ProcessRepo)(nil)
 var _ businessservice.BusinessServiceRepository = (*BusinessServiceRepo)(nil)
 var _ businessservicecapability.BusinessServiceCapabilityRepository = (*BusinessServiceCapabilityRepo)(nil)
 var _ governanceexpectation.Repository = (*GovernanceExpectationRepo)(nil)
+var _ aisystem.SystemRepository = (*AISystemRepo)(nil)
+var _ aisystem.VersionRepository = (*AISystemVersionRepo)(nil)
+var _ aisystem.BindingRepository = (*AISystemBindingRepo)(nil)

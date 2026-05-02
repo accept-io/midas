@@ -188,6 +188,9 @@ func main() {
 		BusinessServiceCapabilities:  repos.BusinessServiceCapabilities,
 		BusinessServiceRelationships: repos.BusinessServiceRelationships,
 		GovernanceExpectations:       repos.GovernanceExpectations,
+		AISystems:                    repos.AISystems,
+		AISystemVersions:             repos.AISystemVersions,
+		AISystemBindings:             repos.AISystemBindings,
 		Tx:                           applyTx,
 	})
 
@@ -202,7 +205,8 @@ func main() {
 	introspectionSvc := httpapi.NewIntrospectionServiceFull(repos.Surfaces, repos.Profiles, repos.Agents, repos.Grants)
 	structuralSvc := httpapi.NewStructuralService(repos.Capabilities, repos.Processes, repos.Surfaces).
 		WithBusinessServices(repos.BusinessServices).
-		WithBusinessServiceRelationships(repos.BusinessServiceRelationships)
+		WithBusinessServiceRelationships(repos.BusinessServiceRelationships).
+		WithAISystems(repos.AISystems, repos.AISystemVersions, repos.AISystemBindings)
 	explicitValidationSvc := httpapi.NewExplicitValidationService(repos.Processes, repos.Surfaces)
 
 	var controlAuditSvc *httpapi.ControlAuditReadService

@@ -139,4 +139,3 @@ func (r *ProcessRepo) List(ctx context.Context) ([]*process.Process, error) {
 	}
 	return out, rows.Err()
 }
-

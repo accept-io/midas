@@ -224,6 +224,21 @@ func newRepositories(db sqltx.DBTX) (*store.Repositories, error) {
 		return nil, err
 	}
 
+	aiSystems, err := NewAISystemRepo(db)
+	if err != nil {
+		return nil, err
+	}
+
+	aiSystemVersions, err := NewAISystemVersionRepo(db)
+	if err != nil {
+		return nil, err
+	}
+
+	aiSystemBindings, err := NewAISystemBindingRepo(db)
+	if err != nil {
+		return nil, err
+	}
+
 	return &store.Repositories{
 		Capabilities:                 caps,
 		Processes:                    procs,
@@ -242,5 +257,8 @@ func newRepositories(db sqltx.DBTX) (*store.Repositories, error) {
 		BusinessServiceCapabilities:  bsCaps,
 		BusinessServiceRelationships: bsRelationships,
 		GovernanceExpectations:       governanceExpectations,
+		AISystems:                    aiSystems,
+		AISystemVersions:             aiSystemVersions,
+		AISystemBindings:             aiSystemBindings,
 	}, nil
 }

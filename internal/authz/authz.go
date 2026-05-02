@@ -58,6 +58,9 @@ const (
 	PermAgentWrite                       Permission = "agent:write"
 	PermGrantWrite                       Permission = "grant:write"
 	PermGovernanceExpectationWrite       Permission = "governanceexpectation:write"
+	PermAISystemWrite                    Permission = "aisystem:write"
+	PermAISystemVersionWrite             Permission = "aisystemversion:write"
+	PermAISystemBindingWrite             Permission = "aisystembinding:write"
 )
 
 // Lifecycle-action permissions. Each sub-action of surface/profile/grant
@@ -75,9 +78,10 @@ const (
 	PermGovernanceExpectationApprove Permission = "governanceexpectation:approve"
 )
 
-// allControlPlaneWritePermissions is the canonical 19-permission set that
-// platform.admin expands to. Declared as a slice so tests can iterate the
-// full matrix; exposed as a copy via AllControlPlaneWritePermissions.
+// allControlPlaneWritePermissions is the canonical control-plane write
+// permission set that platform.admin expands to. Declared as a slice so
+// tests can iterate the full matrix; exposed as a copy via
+// AllControlPlaneWritePermissions.
 //
 // Order is stable by category: endpoints, per-Kind writes, lifecycle actions.
 // Adding a new permission requires updating this slice AND the platform.admin
@@ -96,6 +100,9 @@ var allControlPlaneWritePermissions = []Permission{
 	PermAgentWrite,
 	PermGrantWrite,
 	PermGovernanceExpectationWrite,
+	PermAISystemWrite,
+	PermAISystemVersionWrite,
+	PermAISystemBindingWrite,
 
 	PermSurfaceApprove,
 	PermSurfaceDeprecate,
@@ -238,6 +245,12 @@ func KindToWritePermission(kind string) Permission {
 		return PermGrantWrite
 	case "GovernanceExpectation":
 		return PermGovernanceExpectationWrite
+	case "AISystem":
+		return PermAISystemWrite
+	case "AISystemVersion":
+		return PermAISystemVersionWrite
+	case "AISystemBinding":
+		return PermAISystemBindingWrite
 	default:
 		return ""
 	}

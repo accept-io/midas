@@ -67,6 +67,24 @@ const (
 	// — enough to reconstruct "who approved which version of which
 	// expectation when".
 	ActionGovernanceExpectationApproved Action = "governance_expectation.approved"
+
+	// ActionAISystemCreated is emitted when an AISystem is applied for
+	// the first time. AISystem is status-honouring (no review-forcing),
+	// but governance subjects (AISystem, AISystemVersion) emit audit
+	// records mirroring the Surface/Profile precedent — auditability
+	// of the registry matters even though there is no approval workflow.
+	ActionAISystemCreated Action = "ai_system.created"
+
+	// ActionAISystemUpdated is emitted when an existing AISystem's
+	// mutable fields (name, description, owner, status, etc.) are
+	// changed via apply.
+	ActionAISystemUpdated Action = "ai_system.updated"
+
+	// ActionAISystemVersionCreated is emitted when a new AISystemVersion
+	// row is persisted (a new (ai_system_id, version) tuple). There is
+	// no AISystemVersion update or approval action — versions are
+	// write-once and status is honoured from the bundle.
+	ActionAISystemVersionCreated Action = "ai_system_version.created"
 )
 
 // ResourceKind mirrors the control-plane document kinds to avoid a circular import.
@@ -76,6 +94,8 @@ const (
 	ResourceKindAgent                 = "agent"
 	ResourceKindGrant                 = "grant"
 	ResourceKindGovernanceExpectation = "governance_expectation"
+	ResourceKindAISystem              = "ai_system"
+	ResourceKindAISystemVersion       = "ai_system_version"
 )
 
 // Metadata carries structured context attached to a ControlAuditRecord.
@@ -334,6 +354,54 @@ func NewGovernanceExpectationApprovedRecord(actor, expectationID string, version
 		expectationID,
 		intPtr(version),
 		"governance expectation approved: "+expectationID+" v"+itoa(version),
+		nil,
+	)
+}
+
+// NewAISystemCreatedRecord builds a record for a first-time AISystem
+// creation. Mirrors NewAgentCreatedRecord in shape (no version field —
+// AISystem is non-versioned).
+func NewAISystemCreatedRecord(actor, aiSystemID string) *ControlAuditRecord {
+	return newRecord(
+		actor,
+		ActionAISystemCreated,
+		ResourceKindAISystem,
+		aiSystemID,
+		nil,
+		"ai system created: "+aiSystemID,
+		nil,
+	)
+}
+
+// NewAISystemUpdatedRecord builds a record for an update to an existing
+// AISystem. The mutable surface (name, description, owner, status,
+// vendor, system_type) is captured implicitly via the resource_id —
+// a follow-up may attach a structured diff in metadata.
+func NewAISystemUpdatedRecord(actor, aiSystemID string) *ControlAuditRecord {
+	return newRecord(
+		actor,
+		ActionAISystemUpdated,
+		ResourceKindAISystem,
+		aiSystemID,
+		nil,
+		"ai system updated: "+aiSystemID,
+		nil,
+	)
+}
+
+// NewAISystemVersionCreatedRecord builds a record for a new
+// AISystemVersion. AISystemVersion is status-honouring: there is no
+// "versioned" / "approved" companion action, only this single create
+// event. The version number is captured in resource_version for
+// reconstructing "which version of which system was registered when".
+func NewAISystemVersionCreatedRecord(actor, aiSystemID string, version int) *ControlAuditRecord {
+	return newRecord(
+		actor,
+		ActionAISystemVersionCreated,
+		ResourceKindAISystemVersion,
+		aiSystemID,
+		intPtr(version),
+		"ai system version created: "+aiSystemID+" v"+itoa(version),
 		nil,
 	)
 }

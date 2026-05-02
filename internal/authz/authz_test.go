@@ -12,24 +12,27 @@ import (
 // T1 — Permission inventory and naming discipline
 // ---------------------------------------------------------------------------
 
-// TestAllControlPlaneWritePermissions_Count guards the v1 19-permission
-// invariant. The v1 service-led model removed PermProcessCapabilityWrite
-// and PermProcessBusinessServiceWrite alongside the obsolete
-// ProcessCapability and ProcessBusinessService Kinds (ADR-XXX),
-// reintroduced a single PermBusinessServiceCapabilityWrite to gate the
-// new BusinessServiceCapability junction Kind, and removed
+// TestAllControlPlaneWritePermissions_Count guards the control-plane
+// permission count invariant. The v1 service-led model removed
+// PermProcessCapabilityWrite and PermProcessBusinessServiceWrite
+// alongside the obsolete ProcessCapability and ProcessBusinessService
+// Kinds (ADR-XXX), reintroduced a single PermBusinessServiceCapabilityWrite
+// to gate the new BusinessServiceCapability junction Kind, and removed
 // PermControlplanePromote and PermControlplaneCleanup with the inference
 // subsystem. Issue #52 added PermGovernanceExpectationWrite to gate the
 // new GovernanceExpectation Kind; issue #57 added
 // PermGovernanceExpectationApprove for the approval lifecycle endpoint.
+// Epic 1 PR 1 added PermBusinessServiceRelationshipWrite. Epic 1 PR 2
+// added PermAISystemWrite, PermAISystemVersionWrite, and
+// PermAISystemBindingWrite for the AI System Registration substrate.
 // Adding or removing a permission requires updating this count
 // deliberately, which forces a review of the corresponding
 // platform.admin bundle.
 func TestAllControlPlaneWritePermissions_Count(t *testing.T) {
 	got := authz.AllControlPlaneWritePermissions()
-	// 20 = 19 prior + PermBusinessServiceRelationshipWrite (Epic 1, PR 1).
-	if len(got) != 20 {
-		t.Errorf("want 20 control-plane write permissions, got %d", len(got))
+	// 23 = 20 prior + 3 AI System write permissions (Epic 1, PR 2).
+	if len(got) != 23 {
+		t.Errorf("want 23 control-plane write permissions, got %d", len(got))
 	}
 }
 
@@ -330,6 +333,9 @@ func TestKindToWritePermission_AllKnownKinds(t *testing.T) {
 		"Agent":                       authz.PermAgentWrite,
 		"Grant":                       authz.PermGrantWrite,
 		"GovernanceExpectation":       authz.PermGovernanceExpectationWrite,
+		"AISystem":                    authz.PermAISystemWrite,
+		"AISystemVersion":             authz.PermAISystemVersionWrite,
+		"AISystemBinding":             authz.PermAISystemBindingWrite,
 	}
 	for kind, wantPerm := range want {
 		got := authz.KindToWritePermission(kind)

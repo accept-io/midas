@@ -80,7 +80,6 @@ func hierBSDoc(id string) parser.ParsedDocument {
 	}
 }
 
-
 func assertNoErrors(t *testing.T, result types.ApplyResult) {
 	t.Helper()
 	if result.ValidationErrorCount() != 0 {

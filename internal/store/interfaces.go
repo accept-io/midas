@@ -3,6 +3,7 @@ package store
 import (
 	"github.com/accept-io/midas/internal/adminaudit"
 	"github.com/accept-io/midas/internal/agent"
+	"github.com/accept-io/midas/internal/aisystem"
 	"github.com/accept-io/midas/internal/audit"
 	"github.com/accept-io/midas/internal/authority"
 	"github.com/accept-io/midas/internal/businessservice"
@@ -53,4 +54,12 @@ type Repositories struct {
 	// added in a later issue. Nil-safe: emission/lookup sites must check
 	// for nil before use, matching the convention for other newer repos.
 	GovernanceExpectations governanceexpectation.Repository
+
+	// AI System Registration substrate (Epic 1, PR 2). All three
+	// repositories are nil-safe at apply / read time so unconfigured
+	// deployments degrade gracefully — mirrors the BSR/GovernanceExpectation
+	// posture for newer repos.
+	AISystems        aisystem.SystemRepository
+	AISystemVersions aisystem.VersionRepository
+	AISystemBindings aisystem.BindingRepository
 }
