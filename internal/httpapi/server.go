@@ -345,7 +345,11 @@ type processResponse struct {
 	UpdatedAt         time.Time `json:"updated_at"`
 }
 
-// businessServiceResponse is the wire format for GET /v1/businessservices/{id} and list items.
+// businessServiceResponse is the wire format for GET /v1/businessservices/{id}
+// and individual items inside businessServicesResponse.
+//
+// owner_id was added by the live-BS-selector change. It is purely additive
+// (omitempty), so existing clients that ignore the field continue to work.
 type businessServiceResponse struct {
 	ID              string               `json:"id"`
 	Name            string               `json:"name"`
@@ -353,9 +357,19 @@ type businessServiceResponse struct {
 	ServiceType     string               `json:"service_type"`
 	RegulatoryScope string               `json:"regulatory_scope,omitempty"`
 	Status          string               `json:"status"`
+	OwnerID         string               `json:"owner_id,omitempty"`
 	CreatedAt       time.Time            `json:"created_at"`
 	UpdatedAt       time.Time            `json:"updated_at"`
 	ExternalRef     *externalRefResponse `json:"external_ref"`
+}
+
+// businessServicesResponse wraps the list endpoint payload. The
+// `business_services` envelope keeps the response self-describing and
+// matches the project's modern list-shape convention (see
+// aiSystemsResponse). The earlier bare-array shape was migrated by the
+// live-BS-selector change; existing tests were updated in lockstep.
+type businessServicesResponse struct {
+	BusinessServices []businessServiceResponse `json:"business_services"`
 }
 
 // businessServiceRelationshipResponse is one item in the
@@ -2921,10 +2935,24 @@ func toBusinessServiceResponse(s *businessservice.BusinessService) businessServi
 		ServiceType:     string(s.ServiceType),
 		RegulatoryScope: s.RegulatoryScope,
 		Status:          s.Status,
+		OwnerID:         s.OwnerID,
 		CreatedAt:       s.CreatedAt,
 		UpdatedAt:       s.UpdatedAt,
 		ExternalRef:     toExternalRefResponse(s.ExternalRef),
 	}
+}
+
+// toBusinessServicesResponse wraps a list of BusinessServices in the
+// `business_services` envelope. Always returns an initialised slice so
+// the JSON renders as `[]` for an empty store, never `null`.
+func toBusinessServicesResponse(svcs []*businessservice.BusinessService) businessServicesResponse {
+	out := businessServicesResponse{
+		BusinessServices: make([]businessServiceResponse, 0, len(svcs)),
+	}
+	for _, s := range svcs {
+		out.BusinessServices = append(out.BusinessServices, toBusinessServiceResponse(s))
+	}
+	return out
 }
 
 // toBusinessServiceRelationshipResponse maps one domain BSR row into the
@@ -3239,6 +3267,11 @@ func (s *Server) handleGetProcessSurfaces(w http.ResponseWriter, r *http.Request
 }
 
 // handleListBusinessServices serves GET /v1/businessservices.
+//
+// Response shape: {"business_services": [...]} — an object envelope keyed
+// by the resource collection name. The envelope replaced the previous
+// bare-array shape when the live BS selector landed; keep parity with
+// aiSystemsResponse for shape consistency across modern list endpoints.
 func (s *Server) handleListBusinessServices(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		methodNotAllowed(w, http.MethodGet)
@@ -3253,11 +3286,7 @@ func (s *Server) handleListBusinessServices(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	out := make([]businessServiceResponse, 0, len(svcs))
-	for _, s := range svcs {
-		out = append(out, toBusinessServiceResponse(s))
-	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, toBusinessServicesResponse(svcs))
 }
 
 // handleGetBusinessService serves GET /v1/businessservices/{id} and the

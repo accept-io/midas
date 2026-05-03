@@ -259,6 +259,90 @@
     50%      { opacity: 0.4; }
   }
 
+  /* ──────────────────────────────────────────────────────────────────────
+     Collapsible sidebar
+     ────────────────────────────────────────────────────────────────────── */
+
+  /* The toggle button lives at the foot of the .shell-brand block so it
+     sits below the brand text in expanded mode and below the bare logo
+     in collapsed mode. Right-aligned when expanded; centre-aligned when
+     collapsed (the brand row no longer carries text in collapsed state). */
+  .shell-sidebar-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 22px;
+    margin-top: 12px;
+    margin-left: auto;
+    background: var(--surface-container-low);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 4px;
+    color: var(--slate-400);
+    cursor: pointer;
+    font-family: inherit;
+    padding: 0;
+    font-size: 14px;
+    line-height: 1;
+  }
+  .shell-sidebar-toggle:hover {
+    background: var(--surface-container);
+    color: var(--on-surface);
+  }
+  .shell-sidebar-toggle:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 1px;
+  }
+
+  /* Smooth transition so the layout shift looks intentional rather than
+     a jump-cut. Width / margin-left / left are the four properties that
+     read --sidebar-width via var() and animate when the variable flips. */
+  .shell-sidebar { transition: width 0.18s ease-out; }
+  .shell-header  { transition: left 0.18s ease-out; }
+  .shell-footer  { transition: left 0.18s ease-out; }
+  .shell-main    { transition: margin-left 0.18s ease-out; }
+
+  /* Collapsed-state activation. Setting the class on <body> overrides
+     the :root --sidebar-width so all four shell elements (sidebar,
+     header, main, footer) shrink in lockstep. Header chips, the
+     execution-mode toggle, and the rest of the workbench are unaffected
+     because they sit INSIDE .shell-main, which simply gains extra
+     horizontal room when the variable shrinks. */
+  body.sidebar-collapsed { --sidebar-width: 56px; }
+
+  /* Hide decorative elements entirely in collapsed mode — they have no
+     accessible content to preserve. */
+  body.sidebar-collapsed .shell-subtitle,
+  body.sidebar-collapsed .shell-control-plane-card,
+  body.sidebar-collapsed .shell-sidebar-footer span:not(.pulse) {
+    display: none;
+  }
+
+  /* Visually hide elements whose text is the accessible name (brand
+     title; nav-item label spans). Standard visually-hidden technique
+     keeps screen-reader access while reclaiming visual space. */
+  body.sidebar-collapsed .shell-brand-title,
+  body.sidebar-collapsed .shell-nav-item > span:not(.shell-nav-glyph) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  /* Collapsed-mode padding + alignment: brand block tightens, brand row
+     centres the logo bars, nav items centre their glyph, footer centres
+     the pulse, sidebar toggle moves to centre. */
+  body.sidebar-collapsed .shell-brand        { padding: 14px 8px; }
+  body.sidebar-collapsed .shell-brand-row    { justify-content: center; gap: 0; }
+  body.sidebar-collapsed .shell-nav-item     { justify-content: center; padding: 11px 0; }
+  body.sidebar-collapsed .shell-sidebar-footer { padding: 18px 0; justify-content: center; }
+  body.sidebar-collapsed .shell-sidebar-toggle { margin-left: auto; margin-right: auto; }
+
   .shell-header {
     position: fixed;
     top: 0;
@@ -2533,6 +2617,46 @@
     text-align: center;
   }
 
+  /* Live BS-list state strips. The selector now consults the live
+     /v1/businessservices endpoint and renders one of three explicit
+     states (loading / empty / error) instead of falling back to the
+     demo constant. Each strip uses the existing dark workbench palette. */
+  .services-bs-loading,
+  .services-bs-empty,
+  .services-bs-error {
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    border-radius: 6px;
+    padding: 14px 16px;
+    font-size: 12px;
+    color: var(--slate-400);
+    line-height: 1.5;
+  }
+  .services-bs-empty strong,
+  .services-bs-error strong {
+    color: var(--on-surface);
+    font-weight: 600;
+    display: block;
+    margin-bottom: 4px;
+  }
+  .services-bs-error {
+    border-left: 4px solid var(--error);
+    color: var(--error);
+  }
+  .services-bs-error strong { color: var(--error); }
+  .services-bs-card-status {
+    font-size: 9px;
+    background: var(--surface-container-high);
+    color: var(--slate-300);
+    border: 1px solid var(--outline-variant);
+    border-radius: 3px;
+    padding: 2px 7px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
   .services-center {
     background: var(--surface-container-low);
     border: 1px solid var(--outline-variant);
@@ -2828,6 +2952,589 @@
   }
 
   /* ──────────────────────────────────────────────────────────────────────
+     Services view — catalogue → record → map navigation
+     Replaces the previous three-column overview/map mode-toggle layout
+     with a sub-view state machine. Class names are entity-agnostic
+     where reasonable so future record pages (Capability, Process, AI
+     System) can adopt the same patterns without renames.
+     ────────────────────────────────────────────────────────────────────── */
+
+  .services-subview { display: none; }
+  .services-subview.active { display: block; }
+
+  /* Catalogue page — full-width list of business services */
+  .services-catalogue { padding: 0; }
+  .services-catalogue-header {
+    margin-bottom: 18px;
+  }
+  .services-catalogue-title {
+    font-size: 22px;
+    font-weight: 700;
+    font-family: var(--font-display);
+    color: var(--on-surface);
+    letter-spacing: -0.01em;
+    margin-bottom: 4px;
+  }
+  .services-catalogue-subtitle {
+    font-size: 12px;
+    color: var(--slate-500);
+    margin-bottom: 12px;
+  }
+  .services-catalogue-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 14px;
+  }
+  /* Catalogue cards extend the existing .services-bs-card styling but
+     the catalogue list re-flows them as a responsive grid rather than
+     a single-column sidebar. The catalogue card adds a meta footer
+     row showing service_type / owner / EXT-REF. */
+  .services-catalogue .services-bs-card-meta {
+    margin-top: 10px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    font-size: 11px;
+    color: var(--slate-400);
+  }
+  .services-bs-card-type,
+  .services-bs-card-owner,
+  .services-bs-card-extref {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 3px;
+    background: var(--surface-container-high);
+    color: var(--slate-300);
+    border: 1px solid var(--outline-variant);
+  }
+  .services-bs-card-extref {
+    color: var(--primary);
+    border-color: rgba(173,198,255,0.30);
+  }
+
+  /* Record page — header + identity strip + sectioned body */
+  .services-record { padding: 0; }
+  .services-record-header {
+    margin-bottom: 18px;
+  }
+  .services-record-back {
+    background: transparent;
+    border: 0;
+    color: var(--primary);
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    padding: 0;
+    margin-bottom: 8px;
+  }
+  .services-record-back:hover { text-decoration: underline; }
+  .services-record-title-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+  }
+  .services-record-name {
+    font-size: 22px;
+    font-weight: 700;
+    font-family: var(--font-display);
+    color: var(--on-surface);
+    letter-spacing: -0.01em;
+  }
+  .services-record-id {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--primary);
+    background: rgba(173,198,255,0.10);
+    padding: 3px 9px;
+    border-radius: 4px;
+  }
+  .services-record-status {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 700;
+    padding: 3px 9px;
+    border-radius: 3px;
+    background: var(--surface-container-high);
+    color: var(--slate-300);
+    border: 1px solid var(--outline-variant);
+  }
+  .services-record-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .services-record-body {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+  .services-record-section {
+    background: var(--surface-container-low);
+    border: 1px solid var(--outline-variant);
+    border-radius: 6px;
+    padding: 16px 20px;
+  }
+  .services-record-section-title {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--slate-500);
+    margin-bottom: 12px;
+  }
+  .services-record-identity {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 14px;
+    font-size: 11px;
+  }
+  .services-record-identity-pill {
+    background: var(--surface-container-high);
+    border: 1px solid var(--outline-variant);
+    border-radius: 999px;
+    padding: 4px 10px;
+    color: var(--slate-300);
+    font-family: var(--font-mono);
+  }
+  .services-record-identity-pill .key {
+    color: var(--slate-500);
+    text-transform: uppercase;
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    margin-right: 4px;
+  }
+
+  /* Generic field grid: two-column key/value pairs, responsive */
+  .services-record-field-grid {
+    display: grid;
+    grid-template-columns: minmax(140px, max-content) 1fr;
+    column-gap: 18px;
+    row-gap: 8px;
+  }
+  .services-record-field-key {
+    color: var(--slate-500);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 700;
+    padding-top: 2px;
+  }
+  .services-record-field-val {
+    color: var(--on-surface);
+    font-size: 12px;
+    font-family: var(--font-mono);
+    word-break: break-word;
+  }
+  .services-record-field-val.muted { color: var(--slate-500); font-style: italic; }
+
+  /* Generic related list: rows with id/name/status + per-row link
+     affordance. Used by Capabilities / Processes / Surfaces / AI
+     systems / Related services on the BS record page. */
+  .services-related-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .services-related-row {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding: 8px 12px;
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    border-radius: 4px;
+    font-size: 12px;
+  }
+  .services-related-row .id {
+    font-family: var(--font-mono);
+    color: var(--primary);
+    font-size: 10px;
+    background: rgba(173,198,255,0.10);
+    padding: 2px 7px;
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+  .services-related-row .name {
+    color: var(--on-surface);
+    font-weight: 600;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .services-related-row .meta {
+    color: var(--slate-400);
+    font-size: 10px;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .services-related-row .badge {
+    font-size: 9px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    border: 1px solid var(--outline-variant);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 700;
+  }
+  .services-related-row .badge.ok    { color: var(--secondary); border-color: rgba(78,222,163,0.40); }
+  .services-related-row .badge.warn  { color: #f0b67a;          border-color: rgba(240,182,122,0.45); }
+  .services-related-row .badge.bind  { color: var(--primary);   border-color: rgba(173,198,255,0.40); }
+  .services-record-empty {
+    color: var(--slate-500);
+    font-size: 12px;
+    font-style: italic;
+    padding: 6px 0;
+  }
+
+  /* Governance summary chip strip */
+  .services-record-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .services-record-chip {
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    border-radius: 4px;
+    padding: 8px 12px;
+    min-width: 110px;
+  }
+  .services-record-chip .label {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--slate-500);
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+  .services-record-chip .value {
+    font-family: var(--font-display);
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--on-surface);
+    line-height: 1.1;
+  }
+  .services-record-chip.gap .value { color: #f0b67a; }
+
+  /* Loading / error strips on the record page */
+  .services-record-loading,
+  .services-record-error {
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    border-radius: 6px;
+    padding: 18px 20px;
+    color: var(--slate-400);
+    font-size: 12px;
+  }
+  .services-record-error {
+    border-left: 4px solid var(--error);
+    color: var(--error);
+  }
+
+  /* ──────────────────────────────────────────────────────────────────────
+     Capabilities catalogue + record (Capabilities view)
+     Mirrors the Services catalogue/record visual language. Class names
+     are capabilities-* so they can later be reused on a per-entity-type
+     basis (Process, Surface, AI System catalogues) without re-styling.
+     The rules deliberately reuse the same colour tokens, padding scale
+     and typography as the Services equivalents — visual consistency
+     across catalogues is intentional. There is no map sub-view here:
+     no per-capability /governance-map endpoint exists today, so the
+     map markup is omitted entirely (rather than disabled).
+     ────────────────────────────────────────────────────────────────── */
+
+  .capabilities-subview { display: none; }
+  .capabilities-subview.active { display: block; }
+
+  .capabilities-catalogue { padding: 0; }
+  .capabilities-catalogue-header { margin-bottom: 18px; }
+  .capabilities-catalogue-title {
+    font-size: 22px;
+    font-weight: 700;
+    font-family: var(--font-display);
+    color: var(--on-surface);
+    letter-spacing: -0.01em;
+    margin-bottom: 4px;
+  }
+  .capabilities-catalogue-subtitle {
+    font-size: 12px;
+    color: var(--slate-500);
+    margin-bottom: 12px;
+  }
+  .capabilities-search {
+    width: 100%;
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    border-radius: 4px;
+    padding: 8px 12px;
+    color: var(--on-surface);
+    font-family: inherit;
+    font-size: 13px;
+  }
+  .capabilities-search:focus {
+    outline: 2px solid var(--primary, #4ea1ff);
+    outline-offset: 1px;
+  }
+  .capabilities-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 14px;
+    margin-top: 14px;
+  }
+
+  .capabilities-card {
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    border-radius: 6px;
+    padding: 14px 16px;
+    cursor: pointer;
+    transition: background 0.12s, border-color 0.12s;
+    text-align: left;
+    font-family: inherit;
+    color: inherit;
+    width: 100%;
+    display: block;
+  }
+  .capabilities-card:hover { background: var(--surface-container-high); }
+  .capabilities-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+  .capabilities-card-id {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--primary);
+    background: rgba(173,198,255,0.10);
+    padding: 2px 8px;
+    border-radius: 4px;
+  }
+  .capabilities-card-status {
+    font-size: 9px;
+    background: var(--surface-container-high);
+    color: var(--slate-300);
+    border: 1px solid var(--outline-variant);
+    border-radius: 3px;
+    padding: 2px 7px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 700;
+  }
+  .capabilities-card-name {
+    font-size: 16px;
+    font-weight: 700;
+    font-family: var(--font-display);
+    color: var(--on-surface);
+    margin-bottom: 6px;
+    letter-spacing: -0.01em;
+  }
+  .capabilities-card-desc {
+    font-size: 12px;
+    color: var(--slate-400);
+    margin-bottom: 8px;
+    line-height: 1.4;
+  }
+  .capabilities-card-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    font-size: 11px;
+    color: var(--slate-400);
+  }
+  .capabilities-card-owner {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 3px;
+    background: var(--surface-container-high);
+    color: var(--slate-300);
+    border: 1px solid var(--outline-variant);
+  }
+
+  /* State strips (loading / empty / error / no-match). Mirror the
+     Services equivalents but use capabilities- prefixes so a future
+     visual divergence is one block, not a regex. */
+  .capabilities-loading,
+  .capabilities-empty,
+  .capabilities-error,
+  .capabilities-no-match {
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    border-radius: 6px;
+    padding: 14px 16px;
+    font-size: 12px;
+    color: var(--slate-400);
+    line-height: 1.5;
+  }
+  .capabilities-empty strong,
+  .capabilities-error strong {
+    color: var(--on-surface);
+    font-weight: 600;
+    display: block;
+    margin-bottom: 4px;
+  }
+  .capabilities-error {
+    border-left: 4px solid var(--error);
+    color: var(--error);
+  }
+  .capabilities-error strong { color: var(--error); }
+
+  /* Record page — header + identity strip + sectioned body. Mirrors
+     services-record-* visually but kept under capabilities-record-* so
+     the two record pages can diverge cleanly later (different sections,
+     different actions). */
+  .capabilities-record { padding: 0; }
+  .capabilities-record-header { margin-bottom: 18px; }
+  .capabilities-record-back {
+    background: transparent;
+    border: 0;
+    color: var(--primary);
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    padding: 0;
+    margin-bottom: 8px;
+  }
+  .capabilities-record-back:hover { text-decoration: underline; }
+  .capabilities-record-title-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+  }
+  .capabilities-record-name {
+    font-size: 22px;
+    font-weight: 700;
+    font-family: var(--font-display);
+    color: var(--on-surface);
+    letter-spacing: -0.01em;
+  }
+  .capabilities-record-id {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--primary);
+    background: rgba(173,198,255,0.10);
+    padding: 3px 9px;
+    border-radius: 4px;
+  }
+  .capabilities-record-status {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 700;
+    padding: 3px 9px;
+    border-radius: 3px;
+    background: var(--surface-container-high);
+    color: var(--slate-300);
+    border: 1px solid var(--outline-variant);
+  }
+  .capabilities-record-body {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+  .capabilities-record-section {
+    background: var(--surface-container-low);
+    border: 1px solid var(--outline-variant);
+    border-radius: 6px;
+    padding: 16px 20px;
+  }
+  .capabilities-record-section-title {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--slate-500);
+    margin-bottom: 12px;
+  }
+  .capabilities-record-identity {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 14px;
+    font-size: 11px;
+  }
+  .capabilities-record-identity-pill {
+    background: var(--surface-container-high);
+    border: 1px solid var(--outline-variant);
+    border-radius: 999px;
+    padding: 4px 10px;
+    color: var(--slate-300);
+    font-family: var(--font-mono);
+  }
+  .capabilities-record-identity-pill .key {
+    color: var(--slate-500);
+    text-transform: uppercase;
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    margin-right: 4px;
+  }
+  .capabilities-record-field-grid {
+    display: grid;
+    grid-template-columns: minmax(140px, max-content) 1fr;
+    column-gap: 18px;
+    row-gap: 8px;
+  }
+  .capabilities-record-field-key {
+    color: var(--slate-500);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 700;
+    padding-top: 2px;
+  }
+  .capabilities-record-field-val {
+    color: var(--on-surface);
+    font-size: 12px;
+    font-family: var(--font-mono);
+    word-break: break-word;
+  }
+  .capabilities-record-field-val.muted { color: var(--slate-500); font-style: italic; }
+  .capabilities-record-loading,
+  .capabilities-record-error,
+  .capabilities-record-empty {
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    border-radius: 6px;
+    padding: 18px 20px;
+    color: var(--slate-400);
+    font-size: 12px;
+  }
+  .capabilities-record-error {
+    border-left: 4px solid var(--error);
+    color: var(--error);
+  }
+
+  /* Map sub-view header — distinct from the map's own internal toolbar.
+     Provides the back affordance + selected-BS context. */
+  .services-map-view-header {
+    margin-bottom: 14px;
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+  .services-map-title {
+    font-size: 18px;
+    font-weight: 700;
+    font-family: var(--font-display);
+    color: var(--on-surface);
+    letter-spacing: -0.01em;
+  }
+  .services-map-context {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--slate-400);
+  }
+
+  /* ──────────────────────────────────────────────────────────────────────
      Governance Map (Epic 1, PR 5)
      ServiceNow-style node-link visual rendered inside the Services view
      centre panel. Layout is static / slot-based — nodes are positioned
@@ -2897,12 +3604,15 @@
     color: var(--slate-500);
   }
 
-  /* Horizontal scroll wrapper so the fixed-width 1180px canvas is never
-     clipped on narrower viewports; on wider viewports the canvas sits
-     left-aligned within the workbench (no awkward stretch). */
+  /* Scroll wrapper now allows BOTH axes so the zoom feature can grow
+     the canvas beyond the viewport in either direction. The wrapper's
+     max-height pins the visible area to one unscaled canvas-height
+     (720px) so vertical zoom-in always engages the scrollbar rather
+     than pushing the rest of the workbench down the page. */
   .governance-map-canvas-scroll {
     overflow-x: auto;
-    overflow-y: hidden;
+    overflow-y: auto;
+    max-height: 720px;
     background: var(--surface-container-lowest);
   }
   .governance-map-canvas {
@@ -2914,6 +3624,19 @@
     border-bottom: 1px solid var(--outline-variant);
     overflow: visible;
   }
+  /* Zoom scene wrapper. Holds the SVG connector layer and every node
+     card; the renderer injects into the scene so the connector layer
+     and the HTML cards transform together. The scene's internal
+     coordinates are unscaled (baseW × CANVAS_H); transform: scale(z)
+     with transform-origin: 0 0 produces the apparent size, and the
+     parent canvas reports the scaled dimensions to the scroll wrapper. */
+  .governance-map-scene {
+    position: absolute;
+    top: 0;
+    left: 0;
+    transform-origin: 0 0;
+    will-change: transform;
+  }
   .governance-map-svg {
     position: absolute;
     inset: 0;
@@ -2922,6 +3645,44 @@
     pointer-events: none;
     z-index: 1;
     overflow: visible;
+  }
+
+  /* Zoom controls — three buttons + a live percentage indicator,
+     centred between the toolbar's title and the source slot. The
+     buttons are visually neutral: enabled = workbench surface,
+     hovered = lighter, disabled = dimmed and not pointer-active. */
+  .gmap-zoom-controls {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .gmap-zoom-controls button {
+    background: var(--surface-container);
+    color: var(--slate-300);
+    border: 1px solid var(--outline-variant);
+    padding: 3px 8px;
+    font-size: 12px;
+    font-family: var(--font-mono);
+    border-radius: 3px;
+    cursor: pointer;
+    min-width: 28px;
+    line-height: 1.2;
+  }
+  .gmap-zoom-controls button:hover:not(:disabled) {
+    background: var(--surface-container-high);
+    color: var(--on-surface);
+  }
+  .gmap-zoom-controls button:disabled {
+    opacity: 0.40;
+    cursor: not-allowed;
+  }
+  #gmap-zoom-level {
+    display: inline-block;
+    min-width: 44px;
+    text-align: center;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--slate-400);
   }
 
   .gmap-node {
@@ -3000,6 +3761,26 @@
   .authority-node        { border-left: 4px dashed #6fb7e6; }
   .coverage-node         { border-left: 4px solid #d6c46f; }
 
+  /* Truncation marker — placed at the end of any layer the
+     GMAP.MAX_PER_LAYER cap truncated. Visually distinct from semantic
+     entity nodes (dashed border, muted palette, italic name) so the
+     operator reads it as "summary, not entity". The styling does not
+     reuse any per-entity class, so a regression that drops or renames
+     the .gmap-more-node selector surfaces here visually as well as via
+     the source-level test. */
+  .gmap-more-node {
+    border: 1px dashed var(--outline-variant);
+    border-left: 4px dashed var(--slate-500);
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--slate-400);
+  }
+  .gmap-more-node .gmap-node-label { color: var(--slate-500); }
+  .gmap-more-node .gmap-node-name {
+    color: var(--slate-300);
+    font-style: italic;
+  }
+  .gmap-more-node .gmap-node-meta { color: var(--slate-500); }
+
   /* Connector line styles — these classes are the contract Cluster B/C
      tests pin. Change them with a matching test update. */
   .connector-service     { fill: none; stroke: #8b949c; stroke-width: 2.2; opacity: 0.85; }
@@ -3066,6 +3847,28 @@
   .gmap-details-row:last-child { border-bottom: 0; }
   .gmap-details-key { color: var(--slate-500); font-family: var(--font-mono); font-size: 11px; }
   .gmap-details-val { color: var(--on-surface); font-family: var(--font-mono); font-size: 11px; }
+
+  /* Action area inside the selected-node details column. Only shown when
+     setGovernanceMapDetailsActions() appends at least one action button —
+     otherwise the wrapper has no children and collapses to zero height
+     (no top margin / padding leaks when empty). */
+  .gmap-details-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .gmap-details-actions:empty { display: none; }
+  .gmap-details-actions:not(:empty) { margin-top: 12px; }
+  .gmap-action-view-record {
+    font-size: 12px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--outline-variant);
+    background: var(--surface-container);
+    color: var(--on-surface);
+    cursor: pointer;
+  }
+  .gmap-action-view-record:hover { background: var(--surface-container-high); }
+  .gmap-action-view-record:focus-visible {
+    outline: 2px solid var(--primary, #4ea1ff);
+    outline-offset: 2px;
+  }
 
   .governance-map-empty,
   .governance-map-error {
@@ -3166,11 +3969,22 @@
         <span class="shell-control-plane-version">midas-explorer</span>
       </span>
     </div>
+    <!-- Sidebar collapse/expand toggle. Setting `body.sidebar-collapsed`
+         flips --sidebar-width on :root so all four shell elements
+         (sidebar / header / main / footer) shrink in lockstep. -->
+    <button type="button" id="sidebar-collapse-toggle" class="shell-sidebar-toggle"
+            aria-label="Collapse navigation" aria-expanded="true" title="Collapse navigation">
+      <span class="shell-sidebar-toggle-glyph" aria-hidden="true">&laquo;</span>
+    </button>
   </div>
   <nav class="shell-nav" role="navigation">
     <button type="button" class="shell-nav-item active" data-nav-view="services">
       <span class="shell-nav-glyph" aria-hidden="true">&#9622;</span>
       <span>Services</span>
+    </button>
+    <button type="button" class="shell-nav-item" data-nav-view="capabilities">
+      <span class="shell-nav-glyph" aria-hidden="true">&#9670;</span>
+      <span>Capabilities</span>
     </button>
     <button type="button" class="shell-nav-item" data-nav-view="evaluate">
       <span class="shell-nav-glyph" aria-hidden="true">&#9783;</span>
@@ -3231,103 +4045,65 @@
   <section id="view-services" class="app-view active services-view" data-view="services" aria-labelledby="view-services-title">
     <h2 id="view-services-title" style="position:absolute;left:-9999px">Services</h2>
 
-    <!-- Services view mode toggle — sibling of the two layouts below so it
-         remains visible across modes. PR 5 lifts the Governance Map out of
-         the three-column grid into its own full-width workbench. -->
-    <div class="services-mode-toolbar">
-      <div class="services-mode-tabs" role="tablist" aria-label="Services view mode">
-        <button type="button" class="services-mode-tab active" id="services-mode-overview-btn"
-                role="tab" aria-selected="true" aria-controls="services-overview-layout"
-                data-services-mode="overview">Overview</button>
-        <button type="button" class="services-mode-tab" id="services-mode-map-btn"
-                role="tab" aria-selected="false" aria-controls="services-map-layout"
-                data-services-mode="map">Governance Map</button>
-      </div>
+    <!-- Sub-view: Catalogue.
+         Full-width Business Services catalogue. Replaces the previous
+         three-column dashboard. Backed by the live /v1/businessservices
+         envelope (no STRUCTURAL_CONTEXT). Cards click through to the
+         record sub-view. -->
+    <div id="services-catalogue-view" class="services-subview services-catalogue active" role="region" aria-label="Business Services catalogue">
+      <header class="services-catalogue-header">
+        <h2 class="services-catalogue-title">Business Services</h2>
+        <p class="services-catalogue-subtitle">Browse business services in scope of the platform. Select one to view its record and governance map.</p>
+        <input type="text" id="services-bs-search" class="services-bs-search"
+               placeholder="Search Business Services..." autocomplete="off">
+      </header>
+      <div id="services-bs-list" class="services-bs-list services-catalogue-list"></div>
     </div>
 
-    <!-- Overview layout — original three-column grid (BS selector | overview | summary). -->
-    <div id="services-overview-layout" class="services-overview-layout" role="tabpanel"
-         aria-labelledby="services-mode-overview-btn">
-      <div class="services-grid">
-        <!-- LEFT: Business Service selector
-             Polish PR: each column now carries an explicit header + helper
-             subtitle so a first-time user can read the layout's purpose
-             without inferring it from the contents below. -->
-        <aside class="services-col services-col-left" aria-labelledby="services-col-left-title">
-          <header class="services-col-header">
-            <h3 id="services-col-left-title" class="services-col-title">Business Services</h3>
-            <p class="services-col-subtitle">Select a service to explore its context</p>
-          </header>
-          <input type="text" id="services-bs-search" class="services-bs-search"
-                 placeholder="Search Business Services..." autocomplete="off">
-          <div id="services-bs-list" class="services-bs-list"></div>
-        </aside>
-
-        <!-- CENTER: selected service overview -->
-        <section class="services-col services-col-center" aria-labelledby="services-col-center-title">
-          <header class="services-col-header">
-            <h3 id="services-col-center-title" class="services-col-title">Service Context</h3>
-            <p class="services-col-subtitle">Structural and governance context for the selected service</p>
-          </header>
-          <section class="services-center" aria-labelledby="services-overview-title">
-            <header class="services-overview-header">
-              <h3 id="services-overview-title">Service Overview</h3>
-              <p>Business-service context for capabilities, processes, decision surfaces, authority grants, and recent decisions.</p>
-            </header>
-            <div id="services-overview-body" class="services-overview-body"></div>
-          </section>
-        </section>
-
-        <!-- RIGHT: stack of summary cards -->
-        <aside class="services-col services-col-right services-summary" aria-labelledby="services-col-right-title">
-          <header class="services-col-header">
-            <h3 id="services-col-right-title" class="services-col-title">Governance Summary</h3>
-            <p class="services-col-subtitle">Key governance signals and runtime context</p>
-          </header>
-          <div class="services-card">
-            <div class="services-card-header">
-              <span class="services-card-title">Service Authority Summary</span>
-            </div>
-            <div id="services-authority-summary"></div>
-          </div>
-
-          <div class="services-card">
-            <div class="services-card-header">
-              <span class="services-card-title">Coverage Summary</span>
-              <span class="services-card-demo-badge">Demo sample</span>
-            </div>
-            <div id="services-coverage-summary"></div>
-          </div>
-
-          <div class="services-card">
-            <div class="services-card-header">
-              <span class="services-card-title">Recent Decisions</span>
-              <span class="services-card-demo-badge">Demo sample</span>
-            </div>
-            <div id="services-recent-decisions"></div>
-          </div>
-
-          <div class="services-card">
-            <div class="services-card-header">
-              <span class="services-card-title">Runtime Context</span>
-            </div>
-            <div id="services-runtime-context"></div>
-          </div>
-        </aside>
-      </div>
+    <!-- Sub-view: Record.
+         Per-service detail page. Header shows back-to-catalogue +
+         identity + primary action. Body shows identity strip, core
+         details, related services, capabilities, processes, surfaces,
+         AI systems, governance summary. All data comes from
+         GET /v1/businessservices/{id}/governance-map. -->
+    <div id="services-record-view" class="services-subview services-record" role="region" aria-label="Business Service record">
+      <header class="services-record-header">
+        <button type="button" id="services-record-back-btn" class="services-record-back" aria-label="Back to Business Services catalogue">← Business Services</button>
+        <div class="services-record-title-row">
+          <h2 class="services-record-name" id="services-record-name">—</h2>
+          <span class="services-record-id" id="services-record-id"></span>
+          <span class="services-record-status" id="services-record-status"></span>
+        </div>
+        <div class="services-record-actions">
+          <button type="button" id="services-record-open-map-btn" class="btn btn-primary" aria-label="Open Governance Map for this service">Open Governance Map</button>
+        </div>
+      </header>
+      <div id="services-record-body" class="services-record-body"></div>
     </div>
 
-    <!-- Map layout — full-width governance-map workbench (PR 5).
-         Sibling of services-overview-layout, NOT a child of .services-grid
-         or .services-center. The horizontal scroll wrapper keeps the
-         1180px canvas un-clipped on narrower viewports. -->
-    <div id="services-map-layout" class="services-map-layout" role="tabpanel"
-         aria-labelledby="services-mode-map-btn">
+    <!-- Sub-view: Map.
+         Wraps the existing PR 5 governance-map workbench. The inner IDs
+         (gmap-canvas / gmap-scene / gmap-svg / gmap-zoom-* / gmap-details-*)
+         are preserved verbatim because the renderer references them by id.
+         Only the outer container changes: a back-to-record header replaces
+         the previous Overview/Map mode toggle. -->
+    <div id="services-map-view" class="services-subview" role="region" aria-label="Governance Map">
+      <header class="services-map-view-header">
+        <button type="button" id="services-map-back-btn" class="services-record-back" aria-label="Back to Business Service record">← <span id="services-map-back-label">Record</span></button>
+        <h2 class="services-map-title">Governance Map</h2>
+        <span class="services-map-context" id="services-map-context"></span>
+      </header>
       <div class="governance-map-workbench">
         <div class="governance-map-toolbar">
           <div>
             <strong id="gmap-title">Governance Map</strong>
             <span class="gmap-status" id="gmap-status"></span>
+          </div>
+          <div class="gmap-zoom-controls" role="group" aria-label="Map zoom">
+            <button type="button" id="gmap-zoom-out" aria-label="Zoom out" title="Zoom out">−</button>
+            <span id="gmap-zoom-level" aria-live="polite">100%</span>
+            <button type="button" id="gmap-zoom-in" aria-label="Zoom in" title="Zoom in">+</button>
+            <button type="button" id="gmap-zoom-reset" aria-label="Reset zoom to 100%" title="Reset zoom">100%</button>
           </div>
           <div class="gmap-status" id="gmap-source"></div>
         </div>
@@ -3340,9 +4116,15 @@
         </div>
         <div class="governance-map-canvas-scroll">
           <div id="gmap-canvas" class="governance-map-canvas" data-governance-map="canvas">
-            <svg id="gmap-svg" class="governance-map-svg" data-governance-map="svg-layer"
-                 viewBox="0 0 1180 720" preserveAspectRatio="none" aria-hidden="true"></svg>
-            <!-- node cards injected here by renderGovernanceMap() -->
+            <!-- The scene wrapper is the zoom target. Both the SVG
+                 connector layer and the HTML node cards live INSIDE
+                 #gmap-scene so transform: scale() applies to them
+                 together; their relative coordinates never drift. -->
+            <div id="gmap-scene" class="governance-map-scene">
+              <svg id="gmap-svg" class="governance-map-svg" data-governance-map="svg-layer"
+                   viewBox="0 0 1180 720" preserveAspectRatio="none" aria-hidden="true"></svg>
+              <!-- node cards injected here by renderGovernanceMap() -->
+            </div>
           </div>
         </div>
         <div id="gmap-details" class="governance-map-details" aria-live="polite">
@@ -3350,6 +4132,14 @@
             <div class="gmap-details-title">Selected node</div>
             <div class="gmap-details-name" id="gmap-details-name">Select a node to inspect it</div>
             <div id="gmap-details-fields"></div>
+            <!-- Action area for the selected node. Rendered empty here;
+                 setGovernanceMapDetailsActions() populates it on selection
+                 ONLY when the selected node has whitelisted actions. The
+                 wrapper stays empty (no children) for node types that have
+                 no real navigation target — no disabled buttons, no
+                 placeholder text. See handleGovernanceMapAction() for the
+                 whitelist. -->
+            <div id="gmap-details-actions" class="gmap-details-actions" role="group" aria-label="Selected node actions"></div>
           </div>
           <div>
             <div class="gmap-details-title">Map summary</div>
@@ -3357,6 +4147,47 @@
           </div>
         </div>
       </div>
+    </div>
+  </section>
+
+  <!-- ─── View 1b: Capabilities ────────────────────────────────────────── -->
+  <!-- Business Capability catalogue + thin record page. Backed entirely by
+       the existing GET /v1/capabilities (bare-array) and
+       GET /v1/capabilities/{id} endpoints. There is no per-capability
+       governance map, no related-services / child-capabilities / AI
+       bindings sub-list endpoint — those would be a separate backend PR.
+       The record page therefore renders ONLY the wire-exposed fields
+       (id, name, description, status, owner, created_at, updated_at).
+       STRUCTURAL_CONTEXT is intentionally NOT consulted from this view;
+       on fetch error we surface the error rather than silently fall back
+       to demo data. -->
+  <section id="view-capabilities" class="app-view capabilities-view" data-view="capabilities" aria-labelledby="view-capabilities-title">
+    <h2 id="view-capabilities-title" style="position:absolute;left:-9999px">Capabilities</h2>
+
+    <!-- Sub-view: Catalogue. Live list from GET /v1/capabilities. -->
+    <div id="capabilities-catalogue-view" class="capabilities-subview capabilities-catalogue active" role="region" aria-label="Business Capabilities catalogue">
+      <header class="capabilities-catalogue-header">
+        <h2 class="capabilities-catalogue-title">Business Capabilities</h2>
+        <p class="capabilities-catalogue-subtitle">Browse business capabilities defined on the platform. Select one to view its record.</p>
+        <input type="text" id="capabilities-search" class="capabilities-search"
+               placeholder="Search Capabilities..." autocomplete="off">
+      </header>
+      <div id="capabilities-list" class="capabilities-list"></div>
+    </div>
+
+    <!-- Sub-view: Record. Per-capability detail page. Header shows
+         back-to-catalogue + identity + status; body shows identity strip
+         and core details only. -->
+    <div id="capabilities-record-view" class="capabilities-subview capabilities-record" role="region" aria-label="Business Capability record">
+      <header class="capabilities-record-header">
+        <button type="button" id="capabilities-record-back-btn" class="capabilities-record-back" aria-label="Back to Capabilities catalogue">← Capabilities</button>
+        <div class="capabilities-record-title-row">
+          <h2 class="capabilities-record-name" id="capabilities-record-name">—</h2>
+          <span class="capabilities-record-id" id="capabilities-record-id"></span>
+          <span class="capabilities-record-status" id="capabilities-record-status"></span>
+        </div>
+      </header>
+      <div id="capabilities-record-body" class="capabilities-record-body"></div>
     </div>
   </section>
 
@@ -3905,7 +4736,7 @@
   // IDs (e.g. submitRequest reading f-surface) keep working regardless of
   // which view is currently visible.
 
-  const VALID_VIEWS = ['services', 'evaluate', 'records', 'settings'];
+  const VALID_VIEWS = ['services', 'capabilities', 'evaluate', 'records', 'settings'];
   const DEFAULT_VIEW = 'services';
 
   function showView(viewName) {
@@ -3940,13 +4771,64 @@
   // Initial view
   showView(viewFromHash());
 
-  // ── Services view ──────────────────────────────────────────────────────────
-  // Source-of-truth for the selected-service overview is STRUCTURAL_CONTEXT
-  // (defined later — referenced lazily by name). Authority chain overlays
-  // (profile / grant / agent per surface) come from SERVICE_PATH_OVERLAY,
-  // a small map mirroring the seeded demo grants. Services with no overlay
-  // entry render a structural-only path (capability → process → surface).
+  // ── Collapsible sidebar ──────────────────────────────────────────────────
+  // Module-level boolean flips a `body.sidebar-collapsed` class that
+  // overrides --sidebar-width via CSS, shrinking the four shell elements
+  // (sidebar / header / main / footer) in lockstep without touching the
+  // governance-map renderer or any catalogue/record-page logic.
+  //
+  // No data is fetched on toggle; the helpers only manipulate DOM
+  // classes + ARIA attributes. State is in-memory (no localStorage) per
+  // the brief — refreshing returns to the expanded default.
+  let sidebarCollapsed = false;
 
+  function updateSidebarCollapseUI() {
+    document.body.classList.toggle('sidebar-collapsed', sidebarCollapsed);
+    const btn = document.getElementById('sidebar-collapse-toggle');
+    if (!btn) return;
+    const label = sidebarCollapsed ? 'Expand navigation' : 'Collapse navigation';
+    btn.setAttribute('aria-expanded', sidebarCollapsed ? 'false' : 'true');
+    btn.setAttribute('aria-label', label);
+    btn.setAttribute('title', label);
+    const glyph = btn.querySelector('.shell-sidebar-toggle-glyph');
+    if (glyph) glyph.textContent = sidebarCollapsed ? '»' : '«';
+  }
+
+  function setSidebarCollapsed(collapsed) {
+    sidebarCollapsed = !!collapsed;
+    updateSidebarCollapseUI();
+  }
+
+  function toggleSidebarCollapsed() {
+    setSidebarCollapsed(!sidebarCollapsed);
+  }
+
+  (function wireSidebarCollapseToggle() {
+    const btn = document.getElementById('sidebar-collapse-toggle');
+    if (btn) btn.addEventListener('click', toggleSidebarCollapsed);
+  })();
+
+  // ── Services view — catalogue / record / map sub-views ───────────────────
+  // The Services view is a sub-view state machine with three modes:
+  //   - 'catalogue' — full-width Business Services list (default landing).
+  //   - 'detail'    — record/detail page for one Business Service.
+  //   - 'map'       — Governance Map workbench for the same Business Service.
+  //
+  // The state machine is internal-only — sub-views are not (yet) hash-routed.
+  // Adding hash routing later is a focused change because every transition
+  // already goes through setServicesSubView() / show*() helpers.
+  //
+  // No path through this module reads STRUCTURAL_CONTEXT. The catalogue is
+  // backed by GET /v1/businessservices (envelope-shape `{business_services}`);
+  // the record page is backed by GET /v1/businessservices/{id}/governance-map;
+  // the map sub-view re-uses the same governance-map endpoint via the
+  // existing PR 5 renderer. Other Explorer views (Records, Settings, the
+  // hidden Resource Reference panel) continue to read STRUCTURAL_CONTEXT —
+  // that is a separate scope.
+
+  // SERVICE_PATH_OVERLAY is retained as dead state — the previous Overview
+  // mode consumed it, but the new record page does not. It exists only for
+  // reference / future Capability-Process-Surface drill-down designs.
   const SERVICE_PATH_OVERLAY = {
     'bs-merchant-services': [
       {
@@ -3968,241 +4850,481 @@
     ],
   };
 
-  let currentSelectedService = 'bs-merchant-services';
+  // currentSelectedService is set from the live /v1/businessservices list
+  // after `loadBusinessServicesList()` resolves. Initialised to null so
+  // there is NO hardcoded default — operators with a non-demo store see
+  // the BSes that actually exist, not a stale demo ID. Overview mode
+  // continues to read STRUCTURAL_CONTEXT and will show its
+  // "select a business service" placeholder until the live fetch resolves.
+  let currentSelectedService = null;
 
+  // ── Live Business Service list state ──────────────────────────────────────
+  // The selector that drives currentSelectedService is backed by
+  // GET /v1/businessservices (envelope-shape `{business_services: [...]}`).
+  // On fetch success: liveBSList = array, liveBSError = null.
+  // On fetch failure: liveBSError = {status, message}, liveBSList = null.
+  // While the request is in flight: liveBSLoading = true.
+  //
+  // No fallback to STRUCTURAL_CONTEXT on failure: showing the operator a
+  // visible error is preferable to showing demo data that doesn't reflect
+  // the store. Other Explorer views (Overview, Records, Settings) continue
+  // to read STRUCTURAL_CONTEXT — that is a separate scope.
+  let liveBSList = null;
+  let liveBSError = null;
+  let liveBSLoading = false;
+
+  function loadBusinessServicesList() {
+    if (liveBSLoading) return;
+    liveBSLoading = true;
+    liveBSError = null;
+    renderServicesCatalogue();
+    fetch('/v1/businessservices', {
+      credentials: 'same-origin',
+      headers: { 'Accept': 'application/json' },
+    })
+      .then(resp => {
+        if (!resp.ok) {
+          return resp.text().then(t => ({ __status: resp.status, __text: t }));
+        }
+        return resp.json();
+      })
+      .then(payload => {
+        liveBSLoading = false;
+        if (payload && payload.__status) {
+          liveBSError = { status: payload.__status, message: 'HTTP ' + payload.__status };
+          liveBSList = null;
+          renderServicesCatalogue();
+          return;
+        }
+        // Envelope shape: payload.business_services is always an array.
+        liveBSList = (payload && payload.business_services) || [];
+        liveBSError = null;
+        // Default the selection from the live list when no current
+        // selection is set OR when the current selection is missing
+        // from the live list (e.g. a BS was removed between renders).
+        if (liveBSList.length === 0) {
+          currentSelectedService = null;
+        } else if (!liveBSList.some(bs => bs.id === currentSelectedService)) {
+          currentSelectedService = liveBSList[0].id;
+        }
+        renderServicesView();
+      })
+      .catch(err => {
+        liveBSLoading = false;
+        liveBSError = { status: 0, message: (err && err.message) || 'fetch failed' };
+        liveBSList = null;
+        renderServicesCatalogue();
+      });
+  }
+
+  // ── Sub-view state machine ────────────────────────────────────────────────
+  // Module-level state for the Services view. Three sub-views are reachable
+  // (catalogue / detail / map). The state machine is intentionally simple so
+  // that adding hash-route persistence later is a focused change.
+  let servicesSubView = 'catalogue';
+  // Per-record cache keyed by Business Service ID. Stores the most recent
+  // successful governance-map payload so the record page renders instantly
+  // on revisit. The map view does its own fetch via refreshGovernanceMap()
+  // (with its own dedup) so the duplicate first-fetch on record→map is
+  // accepted in exchange for keeping the cache plumbing trivial.
+  const serviceRecordCache = {};
+  let serviceRecordLoading = false;
+  let serviceRecordError = null;
+
+  function setServicesSubView(view) {
+    servicesSubView = view === 'detail' || view === 'map' ? view : 'catalogue';
+    const cat = document.getElementById('services-catalogue-view');
+    const rec = document.getElementById('services-record-view');
+    const map = document.getElementById('services-map-view');
+    if (cat) cat.classList.toggle('active', servicesSubView === 'catalogue');
+    if (rec) rec.classList.toggle('active', servicesSubView === 'detail');
+    if (map) map.classList.toggle('active', servicesSubView === 'map');
+  }
+
+  function showServicesCatalogue() {
+    setServicesSubView('catalogue');
+    // The map sub-view is leaving the screen — return gmapMode so the map
+    // renderer's `if (gmapMode !== 'map') return` gate prevents a stale
+    // fetch firing for a different selection later.
+    if (typeof gmapMode !== 'undefined') gmapMode = 'overview';
+    renderServicesCatalogue();
+  }
+
+  function showBusinessServiceRecord(serviceId) {
+    if (!serviceId) { showServicesCatalogue(); return; }
+    currentSelectedService = serviceId;
+    setServicesSubView('detail');
+    if (typeof gmapMode !== 'undefined') gmapMode = 'overview';
+    loadBusinessServiceRecord(serviceId);
+  }
+
+  function showBusinessServiceMap(serviceId) {
+    if (!serviceId) { showServicesCatalogue(); return; }
+    currentSelectedService = serviceId;
+    setServicesSubView('map');
+    // Update the back-affordance label to the selected BS name when known
+    // (cached payload). Falls back to "Record" if not yet loaded.
+    const cached = serviceRecordCache[serviceId];
+    const label = document.getElementById('services-map-back-label');
+    const ctx = document.getElementById('services-map-context');
+    const bsName = (cached && cached.business_service && (cached.business_service.name || cached.business_service.id)) || serviceId;
+    if (label) label.textContent = bsName;
+    if (ctx) ctx.textContent = bsName + ' · ' + serviceId;
+    // Force the existing renderer to re-fetch even if it served the same
+    // BS earlier in this session — the record-page → map transition should
+    // always present a fresh map.
+    if (typeof gmapMode !== 'undefined') gmapMode = 'map';
+    if (typeof gmapLastBSId !== 'undefined') gmapLastBSId = null;
+    if (typeof refreshGovernanceMap === 'function') refreshGovernanceMap();
+  }
+
+  // renderServicesView re-renders the active sub-view. Used by the live BS
+  // selector loader after the catalogue list comes back.
   function renderServicesView() {
-    renderServicesBSList();
-    renderServicesOverview();
-    renderServicesSummary();
-    // PR 5: refresh the governance map for the newly-selected service.
-    // The renderer is a no-op if the map pane is not yet wired.
-    if (typeof refreshGovernanceMap === 'function') {
-      refreshGovernanceMap();
+    if (servicesSubView === 'detail') {
+      // Re-render the record from cache; do not re-fetch here.
+      renderBusinessServiceRecord(currentSelectedService && serviceRecordCache[currentSelectedService]);
+    } else if (servicesSubView === 'map') {
+      // Map renderer is responsible for its own state — leave it alone.
+    } else {
+      renderServicesCatalogue();
     }
   }
 
-  function renderServicesBSList(filter) {
+  // renderServicesCatalogue renders the BS catalogue from the live state
+  // machine. NEVER reads from STRUCTURAL_CONTEXT. The wire shape is
+  // `{business_services: [{id, name, status, service_type, owner_id,
+  // external_ref}]}`, accessed via liveBSList[i].
+  function renderServicesCatalogue(filter) {
     const list = document.getElementById('services-bs-list');
     if (!list) return;
-    if (typeof STRUCTURAL_CONTEXT === 'undefined') return; // not yet defined
     const q = (filter || '').toLowerCase().trim();
 
-    const filtered = STRUCTURAL_CONTEXT.filter(svc =>
-      !q ||
-      svc.businessService.name.toLowerCase().includes(q) ||
-      svc.businessService.id.toLowerCase().includes(q)
-    );
+    if (liveBSLoading) {
+      list.innerHTML = '<div class="services-bs-loading">Loading business services…</div>';
+      return;
+    }
+    if (liveBSError) {
+      const status = liveBSError.status ? ('HTTP ' + liveBSError.status) : 'Network error';
+      list.innerHTML =
+        '<div class="services-bs-error">' +
+          '<div><strong>Could not load business services</strong></div>' +
+          '<div>' + escHtml(status) + (liveBSError.message ? ' — ' + escHtml(liveBSError.message) : '') + '</div>' +
+        '</div>';
+      return;
+    }
+    if (!Array.isArray(liveBSList)) {
+      list.innerHTML = '<div class="services-bs-loading">Loading business services…</div>';
+      return;
+    }
+    if (liveBSList.length === 0) {
+      list.innerHTML =
+        '<div class="services-bs-empty">' +
+          '<div><strong>No business services found</strong></div>' +
+          '<div>Apply a BusinessService bundle to populate this list.</div>' +
+        '</div>';
+      return;
+    }
 
+    const filtered = liveBSList.filter(bs =>
+      !q ||
+      (bs.name || '').toLowerCase().includes(q) ||
+      (bs.id || '').toLowerCase().includes(q)
+    );
     if (filtered.length === 0) {
       list.innerHTML = '<div class="scenario-no-results">No services match “' + escHtml(q) + '”</div>';
       return;
     }
 
-    list.innerHTML = filtered.map(svc => {
-      const id = svc.businessService.id;
-      const isActive = id === currentSelectedService;
-      const surfaceCount = svc.processes.reduce((acc, p) => acc + (p.surfaces || []).length, 0);
-      const counts = [
-        ['⚙', svc.capabilities.length, svc.capabilities.length === 1 ? 'Capability' : 'Capabilities'],
-        ['⇄', svc.processes.length,    svc.processes.length === 1    ? 'Process'    : 'Processes'],
-        ['▤', surfaceCount,            surfaceCount === 1            ? 'Surface'    : 'Surfaces'],
-      ];
-      const countsHtml = counts.map(([g, n, lbl]) =>
-        '<span class="services-bs-card-count-item">' +
-          '<span class="services-bs-card-count-glyph" aria-hidden="true">' + g + '</span>' +
-          n + ' ' + escHtml(lbl) +
-        '</span>'
-      ).join('');
+    list.innerHTML = filtered.map(bs => {
+      const id = bs.id;
+      const status = bs.status ? '<span class="services-bs-card-status">' + escHtml(bs.status) + '</span>' : '';
+      const typePill = bs.service_type ? '<span class="services-bs-card-type">' + escHtml(bs.service_type) + '</span>' : '';
+      const ownerPill = bs.owner_id ? '<span class="services-bs-card-owner">owner: ' + escHtml(bs.owner_id) + '</span>' : '';
+      const extPill = bs.external_ref ? '<span class="services-bs-card-extref">EXT-REF</span>' : '';
+      const meta = (typePill || ownerPill || extPill)
+        ? '<div class="services-bs-card-meta">' + typePill + ownerPill + extPill + '</div>'
+        : '';
       return (
-        '<button type="button" class="services-bs-card ' + (isActive ? 'active' : 'inactive') + '" data-service-id="' + escHtml(id) + '">' +
+        '<button type="button" class="services-bs-card services-catalogue-card inactive" data-service-id="' + escHtml(id) + '">' +
           '<div class="services-bs-card-header">' +
             '<span class="services-bs-card-id">' + escHtml(id) + '</span>' +
-            '<span class="services-bs-card-badge">Demo seeded</span>' +
+            status +
           '</div>' +
-          '<div class="services-bs-card-name">' + escHtml(svc.businessService.name) + '</div>' +
-          '<div class="services-bs-card-counts">' + countsHtml + '</div>' +
+          '<div class="services-bs-card-name">' + escHtml(bs.name || id) + '</div>' +
+          meta +
         '</button>'
       );
     }).join('');
 
     list.querySelectorAll('.services-bs-card').forEach(btn => {
       btn.addEventListener('click', () => {
-        if (btn.dataset.serviceId === currentSelectedService) return;
-        currentSelectedService = btn.dataset.serviceId;
-        renderServicesView();
+        showBusinessServiceRecord(btn.dataset.serviceId);
       });
     });
   }
 
-  function renderServicesOverview() {
-    const titleEl = document.getElementById('services-overview-title');
-    const bodyEl  = document.getElementById('services-overview-body');
-    if (!titleEl || !bodyEl) return;
-    if (typeof STRUCTURAL_CONTEXT === 'undefined') return;
+  // ── Record page ──────────────────────────────────────────────────────────
+  // Defensive renderer: tolerates null payloads, missing arrays, missing
+  // optional fields, empty arrays. Renders empty-state strings instead of
+  // throwing on unexpected payload shapes.
 
-    const svc = STRUCTURAL_CONTEXT.find(s => s.businessService.id === currentSelectedService);
-    if (!svc) {
-      titleEl.textContent = 'Service Overview';
-      bodyEl.innerHTML = '<div class="placeholder-text">Select a business service to see its authority context</div>';
+  function loadBusinessServiceRecord(serviceId) {
+    // Cache hit → render immediately. The map sub-view's renderer also
+    // does its own fetch with separate dedup; the duplicate cost is small.
+    const cached = serviceRecordCache[serviceId];
+    if (cached) {
+      serviceRecordLoading = false;
+      serviceRecordError = null;
+      renderBusinessServiceRecord(cached);
       return;
     }
-    titleEl.textContent = svc.businessService.name + ' Overview';
-
-    const bsCard =
-      '<div class="services-overview-bs-card">' +
-        '<div class="services-overview-bs-icon" aria-hidden="true">⌘</div>' +
-        '<div class="services-overview-bs-text">' +
-          '<div class="services-overview-bs-label">Business Service</div>' +
-          '<div class="services-overview-bs-name">' + escHtml(svc.businessService.name) + '</div>' +
-        '</div>' +
-      '</div>';
-
-    const overlay = SERVICE_PATH_OVERLAY[svc.businessService.id];
-    let pathsHtml;
-    if (overlay && overlay.length) {
-      pathsHtml =
-        '<div class="services-paths-header">Service Authority Paths</div>' +
-        '<div class="services-paths-grid">' + overlay.map(renderServicesAuthorityPath).join('') + '</div>';
-    } else {
-      // No authority-chain overlay seeded for this service; render structural
-      // context only (capability + process + surface). This keeps Consumer
-      // Lending visible without inventing profile/grant/agent values.
-      pathsHtml =
-        '<div class="services-paths-header">Structural Context</div>' +
-        '<div class="services-paths-grid">' + svc.processes.map(p => renderServicesStructuralPath(p, svc)).join('') + '</div>';
-    }
-
-    bodyEl.innerHTML = bsCard + pathsHtml;
+    serviceRecordLoading = true;
+    serviceRecordError = null;
+    renderBusinessServiceRecord(null);
+    const url = '/v1/businessservices/' + encodeURIComponent(serviceId) + '/governance-map';
+    fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+      .then(resp => {
+        if (!resp.ok) return resp.text().then(t => ({ __status: resp.status, __text: t }));
+        return resp.json();
+      })
+      .then(payload => {
+        serviceRecordLoading = false;
+        if (payload && payload.__status) {
+          serviceRecordError = { status: payload.__status, message: 'HTTP ' + payload.__status };
+          renderBusinessServiceRecord(null);
+          return;
+        }
+        // Discard if user navigated to a different service while in flight.
+        if (serviceId !== currentSelectedService) return;
+        serviceRecordCache[serviceId] = payload;
+        serviceRecordError = null;
+        renderBusinessServiceRecord(payload);
+      })
+      .catch(err => {
+        serviceRecordLoading = false;
+        serviceRecordError = { status: 0, message: (err && err.message) || 'fetch failed' };
+        renderBusinessServiceRecord(null);
+      });
   }
 
-  function renderServicesAuthorityPath(path) {
-    return (
-      '<div class="services-path">' +
-        '<div class="services-path-step">' +
-          '<span class="services-path-step-label">Capability</span>' +
-          '<span class="services-path-step-name">' + escHtml(path.capability.name) + '</span>' +
-        '</div>' +
-        '<div class="services-path-connector" aria-hidden="true"></div>' +
-        '<div class="services-path-step">' +
-          '<span class="services-path-step-label">Process</span>' +
-          '<span class="services-path-step-name">' + escHtml(path.process.name) + '</span>' +
-        '</div>' +
-        '<div class="services-path-chain">' +
-          '<div class="services-path-chain-row surface">' +
-            '<span class="services-path-chain-key">Surface</span>' +
-            '<span class="services-path-chain-val">' + escHtml(path.surface.id) + '</span>' +
-          '</div>' +
-          '<div class="services-path-chain-row profile">' +
-            '<span class="services-path-chain-key">Profile</span>' +
-            '<span class="services-path-chain-val">' + escHtml(path.profile) + '</span>' +
-          '</div>' +
-          '<div class="services-path-chain-row grant">' +
-            '<span class="services-path-chain-key">Grant</span>' +
-            '<span class="services-path-chain-val">' + escHtml(path.grant) + '</span>' +
-          '</div>' +
-          '<div class="services-path-chain-row agent">' +
-            '<span class="services-path-chain-key">Agent</span>' +
-            '<span class="services-path-chain-val">' + escHtml(path.agent) + '</span>' +
-          '</div>' +
-        '</div>' +
-      '</div>'
-    );
+  function formatFieldValue(v) {
+    if (v == null || v === '') return '<span class="services-record-field-val muted">—</span>';
+    return '<span class="services-record-field-val">' + escHtml(String(v)) + '</span>';
   }
 
-  function renderServicesStructuralPath(proc, svc) {
-    // Without an explicit M:N capability→process linkage in the seed data we
-    // pick the first capability of the service as the representative
-    // capability for each process — accurate for the current demo shape and
-    // honest about its limit.
-    const cap = svc.capabilities[0];
-    const surfacesHtml = (proc.surfaces || []).map(s =>
-      '<div class="services-path-chain-row surface">' +
-        '<span class="services-path-chain-key">Surface</span>' +
-        '<span class="services-path-chain-val">' + escHtml(s.id) + '</span>' +
-      '</div>'
+  function renderRecordFieldGrid(rows) {
+    if (!rows || rows.length === 0) return '';
+    const cells = rows.map(([k, v]) =>
+      '<div class="services-record-field-key">' + escHtml(String(k)) + '</div>' +
+      formatFieldValue(v)
     ).join('');
+    return '<div class="services-record-field-grid">' + cells + '</div>';
+  }
+
+  function renderRecordSection(title, contentHtml) {
+    if (!contentHtml) return '';
     return (
-      '<div class="services-path">' +
-        '<div class="services-path-step">' +
-          '<span class="services-path-step-label">Capability</span>' +
-          '<span class="services-path-step-name">' + escHtml(cap ? cap.name : '—') + '</span>' +
-        '</div>' +
-        '<div class="services-path-connector" aria-hidden="true"></div>' +
-        '<div class="services-path-step">' +
-          '<span class="services-path-step-label">Process</span>' +
-          '<span class="services-path-step-name">' + escHtml(proc.name) + '</span>' +
-        '</div>' +
-        '<div class="services-path-chain">' + surfacesHtml + '</div>' +
-      '</div>'
+      '<section class="services-record-section">' +
+        '<div class="services-record-section-title">' + escHtml(title) + '</div>' +
+        contentHtml +
+      '</section>'
     );
   }
 
-  function renderServicesSummary() {
-    // Authority Summary — pulled from existing /explorer/config when available.
-    const auth = document.getElementById('services-authority-summary');
-    if (auth) {
-      auth.innerHTML =
-        '<div class="services-summary-row">' +
-          '<span class="services-summary-key">Authority model</span>' +
-          '<span class="services-summary-val">Service scoped</span>' +
-        '</div>' +
-        '<div class="services-summary-row">' +
-          '<span class="services-summary-key">Policy mode</span>' +
-          '<span class="services-summary-val" id="services-summary-policy-mode">—</span>' +
-        '</div>' +
-        '<div class="services-summary-row">' +
-          '<span class="services-summary-key">Recent decision latency</span>' +
-          '<span class="services-summary-val ok">—</span>' +
-        '</div>';
+  function renderRelatedList(rows, emptyMessage) {
+    if (!rows || rows.length === 0) {
+      return '<div class="services-record-empty">' + escHtml(emptyMessage) + '</div>';
     }
-
-    // Coverage Summary — backed by /explorer/coverage records count via
-    // updateServicesCoverageSummary(). Initial state shows a placeholder.
-    const cov = document.getElementById('services-coverage-summary');
-    if (cov) {
-      cov.innerHTML =
-        '<div class="services-coverage-pct" id="services-coverage-pct">—</div>' +
-        '<div class="services-coverage-bar"><div class="services-coverage-bar-fill" id="services-coverage-bar-fill" style="width:0%"></div></div>' +
-        '<div class="services-coverage-note" id="services-coverage-note">Coverage refreshes after evaluations.</div>';
-    }
-
-    // Recent Decisions — demo sample only (no list endpoint exists yet).
-    const recent = document.getElementById('services-recent-decisions');
-    if (recent) {
-      const samples = [
-        { id: '#AC-7281', time: '2 mins ago',  label: 'ACCEPT',   cls: 'badge-accept'   },
-        { id: '#ES-7280', time: '5 mins ago',  label: 'ESCALATE', cls: 'badge-escalate' },
-        { id: '#RE-7279', time: '12 mins ago', label: 'REJECT',   cls: 'badge-reject'   },
-      ];
-      recent.innerHTML = samples.map(s =>
-        '<div class="services-recent-decision">' +
-          '<div>' +
-            '<div class="services-recent-id">' + escHtml(s.id) + '</div>' +
-            '<div class="services-recent-time">' + escHtml(s.time) + '</div>' +
-          '</div>' +
-          '<span class="services-recent-badge ' + s.cls + '">' + escHtml(s.label) + '</span>' +
+    return '<div class="services-related-list">' +
+      rows.map(r =>
+        '<div class="services-related-row">' +
+          (r.id   ? '<span class="id">' + escHtml(r.id) + '</span>' : '') +
+          (r.name ? '<span class="name">' + escHtml(r.name) + '</span>' : '') +
+          (r.meta ? '<span class="meta">' + escHtml(r.meta) + '</span>' : '') +
+          (r.badge ? '<span class="badge ' + escHtml(r.badgeCls || '') + '">' + escHtml(r.badge) + '</span>' : '') +
         '</div>'
-      ).join('');
-    }
-
-    // Runtime Context — populated by the /explorer/config block via the
-    // services-runtime-* IDs below.
-    const rt = document.getElementById('services-runtime-context');
-    if (rt) {
-      rt.innerHTML =
-        '<div class="services-runtime-grid">' +
-          '<div class="services-runtime-item"><span class="services-runtime-key">Sandbox</span><span class="services-runtime-val">active</span></div>' +
-          '<div class="services-runtime-item"><span class="services-runtime-key">Auth</span><span class="services-runtime-val" id="services-runtime-auth">—</span></div>' +
-          '<div class="services-runtime-item"><span class="services-runtime-key">Store</span><span class="services-runtime-val" id="services-runtime-store">—</span></div>' +
-          '<div class="services-runtime-item"><span class="services-runtime-key">Policy</span><span class="services-runtime-val" id="services-runtime-policy">—</span></div>' +
-        '</div>';
-    }
+      ).join('') +
+    '</div>';
   }
 
-  // updateServicesCoverageSummary is called from refreshCoverage() after each
-  // /explorer/coverage fetch so the Services-view summary card stays in sync
-  // with whatever Records shows.
+  function renderBusinessServiceRecord(payload) {
+    const body = document.getElementById('services-record-body');
+    const nameEl = document.getElementById('services-record-name');
+    const idEl = document.getElementById('services-record-id');
+    const statusEl = document.getElementById('services-record-status');
+    if (!body || !nameEl || !idEl || !statusEl) return;
+
+    if (serviceRecordLoading) {
+      body.innerHTML = '<div class="services-record-loading">Loading record…</div>';
+      nameEl.textContent = currentSelectedService || '—';
+      idEl.textContent = currentSelectedService || '';
+      statusEl.textContent = '';
+      return;
+    }
+    if (serviceRecordError) {
+      const status = serviceRecordError.status ? ('HTTP ' + serviceRecordError.status) : 'Network error';
+      body.innerHTML =
+        '<div class="services-record-error">' +
+          '<div><strong>Could not load record</strong></div>' +
+          '<div>' + escHtml(status) + (serviceRecordError.message ? ' — ' + escHtml(serviceRecordError.message) : '') + '</div>' +
+        '</div>';
+      nameEl.textContent = currentSelectedService || '—';
+      idEl.textContent = currentSelectedService || '';
+      statusEl.textContent = '';
+      return;
+    }
+    if (!payload || !payload.business_service) {
+      body.innerHTML = '<div class="services-record-empty">No record loaded.</div>';
+      nameEl.textContent = currentSelectedService || '—';
+      idEl.textContent = currentSelectedService || '';
+      statusEl.textContent = '';
+      return;
+    }
+
+    const bs = payload.business_service;
+    nameEl.textContent = bs.name || bs.id;
+    idEl.textContent = bs.id;
+    statusEl.textContent = bs.status || '';
+
+    const sections = [];
+
+    // 1. Identity strip — pills along the top of the body.
+    const identityPills = [];
+    if (bs.status)        identityPills.push({ key: 'status', val: bs.status });
+    if (bs.service_type)  identityPills.push({ key: 'type',   val: bs.service_type });
+    if (bs.owner_id)      identityPills.push({ key: 'owner',  val: bs.owner_id });
+    if (bs.external_ref)  identityPills.push({ key: 'ext',    val: 'EXT-REF' });
+    if (identityPills.length) {
+      const pills = identityPills.map(p =>
+        '<span class="services-record-identity-pill"><span class="key">' + escHtml(p.key) + '</span>' + escHtml(p.val) + '</span>'
+      ).join('');
+      sections.push(renderRecordSection('Identity', '<div class="services-record-identity">' + pills + '</div>'));
+    }
+
+    // 2. Core details — field grid. Field present, value missing → "—".
+    const coreRows = [
+      ['id',               bs.id],
+      ['name',             bs.name],
+      ['description',      bs.description],
+      ['service_type',     bs.service_type],
+      ['owner_id',         bs.owner_id],
+      ['regulatory_scope', bs.regulatory_scope],
+      ['external_ref',     bs.external_ref ? formatExternalRef(bs.external_ref) : ''],
+    ];
+    sections.push(renderRecordSection('Core details', renderRecordFieldGrid(coreRows)));
+
+    // 3. Related services — combine outgoing + incoming with a directional
+    //    indicator. Empty state renders explicit "No related services".
+    const rels = (payload.relationships && payload.relationships.outgoing) || [];
+    const relsIn = (payload.relationships && payload.relationships.incoming) || [];
+    const relRows = [];
+    rels.forEach(r => relRows.push({
+      id: r.id,
+      name: '→ ' + (r.other_name || r.target_business_service_id || ''),
+      meta: r.relationship_type || '',
+    }));
+    relsIn.forEach(r => relRows.push({
+      id: r.id,
+      name: '← ' + (r.other_name || r.source_business_service_id || ''),
+      meta: r.relationship_type || '',
+    }));
+    sections.push(renderRecordSection('Related services', renderRelatedList(relRows, 'No related services')));
+
+    // 4. Capabilities
+    const caps = (payload.capabilities || []).map(c => ({
+      id: c.id, name: c.name || c.id, meta: c.status || '',
+    }));
+    sections.push(renderRecordSection('Capabilities', renderRelatedList(caps, 'No capabilities linked')));
+
+    // 5. Processes
+    const procs = (payload.processes || []).map(p => ({
+      id: p.id, name: p.name || p.id, meta: p.status || '',
+    }));
+    sections.push(renderRecordSection('Processes', renderRelatedList(procs, 'No processes linked')));
+
+    // 6. Decision surfaces — id + version + name + status + AI-bound flag +
+    //    per-surface profile/grant/agent counts in the meta column.
+    const surfs = (payload.surfaces || []).map(s => {
+      const hasBinding = (s.ai_bindings || []).length > 0;
+      const counts = [];
+      if (s.profile_count != null) counts.push('p=' + s.profile_count);
+      if (s.grant_count != null)   counts.push('g=' + s.grant_count);
+      if (s.agent_count != null)   counts.push('a=' + s.agent_count);
+      return {
+        id: s.id + (s.version != null ? '·v' + s.version : ''),
+        name: s.name || s.id,
+        meta: [s.status || '', s.process_id ? 'proc=' + s.process_id : '', counts.join(' ')].filter(Boolean).join(' · '),
+        badge: hasBinding ? 'AI bound' : 'no AI',
+        badgeCls: hasBinding ? 'bind' : 'warn',
+      };
+    });
+    sections.push(renderRecordSection('Decision surfaces', renderRelatedList(surfs, 'No decision surfaces under this service')));
+
+    // 7. AI systems — id + name + vendor / system_type / status + version +
+    //    binding count.
+    const ais = (payload.ai_systems || []).map(ai => {
+      const ver = ai.active_version && ai.active_version.version != null ? 'v' + ai.active_version.version : '';
+      const bcount = (ai.bindings || []).length;
+      const meta = [ai.vendor, ai.system_type, ai.status, ver, bcount + ' binding' + (bcount === 1 ? '' : 's')]
+        .filter(Boolean).join(' · ');
+      return { id: ai.id, name: ai.name || ai.id, meta };
+    });
+    sections.push(renderRecordSection('AI systems', renderRelatedList(ais, 'No AI systems linked')));
+
+    // 8. Governance summary — chip strip pulling from authority_summary +
+    //    coverage. Always rendered for BS records (PR 4 always returns
+    //    these fields, even for empty services).
+    const auth = payload.authority_summary || {};
+    const cov  = payload.coverage || {};
+    const chips = [
+      { label: 'Surfaces',        value: auth.surface_count || 0 },
+      { label: 'Active profiles', value: auth.active_profile_count || 0 },
+      { label: 'Active grants',   value: auth.active_grant_count || 0 },
+      { label: 'Active agents',   value: auth.active_agent_count || 0 },
+      { label: 'AI-bound',        value: cov.surfaces_with_ai_binding || 0 },
+      { label: 'Coverage gaps',   value: cov.surfaces_without_ai_binding || 0, gap: (cov.surfaces_without_ai_binding || 0) > 0 },
+    ];
+    const chipHtml = '<div class="services-record-chips">' +
+      chips.map(c =>
+        '<div class="services-record-chip' + (c.gap ? ' gap' : '') + '">' +
+          '<div class="label">' + escHtml(c.label) + '</div>' +
+          '<div class="value">' + escHtml(String(c.value)) + '</div>' +
+        '</div>'
+      ).join('') +
+    '</div>';
+    sections.push(renderRecordSection('Governance summary', chipHtml));
+
+    body.innerHTML = sections.filter(Boolean).join('');
+  }
+
+  // ── Wire sub-view transitions + search input ─────────────────────────────
+  // The catalogue search input remains the only persistent input across
+  // the catalogue sub-view. The back-affordances and the Open-Map button
+  // live inside the sub-view markup and are wired here once at load.
+  (function wireServicesSubViewControls() {
+    const search = document.getElementById('services-bs-search');
+    if (search) search.addEventListener('input', e => renderServicesCatalogue(e.target.value));
+    const backToCat = document.getElementById('services-record-back-btn');
+    if (backToCat) backToCat.addEventListener('click', showServicesCatalogue);
+    const openMap = document.getElementById('services-record-open-map-btn');
+    if (openMap) openMap.addEventListener('click', () => showBusinessServiceMap(currentSelectedService));
+    const backToRec = document.getElementById('services-map-back-btn');
+    if (backToRec) backToRec.addEventListener('click', () => showBusinessServiceRecord(currentSelectedService));
+  })();
+
+  // updateServicesCoverageSummary is retained so refreshCoverage()'s
+  // hook continues to type-check. The DOM nodes it targeted (the old
+  // right-column cards) have been removed; the function now no-ops via
+  // its existing null-guards. Keeping it avoids a code change to
+  // refreshCoverage in another module of this file.
   function updateServicesCoverageSummary(records) {
+    // The previous Services-view right-column coverage card was retired
+    // when the three-column layout was removed; the DOM nodes this
+    // function targeted (services-coverage-pct / -bar-fill / -note) no
+    // longer exist. The null-guard makes the call a safe no-op. Kept
+    // so refreshCoverage()'s `if (typeof updateServicesCoverageSummary
+    // === 'function')` hook in another module continues to type-check.
     const pctEl  = document.getElementById('services-coverage-pct');
     const barEl  = document.getElementById('services-coverage-bar-fill');
     const noteEl = document.getElementById('services-coverage-note');
@@ -4215,11 +5337,320 @@
       : 'Records visible in the Records view.';
   }
 
-  // Wire search
-  const servicesBSSearch = document.getElementById('services-bs-search');
-  if (servicesBSSearch) {
-    servicesBSSearch.addEventListener('input', e => renderServicesBSList(e.target.value));
+  // The five render functions that powered the previous three-column
+  // overview (renderServicesOverview, renderServicesAuthorityPath,
+  // renderServicesStructuralPath, renderServicesSummary, plus the local
+  // duplicate of updateServicesCoverageSummary, plus the search-wire
+  // hook that referenced renderServicesBSList) were retired when the
+  // sub-view state machine landed. The catalogue/record/map renderers
+  // above replace all of their responsibilities. The previous block was
+  // deleted intentionally — STRUCTURAL_CONTEXT and SERVICE_PATH_OVERLAY
+  // remain defined elsewhere in this file for other consumers.
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Capabilities catalogue + record (live API; no STRUCTURAL_CONTEXT)
+  // ──────────────────────────────────────────────────────────────────────
+  // Backed by GET /v1/capabilities (bare-array — kept as bare array
+  // intentionally; envelope migration is a separate scope) and
+  // GET /v1/capabilities/{id}. The state model mirrors the Services
+  // sub-view machinery — catalogue / detail — but the per-capability
+  // map sub-view is intentionally absent. There is no per-capability
+  // governance-map endpoint today; if a record page wants to show map
+  // context it must do so through the BS that consumes the capability,
+  // and that drill-down is scoped to a future PR.
+  //
+  // STRUCTURAL_CONTEXT is NOT consulted from this view — there is no
+  // demo-data fallback. On fetch error the operator sees the explicit
+  // error strip rather than seeded demo capabilities.
+
+  let capabilitiesSubView = 'catalogue';
+  let currentSelectedCapability = null;
+  let liveCapabilityList = null;
+  let liveCapabilityError = null;
+  let liveCapabilityLoading = false;
+  const capabilityRecordCache = {};
+  let capabilityRecordLoading = false;
+  let capabilityRecordError = null;
+
+  function setCapabilitiesSubView(view) {
+    capabilitiesSubView = view === 'detail' ? 'detail' : 'catalogue';
+    const cat = document.getElementById('capabilities-catalogue-view');
+    const rec = document.getElementById('capabilities-record-view');
+    if (cat) cat.classList.toggle('active', capabilitiesSubView === 'catalogue');
+    if (rec) rec.classList.toggle('active', capabilitiesSubView === 'detail');
   }
+
+  function showCapabilitiesCatalogue() {
+    setCapabilitiesSubView('catalogue');
+    renderCapabilitiesCatalogue();
+  }
+
+  function showCapabilityRecord(capId) {
+    if (!capId) { showCapabilitiesCatalogue(); return; }
+    currentSelectedCapability = capId;
+    setCapabilitiesSubView('detail');
+    loadCapabilityRecord(capId);
+  }
+
+  // loadCapabilitiesList fetches GET /v1/capabilities and populates
+  // liveCapabilityList with the bare-array payload. The endpoint is
+  // intentionally consumed as a bare array (Array.isArray check) — the
+  // envelope migration is a separate scope. No fallback to
+  // STRUCTURAL_CONTEXT on error: showing the operator a visible error
+  // is preferable to showing demo data that doesn't reflect the store.
+  function loadCapabilitiesList() {
+    if (liveCapabilityLoading) return;
+    liveCapabilityLoading = true;
+    liveCapabilityError = null;
+    renderCapabilitiesCatalogue();
+    fetch('/v1/capabilities', {
+      credentials: 'same-origin',
+      headers: { 'Accept': 'application/json' },
+    })
+      .then(resp => {
+        if (!resp.ok) {
+          return resp.text().then(t => ({ __status: resp.status, __text: t }));
+        }
+        return resp.json();
+      })
+      .then(payload => {
+        liveCapabilityLoading = false;
+        if (payload && payload.__status) {
+          liveCapabilityError = { status: payload.__status, message: 'HTTP ' + payload.__status };
+          liveCapabilityList = null;
+          renderCapabilitiesCatalogue();
+          return;
+        }
+        // Bare-array shape: payload is the array itself. Guard with
+        // Array.isArray so a future envelope migration that returns
+        // {capabilities: [...]} doesn't silently render nothing.
+        liveCapabilityList = Array.isArray(payload) ? payload : [];
+        liveCapabilityError = null;
+        renderCapabilitiesCatalogue();
+      })
+      .catch(err => {
+        liveCapabilityLoading = false;
+        liveCapabilityError = { status: 0, message: (err && err.message) || 'fetch failed' };
+        liveCapabilityList = null;
+        renderCapabilitiesCatalogue();
+      });
+  }
+
+  function renderCapabilitiesCatalogue(filter) {
+    const list = document.getElementById('capabilities-list');
+    if (!list) return;
+    const q = (filter || '').toLowerCase().trim();
+
+    if (liveCapabilityLoading) {
+      list.innerHTML = '<div class="capabilities-loading">Loading capabilities…</div>';
+      return;
+    }
+    if (liveCapabilityError) {
+      const status = liveCapabilityError.status ? ('HTTP ' + liveCapabilityError.status) : 'Network error';
+      list.innerHTML =
+        '<div class="capabilities-error">' +
+          '<div><strong>Could not load capabilities</strong></div>' +
+          '<div>' + escHtml(status) + (liveCapabilityError.message ? ' — ' + escHtml(liveCapabilityError.message) : '') + '</div>' +
+        '</div>';
+      return;
+    }
+    if (!Array.isArray(liveCapabilityList)) {
+      list.innerHTML = '<div class="capabilities-loading">Loading capabilities…</div>';
+      return;
+    }
+    if (liveCapabilityList.length === 0) {
+      list.innerHTML =
+        '<div class="capabilities-empty">' +
+          '<div><strong>No capabilities found</strong></div>' +
+          '<div>Apply a Capability bundle to populate this list.</div>' +
+        '</div>';
+      return;
+    }
+
+    const filtered = liveCapabilityList.filter(c =>
+      !q ||
+      (c.name || '').toLowerCase().includes(q) ||
+      (c.id || '').toLowerCase().includes(q) ||
+      (c.owner || '').toLowerCase().includes(q) ||
+      (c.description || '').toLowerCase().includes(q)
+    );
+    if (filtered.length === 0) {
+      list.innerHTML = '<div class="capabilities-no-match">No capabilities match “' + escHtml(q) + '”</div>';
+      return;
+    }
+
+    list.innerHTML = filtered.map(c => {
+      const id = c.id;
+      const status = c.status ? '<span class="capabilities-card-status">' + escHtml(c.status) + '</span>' : '';
+      const desc = c.description ? '<div class="capabilities-card-desc">' + escHtml(c.description) + '</div>' : '';
+      const ownerPill = c.owner ? '<span class="capabilities-card-owner">owner: ' + escHtml(c.owner) + '</span>' : '';
+      const meta = ownerPill ? '<div class="capabilities-card-meta">' + ownerPill + '</div>' : '';
+      return (
+        '<button type="button" class="capabilities-card" data-capability-id="' + escHtml(id) + '">' +
+          '<div class="capabilities-card-header">' +
+            '<span class="capabilities-card-id">' + escHtml(id) + '</span>' +
+            status +
+          '</div>' +
+          '<div class="capabilities-card-name">' + escHtml(c.name || id) + '</div>' +
+          desc +
+          meta +
+        '</button>'
+      );
+    }).join('');
+
+    list.querySelectorAll('.capabilities-card').forEach(btn => {
+      btn.addEventListener('click', () => {
+        showCapabilityRecord(btn.dataset.capabilityId);
+      });
+    });
+  }
+
+  // loadCapabilityRecord fetches GET /v1/capabilities/{id} and renders
+  // the record page. Cache hit → render immediately; otherwise show a
+  // loading strip during the fetch. On 404/500 the error strip stays
+  // up; the operator returns to the catalogue via the back button.
+  function loadCapabilityRecord(capId) {
+    const cached = capabilityRecordCache[capId];
+    if (cached) {
+      capabilityRecordLoading = false;
+      capabilityRecordError = null;
+      renderCapabilityRecord(cached);
+      return;
+    }
+    capabilityRecordLoading = true;
+    capabilityRecordError = null;
+    renderCapabilityRecord(null);
+    const url = '/v1/capabilities/' + encodeURIComponent(capId);
+    fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+      .then(resp => {
+        if (!resp.ok) return resp.text().then(t => ({ __status: resp.status, __text: t }));
+        return resp.json();
+      })
+      .then(payload => {
+        capabilityRecordLoading = false;
+        if (payload && payload.__status) {
+          capabilityRecordError = { status: payload.__status, message: 'HTTP ' + payload.__status };
+          renderCapabilityRecord(null);
+          return;
+        }
+        if (capId !== currentSelectedCapability) return;
+        capabilityRecordCache[capId] = payload;
+        capabilityRecordError = null;
+        renderCapabilityRecord(payload);
+      })
+      .catch(err => {
+        capabilityRecordLoading = false;
+        capabilityRecordError = { status: 0, message: (err && err.message) || 'fetch failed' };
+        renderCapabilityRecord(null);
+      });
+  }
+
+  // Defensive renderer: tolerates null payload, missing optional fields,
+  // and renders "—" for empty values via formatFieldValue() (the same
+  // helper the Business Service record page uses). Renders only the
+  // fields actually exposed on the wire today (id, name, description,
+  // status, owner, created_at, updated_at). Fields present in the
+  // domain but not on the wire (parent_capability_id, origin, managed,
+  // replaces, created_by) are NOT rendered — adding a row for them
+  // would either fabricate a value or surface "—" everywhere, both of
+  // which are dishonest UX.
+  function renderCapabilityRecord(payload) {
+    const body = document.getElementById('capabilities-record-body');
+    const nameEl = document.getElementById('capabilities-record-name');
+    const idEl = document.getElementById('capabilities-record-id');
+    const statusEl = document.getElementById('capabilities-record-status');
+    if (!body || !nameEl || !idEl || !statusEl) return;
+
+    if (capabilityRecordLoading) {
+      body.innerHTML = '<div class="capabilities-record-loading">Loading record…</div>';
+      nameEl.textContent = currentSelectedCapability || '—';
+      idEl.textContent = currentSelectedCapability || '';
+      statusEl.textContent = '';
+      return;
+    }
+    if (capabilityRecordError) {
+      const status = capabilityRecordError.status ? ('HTTP ' + capabilityRecordError.status) : 'Network error';
+      body.innerHTML =
+        '<div class="capabilities-record-error">' +
+          '<div><strong>Could not load capability</strong></div>' +
+          '<div>' + escHtml(status) + (capabilityRecordError.message ? ' — ' + escHtml(capabilityRecordError.message) : '') + '</div>' +
+        '</div>';
+      nameEl.textContent = currentSelectedCapability || '—';
+      idEl.textContent = currentSelectedCapability || '';
+      statusEl.textContent = '';
+      return;
+    }
+    if (!payload || typeof payload !== 'object') {
+      body.innerHTML = '<div class="capabilities-record-empty">No record loaded.</div>';
+      nameEl.textContent = currentSelectedCapability || '—';
+      idEl.textContent = currentSelectedCapability || '';
+      statusEl.textContent = '';
+      return;
+    }
+
+    nameEl.textContent = payload.name || payload.id || '—';
+    idEl.textContent = payload.id || '';
+    statusEl.textContent = payload.status || '';
+
+    const sections = [];
+
+    // 1. Identity strip — pills along the top of the body. Only fields
+    // actually on the wire today (status, owner). Parent capability is
+    // intentionally absent — the wire format does not expose it.
+    const identityPills = [];
+    if (payload.status) identityPills.push({ key: 'status', val: payload.status });
+    if (payload.owner)  identityPills.push({ key: 'owner',  val: payload.owner });
+    if (identityPills.length) {
+      const pills = identityPills.map(p =>
+        '<span class="capabilities-record-identity-pill"><span class="key">' + escHtml(p.key) + '</span>' + escHtml(p.val) + '</span>'
+      ).join('');
+      sections.push(
+        '<section class="capabilities-record-section">' +
+          '<div class="capabilities-record-section-title">Identity</div>' +
+          '<div class="capabilities-record-identity">' + pills + '</div>' +
+        '</section>'
+      );
+    }
+
+    // 2. Core details — field grid. Field present in payload, value
+    // missing → "—" via formatFieldValue. Field NOT in the payload at
+    // all is also rendered as "—" for the seven canonical wire fields,
+    // because the response contract guarantees they exist (status,
+    // created_at, updated_at) or are documented as optional (description,
+    // owner). No fields are added beyond this canonical set.
+    const cells = [
+      ['id',          payload.id],
+      ['name',        payload.name],
+      ['description', payload.description],
+      ['status',      payload.status],
+      ['owner',       payload.owner],
+      ['created_at',  payload.created_at],
+      ['updated_at',  payload.updated_at],
+    ].map(([k, v]) =>
+      '<div class="capabilities-record-field-key">' + escHtml(k) + '</div>' +
+      (v == null || v === ''
+        ? '<span class="capabilities-record-field-val muted">—</span>'
+        : '<span class="capabilities-record-field-val">' + escHtml(String(v)) + '</span>')
+    ).join('');
+    sections.push(
+      '<section class="capabilities-record-section">' +
+        '<div class="capabilities-record-section-title">Core details</div>' +
+        '<div class="capabilities-record-field-grid">' + cells + '</div>' +
+      '</section>'
+    );
+
+    body.innerHTML = sections.join('');
+  }
+
+  // Wire the catalogue search input + back-to-catalogue affordance.
+  // The catalogue list itself wires its per-card click handlers from
+  // inside renderCapabilitiesCatalogue (one wire per render).
+  (function wireCapabilitiesSubViewControls() {
+    const search = document.getElementById('capabilities-search');
+    if (search) search.addEventListener('input', e => renderCapabilitiesCatalogue(e.target.value));
+    const back = document.getElementById('capabilities-record-back-btn');
+    if (back) back.addEventListener('click', showCapabilitiesCatalogue);
+  })();
 
   // ── Governance Map (Epic 1, PR 5) ──────────────────────────────────────────
   // Renders a ServiceNow-style node-link map for the currently-selected
@@ -4265,6 +5696,76 @@
   let gmapPositions = {};        // node id → {x, y} (top-left of card)
   let gmapSelectedId = null;
   let gmapInFlight = 0;          // monotonic counter to discard stale fetches
+
+  // ── Map zoom state ────────────────────────────────────────────────────────
+  // Multiplicative zoom: in-button multiplies by STEP, out-button divides
+  // by STEP. Range is clamped to [MIN, MAX]. The current value is preserved
+  // across re-renders so switching Business Services keeps the zoom level.
+  let gmapZoom = 1.0;
+  const GMAP_ZOOM = {
+    MIN: 0.50,
+    MAX: 2.00,
+    STEP: 1.25,
+    DEFAULT: 1.0,
+  };
+
+  function clampGmapZoom(z) {
+    if (!Number.isFinite(z)) return GMAP_ZOOM.DEFAULT;
+    if (z < GMAP_ZOOM.MIN) return GMAP_ZOOM.MIN;
+    if (z > GMAP_ZOOM.MAX) return GMAP_ZOOM.MAX;
+    return z;
+  }
+
+  // applyGmapZoom synchronises the DOM with the current gmapZoom value:
+  // (1) the scene element keeps its UNSCALED internal dimensions
+  //     (baseW × CANVAS_H) so SVG viewBox + node x/y coords stay in
+  //     lockstep; transform: scale(z) on the scene produces the visual
+  //     size. transform-origin: 0 0 (set in CSS) anchors the scene's
+  //     top-left so growth happens to the right and downward — directions
+  //     the scroll wrapper can already handle.
+  // (2) the canvas element reports the SCALED size to its scroll-wrapper
+  //     parent so overflow-x and overflow-y engage correctly.
+  // (3) the percentage indicator updates and the in/out buttons toggle
+  //     their disabled state at the clamp boundaries.
+  function applyGmapZoom() {
+    const canvas = document.getElementById('gmap-canvas');
+    const scene = document.getElementById('gmap-scene');
+    if (!canvas || !scene) return;
+    const baseW = parseFloat(canvas.dataset.baseWidth) || GMAP.MIN_CANVAS_W;
+    const baseH = GMAP.CANVAS_H;
+    scene.style.width = baseW + 'px';
+    scene.style.height = baseH + 'px';
+    scene.style.transform = 'scale(' + gmapZoom + ')';
+    canvas.style.width = (baseW * gmapZoom) + 'px';
+    canvas.style.minWidth = (baseW * gmapZoom) + 'px';
+    canvas.style.height = (baseH * gmapZoom) + 'px';
+
+    const lvl = document.getElementById('gmap-zoom-level');
+    if (lvl) lvl.textContent = Math.round(gmapZoom * 100) + '%';
+    const inBtn = document.getElementById('gmap-zoom-in');
+    const outBtn = document.getElementById('gmap-zoom-out');
+    // Use a small epsilon so floating-point drift in repeated multiply/
+    // divide steps doesn't leave a button enabled at the actual boundary.
+    if (inBtn) inBtn.disabled = gmapZoom >= GMAP_ZOOM.MAX - 1e-6;
+    if (outBtn) outBtn.disabled = gmapZoom <= GMAP_ZOOM.MIN + 1e-6;
+  }
+
+  function setGmapZoom(z) {
+    gmapZoom = clampGmapZoom(z);
+    applyGmapZoom();
+  }
+
+  // Wire zoom controls once at script load (idempotent — same pattern as
+  // wireServicesModeTabs). Multiplicative step keeps each click feeling
+  // proportional regardless of current zoom level.
+  (function wireGmapZoomControls() {
+    const inBtn = document.getElementById('gmap-zoom-in');
+    const outBtn = document.getElementById('gmap-zoom-out');
+    const resetBtn = document.getElementById('gmap-zoom-reset');
+    if (inBtn)    inBtn.addEventListener('click',    () => setGmapZoom(gmapZoom * GMAP_ZOOM.STEP));
+    if (outBtn)   outBtn.addEventListener('click',   () => setGmapZoom(gmapZoom / GMAP_ZOOM.STEP));
+    if (resetBtn) resetBtn.addEventListener('click', () => setGmapZoom(GMAP_ZOOM.DEFAULT));
+  })();
 
   function setServicesMode(mode) {
     gmapMode = mode === 'map' ? 'map' : 'overview';
@@ -4348,11 +5849,19 @@
 
   function clearGovernanceMapCanvas() {
     const canvas = document.getElementById('gmap-canvas');
+    const scene = document.getElementById('gmap-scene');
     const svg = document.getElementById('gmap-svg');
-    if (!canvas || !svg) return;
-    // Remove every previous node card (anything that is not the SVG layer).
+    if (!canvas || !scene || !svg) return;
+    // Remove canvas-level children that aren't the scene wrapper itself.
+    // This drops empty/error overlays from previous renders. The scene
+    // wrapper is preserved so its CSS transform survives across renders.
     Array.from(canvas.children).forEach(child => {
-      if (child !== svg) canvas.removeChild(child);
+      if (child !== scene) canvas.removeChild(child);
+    });
+    // Remove scene-level children that aren't the SVG layer (i.e. node
+    // buttons from previous renders).
+    Array.from(scene.children).forEach(child => {
+      if (child !== svg) scene.removeChild(child);
     });
     while (svg.firstChild) svg.removeChild(svg.firstChild);
     gmapPositions = {};
@@ -4441,6 +5950,95 @@
                   x2 + ' ' + y2;
   }
 
+  // ── AI System detail formatters ───────────────────────────────────────────
+  // Helpers used when populating the AI System node's details payload.
+  // They are defensive — null-safe, tolerate missing fields, and produce
+  // short single-line strings suitable for the details panel rows.
+
+  // formatExternalRef renders an ExternalRef object as `system:id` to match
+  // the Business Service node's existing presentation. Falls back to either
+  // half on its own if only one is set, or `(set)` when neither is present
+  // but the field exists at all (we only call this when ref is truthy).
+  function formatExternalRef(ref) {
+    if (!ref || typeof ref !== 'object') return '';
+    const sys = ref.source_system || '';
+    const id  = ref.source_id || '';
+    if (sys && id) return sys + ':' + id;
+    return sys || id || '(set)';
+  }
+
+  // formatAIBindingScope returns the binding's scope as `kind=id`, using the
+  // same precedence chain as the connector-resolution code in
+  // renderGovernanceMap (surface > process > capability > business_service).
+  // A binding with NO scope id at all renders as `unscoped` rather than
+  // throwing or returning an empty string.
+  function formatAIBindingScope(b) {
+    if (!b) return 'unscoped';
+    if (b.surface_id)          return 'surface=' + b.surface_id;
+    if (b.process_id)          return 'process=' + b.process_id;
+    if (b.capability_id)       return 'capability=' + b.capability_id;
+    if (b.business_service_id) return 'business_service=' + b.business_service_id;
+    return 'unscoped';
+  }
+
+  // formatAIBindingDetail composes role + scope + description into one line
+  // for a single binding row. Each part is dropped when absent so the
+  // resulting string never carries empty pieces or trailing separators.
+  function formatAIBindingDetail(b) {
+    if (!b) return 'unscoped';
+    const parts = [];
+    if (b.role) parts.push('role=' + b.role);
+    parts.push(formatAIBindingScope(b));
+    if (b.description) parts.push(b.description);
+    return parts.join(' · ');
+  }
+
+  // ── Layer-truncation helpers ──────────────────────────────────────────────
+  // GMAP.MAX_PER_LAYER caps how many real entity nodes any one layer can
+  // render (a layout-readability concern). When the cap fires, a single
+  // gmap-more-node is added at the end of the truncated row so the
+  // operator can see something was hidden — the cap is enforced silently
+  // otherwise. Hidden items are NOT individually rendered, NOT individually
+  // selectable, and never receive connectors.
+
+  // getTruncationInfo computes the (rendered, total, omitted) triple for
+  // a single layer. Defensive against non-finite or negative inputs.
+  function getTruncationInfo(total, rendered) {
+    const safeTotal = Math.max(0, Number.isFinite(total) ? total : 0);
+    const safeRendered = Math.max(0, Number.isFinite(rendered) ? rendered : 0);
+    return {
+      total: safeTotal,
+      rendered: safeRendered,
+      omitted: Math.max(0, safeTotal - safeRendered),
+    };
+  }
+
+  // addMoreNode renders one truncation marker at the supplied position.
+  // The id (`more:<layerKey>`) is stable per layer so re-renders replace
+  // the previous marker. The details payload exposes the (rendered,
+  // total, omitted) accounting plus a short note explaining why hidden
+  // items are not enumerated. Returns silently when omitted == 0 so the
+  // caller can call this unconditionally.
+  function addMoreNode(layerKey, layerLabel, total, rendered, pos) {
+    const info = getTruncationInfo(total, rendered);
+    if (info.omitted <= 0) return;
+    addNode({
+      id: 'more:' + layerKey,
+      kind: 'more',
+      cls: 'gmap-more-node',
+      label: 'MORE',
+      name: '+' + info.omitted + ' more',
+      meta: [String(info.total) + ' total', String(info.rendered) + ' shown'],
+      details: {
+        layer: layerLabel,
+        rendered: String(info.rendered),
+        total: String(info.total),
+        omitted: String(info.omitted),
+        note: 'Additional items are hidden to preserve map readability.',
+      },
+    }, pos);
+  }
+
   function renderGovernanceMap(data) {
     clearGovernanceMapCanvas();
     setGovernanceMapStatus('');
@@ -4463,21 +6061,47 @@
     //      n * NODE_W + (n - 1) * NODE_GAP
     const reqRow = (n) => n <= 0 ? 0 : n * GMAP.NODE_W + (n - 1) * GMAP.NODE_GAP;
 
-    const rels = (data.relationships && data.relationships.outgoing) || [];
-    const relSlice = rels.slice(0, GMAP.MAX_PER_LAYER);
-    const caps = (data.capabilities || []).slice(0, GMAP.MAX_PER_LAYER);
-    const procs = (data.processes || []).slice(0, GMAP.MAX_PER_LAYER);
-    const surfaces = (data.surfaces || []).slice(0, GMAP.MAX_PER_LAYER);
-    const aiSystems = (data.ai_systems || []).slice(0, GMAP.MAX_PER_LAYER);
+    // Capture the FULL response arrays first so the omitted-count math
+    // works against the unsliced length. The sliced arrays preserve
+    // their original names so all downstream renderer code (forEach
+    // loops, connector resolution, summary panel) keeps working.
+    const fullRels       = (data.relationships && data.relationships.outgoing) || [];
+    const fullCaps       = data.capabilities || [];
+    const fullProcs      = data.processes || [];
+    const fullSurfaces   = data.surfaces || [];
+    const fullAISystems  = data.ai_systems || [];
 
-    const relReqW   = reqRow(relSlice.length);
-    const surfReqW  = reqRow(surfaces.length);
-    const aiReqW    = reqRow(aiSystems.length);
+    const rels       = fullRels;          // alias kept for the existing connector blocks
+    const relSlice   = fullRels.slice(0, GMAP.MAX_PER_LAYER);
+    const caps       = fullCaps.slice(0, GMAP.MAX_PER_LAYER);
+    const procs      = fullProcs.slice(0, GMAP.MAX_PER_LAYER);
+    const surfaces   = fullSurfaces.slice(0, GMAP.MAX_PER_LAYER);
+    const aiSystems  = fullAISystems.slice(0, GMAP.MAX_PER_LAYER);
+
+    // Truncation: how many were hidden by the cap, and the layout-only
+    // count (visible + 1 extra slot for the more-node when truncated).
+    // Layout counts are used for reqRow + distributeRow only; connector
+    // iteration and details-panel logic still see the visible slices.
+    const relOmitted  = fullRels.length      - relSlice.length;
+    const capOmitted  = fullCaps.length      - caps.length;
+    const procOmitted = fullProcs.length     - procs.length;
+    const surfOmitted = fullSurfaces.length  - surfaces.length;
+    const aiOmitted   = fullAISystems.length - aiSystems.length;
+    const relLayoutN  = relSlice.length  + (relOmitted  > 0 ? 1 : 0);
+    const capLayoutN  = caps.length      + (capOmitted  > 0 ? 1 : 0);
+    const procLayoutN = procs.length     + (procOmitted > 0 ? 1 : 0);
+    const surfLayoutN = surfaces.length  + (surfOmitted > 0 ? 1 : 0);
+    const aiLayoutN   = aiSystems.length + (aiOmitted   > 0 ? 1 : 0);
+
+    const relReqW   = reqRow(relLayoutN);
+    const surfReqW  = reqRow(surfLayoutN);
+    const aiReqW    = reqRow(aiLayoutN);
     // Cap+proc share a row split into two sub-strips with a midGap
     // between them. midGap is only added when both sides are populated.
-    const capsReqW  = reqRow(caps.length);
-    const procsReqW = reqRow(procs.length);
-    const midGap    = (caps.length && procs.length) ? GMAP.NODE_GAP : 0;
+    // The layout counts already include the optional more-node slot.
+    const capsReqW  = reqRow(capLayoutN);
+    const procsReqW = reqRow(procLayoutN);
+    const midGap    = (capLayoutN && procLayoutN) ? GMAP.NODE_GAP : 0;
     const capProcReqW = capsReqW + midGap + procsReqW;
 
     const EDGE = GMAP.EDGE_PAD;
@@ -4493,25 +6117,43 @@
     const govX   = mainX1 + GMAP.GOV_GAP;
     const canvasW = Math.max(GMAP.MIN_CANVAS_W, govX + GMAP.NODE_W + EDGE);
 
-    // Apply the computed canvas width + SVG viewBox so the wrapper's
-    // overflow-x:auto can scroll horizontally when the strip grew.
-    canvas.style.width = canvasW + 'px';
-    canvas.style.minWidth = canvasW + 'px';
+    // Stash the unscaled base width on the canvas dataset so applyGmapZoom
+    // can recompute scaled dimensions on every zoom change without
+    // re-running the row-sizing pass. The SVG viewBox uses the unscaled
+    // dimensions — the SVG fills the scene at 100%, so the zoom transform
+    // applied to the scene scales the SVG paint output uniformly with
+    // the HTML node cards.
+    canvas.dataset.baseWidth = canvasW;
     svg.setAttribute('viewBox', '0 0 ' + canvasW + ' ' + GMAP.CANVAS_H);
 
     // ── Layer 1: Related Services (top row) ─────────────────────────────
-    const relX = distributeRow(relSlice.length, mainX0, mainX1);
+    // distributeRow gets the LAYOUT count (visible + 1 if truncated) so
+    // the more-node has a reserved slot at the row's right end.
+    const relX = distributeRow(relLayoutN, mainX0, mainX1);
     relSlice.forEach((rel, i) => {
       const id = 'rel:' + rel.id;
       positions[id] = { x: relX[i], y: GMAP.LAYERS.RELATED.y, kind: 'related' };
+      // Drill-down: the action only attaches when the related-service
+      // node carries a real target BS id. Without it, the action area
+      // stays empty (no disabled placeholder button).
+      const relActions = rel.target_business_service_id
+        ? [{ kind: 'view-business-service-record', target_id: rel.target_business_service_id, label: 'View record' }]
+        : [];
       addNode({
         id, kind: 'related', cls: 'related-service-node',
         label: 'RELATED SERVICE',
         name: rel.other_name || rel.target_business_service_id,
         meta: rel.relationship_type ? [rel.relationship_type] : [],
         details: { 'relationship': rel.relationship_type || '—', 'target_id': rel.target_business_service_id, 'edge_id': rel.id },
+        actions: relActions,
       }, positions[id]);
     });
+    if (relOmitted > 0) {
+      const moreX = relX[relX.length - 1];
+      const morePos = { x: moreX, y: GMAP.LAYERS.RELATED.y, kind: 'more' };
+      positions['more:relationships'] = morePos;
+      addMoreNode('relationships', 'Related services', fullRels.length, relSlice.length, morePos);
+    }
 
     // ── Layer 2: Business Service (centred in the main strip) ──────────
     const bs = data.business_service;
@@ -4533,6 +6175,13 @@
         'owner': bs.owner_id || '—',
         'external_ref': bs.external_ref ? (bs.external_ref.source_system + ':' + bs.external_ref.source_id) : 'none',
       },
+      // Drill-down: the BS node always has a navigable record because
+      // the map only renders for an existing BS. target_id is the bare
+      // id (no `bs:` prefix) so showBusinessServiceRecord receives the
+      // catalogue/record cache key directly.
+      actions: bs.id
+        ? [{ kind: 'view-business-service-record', target_id: bs.id, label: 'View record' }]
+        : [],
     }, positions[bsId]);
     gmapSelectedId = bsId;
 
@@ -4545,8 +6194,11 @@
     const capSubX1  = mainX0 + halfW;
     const procSubX0 = mainX0 + halfW + midGap;
     const procSubX1 = mainX1;
-    const capX  = distributeRow(caps.length,  capSubX0,  capSubX1);
-    const procX = distributeRow(procs.length, procSubX0, procSubX1);
+    // Each half-strip uses its own layout count so a truncated cap row
+    // and a non-truncated proc row (or vice versa) each pack their own
+    // sub-strip correctly.
+    const capX  = distributeRow(capLayoutN,  capSubX0,  capSubX1);
+    const procX = distributeRow(procLayoutN, procSubX0, procSubX1);
     caps.forEach((c, i) => {
       const id = 'cap:' + c.id;
       positions[id] = { x: capX[i], y: GMAP.LAYERS.CAP_PROC.y, kind: 'cap' };
@@ -4557,6 +6209,12 @@
         details: { 'id': c.id, 'status': c.status || '—' },
       }, positions[id]);
     });
+    if (capOmitted > 0) {
+      const moreX = capX[capX.length - 1];
+      const morePos = { x: moreX, y: GMAP.LAYERS.CAP_PROC.y, kind: 'more' };
+      positions['more:capabilities'] = morePos;
+      addMoreNode('capabilities', 'Capabilities', fullCaps.length, caps.length, morePos);
+    }
     procs.forEach((p, i) => {
       const id = 'proc:' + p.id;
       positions[id] = { x: procX[i], y: GMAP.LAYERS.CAP_PROC.y, kind: 'proc' };
@@ -4567,9 +6225,15 @@
         details: { 'id': p.id, 'business_service_id': p.business_service_id || '—', 'status': p.status || '—' },
       }, positions[id]);
     });
+    if (procOmitted > 0) {
+      const moreX = procX[procX.length - 1];
+      const morePos = { x: moreX, y: GMAP.LAYERS.CAP_PROC.y, kind: 'more' };
+      positions['more:processes'] = morePos;
+      addMoreNode('processes', 'Processes', fullProcs.length, procs.length, morePos);
+    }
 
     // ── Layer 4: Decision Surfaces ─────────────────────────────────────
-    const surfX = distributeRow(surfaces.length, mainX0, mainX1);
+    const surfX = distributeRow(surfLayoutN, mainX0, mainX1);
     surfaces.forEach((s, i) => {
       const id = 'surf:' + s.id;
       positions[id] = { x: surfX[i], y: GMAP.LAYERS.SURFACE.y, kind: 'surface', surface: s };
@@ -4590,26 +6254,68 @@
         },
       }, positions[id]);
     });
+    if (surfOmitted > 0) {
+      const moreX = surfX[surfX.length - 1];
+      const morePos = { x: moreX, y: GMAP.LAYERS.SURFACE.y, kind: 'more' };
+      positions['more:surfaces'] = morePos;
+      addMoreNode('surfaces', 'Decision surfaces', fullSurfaces.length, surfaces.length, morePos);
+    }
 
     // ── Layer 5: AI Systems ─────────────────────────────────────────────
-    const aiX = distributeRow(aiSystems.length, mainX0, mainX1);
+    const aiX = distributeRow(aiLayoutN, mainX0, mainX1);
     aiSystems.forEach((ai, i) => {
       const id = 'ai:' + ai.id;
       positions[id] = { x: aiX[i], y: GMAP.LAYERS.AI.y, kind: 'ai', ai };
+      // Card meta line: status, active version, and an EXT-REF marker
+      // when external_ref is present. The EXT-REF treatment matches the
+      // Business Service node's existing meta-line convention.
       const meta = [];
       if (ai.status) meta.push(ai.status);
       if (ai.active_version) meta.push('v' + ai.active_version.version);
+      if (ai.external_ref) meta.push('EXT-REF');
+
+      // Build the details payload up front. The panel renders one row
+      // per (key, value) pair, so each scalar field gets its own key.
+      // Bindings are unfolded into binding_1, binding_2, ... rows so
+      // the operator sees role + scope per binding rather than only a
+      // count.
+      const aiDetails = {
+        id: ai.id,
+        vendor: ai.vendor || '—',
+        system_type: ai.system_type || '—',
+        status: ai.status || '—',
+        active_version: ai.active_version ? ai.active_version.version : 'none',
+      };
+      if (ai.active_version) {
+        if (ai.active_version.release_label) {
+          aiDetails.active_release = ai.active_version.release_label;
+        }
+        if (ai.active_version.status) {
+          aiDetails.active_version_status = ai.active_version.status;
+        }
+      }
+      if (ai.external_ref) {
+        aiDetails.external_ref = formatExternalRef(ai.external_ref);
+      }
+      const aiBindings = ai.bindings || [];
+      aiDetails.bindings = aiBindings.length;
+      aiBindings.forEach((b, idx) => {
+        aiDetails['binding_' + (idx + 1)] = formatAIBindingDetail(b);
+      });
+
       addNode({
         id, kind: 'ai', cls: 'ai-system-node',
         label: 'AI SYSTEM', name: ai.name || ai.id,
         meta,
-        details: {
-          'id': ai.id, 'vendor': ai.vendor || '—', 'system_type': ai.system_type || '—', 'status': ai.status || '—',
-          'active_version': ai.active_version ? ai.active_version.version : 'none',
-          'bindings': (ai.bindings || []).length,
-        },
+        details: aiDetails,
       }, positions[id]);
     });
+    if (aiOmitted > 0) {
+      const moreX = aiX[aiX.length - 1];
+      const morePos = { x: moreX, y: GMAP.LAYERS.AI.y, kind: 'more' };
+      positions['more:ai-systems'] = morePos;
+      addMoreNode('ai-systems', 'AI systems', fullAISystems.length, aiSystems.length, morePos);
+    }
 
     // ── Right-side governance column: Authority + Coverage ─────────────
     // govX was computed in the sizing pass so it always sits NODE_GAP-or-
@@ -4741,6 +6447,13 @@
       ['Coverage gaps',        String(cov.surfaces_without_ai_binding || 0)],
     ]);
     selectGovernanceMapNode(bsId);
+
+    // Apply the current zoom level. Carries the operator's zoom choice
+    // across BS-switch re-renders (renderGovernanceMap runs again on
+    // each refresh; gmapZoom state is module-level so it survives).
+    // Also sizes the canvas to the scaled dimensions so the scroll
+    // wrapper has the right bounds for both axes.
+    applyGmapZoom();
   }
 
   // addNode positions an HTML node card and registers click + keyboard
@@ -4748,8 +6461,11 @@
   // a JSON-encoded data attribute so the details panel can read it on
   // click without re-querying the API response.
   function addNode(spec, pos) {
-    const canvas = document.getElementById('gmap-canvas');
-    if (!canvas) return;
+    // Append into the scene wrapper so the node card transforms together
+    // with the SVG connector layer — relative coordinates between any
+    // node and any connector path are preserved across all zoom levels.
+    const scene = document.getElementById('gmap-scene');
+    if (!scene) return;
     const node = document.createElement('button');
     node.type = 'button';
     node.className = 'gmap-node ' + (spec.cls || '');
@@ -4772,11 +6488,21 @@
     try {
       node.dataset.nodeDetails = JSON.stringify(spec.details || {});
     } catch { /* details optional */ }
+    // Drill-down actions metadata. Stored as data-only JSON — never as
+    // executable strings or callbacks — so the click handler cannot be
+    // hijacked through dataset injection. The dispatcher
+    // (handleGovernanceMapAction) only honours kinds in its whitelist.
+    try {
+      node.dataset.nodeActions = JSON.stringify(spec.actions || []);
+    } catch { /* actions optional */ }
+    // Click = selection only. Navigation is gated behind the explicit
+    // "View record" button rendered into #gmap-details-actions on
+    // selection; clicking the node itself NEVER navigates.
     node.addEventListener('click', () => selectGovernanceMapNode(spec.id));
     node.addEventListener('keydown', e => {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectGovernanceMapNode(spec.id); }
     });
-    canvas.appendChild(node);
+    scene.appendChild(node);
   }
 
   function addConnector(p1, p2, cls) {
@@ -4804,6 +6530,59 @@
     let details = {};
     try { details = JSON.parse(selectedNode.dataset.nodeDetails || '{}'); } catch { /* ignore */ }
     setGovernanceMapDetailsFields(Object.keys(details).map(k => [k, details[k]]));
+    // Read the node's action metadata and (re-)render the action area.
+    // An empty/absent list collapses the wrapper to zero height — no
+    // disabled buttons appear for unsupported node types.
+    let actions = [];
+    try { actions = JSON.parse(selectedNode.dataset.nodeActions || '[]'); } catch { /* ignore */ }
+    setGovernanceMapDetailsActions(Array.isArray(actions) ? actions : []);
+  }
+
+  // setGovernanceMapDetailsActions renders the per-selection action area.
+  // Only known action kinds (see handleGovernanceMapAction) produce a
+  // button; any unknown kind is silently dropped. The wrapper is left
+  // empty when no valid actions remain — the CSS rule
+  // `.gmap-details-actions:empty { display: none; }` collapses it.
+  function setGovernanceMapDetailsActions(actions) {
+    const el = document.getElementById('gmap-details-actions');
+    if (!el) return;
+    el.innerHTML = '';
+    if (!Array.isArray(actions) || actions.length === 0) return;
+    actions.forEach(action => {
+      if (!action || typeof action !== 'object') return;
+      if (action.kind === 'view-business-service-record') {
+        if (!action.target_id) return;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-secondary gmap-action-view-record';
+        btn.textContent = action.label || 'View record';
+        btn.setAttribute('aria-label', (action.label || 'View record') + ' for ' + String(action.target_id));
+        btn.addEventListener('click', () => handleGovernanceMapAction(action));
+        el.appendChild(btn);
+      }
+      // Unknown kinds are intentionally dropped here; the dispatcher
+      // also enforces this on click as a defence-in-depth check.
+    });
+  }
+
+  // handleGovernanceMapAction is the single dispatcher for governance-map
+  // actions. It accepts ONLY whitelisted action kinds and routes them to
+  // existing in-app navigation. Unknown kinds, missing target_ids, or
+  // payloads of the wrong shape are ignored — no fake routes, no errors
+  // surfaced to the operator. Add a new kind here only when there is a
+  // real, navigable Explorer destination for it.
+  function handleGovernanceMapAction(action) {
+    if (!action || typeof action !== 'object') return;
+    switch (action.kind) {
+      case 'view-business-service-record':
+        if (action.target_id && typeof showBusinessServiceRecord === 'function') {
+          showBusinessServiceRecord(action.target_id);
+        }
+        return;
+      default:
+        // Unknown kind — drop silently.
+        return;
+    }
   }
 
   function setGovernanceMapDetailsName(name) {
@@ -6648,9 +8427,20 @@
   // Initialise resource panel after a short delay so it appears after config fetch
   setTimeout(renderResourcePanel, 0);
 
-  // Initialise the Services view content (Cluster 2). STRUCTURAL_CONTEXT and
-  // DEMO_RESOURCES are now in scope — renderServicesView reads from them.
-  setTimeout(renderServicesView, 0);
+  // Initialise the Services view at the catalogue sub-view. The previous
+  // three-column overview was retired in favour of a catalogue → record
+  // → map flow; the catalogue is the landing page, the live
+  // /v1/businessservices fetch populates it, and the record + map
+  // sub-views activate via showBusinessServiceRecord() and
+  // showBusinessServiceMap() once the operator clicks through.
+  setTimeout(showServicesCatalogue, 0);
+  setTimeout(loadBusinessServicesList, 0);
+
+  // Capabilities view bootstrap — load the live capability list once,
+  // independently of which top-level view is currently active. The list
+  // is small (no pagination today) and the catalogue is the landing
+  // point when the operator clicks the Capabilities sidebar item.
+  setTimeout(loadCapabilitiesList, 0);
 
   // Initialise the Records view content (Cluster 4) — demo rows + selected
   // record detail rail. No backend calls; all data is local.

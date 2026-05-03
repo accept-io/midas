@@ -601,6 +601,12 @@ components:
         status:
           type: string
           enum: [active, inactive, deprecated]
+        owner_id:
+          type: string
+          description: >
+            Optional owner identifier (team, person, or organisational unit).
+            Omitted when empty. Surfaced on detail and list responses for
+            operator triage (added with the live BS selector).
         created_at:
           type: string
           format: date-time
@@ -615,6 +621,20 @@ components:
             Optional structured reference to an external system. Always
             present in the response; rendered as null when no external
             reference is recorded (Epic 1, PR 3).
+
+    BusinessServicesResponse:
+      type: object
+      description: >
+        Envelope wrapping the GET /v1/businessservices list payload. The
+        `business_services` array is always present (never null); empty
+        store returns []. The envelope shape replaced the previous bare
+        array when the live Explorer Business-Service selector landed.
+      required: [business_services]
+      properties:
+        business_services:
+          type: array
+          items:
+            $ref: "#/components/schemas/BusinessService"
 
     BusinessServiceRelationship:
       type: object
@@ -3217,17 +3237,16 @@ paths:
       operationId: listBusinessServices
       summary: List all business services
       description: >
-        Returns all registered business services. No pagination — returns the
-        full list. Requires platform.viewer or above.
+        Returns all registered business services wrapped in a
+        `business_services` envelope. No pagination — returns the full
+        list. Requires platform.viewer or above.
       responses:
         "200":
-          description: Business service list
+          description: Business service list (envelope shape)
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/BusinessService"
+                $ref: "#/components/schemas/BusinessServicesResponse"
         "401":
           description: Unauthenticated
           content:

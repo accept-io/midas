@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,12 +26,23 @@ func TestListBusinessServices_Empty(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	var out []businessServiceResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
-		t.Fatalf("unmarshal: %v", err)
+	// Envelope-shape contract: the JSON body must be exactly
+	// `{"business_services":[]}` — array present, never null. Pin both
+	// the unmarshal path and the literal so a regression to bare-array
+	// or to `null` surfaces explicitly.
+	if !strings.Contains(rec.Body.String(), `"business_services":[]`) {
+		t.Errorf("envelope shape: empty list must render as `\"business_services\":[]`; got %s",
+			rec.Body.String())
 	}
-	if len(out) != 0 {
-		t.Errorf("expected empty list, got %d", len(out))
+	var out businessServicesResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal envelope: %v", err)
+	}
+	if out.BusinessServices == nil {
+		t.Errorf("business_services must be a non-nil empty slice, got nil")
+	}
+	if len(out.BusinessServices) != 0 {
+		t.Errorf("expected empty list, got %d", len(out.BusinessServices))
 	}
 }
 
@@ -44,6 +56,7 @@ func TestListBusinessServices_WithItems(t *testing.T) {
 		Status:      "active",
 		Origin:      "manual",
 		Managed:     true,
+		OwnerID:     "team-credit",
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	})
@@ -63,12 +76,26 @@ func TestListBusinessServices_WithItems(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	var out []businessServiceResponse
+	var out businessServicesResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
-		t.Fatalf("unmarshal: %v", err)
+		t.Fatalf("unmarshal envelope: %v", err)
 	}
-	if len(out) != 2 {
-		t.Errorf("expected 2 business services, got %d", len(out))
+	if len(out.BusinessServices) != 2 {
+		t.Fatalf("expected 2 business services, got %d", len(out.BusinessServices))
+	}
+	// Find bs-1 to assert the new owner_id field flows through.
+	var bs1 *businessServiceResponse
+	for i := range out.BusinessServices {
+		if out.BusinessServices[i].ID == "bs-1" {
+			bs1 = &out.BusinessServices[i]
+			break
+		}
+	}
+	if bs1 == nil {
+		t.Fatalf("bs-1 missing from response")
+	}
+	if bs1.OwnerID != "team-credit" {
+		t.Errorf("owner_id propagation: want team-credit, got %q", bs1.OwnerID)
 	}
 }
 
@@ -136,7 +163,9 @@ func TestBusinessService_NoStructuralService_Returns501(t *testing.T) {
 }
 
 func TestListBusinessServices_WithoutBSReader_ReturnsEmpty(t *testing.T) {
-	// StructuralService configured but without a BusinessServiceReader — returns empty list.
+	// StructuralService configured but without a BusinessServiceReader —
+	// returns an empty envelope, not an error. The non-nil empty array
+	// guarantee from the envelope shape must hold even on this path.
 	svc := NewStructuralService(memory.NewCapabilityRepo(), memory.NewProcessRepo(), memory.NewSurfaceRepo())
 	srv := NewServerFull(nil, nil, nil, nil, nil, nil)
 	srv.WithStructural(svc)
@@ -145,12 +174,16 @@ func TestListBusinessServices_WithoutBSReader_ReturnsEmpty(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	var out []businessServiceResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
-		t.Fatalf("unmarshal: %v", err)
+	if !strings.Contains(rec.Body.String(), `"business_services":[]`) {
+		t.Errorf("envelope shape: missing-reader path must still render `\"business_services\":[]`; got %s",
+			rec.Body.String())
 	}
-	if len(out) != 0 {
-		t.Errorf("expected empty list without BS reader, got %d", len(out))
+	var out businessServicesResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal envelope: %v", err)
+	}
+	if len(out.BusinessServices) != 0 {
+		t.Errorf("expected empty list without BS reader, got %d", len(out.BusinessServices))
 	}
 }
 
