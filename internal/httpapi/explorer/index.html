@@ -4,6 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MIDAS Explorer</title>
+<!-- MIDAS favicon — inline SVG data URI mirrors the sidebar `.midas-logo-mark`:
+     four equal vertical white bars on a black background, with bars 2 and 3
+     translated down ~2px. No external assets are loaded. -->
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20fill='%23000'/%3E%3Crect%20x='5'%20y='6'%20width='4'%20height='20'%20fill='%23fff'/%3E%3Crect%20x='12'%20y='8'%20width='4'%20height='20'%20fill='%23fff'/%3E%3Crect%20x='19'%20y='8'%20width='4'%20height='20'%20fill='%23fff'/%3E%3Crect%20x='26'%20y='6'%20width='4'%20height='20'%20fill='%23fff'/%3E%3C/svg%3E">
 <style>
   /* ──────────────────────────────────────────────────────────────────────────
      MIDAS Explorer — dark workbench theme
@@ -263,30 +267,24 @@
     height: var(--header-height);
     background: var(--slate-900);
     border-bottom: 1px solid rgba(255,255,255,0.05);
-    display: flex;
+    /* Polish PR: three-zone grid keeps the centre cluster centred on
+       the canvas regardless of the right-zone width. The left zone is
+       intentionally empty (and aria-hidden in markup) — MIDAS branding
+       lives in the sidebar. */
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
     align-items: center;
-    justify-content: space-between;
     padding: 0 24px;
     z-index: 30;
     font-family: var(--font-display);
   }
-  .shell-header-left {
+  .shell-header-left  { min-width: 0; }
+  .shell-header-center {
     display: flex;
     align-items: center;
-    gap: 24px;
+    gap: 18px;
+    justify-self: center;
     min-width: 0;
-  }
-  .shell-header-brand {
-    font-size: 18px;
-    font-weight: 700;
-    letter-spacing: -0.02em;
-    color: var(--slate-200);
-    white-space: nowrap;
-  }
-  .shell-header-divider {
-    width: 1px;
-    height: 16px;
-    background: rgba(255,255,255,0.10);
   }
   .shell-header-chips {
     display: flex;
@@ -316,6 +314,7 @@
     display: flex;
     align-items: center;
     gap: 14px;
+    justify-self: end; /* right-align inside the header grid cell */
   }
   #iam-user-pill {
     display: none;
@@ -441,47 +440,11 @@
     color: var(--on-primary-container);
   }
 
-  /* Warning bar / demo banner / mode banner — keep IDs, dark styling */
-  .warning-bar {
-    background: rgba(146, 64, 14, 0.18);
-    border-bottom: 1px solid rgba(252, 211, 77, 0.18);
-    padding: 8px 24px;
-    font-size: 12px;
-    color: #fcd34d;
-  }
-  .demo-banner {
-    padding: 8px 24px;
-    font-size: 12px;
-    font-weight: 500;
-    display: none;
-  }
-  .demo-banner.ready {
-    display: block;
-    background: rgba(78, 222, 163, 0.10);
-    border-bottom: 1px solid rgba(78, 222, 163, 0.28);
-    color: var(--secondary);
-  }
-  .demo-banner.not-ready {
-    display: block;
-    background: rgba(252, 211, 77, 0.10);
-    border-bottom: 1px solid rgba(252, 211, 77, 0.28);
-    color: #fcd34d;
-  }
-
-  .mode-banner { font-size: 11px; line-height: 1.5; }
-  .mode-banner-evaluate {
-    padding: 6px 24px;
-    background: rgba(78, 222, 163, 0.08);
-    border-bottom: 1px solid rgba(78, 222, 163, 0.20);
-    color: var(--secondary);
-  }
-  .mode-banner-simulate {
-    padding: 6px 24px;
-    background: rgba(252, 211, 77, 0.10);
-    border-bottom: 1px solid rgba(252, 211, 77, 0.24);
-    color: #fcd34d;
-  }
-  .mode-bar-hint { display: none; }   /* hint is conveyed via .mode-banner */
+  /* Banner rules removed in the Explorer Shell Polish PR.
+     The .warning-bar, .demo-banner*, .mode-banner*, and .mode-bar-hint
+     classes no longer exist anywhere; their related DOM nodes and JS
+     hooks were removed in the same PR. The execution-mode toggle in the
+     header remains the source of truth for evaluate vs simulate. */
 
   /* Auth-gate blur — toggled on .shell-main when an overlay is shown */
   .layout-gated {
@@ -2431,6 +2394,37 @@
     align-items: start;
   }
 
+  /* Polish PR: per-column header strip for first-use clarity. The
+     three columns now each declare a title + helper subtitle so the
+     reading order ("which service?" → "what does it do?" → "how is
+     it governed?") is explicit. Visual treatment is intentionally
+     light — a small uppercase title and a one-line subtitle —
+     matching the existing dark workbench language. */
+  .services-col {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .services-col-header {
+    margin-bottom: 12px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--outline-variant);
+  }
+  .services-col-title {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--slate-300);
+    font-family: var(--font-display);
+    margin-bottom: 2px;
+  }
+  .services-col-subtitle {
+    font-size: 11px;
+    color: var(--slate-500);
+    line-height: 1.45;
+  }
+
   .services-bs-search {
     width: 100%;
     padding: 9px 12px;
@@ -2832,6 +2826,266 @@
     .services-grid       { grid-template-columns: 1fr; }
     .services-paths-grid { grid-template-columns: 1fr; }
   }
+
+  /* ──────────────────────────────────────────────────────────────────────
+     Governance Map (Epic 1, PR 5)
+     ServiceNow-style node-link visual rendered inside the Services view
+     centre panel. Layout is static / slot-based — nodes are positioned
+     by category at known (x,y) slots and connectors are drawn into an
+     SVG layer behind the HTML node cards using the same coordinates.
+     The connectors are the product, so the SVG layer is load-bearing.
+     ────────────────────────────────────────────────────────────────────── */
+
+  .services-mode-tabs {
+    display: flex;
+    gap: 6px;
+    margin-top: 10px;
+  }
+  .services-mode-tab {
+    background: var(--surface-container);
+    color: var(--slate-400);
+    border: 1px solid var(--outline-variant);
+    padding: 6px 14px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .services-mode-tab.active {
+    background: var(--surface-container-high);
+    color: var(--primary);
+    border-color: var(--primary);
+  }
+
+  /* Top-level Services layouts. Exactly one is active at a time —
+     Overview (the original three-column grid) or Map (the full-width
+     governance-map workbench). The mode toggle is a sibling of both
+     containers so it remains visible across modes. */
+  .services-mode-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 18px;
+  }
+  .services-mode-toolbar .services-mode-tabs { margin-top: 0; }
+
+  .services-overview-layout { display: block; }
+  .services-overview-layout.hidden { display: none; }
+  .services-map-layout      { display: none; }
+  .services-map-layout.active { display: block; }
+
+  .governance-map-workbench {
+    background: var(--surface-container-low);
+    border: 1px solid var(--outline-variant);
+    border-radius: 8px;
+    overflow: hidden;
+    width: 100%;
+  }
+  .governance-map-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 22px;
+    background: var(--surface-container-lowest);
+    border-bottom: 1px solid var(--outline-variant);
+  }
+  .governance-map-toolbar .gmap-status {
+    font-size: 11px;
+    color: var(--slate-500);
+  }
+
+  /* Horizontal scroll wrapper so the fixed-width 1180px canvas is never
+     clipped on narrower viewports; on wider viewports the canvas sits
+     left-aligned within the workbench (no awkward stretch). */
+  .governance-map-canvas-scroll {
+    overflow-x: auto;
+    overflow-y: hidden;
+    background: var(--surface-container-lowest);
+  }
+  .governance-map-canvas {
+    position: relative;
+    width: 1180px;
+    min-width: 1180px;
+    height: 720px;
+    background: var(--surface-container-lowest);
+    border-bottom: 1px solid var(--outline-variant);
+    overflow: visible;
+  }
+  .governance-map-svg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 1;
+    overflow: visible;
+  }
+
+  .gmap-node {
+    position: absolute;
+    width: 220px;
+    min-height: 64px;
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    border-radius: 8px;
+    padding: 9px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    color: var(--on-surface);
+    z-index: 2;
+    cursor: pointer;
+    font-family: inherit;
+    text-align: left;
+    transition: border-color 0.12s, background 0.12s, transform 0.08s;
+  }
+  .gmap-node:hover { background: var(--surface-container-high); }
+  .gmap-node:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 1px;
+  }
+  .gmap-node.selected {
+    border-color: var(--primary);
+    background: var(--surface-container-high);
+    box-shadow: 0 4px 16px rgba(173,198,255,0.18);
+  }
+
+  .gmap-node-label {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    color: var(--slate-500);
+  }
+  .gmap-node-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--on-surface);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .gmap-node-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    font-size: 10px;
+    color: var(--slate-400);
+    font-family: var(--font-mono);
+  }
+  .gmap-badge {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 1px 6px;
+    border-radius: 3px;
+    border: 1px solid var(--outline-variant);
+    color: var(--slate-400);
+  }
+  .gmap-badge.ok { color: var(--secondary); border-color: rgba(78,222,163,0.40); }
+  .gmap-badge.warn { color: #f0b67a; border-color: rgba(240,182,122,0.45); }
+  .gmap-badge.bind { color: var(--primary); border-color: rgba(173,198,255,0.40); }
+
+  /* Per-type node accents — left border + label colour */
+  .business-service-node { border-left: 4px solid var(--primary); }
+  .related-service-node  { border-left: 4px solid #8aa7d6; }
+  .capability-node       { border-left: 4px solid #c2c6d6; }
+  .process-node          { border-left: 4px solid #c2c6d6; }
+  .decision-surface-node { border-left: 4px solid var(--secondary); }
+  .ai-system-node        { border-left: 4px solid #6fb7e6; }
+  .authority-node        { border-left: 4px dashed #6fb7e6; }
+  .coverage-node         { border-left: 4px solid #d6c46f; }
+
+  /* Connector line styles — these classes are the contract Cluster B/C
+     tests pin. Change them with a matching test update. */
+  .connector-service     { fill: none; stroke: #8b949c; stroke-width: 2.2; opacity: 0.85; }
+  .connector-ai-binding  { fill: none; stroke: #6fb7e6; stroke-width: 2.2; opacity: 0.95; }
+  .connector-authority   { fill: none; stroke: #6fb7e6; stroke-width: 2.0; stroke-dasharray: 6 4; opacity: 0.85; }
+  .connector-evidence    { fill: none; stroke: #4edea3; stroke-width: 2.0; opacity: 0.85; }
+  .connector-gap         { fill: none; stroke: #f0b67a; stroke-width: 2.0; stroke-dasharray: 5 5; opacity: 0.95; }
+
+  .governance-map-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    padding: 10px 22px;
+    background: var(--surface-container-lowest);
+    border-bottom: 1px solid var(--outline-variant);
+    font-size: 11px;
+    color: var(--slate-400);
+  }
+  .gmap-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .gmap-legend-swatch {
+    display: inline-block;
+    width: 24px;
+    height: 2px;
+    background: #8b949c;
+    border-radius: 2px;
+  }
+  .gmap-legend-swatch.ai-binding { background: #6fb7e6; height: 2px; }
+  .gmap-legend-swatch.authority  { background: transparent; border-top: 2px dashed #6fb7e6; }
+  .gmap-legend-swatch.evidence   { background: #4edea3; }
+  .gmap-legend-swatch.gap        { background: transparent; border-top: 2px dashed #f0b67a; }
+
+  .governance-map-details {
+    padding: 14px 22px;
+    background: var(--surface-container-low);
+    border-top: 1px solid var(--outline-variant);
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+  }
+  .gmap-details-title {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--slate-500);
+    margin-bottom: 6px;
+  }
+  .gmap-details-name {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--on-surface);
+    margin-bottom: 4px;
+  }
+  .gmap-details-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    padding: 3px 0;
+    border-bottom: 1px dotted var(--outline-variant);
+  }
+  .gmap-details-row:last-child { border-bottom: 0; }
+  .gmap-details-key { color: var(--slate-500); font-family: var(--font-mono); font-size: 11px; }
+  .gmap-details-val { color: var(--on-surface); font-family: var(--font-mono); font-size: 11px; }
+
+  .governance-map-empty,
+  .governance-map-error {
+    padding: 48px 24px;
+    text-align: center;
+    color: var(--slate-400);
+    font-size: 13px;
+  }
+  .governance-map-empty .gmap-empty-title,
+  .governance-map-error .gmap-empty-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--on-surface);
+    margin-bottom: 6px;
+  }
+  .governance-map-error { color: #f0b67a; }
+
+  @media (max-width: 1100px) {
+    .governance-map-details { grid-template-columns: 1fr; }
+  }
 </style>
 </head>
 <body>
@@ -2937,22 +3191,26 @@
   </div>
 </aside>
 
+<!-- Polish PR: the redundant top-nav brand text + its divider were
+     removed; MIDAS Explorer branding lives in the sidebar only. The
+     header now uses a three-zone grid (left empty | centre chips+toggle
+     | right iam+badge) so the chips and execution-mode toggle sit
+     centred on the canvas regardless of the right-zone width. -->
 <header class="shell-header" role="banner">
-  <div class="shell-header-left">
-    <span class="shell-header-brand">Accept Explorer</span>
-    <span class="shell-header-divider" aria-hidden="true"></span>
+  <div class="shell-header-left" aria-hidden="true"></div>
+  <div class="shell-header-center">
     <nav class="shell-header-chips" aria-label="Runtime context">
       <span class="shell-header-chip" id="header-sandbox-chip">Sandbox</span>
       <span class="shell-header-chip" id="header-auth-chip">Auth: <strong>—</strong></span>
       <span class="shell-header-chip" id="header-store-chip">Store: <strong>—</strong></span>
       <span class="shell-header-chip" id="header-policy-chip">Policy: <strong>—</strong></span>
     </nav>
-  </div>
-  <div class="shell-header-right">
     <div class="exec-mode-tabs" role="tablist" aria-label="Execution mode">
       <button class="exec-mode-tab active" data-exec-mode="evaluate" role="tab">Evaluate</button>
       <button class="exec-mode-tab" data-exec-mode="simulate" role="tab">Simulate</button>
     </div>
+  </div>
+  <div class="shell-header-right">
     <div id="iam-user-pill">
       <span id="iam-username-display"></span>
       <button id="iam-logout-btn" type="button">Sign out</button>
@@ -2963,68 +3221,142 @@
 
 <main class="shell-main" id="shell-main">
 
-  <div class="warning-bar">
-    &#9888;&#65039; Developer sandbox only. Use test tokens only — do not paste production credentials.
-  </div>
-
-  <div class="demo-banner" id="demo-banner"></div>
-
-  <div class="mode-banner mode-banner-evaluate" id="mode-banner">Result persisted &mdash; envelope created, audit logged, sandbox store</div>
-  <span class="mode-bar-hint" id="mode-bar-hint" hidden>Decisions are persisted and audited</span>
+  <!-- Polish PR: the three top banners (developer-sandbox warning,
+       sandbox-mode banner, evaluate/simulate mode banner) were removed
+       entirely. Their JS hooks have been removed from setExecMode() and
+       the /explorer/config block. The execution-mode toggle in the
+       header remains the source of truth for evaluate vs simulate. -->
 
   <!-- ─── View 1: Services ─────────────────────────────────────────────── -->
   <section id="view-services" class="app-view active services-view" data-view="services" aria-labelledby="view-services-title">
     <h2 id="view-services-title" style="position:absolute;left:-9999px">Services</h2>
 
-    <div class="services-grid">
-      <!-- LEFT: Business Service selector -->
-      <aside aria-label="Business services">
-        <input type="text" id="services-bs-search" class="services-bs-search"
-               placeholder="Search Business Services..." autocomplete="off">
-        <div id="services-bs-list" class="services-bs-list"></div>
-      </aside>
+    <!-- Services view mode toggle — sibling of the two layouts below so it
+         remains visible across modes. PR 5 lifts the Governance Map out of
+         the three-column grid into its own full-width workbench. -->
+    <div class="services-mode-toolbar">
+      <div class="services-mode-tabs" role="tablist" aria-label="Services view mode">
+        <button type="button" class="services-mode-tab active" id="services-mode-overview-btn"
+                role="tab" aria-selected="true" aria-controls="services-overview-layout"
+                data-services-mode="overview">Overview</button>
+        <button type="button" class="services-mode-tab" id="services-mode-map-btn"
+                role="tab" aria-selected="false" aria-controls="services-map-layout"
+                data-services-mode="map">Governance Map</button>
+      </div>
+    </div>
 
-      <!-- CENTER: selected service overview -->
-      <section class="services-center" aria-labelledby="services-overview-title">
-        <header class="services-overview-header">
-          <h3 id="services-overview-title">Service Overview</h3>
-          <p>Business-service context for capabilities, processes, decision surfaces, authority grants, and recent decisions.</p>
-        </header>
-        <div id="services-overview-body" class="services-overview-body"></div>
-      </section>
+    <!-- Overview layout — original three-column grid (BS selector | overview | summary). -->
+    <div id="services-overview-layout" class="services-overview-layout" role="tabpanel"
+         aria-labelledby="services-mode-overview-btn">
+      <div class="services-grid">
+        <!-- LEFT: Business Service selector
+             Polish PR: each column now carries an explicit header + helper
+             subtitle so a first-time user can read the layout's purpose
+             without inferring it from the contents below. -->
+        <aside class="services-col services-col-left" aria-labelledby="services-col-left-title">
+          <header class="services-col-header">
+            <h3 id="services-col-left-title" class="services-col-title">Business Services</h3>
+            <p class="services-col-subtitle">Select a service to explore its context</p>
+          </header>
+          <input type="text" id="services-bs-search" class="services-bs-search"
+                 placeholder="Search Business Services..." autocomplete="off">
+          <div id="services-bs-list" class="services-bs-list"></div>
+        </aside>
 
-      <!-- RIGHT: stack of summary cards -->
-      <aside class="services-summary" aria-label="Service summary">
-        <div class="services-card">
-          <div class="services-card-header">
-            <span class="services-card-title">Service Authority Summary</span>
+        <!-- CENTER: selected service overview -->
+        <section class="services-col services-col-center" aria-labelledby="services-col-center-title">
+          <header class="services-col-header">
+            <h3 id="services-col-center-title" class="services-col-title">Service Context</h3>
+            <p class="services-col-subtitle">Structural and governance context for the selected service</p>
+          </header>
+          <section class="services-center" aria-labelledby="services-overview-title">
+            <header class="services-overview-header">
+              <h3 id="services-overview-title">Service Overview</h3>
+              <p>Business-service context for capabilities, processes, decision surfaces, authority grants, and recent decisions.</p>
+            </header>
+            <div id="services-overview-body" class="services-overview-body"></div>
+          </section>
+        </section>
+
+        <!-- RIGHT: stack of summary cards -->
+        <aside class="services-col services-col-right services-summary" aria-labelledby="services-col-right-title">
+          <header class="services-col-header">
+            <h3 id="services-col-right-title" class="services-col-title">Governance Summary</h3>
+            <p class="services-col-subtitle">Key governance signals and runtime context</p>
+          </header>
+          <div class="services-card">
+            <div class="services-card-header">
+              <span class="services-card-title">Service Authority Summary</span>
+            </div>
+            <div id="services-authority-summary"></div>
           </div>
-          <div id="services-authority-summary"></div>
-        </div>
 
-        <div class="services-card">
-          <div class="services-card-header">
-            <span class="services-card-title">Coverage Summary</span>
-            <span class="services-card-demo-badge">Demo sample</span>
+          <div class="services-card">
+            <div class="services-card-header">
+              <span class="services-card-title">Coverage Summary</span>
+              <span class="services-card-demo-badge">Demo sample</span>
+            </div>
+            <div id="services-coverage-summary"></div>
           </div>
-          <div id="services-coverage-summary"></div>
-        </div>
 
-        <div class="services-card">
-          <div class="services-card-header">
-            <span class="services-card-title">Recent Decisions</span>
-            <span class="services-card-demo-badge">Demo sample</span>
+          <div class="services-card">
+            <div class="services-card-header">
+              <span class="services-card-title">Recent Decisions</span>
+              <span class="services-card-demo-badge">Demo sample</span>
+            </div>
+            <div id="services-recent-decisions"></div>
           </div>
-          <div id="services-recent-decisions"></div>
-        </div>
 
-        <div class="services-card">
-          <div class="services-card-header">
-            <span class="services-card-title">Runtime Context</span>
+          <div class="services-card">
+            <div class="services-card-header">
+              <span class="services-card-title">Runtime Context</span>
+            </div>
+            <div id="services-runtime-context"></div>
           </div>
-          <div id="services-runtime-context"></div>
+        </aside>
+      </div>
+    </div>
+
+    <!-- Map layout — full-width governance-map workbench (PR 5).
+         Sibling of services-overview-layout, NOT a child of .services-grid
+         or .services-center. The horizontal scroll wrapper keeps the
+         1180px canvas un-clipped on narrower viewports. -->
+    <div id="services-map-layout" class="services-map-layout" role="tabpanel"
+         aria-labelledby="services-mode-map-btn">
+      <div class="governance-map-workbench">
+        <div class="governance-map-toolbar">
+          <div>
+            <strong id="gmap-title">Governance Map</strong>
+            <span class="gmap-status" id="gmap-status"></span>
+          </div>
+          <div class="gmap-status" id="gmap-source"></div>
         </div>
-      </aside>
+        <div class="governance-map-legend" aria-label="Connector legend">
+          <span class="gmap-legend-item"><span class="gmap-legend-swatch"></span>Service relationship</span>
+          <span class="gmap-legend-item"><span class="gmap-legend-swatch ai-binding"></span>AI binding</span>
+          <span class="gmap-legend-item"><span class="gmap-legend-swatch authority"></span>Authority</span>
+          <span class="gmap-legend-item"><span class="gmap-legend-swatch evidence"></span>Evidence</span>
+          <span class="gmap-legend-item"><span class="gmap-legend-swatch gap"></span>Coverage gap</span>
+        </div>
+        <div class="governance-map-canvas-scroll">
+          <div id="gmap-canvas" class="governance-map-canvas" data-governance-map="canvas">
+            <svg id="gmap-svg" class="governance-map-svg" data-governance-map="svg-layer"
+                 viewBox="0 0 1180 720" preserveAspectRatio="none" aria-hidden="true"></svg>
+            <!-- node cards injected here by renderGovernanceMap() -->
+          </div>
+        </div>
+        <div id="gmap-details" class="governance-map-details" aria-live="polite">
+          <div>
+            <div class="gmap-details-title">Selected node</div>
+            <div class="gmap-details-name" id="gmap-details-name">Select a node to inspect it</div>
+            <div id="gmap-details-fields"></div>
+          </div>
+          <div>
+            <div class="gmap-details-title">Map summary</div>
+            <div id="gmap-details-summary"></div>
+          </div>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -3642,6 +3974,11 @@
     renderServicesBSList();
     renderServicesOverview();
     renderServicesSummary();
+    // PR 5: refresh the governance map for the newly-selected service.
+    // The renderer is a no-op if the map pane is not yet wired.
+    if (typeof refreshGovernanceMap === 'function') {
+      refreshGovernanceMap();
+    }
   }
 
   function renderServicesBSList(filter) {
@@ -3882,6 +4219,616 @@
   const servicesBSSearch = document.getElementById('services-bs-search');
   if (servicesBSSearch) {
     servicesBSSearch.addEventListener('input', e => renderServicesBSList(e.target.value));
+  }
+
+  // ── Governance Map (Epic 1, PR 5) ──────────────────────────────────────────
+  // Renders a ServiceNow-style node-link map for the currently-selected
+  // business service. Data comes from GET /v1/businessservices/{id}/governance-map
+  // (PR 4). Layout is static / slot-based so connectors are deterministic.
+  // The connector SVG layer sits behind absolute-positioned HTML node cards
+  // and is drawn from precomputed coordinates — no force-directed physics,
+  // no graph library.
+
+  const GMAP = {
+    NODE_W: 220,
+    NODE_H: 64,
+    NODE_GAP: 32,           // minimum horizontal gap between any two cards in
+                            // the same row — strict no-overlap invariant. Any
+                            // change to NODE_W or NODE_GAP must be reflected
+                            // in the regression test that pins this constant.
+    MIN_CANVAS_W: 1180,     // smallest canvas width before dynamic growth.
+                            // The canvas may grow above this when a row
+                            // requires more horizontal room than the minimum
+                            // provides; the wrapper's overflow-x:auto handles
+                            // the resulting horizontal scroll.
+    CANVAS_H: 720,
+    EDGE_PAD: 40,           // minimum margin between any node and the canvas
+                            // right edge (also between the rightmost main row
+                            // and the governance column).
+    GOV_GAP: 60,            // gap between the rightmost main row and the
+                            // start of the governance column.
+    MAX_PER_LAYER: 6,       // soft cap; truncation indicator is shown above
+    LAYERS: {
+      RELATED:  { y:  24 },
+      BUSINESS: { y: 156 },
+      CAP_PROC: { y: 290 }, // capabilities and processes share this row
+      SURFACE:  { y: 432 },
+      AI:       { y: 568 },
+    },
+    GOV_X_DEFAULT: 952,     // initial x for the governance column; recomputed
+                            // per-render so it never overlaps a wider main row
+  };
+
+  let gmapMode = 'overview';     // 'overview' | 'map'
+  let gmapLastBSId = null;       // last id we fetched for, to avoid duplicate work
+  let gmapData = null;           // last successful payload
+  let gmapPositions = {};        // node id → {x, y} (top-left of card)
+  let gmapSelectedId = null;
+  let gmapInFlight = 0;          // monotonic counter to discard stale fetches
+
+  function setServicesMode(mode) {
+    gmapMode = mode === 'map' ? 'map' : 'overview';
+    // PR 5 layout correction: toggle the two top-level Services layouts
+    // (overview = three-column grid, map = full-width workbench), not the
+    // centre-column body. The map must not render inside .services-grid.
+    const overviewLayout = document.getElementById('services-overview-layout');
+    const mapLayout = document.getElementById('services-map-layout');
+    const overviewBtn = document.getElementById('services-mode-overview-btn');
+    const mapBtn = document.getElementById('services-mode-map-btn');
+    if (overviewLayout) overviewLayout.classList.toggle('hidden', gmapMode === 'map');
+    if (mapLayout)      mapLayout.classList.toggle('active', gmapMode === 'map');
+    if (overviewBtn) {
+      overviewBtn.classList.toggle('active', gmapMode === 'overview');
+      overviewBtn.setAttribute('aria-selected', gmapMode === 'overview' ? 'true' : 'false');
+    }
+    if (mapBtn) {
+      mapBtn.classList.toggle('active', gmapMode === 'map');
+      mapBtn.setAttribute('aria-selected', gmapMode === 'map' ? 'true' : 'false');
+    }
+    if (gmapMode === 'map') {
+      // Force a fetch the first time we open the pane for this BS.
+      gmapLastBSId = null;
+      refreshGovernanceMap();
+    }
+  }
+
+  // Wire the mode toggle once at script load (idempotent).
+  (function wireServicesModeTabs() {
+    const overviewBtn = document.getElementById('services-mode-overview-btn');
+    const mapBtn = document.getElementById('services-mode-map-btn');
+    if (overviewBtn) overviewBtn.addEventListener('click', () => setServicesMode('overview'));
+    if (mapBtn)      mapBtn.addEventListener('click', () => setServicesMode('map'));
+  })();
+
+  function refreshGovernanceMap() {
+    if (gmapMode !== 'map') return; // only fetch when the pane is visible
+    const bsId = currentSelectedService;
+    if (!bsId || bsId === gmapLastBSId) return;
+    gmapLastBSId = bsId;
+    gmapSelectedId = null;
+    setGovernanceMapStatus('Loading…');
+    const fetchToken = ++gmapInFlight;
+    // PR 4 endpoint — keep this URL literal here so the explorer test
+    // can pin it via substring match.
+    const url = '/v1/businessservices/' + encodeURIComponent(bsId) + '/governance-map';
+    fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+      .then(resp => {
+        if (resp.status === 404) return { __status: 404 };
+        if (resp.status === 501) return { __status: 501 };
+        if (!resp.ok)            return resp.text().then(t => ({ __status: resp.status, __text: t }));
+        return resp.json();
+      })
+      .then(payload => {
+        if (fetchToken !== gmapInFlight) return; // a newer fetch superseded this
+        if (payload && payload.__status === 404) {
+          renderGovernanceMapEmpty('No governance map for this service yet.', bsId);
+          return;
+        }
+        if (payload && payload.__status === 501) {
+          renderGovernanceMapEmpty('Governance map is not configured on this server.', bsId);
+          return;
+        }
+        if (payload && payload.__status) {
+          renderGovernanceMapError('Governance map fetch failed (HTTP ' + payload.__status + ').');
+          return;
+        }
+        gmapData = payload;
+        renderGovernanceMap(payload);
+      })
+      .catch(err => {
+        if (fetchToken !== gmapInFlight) return;
+        renderGovernanceMapError('Network error: ' + (err && err.message || 'fetch failed'));
+      });
+  }
+
+  function setGovernanceMapStatus(text) {
+    const el = document.getElementById('gmap-status');
+    if (el) el.textContent = text ? '— ' + text : '';
+  }
+
+  function clearGovernanceMapCanvas() {
+    const canvas = document.getElementById('gmap-canvas');
+    const svg = document.getElementById('gmap-svg');
+    if (!canvas || !svg) return;
+    // Remove every previous node card (anything that is not the SVG layer).
+    Array.from(canvas.children).forEach(child => {
+      if (child !== svg) canvas.removeChild(child);
+    });
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    gmapPositions = {};
+  }
+
+  function renderGovernanceMapEmpty(message, bsId) {
+    clearGovernanceMapCanvas();
+    setGovernanceMapStatus('');
+    const canvas = document.getElementById('gmap-canvas');
+    if (!canvas) return;
+    const div = document.createElement('div');
+    div.className = 'governance-map-empty';
+    div.innerHTML =
+      '<div class="gmap-empty-title">' + escHtml(message) + '</div>' +
+      '<div>Service id: <code>' + escHtml(bsId || '') + '</code></div>';
+    canvas.appendChild(div);
+    setGovernanceMapDetailsName('No node selected');
+    setGovernanceMapDetailsFields([]);
+    setGovernanceMapSummary([]);
+  }
+
+  function renderGovernanceMapError(message) {
+    clearGovernanceMapCanvas();
+    setGovernanceMapStatus('error');
+    const canvas = document.getElementById('gmap-canvas');
+    if (!canvas) return;
+    const div = document.createElement('div');
+    div.className = 'governance-map-error';
+    div.innerHTML =
+      '<div class="gmap-empty-title">Governance map unavailable</div>' +
+      '<div>' + escHtml(message) + '</div>';
+    canvas.appendChild(div);
+  }
+
+  // ── Layout helpers ────────────────────────────────────────────────────────
+  // distributeRow returns N top-left x-coordinates for nodes laid out
+  // along a horizontal range [x0, x1]. The caller's range is treated as
+  // a *preferred* range, NOT a hard cap on the row's right edge:
+  //
+  //   - If the row fits inside [x0, x1] with at least NODE_GAP between
+  //     consecutive cards, nodes are spread evenly across the range.
+  //   - If the row needs more horizontal room than the range provides
+  //     (n*NODE_W + (n-1)*NODE_GAP > x1 - x0), nodes are packed tightly
+  //     starting at x0 with exactly NODE_GAP between cards. The row's
+  //     rightmost edge will exceed x1; the renderer detects this and
+  //     grows the canvas + viewBox so no card is clipped or overlaps.
+  //
+  // No matter the input, consecutive top-left x-coordinates differ by
+  // at least NODE_W + NODE_GAP — that is the strict no-overlap
+  // invariant the regression test pins.
+  function distributeRow(n, x0, x1) {
+    if (n <= 0) return [];
+    if (n === 1) return [(x0 + x1) / 2 - GMAP.NODE_W / 2];
+    const minStride = GMAP.NODE_W + GMAP.NODE_GAP;
+    const required  = n * GMAP.NODE_W + (n - 1) * GMAP.NODE_GAP;
+    const available = x1 - x0;
+    if (available >= required) {
+      // Spread evenly across the requested range. The stride
+      // (consecutive top-left distance) ends up >= minStride because
+      // available >= required, so the no-overlap invariant holds.
+      const stride = (available - GMAP.NODE_W) / (n - 1);
+      const out = [];
+      for (let i = 0; i < n; i++) out.push(x0 + i * stride);
+      return out;
+    }
+    // Packed-overflow path: anchor at x0 with the minimum stride.
+    // The row will be wider than the requested range — the renderer
+    // grows the canvas to fit.
+    const out = [];
+    for (let i = 0; i < n; i++) out.push(x0 + i * minStride);
+    return out;
+  }
+
+  function topAnchor(p)    { return [p.x + GMAP.NODE_W/2, p.y]; }
+  function bottomAnchor(p) { return [p.x + GMAP.NODE_W/2, p.y + GMAP.NODE_H]; }
+  function leftAnchor(p)   { return [p.x, p.y + GMAP.NODE_H/2]; }
+
+  // Smooth cubic curve between two points — vertical-biased control points
+  // produce ServiceNow-style flowing connectors.
+  function curvePath(x1, y1, x2, y2) {
+    const dy = Math.abs(y2 - y1);
+    const ctrl = Math.max(40, dy * 0.45);
+    return 'M ' + x1 + ' ' + y1 +
+           ' C ' + x1 + ' ' + (y1 + ctrl) + ', ' +
+                  x2 + ' ' + (y2 - ctrl) + ', ' +
+                  x2 + ' ' + y2;
+  }
+
+  function renderGovernanceMap(data) {
+    clearGovernanceMapCanvas();
+    setGovernanceMapStatus('');
+    const canvas = document.getElementById('gmap-canvas');
+    const svg = document.getElementById('gmap-svg');
+    if (!canvas || !svg) return;
+    if (!data || !data.business_service) {
+      renderGovernanceMapError('Empty governance map response.');
+      return;
+    }
+
+    const positions = {};
+
+    // ── Sizing pass — compute per-row required widths first, then size the
+    //    main strip and the canvas BEFORE placing any node. This is what
+    //    makes the no-overlap invariant strict: distributeRow always gets
+    //    a range that either fits the row (even spread) or causes a known,
+    //    accounted-for overflow that the canvas grows to absorb.
+    //    Required width for a row of n cards =
+    //      n * NODE_W + (n - 1) * NODE_GAP
+    const reqRow = (n) => n <= 0 ? 0 : n * GMAP.NODE_W + (n - 1) * GMAP.NODE_GAP;
+
+    const rels = (data.relationships && data.relationships.outgoing) || [];
+    const relSlice = rels.slice(0, GMAP.MAX_PER_LAYER);
+    const caps = (data.capabilities || []).slice(0, GMAP.MAX_PER_LAYER);
+    const procs = (data.processes || []).slice(0, GMAP.MAX_PER_LAYER);
+    const surfaces = (data.surfaces || []).slice(0, GMAP.MAX_PER_LAYER);
+    const aiSystems = (data.ai_systems || []).slice(0, GMAP.MAX_PER_LAYER);
+
+    const relReqW   = reqRow(relSlice.length);
+    const surfReqW  = reqRow(surfaces.length);
+    const aiReqW    = reqRow(aiSystems.length);
+    // Cap+proc share a row split into two sub-strips with a midGap
+    // between them. midGap is only added when both sides are populated.
+    const capsReqW  = reqRow(caps.length);
+    const procsReqW = reqRow(procs.length);
+    const midGap    = (caps.length && procs.length) ? GMAP.NODE_GAP : 0;
+    const capProcReqW = capsReqW + midGap + procsReqW;
+
+    const EDGE = GMAP.EDGE_PAD;
+    // Main strip floor: at least the room the original 1180-canvas left
+    // for main rows after reserving the governance column on the right.
+    const mainStripFloor = GMAP.MIN_CANVAS_W - EDGE - GMAP.GOV_GAP - GMAP.NODE_W - EDGE;
+    const mainStripW = Math.max(
+      mainStripFloor,
+      relReqW, capProcReqW, surfReqW, aiReqW, GMAP.NODE_W /* BS */
+    );
+    const mainX0 = EDGE;
+    const mainX1 = mainX0 + mainStripW;
+    const govX   = mainX1 + GMAP.GOV_GAP;
+    const canvasW = Math.max(GMAP.MIN_CANVAS_W, govX + GMAP.NODE_W + EDGE);
+
+    // Apply the computed canvas width + SVG viewBox so the wrapper's
+    // overflow-x:auto can scroll horizontally when the strip grew.
+    canvas.style.width = canvasW + 'px';
+    canvas.style.minWidth = canvasW + 'px';
+    svg.setAttribute('viewBox', '0 0 ' + canvasW + ' ' + GMAP.CANVAS_H);
+
+    // ── Layer 1: Related Services (top row) ─────────────────────────────
+    const relX = distributeRow(relSlice.length, mainX0, mainX1);
+    relSlice.forEach((rel, i) => {
+      const id = 'rel:' + rel.id;
+      positions[id] = { x: relX[i], y: GMAP.LAYERS.RELATED.y, kind: 'related' };
+      addNode({
+        id, kind: 'related', cls: 'related-service-node',
+        label: 'RELATED SERVICE',
+        name: rel.other_name || rel.target_business_service_id,
+        meta: rel.relationship_type ? [rel.relationship_type] : [],
+        details: { 'relationship': rel.relationship_type || '—', 'target_id': rel.target_business_service_id, 'edge_id': rel.id },
+      }, positions[id]);
+    });
+
+    // ── Layer 2: Business Service (centred in the main strip) ──────────
+    const bs = data.business_service;
+    const bsX = mainX0 + (mainStripW - GMAP.NODE_W) / 2;
+    const bsId = 'bs:' + bs.id;
+    positions[bsId] = { x: bsX, y: GMAP.LAYERS.BUSINESS.y, kind: 'business' };
+    const bsBadges = [];
+    if (bs.status) bsBadges.push(bs.status);
+    if (bs.external_ref) bsBadges.push('EXT-REF');
+    addNode({
+      id: bsId, kind: 'business', cls: 'business-service-node selected',
+      label: 'BUSINESS SERVICE',
+      name: bs.name || bs.id,
+      meta: bsBadges,
+      details: {
+        'id': bs.id,
+        'service_type': bs.service_type || '—',
+        'status': bs.status || '—',
+        'owner': bs.owner_id || '—',
+        'external_ref': bs.external_ref ? (bs.external_ref.source_system + ':' + bs.external_ref.source_id) : 'none',
+      },
+    }, positions[bsId]);
+    gmapSelectedId = bsId;
+
+    // ── Layer 3: Capabilities (left sub-strip) + Processes (right) ─────
+    // Split the main strip with midGap between the two halves so the
+    // groups are visually distinct AND each side has a range wide enough
+    // for its row to fit without overlap.
+    const halfW = (mainStripW - midGap) / 2;
+    const capSubX0  = mainX0;
+    const capSubX1  = mainX0 + halfW;
+    const procSubX0 = mainX0 + halfW + midGap;
+    const procSubX1 = mainX1;
+    const capX  = distributeRow(caps.length,  capSubX0,  capSubX1);
+    const procX = distributeRow(procs.length, procSubX0, procSubX1);
+    caps.forEach((c, i) => {
+      const id = 'cap:' + c.id;
+      positions[id] = { x: capX[i], y: GMAP.LAYERS.CAP_PROC.y, kind: 'cap' };
+      addNode({
+        id, kind: 'cap', cls: 'capability-node',
+        label: 'CAPABILITY', name: c.name || c.id,
+        meta: c.status ? [c.status] : [],
+        details: { 'id': c.id, 'status': c.status || '—' },
+      }, positions[id]);
+    });
+    procs.forEach((p, i) => {
+      const id = 'proc:' + p.id;
+      positions[id] = { x: procX[i], y: GMAP.LAYERS.CAP_PROC.y, kind: 'proc' };
+      addNode({
+        id, kind: 'proc', cls: 'process-node',
+        label: 'PROCESS', name: p.name || p.id,
+        meta: p.status ? [p.status] : [],
+        details: { 'id': p.id, 'business_service_id': p.business_service_id || '—', 'status': p.status || '—' },
+      }, positions[id]);
+    });
+
+    // ── Layer 4: Decision Surfaces ─────────────────────────────────────
+    const surfX = distributeRow(surfaces.length, mainX0, mainX1);
+    surfaces.forEach((s, i) => {
+      const id = 'surf:' + s.id;
+      positions[id] = { x: surfX[i], y: GMAP.LAYERS.SURFACE.y, kind: 'surface', surface: s };
+      const hasBinding = (s.ai_bindings || []).length > 0;
+      const meta = [s.status || ''];
+      if (hasBinding)  meta.push('AI BOUND');
+      else             meta.push('NO AI');
+      addNode({
+        id, kind: 'surface', cls: 'decision-surface-node',
+        label: 'DECISION SURFACE',
+        name: s.name || s.id,
+        meta,
+        badges: hasBinding ? [{ cls: 'bind', text: 'AI binding' }] : [{ cls: 'warn', text: 'no AI binding' }],
+        details: {
+          'id': s.id, 'version': s.version, 'process_id': s.process_id || '—', 'status': s.status || '—',
+          'ai_bindings': hasBinding ? (s.ai_bindings || []).join(', ') : 'none',
+          'profile_count': s.profile_count, 'grant_count': s.grant_count, 'agent_count': s.agent_count,
+        },
+      }, positions[id]);
+    });
+
+    // ── Layer 5: AI Systems ─────────────────────────────────────────────
+    const aiX = distributeRow(aiSystems.length, mainX0, mainX1);
+    aiSystems.forEach((ai, i) => {
+      const id = 'ai:' + ai.id;
+      positions[id] = { x: aiX[i], y: GMAP.LAYERS.AI.y, kind: 'ai', ai };
+      const meta = [];
+      if (ai.status) meta.push(ai.status);
+      if (ai.active_version) meta.push('v' + ai.active_version.version);
+      addNode({
+        id, kind: 'ai', cls: 'ai-system-node',
+        label: 'AI SYSTEM', name: ai.name || ai.id,
+        meta,
+        details: {
+          'id': ai.id, 'vendor': ai.vendor || '—', 'system_type': ai.system_type || '—', 'status': ai.status || '—',
+          'active_version': ai.active_version ? ai.active_version.version : 'none',
+          'bindings': (ai.bindings || []).length,
+        },
+      }, positions[id]);
+    });
+
+    // ── Right-side governance column: Authority + Coverage ─────────────
+    // govX was computed in the sizing pass so it always sits NODE_GAP-or-
+    // more clear of the rightmost main-row node.
+    const auth = data.authority_summary || {};
+    const cov = data.coverage || {};
+    positions['authority'] = { x: govX, y: GMAP.LAYERS.BUSINESS.y, kind: 'authority' };
+    addNode({
+      id: 'authority', kind: 'authority', cls: 'authority-node',
+      label: 'AUTHORITY',
+      name: 'Profiles ' + (auth.active_profile_count || 0) + ' · Grants ' + (auth.active_grant_count || 0),
+      meta: ['agents ' + (auth.active_agent_count || 0)],
+      details: {
+        'surface_count': auth.surface_count || 0,
+        'active_profile_count': auth.active_profile_count || 0,
+        'active_grant_count': auth.active_grant_count || 0,
+        'active_agent_count': auth.active_agent_count || 0,
+      },
+    }, positions['authority']);
+
+    positions['coverage'] = { x: govX, y: GMAP.LAYERS.SURFACE.y, kind: 'coverage' };
+    const covGap = (cov.surfaces_without_ai_binding || 0);
+    addNode({
+      id: 'coverage', kind: 'coverage', cls: 'coverage-node',
+      label: 'COVERAGE',
+      name: (cov.surfaces_with_ai_binding || 0) + ' bound · ' + covGap + ' unbound',
+      meta: ['surfaces ' + (cov.surface_count || 0)],
+      badges: covGap > 0 ? [{ cls: 'warn', text: 'gap' }] : [{ cls: 'ok', text: 'covered' }],
+      details: {
+        'surface_count': cov.surface_count || 0,
+        'surfaces_with_ai_binding': cov.surfaces_with_ai_binding || 0,
+        'surfaces_without_ai_binding': cov.surfaces_without_ai_binding || 0,
+      },
+    }, positions['coverage']);
+
+    gmapPositions = positions;
+
+    // ── Connectors ─────────────────────────────────────────────────────
+    // BS → related services (Layer 2 → Layer 1, drawn upward via top anchor).
+    relSlice.forEach(rel => {
+      const target = positions['rel:' + rel.id];
+      const src = positions[bsId];
+      if (target && src) addConnector(topAnchor(src), bottomAnchor(target), 'connector-service');
+    });
+
+    // BS → capabilities, BS → processes (Layer 2 → Layer 3).
+    caps.forEach(c => {
+      const target = positions['cap:' + c.id];
+      const src = positions[bsId];
+      if (target && src) addConnector(bottomAnchor(src), topAnchor(target), 'connector-service');
+    });
+    procs.forEach(p => {
+      const target = positions['proc:' + p.id];
+      const src = positions[bsId];
+      if (target && src) addConnector(bottomAnchor(src), topAnchor(target), 'connector-service');
+    });
+
+    // Process → decision surfaces (match by surface.process_id).
+    surfaces.forEach(s => {
+      const target = positions['surf:' + s.id];
+      if (!target) return;
+      const procPos = positions['proc:' + s.process_id];
+      if (procPos) addConnector(bottomAnchor(procPos), topAnchor(target), 'connector-service');
+      else if (positions[bsId]) addConnector(bottomAnchor(positions[bsId]), topAnchor(target), 'connector-service');
+    });
+
+    // Surface → AI systems via binding.surface_id.
+    aiSystems.forEach(ai => {
+      const target = positions['ai:' + ai.id];
+      if (!target) return;
+      let drewBindingEdge = false;
+      (ai.bindings || []).forEach(b => {
+        if (b.surface_id) {
+          const sp = positions['surf:' + b.surface_id];
+          if (sp) { addConnector(bottomAnchor(sp), topAnchor(target), 'connector-ai-binding'); drewBindingEdge = true; }
+        } else if (b.process_id) {
+          const pp = positions['proc:' + b.process_id];
+          if (pp) { addConnector(bottomAnchor(pp), topAnchor(target), 'connector-ai-binding'); drewBindingEdge = true; }
+        } else if (b.capability_id) {
+          const cp = positions['cap:' + b.capability_id];
+          if (cp) { addConnector(bottomAnchor(cp), topAnchor(target), 'connector-ai-binding'); drewBindingEdge = true; }
+        } else if (b.business_service_id) {
+          const bp = positions[bsId];
+          if (bp) { addConnector(bottomAnchor(bp), topAnchor(target), 'connector-ai-binding'); drewBindingEdge = true; }
+        }
+      });
+      // Fallback: if we couldn't resolve any binding edge, link from BS so
+      // the AI node never floats disconnected.
+      if (!drewBindingEdge && positions[bsId]) {
+        addConnector(bottomAnchor(positions[bsId]), topAnchor(target), 'connector-ai-binding');
+      }
+    });
+
+    // Surface → Authority (dashed) when the surface has any active profile.
+    surfaces.forEach(s => {
+      const sp = positions['surf:' + s.id];
+      if (!sp) return;
+      if ((s.profile_count || 0) > 0) {
+        addConnector([sp.x + GMAP.NODE_W, sp.y + GMAP.NODE_H/2], leftAnchor(positions['authority']), 'connector-authority');
+      }
+    });
+
+    // Surface → Coverage gap (amber dashed) when surface has no AI binding;
+    // Surface → Evidence (green) when surface has bindings (treated as
+    // governance evidence available signal until /evidence/ ships).
+    surfaces.forEach(s => {
+      const sp = positions['surf:' + s.id];
+      if (!sp) return;
+      const hasBinding = (s.ai_bindings || []).length > 0;
+      const cls = hasBinding ? 'connector-evidence' : 'connector-gap';
+      addConnector([sp.x + GMAP.NODE_W, sp.y + GMAP.NODE_H/2], leftAnchor(positions['coverage']), cls);
+    });
+
+    // Render summary + initial selection (BS).
+    setGovernanceMapStatus(
+      (caps.length || 0) + ' caps · ' +
+      (procs.length || 0) + ' procs · ' +
+      (surfaces.length || 0) + ' surfaces · ' +
+      (aiSystems.length || 0) + ' AI systems'
+    );
+    setGovernanceMapSummary([
+      ['Business service',     bs.name || bs.id],
+      ['Outgoing relationships', String(rels.length)],
+      ['Capabilities',         String((data.capabilities || []).length)],
+      ['Processes',            String((data.processes || []).length)],
+      ['Surfaces (active)',    String((data.surfaces || []).length)],
+      ['AI systems',           String((data.ai_systems || []).length)],
+      ['Authority profiles',   String(auth.active_profile_count || 0)],
+      ['Coverage gaps',        String(cov.surfaces_without_ai_binding || 0)],
+    ]);
+    selectGovernanceMapNode(bsId);
+  }
+
+  // addNode positions an HTML node card and registers click + keyboard
+  // handlers for selection. Each card carries its own details payload as
+  // a JSON-encoded data attribute so the details panel can read it on
+  // click without re-querying the API response.
+  function addNode(spec, pos) {
+    const canvas = document.getElementById('gmap-canvas');
+    if (!canvas) return;
+    const node = document.createElement('button');
+    node.type = 'button';
+    node.className = 'gmap-node ' + (spec.cls || '');
+    node.style.left = pos.x + 'px';
+    node.style.top  = pos.y + 'px';
+    node.dataset.nodeId = spec.id;
+    node.dataset.nodeKind = spec.kind || '';
+    node.dataset.nodeName = spec.name || '';
+    node.setAttribute('aria-label', spec.label + ': ' + (spec.name || spec.id));
+    const badgesHtml = (spec.badges || []).map(b =>
+      '<span class="gmap-badge ' + escHtml(b.cls || '') + '">' + escHtml(b.text || '') + '</span>'
+    ).join('');
+    const metaHtml = (spec.meta || []).filter(Boolean).map(m =>
+      '<span>' + escHtml(String(m)) + '</span>'
+    ).join('');
+    node.innerHTML =
+      '<span class="gmap-node-label">' + escHtml(spec.label) + '</span>' +
+      '<span class="gmap-node-name">' + escHtml(spec.name || spec.id) + '</span>' +
+      ((metaHtml || badgesHtml) ? '<div class="gmap-node-meta">' + metaHtml + badgesHtml + '</div>' : '');
+    try {
+      node.dataset.nodeDetails = JSON.stringify(spec.details || {});
+    } catch { /* details optional */ }
+    node.addEventListener('click', () => selectGovernanceMapNode(spec.id));
+    node.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectGovernanceMapNode(spec.id); }
+    });
+    canvas.appendChild(node);
+  }
+
+  function addConnector(p1, p2, cls) {
+    const svg = document.getElementById('gmap-svg');
+    if (!svg) return;
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('class', cls);
+    path.setAttribute('d', curvePath(p1[0], p1[1], p2[0], p2[1]));
+    svg.appendChild(path);
+  }
+
+  function selectGovernanceMapNode(nodeId) {
+    gmapSelectedId = nodeId;
+    const canvas = document.getElementById('gmap-canvas');
+    if (!canvas) return;
+    const nodes = canvas.querySelectorAll('.gmap-node');
+    let selectedNode = null;
+    nodes.forEach(n => {
+      const isSel = n.dataset.nodeId === nodeId;
+      n.classList.toggle('selected', isSel);
+      if (isSel) selectedNode = n;
+    });
+    if (!selectedNode) return;
+    setGovernanceMapDetailsName(selectedNode.dataset.nodeName || nodeId);
+    let details = {};
+    try { details = JSON.parse(selectedNode.dataset.nodeDetails || '{}'); } catch { /* ignore */ }
+    setGovernanceMapDetailsFields(Object.keys(details).map(k => [k, details[k]]));
+  }
+
+  function setGovernanceMapDetailsName(name) {
+    const el = document.getElementById('gmap-details-name');
+    if (el) el.textContent = name;
+  }
+  function setGovernanceMapDetailsFields(rows) {
+    const el = document.getElementById('gmap-details-fields');
+    if (!el) return;
+    el.innerHTML = rows.map(([k, v]) =>
+      '<div class="gmap-details-row">' +
+        '<span class="gmap-details-key">' + escHtml(String(k)) + '</span>' +
+        '<span class="gmap-details-val">' + escHtml(v == null ? '—' : String(v)) + '</span>' +
+      '</div>'
+    ).join('');
+  }
+  function setGovernanceMapSummary(rows) {
+    const el = document.getElementById('gmap-details-summary');
+    if (!el) return;
+    el.innerHTML = rows.map(([k, v]) =>
+      '<div class="gmap-details-row">' +
+        '<span class="gmap-details-key">' + escHtml(String(k)) + '</span>' +
+        '<span class="gmap-details-val">' + escHtml(String(v)) + '</span>' +
+      '</div>'
+    ).join('');
   }
 
   // ── Records view ───────────────────────────────────────────────────────────
@@ -4417,22 +5364,10 @@
     submitBtn.textContent = mode === 'simulate' ? 'Simulate' : 'Submit';
     document.getElementById('result-section-title').textContent =
       mode === 'simulate' ? 'Simulate' : 'Result';
-    updateModeBanner(mode);
+    // Polish PR: the .mode-banner element was removed; the toggle's
+    // own active state is now the only mode indicator. The previous
+    // banner-update helper has been deleted from this file.
     clearResult();
-  }
-
-  function updateModeBanner(mode) {
-    const banner = document.getElementById('mode-banner');
-    const hint   = document.getElementById('mode-bar-hint');
-    if (mode === 'simulate') {
-      banner.textContent = 'Simulation mode \u2014 no data written, no audit record, no result persisted';
-      banner.className = 'mode-banner mode-banner-simulate';
-      hint.textContent = 'Safe to experiment \u2014 nothing written';
-    } else {
-      banner.textContent = 'Result persisted \u2014 envelope created, audit logged, sandbox store';
-      banner.className = 'mode-banner mode-banner-evaluate';
-      hint.textContent = 'Decisions are persisted and audited';
-    }
   }
 
   document.querySelectorAll('.exec-mode-tab').forEach(tab => {
@@ -4527,7 +5462,8 @@
   const runtimeCard   = document.getElementById('runtime-card');
   const runtimeBadge  = document.getElementById('runtime-badge');
   const authModeHint  = document.getElementById('auth-mode-hint');
-  const demoBanner    = document.getElementById('demo-banner');
+  // Polish PR: #demo-banner removed; sandbox identity is conveyed
+  // by the sidebar "SYSTEM OPERATIONAL" indicator and the header chips.
 
   // demoTagIDs removed — scenario badges are now rendered dynamically by renderScenarioList().
 
@@ -4581,13 +5517,12 @@
         authModeHint.textContent = 'Auth mode is required — bearer token must be set.';
       }
 
-      // Sandbox banner — Explorer always uses an isolated in-memory store with
-      // demo data, independent of the main backend configuration.
+      // Polish PR: the sandbox banner was removed; the sidebar
+      // "SYSTEM OPERATIONAL" indicator and the header chips already
+      // convey sandbox identity. Threshold hints beside the
+      // request-builder fields are still useful, so the memory-store
+      // branch remains and continues to populate them.
       if (cfg.explorerStore === 'memory') {
-        demoBanner.textContent = '\u24d8 Sandbox mode \u2014 Explorer uses isolated in-memory demo data. Production endpoint (/v1/evaluate) uses configured store.';
-        demoBanner.className = 'demo-banner ready';
-        // All sandbox scenarios are immediately available — no badge update needed.
-        // Threshold hints are always valid for the sandbox store
         document.getElementById('confidence-hint').textContent = 'threshold \u2265 0.85';
         document.getElementById('consequence-hint').textContent = 'threshold \u2264 5\u202f000 GBP';
       }

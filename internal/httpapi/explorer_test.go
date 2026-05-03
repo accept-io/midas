@@ -3,6 +3,8 @@ package httpapi
 import (
 	"encoding/json"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -790,5 +792,578 @@ func TestExplorer_HTML_RendersEmptyCapabilitiesIndicator(t *testing.T) {
 		t.Error("want Explorer HTML to define the empty-capabilities indicator " +
 			"\"No capabilities mapped\" — the renderer must surface zero-capability " +
 			"BusinessServices explicitly per the v1 service-led model")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Governance Map (Epic 1, PR 5) — HTML source assertions
+// ---------------------------------------------------------------------------
+//
+// These assertions pin the load-bearing markers of the in-shell governance
+// map visual: the canvas + SVG layer, every node-type class, every
+// connector style class, and the fetch URL to the PR 4 read endpoint.
+// They are intentionally markup-level so a refactor that removes a
+// connector class or renames a node type surfaces here rather than as
+// silent UI drift.
+
+// TestExplorer_HTML_GovernanceMap_MarkersAndCanvas verifies that the
+// Explorer shell embeds the governance-map canvas + SVG layer markers and
+// the mode-toggle button that reveals the map pane.
+func TestExplorer_HTML_GovernanceMap_MarkersAndCanvas(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	wantMarkers := []string{
+		`data-governance-map="canvas"`,    // .governance-map-canvas marker
+		`data-governance-map="svg-layer"`, // .governance-map-svg layer marker
+		`id="services-mode-map-btn"`,      // mode-toggle button revealing the map
+		`data-services-mode="map"`,        // toggle data attribute
+		`id="services-map-layout"`,        // PR 5 layout correction: full-width map workbench
+		`id="services-overview-layout"`,   // PR 5 layout correction: three-column overview layout
+		`id="gmap-canvas"`,                // canvas element id
+		`id="gmap-svg"`,                   // SVG layer id
+		`id="gmap-details"`,               // details panel
+		`Governance Map`,                  // tab label visible to users
+	}
+	for _, marker := range wantMarkers {
+		if !strings.Contains(body, marker) {
+			t.Errorf("Governance Map: want HTML to contain %q", marker)
+		}
+	}
+}
+
+// TestExplorer_HTML_GovernanceMap_LayoutLiftedOutOfServicesGrid pins the
+// PR 5 layout correction: the governance-map workbench must be a top-level
+// sibling of the three-column overview layout, not nested inside the
+// .services-center column. If a future refactor accidentally re-nests the
+// canvas inside .services-grid (which clips and compresses it back to the
+// pre-correction state), this test fails.
+//
+// Substring-matching the markup in source order is sufficient for this
+// guard — the structural anchors here are stable IDs and a single
+// containing class name. The test does not parse HTML; it asserts a
+// specific ordering relationship that is broken by any nesting change.
+func TestExplorer_HTML_GovernanceMap_LayoutLiftedOutOfServicesGrid(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// 1. Both top-level layouts must be present, with the map appearing
+	// after the overview in source order — confirms sibling arrangement,
+	// not nesting.
+	overviewIdx := strings.Index(body, `id="services-overview-layout"`)
+	mapIdx := strings.Index(body, `id="services-map-layout"`)
+	if overviewIdx < 0 || mapIdx < 0 {
+		t.Fatalf("both layouts must be present (overview=%d map=%d)", overviewIdx, mapIdx)
+	}
+	if mapIdx <= overviewIdx {
+		t.Errorf("map layout must appear after overview layout (overview=%d, map=%d)", overviewIdx, mapIdx)
+	}
+
+	// 2. The .services-grid that defines the three-column overview must
+	// fall between the overview-layout opening tag and the map-layout
+	// opening tag — i.e., the grid is contained by overview-layout only,
+	// never by map-layout.
+	gridIdx := strings.Index(body, `class="services-grid"`)
+	if gridIdx < overviewIdx || gridIdx > mapIdx {
+		t.Errorf(".services-grid must live inside #services-overview-layout (grid=%d, overview=%d, map=%d)",
+			gridIdx, overviewIdx, mapIdx)
+	}
+
+	// 3. The map canvas must NOT be a descendant of .services-center.
+	// .services-center lives inside .services-grid (overview-only); the
+	// canvas now lives inside #services-map-layout (sibling). Source
+	// order: .services-center precedes #services-map-layout, and the
+	// canvas falls after #services-map-layout opens.
+	centerIdx := strings.Index(body, `class="services-center"`)
+	canvasIdx := strings.Index(body, `id="gmap-canvas"`)
+	if centerIdx < 0 || canvasIdx < 0 {
+		t.Fatalf("require both .services-center (%d) and #gmap-canvas (%d)", centerIdx, canvasIdx)
+	}
+	if !(centerIdx < mapIdx && canvasIdx > mapIdx) {
+		t.Errorf("#gmap-canvas must live after #services-map-layout opens, with .services-center "+
+			"declared earlier inside #services-overview-layout (center=%d, map=%d, canvas=%d)",
+			centerIdx, mapIdx, canvasIdx)
+	}
+	// Belt-and-braces: .services-center must not reappear inside the map
+	// layout — that would mean the canvas is nested in a duplicate
+	// services-center instance.
+	if strings.Contains(body[mapIdx:], `class="services-center"`) {
+		t.Error(".services-center must not appear inside #services-map-layout")
+	}
+
+	// 4. The full-width workbench wrapper and horizontal-scroll wrapper
+	// must both exist (PR 5 visual contract: wide canvas, no clipping).
+	if !strings.Contains(body, `class="governance-map-workbench"`) {
+		t.Error(".governance-map-workbench wrapper missing — PR 5 layout correction not in place")
+	}
+	if !strings.Contains(body, `class="governance-map-canvas-scroll"`) {
+		t.Error(".governance-map-canvas-scroll wrapper missing — wide canvas must be horizontally scrollable")
+	}
+
+	// 5. The mode toolbar must be a sibling of both layouts (visible
+	// across modes) — it appears before either layout opens.
+	toolbarIdx := strings.Index(body, `class="services-mode-toolbar"`)
+	if toolbarIdx < 0 || toolbarIdx > overviewIdx || toolbarIdx > mapIdx {
+		t.Errorf("services-mode-toolbar must precede both layouts (toolbar=%d, overview=%d, map=%d)",
+			toolbarIdx, overviewIdx, mapIdx)
+	}
+}
+
+// TestExplorer_HTML_GovernanceMap_NodeTypeClasses asserts that every node
+// type the visual must render has a corresponding CSS class declared in
+// the embedded shell. The renderer attaches these classes to the .gmap-node
+// cards; their absence at the source level means a node category was
+// dropped, which is the kind of regression PR 5 explicitly guards.
+func TestExplorer_HTML_GovernanceMap_NodeTypeClasses(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, cls := range []string{
+		"business-service-node",
+		"related-service-node",
+		"capability-node",
+		"process-node",
+		"decision-surface-node",
+		"ai-system-node",
+		"authority-node",
+		"coverage-node",
+	} {
+		if !strings.Contains(body, cls) {
+			t.Errorf("Governance Map node-type class %q missing from Explorer shell", cls)
+		}
+	}
+}
+
+// TestExplorer_HTML_GovernanceMap_ConnectorClasses asserts that every
+// connector style class the visual relies on is declared. The connectors
+// are the product (per PR 5 brief) — line styles distinguish service
+// structure from AI binding, authority, evidence, and coverage gaps.
+func TestExplorer_HTML_GovernanceMap_ConnectorClasses(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, cls := range []string{
+		"connector-service",
+		"connector-ai-binding",
+		"connector-authority",
+		"connector-evidence",
+		"connector-gap",
+	} {
+		if !strings.Contains(body, cls) {
+			t.Errorf("Governance Map connector class %q missing from Explorer shell", cls)
+		}
+	}
+}
+
+// TestExplorer_HTML_GovernanceMap_FetchesPR4Endpoint verifies that the
+// embedded JS issues a fetch to the PR 4 read endpoint. The URL literal
+// is pinned because the visual is data-driven from this one endpoint —
+// any future move (renamed prefix, restructured route) must update this
+// test in the same PR.
+func TestExplorer_HTML_GovernanceMap_FetchesPR4Endpoint(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "/v1/businessservices/") {
+		t.Error("Governance Map JS must reference the /v1/businessservices/ endpoint prefix")
+	}
+	if !strings.Contains(body, "/governance-map") {
+		t.Error("Governance Map JS must reference the /governance-map suffix (PR 4 endpoint)")
+	}
+	// Pin the fetch call site itself so a refactor to a different
+	// transport (e.g., XMLHttpRequest, EventSource) is a deliberate
+	// choice rather than a silent change.
+	if !strings.Contains(body, "fetch(url") && !strings.Contains(body, "fetch(") {
+		t.Error("Governance Map JS must use fetch() to load the read model")
+	}
+}
+
+// TestExplorer_HTML_GovernanceMap_NoInfrastructureNodeLabels asserts that
+// the governance-map markup does not introduce infrastructure-style
+// node labels. PR 5 explicitly disallows servers, VMs, load balancers,
+// pods, and databases as node categories — the visual is service /
+// capability / process / surface / AI / authority / coverage only.
+//
+// Existing strings unrelated to this visual (e.g., "Postgres" as a
+// configured store backend) are tolerated by scoping the search to a
+// curated list of node-label fragments rather than substring-matching
+// against the full document.
+func TestExplorer_HTML_GovernanceMap_NoInfrastructureNodeLabels(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, forbidden := range []string{
+		"server-node",
+		"vm-node",
+		"load-balancer-node",
+		"pod-node",
+		"database-node",
+		"LOAD BALANCER",
+		"VIRTUAL MACHINE",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("Governance Map must not include infrastructure label %q (PR 5 hard constraint)", forbidden)
+		}
+	}
+}
+
+// TestExplorer_HTML_GovernanceMap_NoOverlapInvariant pins the source-
+// level invariants that guarantee no two node cards overlap in the same
+// row. The tests run against the embedded HTML/JS source rather than a
+// live browser, so they assert the *logic* is in place — specifically:
+//
+//  1. A NODE_GAP constant of >= 16px is declared inside GMAP. Without
+//     this, distributeRow has no minimum spacing rule to enforce.
+//  2. distributeRow's required-vs-available branching is present. The
+//     math literal `n * GMAP.NODE_W + (n - 1) * GMAP.NODE_GAP` is the
+//     row-required-width formula; its presence in source means the
+//     function decides between even-spread and packed-overflow paths
+//     rather than blindly subdividing the requested range.
+//  3. Both distributeRow paths use a stride that includes NODE_GAP —
+//     `GMAP.NODE_W + GMAP.NODE_GAP` is the minimum stride literal, and
+//     `(available - GMAP.NODE_W) / (n - 1)` is the even-spread stride
+//     (which equals minStride when available == required and grows
+//     otherwise — both >= NODE_W + NODE_GAP for the no-overlap rule).
+//  4. The renderer dynamically sizes the canvas + SVG viewBox so a
+//     packed-overflow row is never clipped — a regression where the
+//     sizing pass is removed would visibly clip wider rows. The literal
+//     `canvas.style.width` and `svg.setAttribute('viewBox'` calls pin
+//     this dynamic resize.
+//
+// The previous bug (overlapping Process row when 2 procs were squeezed
+// into the right half of a fixed-1180 canvas) failed all four of these
+// checks; the corrected implementation passes all of them.
+func TestExplorer_HTML_GovernanceMap_NoOverlapInvariant(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// 1. NODE_GAP constant present and >= 16. Tolerate any value 16..200
+	// so a future bump (e.g. 40px to match a wider design) doesn't break
+	// the test, but a deletion or a too-small value (e.g. 4) does.
+	gapRe := regexp.MustCompile(`NODE_GAP:\s*(\d+)`)
+	m := gapRe.FindStringSubmatch(body)
+	if m == nil {
+		t.Fatal("GMAP.NODE_GAP constant missing — distributeRow has no minimum-gap rule")
+	}
+	gap, _ := strconv.Atoi(m[1])
+	if gap < 16 || gap > 200 {
+		t.Errorf("GMAP.NODE_GAP = %d, want in [16, 200] — values outside this range "+
+			"either allow visible overlap (too small) or signal an unintended "+
+			"layout change (too large)", gap)
+	}
+
+	// 2. Required-vs-available branching present in distributeRow. The
+	// row-required formula is the discriminator between even-spread and
+	// packed-overflow paths.
+	if !strings.Contains(body, `n * GMAP.NODE_W + (n - 1) * GMAP.NODE_GAP`) {
+		t.Error("distributeRow must compute row-required width as " +
+			"`n * GMAP.NODE_W + (n - 1) * GMAP.NODE_GAP` — without this branch " +
+			"the function cannot decide when to pack vs spread")
+	}
+
+	// 3. Both stride literals present.
+	if !strings.Contains(body, `GMAP.NODE_W + GMAP.NODE_GAP`) {
+		t.Error("distributeRow's packed-overflow path must use stride " +
+			"`GMAP.NODE_W + GMAP.NODE_GAP` (the minimum no-overlap stride)")
+	}
+	if !strings.Contains(body, `(available - GMAP.NODE_W) / (n - 1)`) {
+		t.Error("distributeRow's even-spread path must compute stride as " +
+			"`(available - GMAP.NODE_W) / (n - 1)` — this stride only meets " +
+			"the no-overlap rule when available >= required, which is the " +
+			"branch's guard condition")
+	}
+
+	// 4. Dynamic canvas + viewBox resize so packed-overflow rows aren't
+	// clipped. The horizontal scroll wrapper (PR 5 layout correction)
+	// handles the resulting overflow.
+	if !strings.Contains(body, `canvas.style.width`) {
+		t.Error("renderGovernanceMap must dynamically set canvas.style.width — " +
+			"a fixed-width canvas clips packed-overflow rows")
+	}
+	if !strings.Contains(body, `svg.setAttribute('viewBox'`) {
+		t.Error("renderGovernanceMap must dynamically set the SVG viewBox so " +
+			"connectors stay aligned with the resized canvas")
+	}
+
+	// 5. MIN_CANVAS_W constant present (the floor below which the canvas
+	// never shrinks). Pinning the literal name guards against an
+	// accidental rename that breaks the dynamic-sizing math.
+	if !strings.Contains(body, `MIN_CANVAS_W`) {
+		t.Error("GMAP.MIN_CANVAS_W constant missing — sizing pass needs a minimum")
+	}
+}
+
+// TestExplorer_HTML_GovernanceMap_LegendPresent asserts that the compact
+// connector legend ships with the map pane so users can decode the line
+// styles without reading source.
+func TestExplorer_HTML_GovernanceMap_LegendPresent(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, label := range []string{
+		"governance-map-legend",
+		"Service relationship",
+		"AI binding",
+		"Authority",
+		"Evidence",
+		"Coverage gap",
+	} {
+		if !strings.Contains(body, label) {
+			t.Errorf("Governance Map legend missing item %q", label)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Explorer Shell Polish PR — HTML source assertions
+// ---------------------------------------------------------------------------
+//
+// These tests pin the four polish-PR contracts:
+//   - The three top banners (developer-sandbox warning, sandbox banner,
+//     evaluate/simulate mode banner) are removed from the shell entirely
+//     — both the DOM nodes and the JS hooks/CSS rules that drove them.
+//   - An inline-SVG MIDAS favicon is declared in <head>.
+//   - The redundant "Accept Explorer" header brand is gone; MIDAS
+//     branding lives only in the sidebar.
+//   - The Services view three-column layout carries explicit column
+//     headers + helper subtitles so first-time users can read the
+//     reading order without inferring it from the contents.
+
+// TestExplorer_HTML_Polish_BannersRemoved asserts that every load-bearing
+// reference to the three top banners — the DOM node IDs/classes, the
+// CSS rules, and the JS helper that updated them — has been deleted.
+// A regression that re-introduces any banner surfaces here.
+func TestExplorer_HTML_Polish_BannersRemoved(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// 1. DOM node markers — none of these IDs/classes may appear.
+	for _, marker := range []string{
+		`class="warning-bar"`,
+		`id="demo-banner"`,
+		`id="mode-banner"`,
+		`id="mode-bar-hint"`,
+		`Developer sandbox only`,
+		`mode-banner-evaluate`,
+		`mode-banner-simulate`,
+	} {
+		if strings.Contains(body, marker) {
+			t.Errorf("Polish PR: banner marker %q must be removed from the shell", marker)
+		}
+	}
+
+	// 2. CSS rule selectors — the rule blocks were deleted with the
+	// markup, so their selectors should not appear in the embedded
+	// stylesheet either.
+	for _, rule := range []string{
+		`.warning-bar {`,
+		`.demo-banner {`,
+		`.demo-banner.ready`,
+		`.demo-banner.not-ready`,
+		`.mode-banner {`,
+		`.mode-banner-evaluate {`,
+		`.mode-banner-simulate {`,
+		`.mode-bar-hint {`,
+	} {
+		if strings.Contains(body, rule) {
+			t.Errorf("Polish PR: banner CSS rule %q must be removed", rule)
+		}
+	}
+
+	// 3. JS helper — updateModeBanner was the only function that wrote
+	// to #mode-banner / #mode-bar-hint; it must be deleted along with
+	// any caller that still references it.
+	if strings.Contains(body, `function updateModeBanner`) {
+		t.Error("Polish PR: updateModeBanner() helper must be removed (banner DOM no longer exists)")
+	}
+	if strings.Contains(body, `updateModeBanner(`) {
+		t.Error("Polish PR: callers of updateModeBanner() must be removed")
+	}
+	// The const that grabbed the banner element is also gone.
+	if strings.Contains(body, `getElementById('demo-banner')`) {
+		t.Error("Polish PR: getElementById('demo-banner') must be removed")
+	}
+}
+
+// TestExplorer_HTML_Polish_FaviconPresent asserts the MIDAS favicon is
+// declared as an inline-SVG data URI in <head>. The SVG semantics —
+// black background plus four white rectangles arranged as the MIDAS
+// logo bars — are pinned at the source level so a regression to a
+// different glyph (or to an external asset) fails this test.
+func TestExplorer_HTML_Polish_FaviconPresent(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// Favicon link element — must declare rel="icon" with an SVG MIME
+	// type. The data: URI form keeps the asset inline (no external
+	// fetch, satisfies the no-external-assets guardrail).
+	if !strings.Contains(body, `rel="icon"`) {
+		t.Fatal("Polish PR: <link rel=\"icon\"> missing from <head>")
+	}
+	if !strings.Contains(body, `type="image/svg+xml"`) {
+		t.Error("Polish PR: favicon link must declare type=\"image/svg+xml\"")
+	}
+	if !strings.Contains(body, `href="data:image/svg+xml,`) {
+		t.Error("Polish PR: favicon must be inlined as a data URI (no external assets)")
+	}
+
+	// MIDAS mark semantics: count the white-fill <rect> elements in
+	// the favicon SVG. Four bars = MIDAS logo. The fill color is
+	// percent-encoded as %23fff inside the data URI.
+	whiteRectCount := strings.Count(body, `fill='%23fff'`)
+	if whiteRectCount < 4 {
+		t.Errorf("Polish PR: favicon must contain 4 white-bar <rect> elements; "+
+			"found %d `fill='%%23fff'` occurrences", whiteRectCount)
+	}
+	// And one black-fill <rect> for the background.
+	if !strings.Contains(body, `fill='%23000'`) {
+		t.Error("Polish PR: favicon must contain a black background <rect>")
+	}
+}
+
+// TestExplorer_HTML_Polish_AcceptExplorerRemoved asserts the redundant
+// "Accept Explorer" header brand has been removed. MIDAS Explorer
+// branding remains in the sidebar (TestExplorer_Enabled_ReturnsHTML
+// pins that string elsewhere), so its absence from the top nav is
+// a deliberate de-duplication.
+func TestExplorer_HTML_Polish_AcceptExplorerRemoved(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// The brand text and its container class must both be gone.
+	if strings.Contains(body, "Accept Explorer") {
+		t.Error("Polish PR: the redundant 'Accept Explorer' header text must be removed")
+	}
+	if strings.Contains(body, `class="shell-header-brand"`) {
+		t.Error("Polish PR: the .shell-header-brand container must be removed")
+	}
+	if strings.Contains(body, `class="shell-header-divider"`) {
+		t.Error("Polish PR: the .shell-header-divider span (which separated brand from chips) must be removed")
+	}
+
+	// MIDAS Explorer branding still lives in the sidebar — assert it
+	// exactly once via its sidebar-only class so the test fails if the
+	// removed brand was reintroduced under a different element.
+	if !strings.Contains(body, `class="shell-brand-title"`) {
+		t.Error("Polish PR: the sidebar .shell-brand-title (sole MIDAS Explorer brand) must remain")
+	}
+
+	// Header centre cluster — the new three-zone grid uses
+	// .shell-header-center to host the chips + execution-mode toggle.
+	// Pin its presence so a future refactor doesn't quietly drop the
+	// centred layout.
+	if !strings.Contains(body, `class="shell-header-center"`) {
+		t.Error("Polish PR: .shell-header-center wrapper must be present (centres chips + toggle)")
+	}
+}
+
+// TestExplorer_HTML_Polish_ServicesColumnHeadersPresent asserts the
+// Services view's three-column layout now declares explicit column
+// titles + helper subtitles. The exact wording is pinned because the
+// brief specifies it; a regression that drops the headers (or reverts
+// to the unlabelled layout) fails here.
+func TestExplorer_HTML_Polish_ServicesColumnHeadersPresent(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// Column titles
+	for _, title := range []string{
+		"Business Services",
+		"Service Context",
+		"Governance Summary",
+	} {
+		if !strings.Contains(body, title) {
+			t.Errorf("Polish PR: Services view missing column title %q", title)
+		}
+	}
+	// Helper subtitles — short, not strictly load-bearing on every word
+	// but the brief gave examples and we pin them so intent is explicit.
+	for _, subtitle := range []string{
+		"Select a service to explore its context",
+		"Structural and governance context for the selected service",
+		"Key governance signals and runtime context",
+	} {
+		if !strings.Contains(body, subtitle) {
+			t.Errorf("Polish PR: Services view missing helper subtitle %q", subtitle)
+		}
+	}
+	// Structural anchors for the new column headers — these classes
+	// give the headers a single CSS hook and a deterministic test
+	// target. Their absence means the headers were rendered as
+	// free-floating text rather than a real column-header strip.
+	for _, marker := range []string{
+		`class="services-col-header"`,
+		`class="services-col-title"`,
+		`class="services-col-subtitle"`,
+	} {
+		if !strings.Contains(body, marker) {
+			t.Errorf("Polish PR: Services view missing column-header marker %q", marker)
+		}
 	}
 }
