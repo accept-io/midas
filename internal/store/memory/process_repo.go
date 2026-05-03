@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/accept-io/midas/internal/businessservice"
 	"github.com/accept-io/midas/internal/process"
@@ -58,6 +59,28 @@ func (r *ProcessRepo) List(_ context.Context) ([]*process.Process, error) {
 	for _, p := range r.items {
 		out = append(out, p)
 	}
+	return out, nil
+}
+
+// ListByBusinessService returns processes whose business_service_id
+// matches the given ID, ordered by process ID. Returns an empty slice
+// when no processes match.
+//
+// Result rows are stored pointers — callers receive direct references
+// to the in-memory map's values. This matches the existing List/GetByID
+// pattern; defensive copies are not introduced here because none of
+// the existing methods perform them. (PR 3 surfaced the
+// older-pattern-no-defensive-copy issue on BusinessService and fixed
+// it locally; a follow-up convention-alignment PR can extend the fix
+// to Process when it next changes.)
+func (r *ProcessRepo) ListByBusinessService(_ context.Context, businessServiceID string) ([]*process.Process, error) {
+	out := make([]*process.Process, 0)
+	for _, p := range r.items {
+		if p.BusinessServiceID == businessServiceID {
+			out = append(out, p)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
 }
 

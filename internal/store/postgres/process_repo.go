@@ -129,7 +129,39 @@ func (r *ProcessRepo) List(ctx context.Context) ([]*process.Process, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []*process.Process
+	out := make([]*process.Process, 0)
+	for rows.Next() {
+		var p process.Process
+		if err := rows.Scan(&p.ID, &p.Name, &p.Status, &p.Origin, &p.Managed, &p.Replaces, &p.Description, &p.Owner, &p.BusinessServiceID, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, &p)
+	}
+	return out, rows.Err()
+}
+
+// ListByBusinessService returns processes whose business_service_id
+// matches the given ID, ordered by process_id. Returns an empty slice
+// when no processes match the filter.
+//
+// Added in Epic 1 PR 4 to support the governance map read service.
+// idx_processes_business_service_id (existing) makes the WHERE clause
+// index-backed.
+func (r *ProcessRepo) ListByBusinessService(ctx context.Context, businessServiceID string) ([]*process.Process, error) {
+	const q = `
+		SELECT process_id, name, status, origin, managed, COALESCE(replaces, ''),
+		       COALESCE(description, ''), COALESCE(owner_id, ''),
+		       business_service_id,
+		       created_at, updated_at
+		FROM processes
+		WHERE business_service_id = $1
+		ORDER BY process_id`
+	rows, err := r.db.QueryContext(ctx, q, businessServiceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]*process.Process, 0)
 	for rows.Next() {
 		var p process.Process
 		if err := rows.Scan(&p.ID, &p.Name, &p.Status, &p.Origin, &p.Managed, &p.Replaces, &p.Description, &p.Owner, &p.BusinessServiceID, &p.CreatedAt, &p.UpdatedAt); err != nil {

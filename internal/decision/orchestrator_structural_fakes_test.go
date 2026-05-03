@@ -46,6 +46,21 @@ func (r *fakeProcessRepo) List(_ context.Context) ([]*process.Process, error) {
 	return out, nil
 }
 
+// ListByBusinessService satisfies the process.ProcessRepository contract
+// added in Epic 1 PR 4 to support the governance map read service. The
+// fake filters its in-memory procs map by BusinessServiceID; orchestrator
+// tests do not exercise this method directly, but the interface must
+// be satisfied for fakeStore / spyStore to compile.
+func (r *fakeProcessRepo) ListByBusinessService(_ context.Context, businessServiceID string) ([]*process.Process, error) {
+	out := make([]*process.Process, 0)
+	for _, p := range r.procs {
+		if p.BusinessServiceID == businessServiceID {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
 func (r *fakeProcessRepo) Create(_ context.Context, p *process.Process) error {
 	if r.procs == nil {
 		r.procs = map[string]*process.Process{}

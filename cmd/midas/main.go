@@ -23,6 +23,7 @@ import (
 	"github.com/accept-io/midas/internal/controlplane/approval"
 	"github.com/accept-io/midas/internal/decision"
 	"github.com/accept-io/midas/internal/governancecoverage"
+	"github.com/accept-io/midas/internal/governancemap"
 	"github.com/accept-io/midas/internal/httpapi"
 	"github.com/accept-io/midas/internal/identity"
 	"github.com/accept-io/midas/internal/localiam"
@@ -255,6 +256,22 @@ func main() {
 	if repos.Audit != nil {
 		srv.WithCoverageReadService(governancecoverage.NewReadService(repos.Audit))
 	}
+	// Epic 1, PR 4: wire the governance map read service that powers
+	// GET /v1/businessservices/{id}/governance-map. Composes existing
+	// repository readers via narrow per-entity interfaces.
+	srv.WithGovernanceMap(governancemap.NewReadService(
+		repos.BusinessServices,
+		repos.BusinessServiceRelationships,
+		repos.BusinessServiceCapabilities,
+		repos.Capabilities,
+		repos.Processes,
+		repos.Surfaces,
+		repos.Profiles,
+		repos.Grants,
+		repos.AISystems,
+		repos.AISystemVersions,
+		repos.AISystemBindings,
+	))
 	srv.WithStructuralMode(cfg.Structural.Mode)
 	if authenticator != nil {
 		srv.WithAuthenticator(authenticator)

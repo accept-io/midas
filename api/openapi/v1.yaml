@@ -670,6 +670,327 @@ components:
             $ref: "#/components/schemas/BusinessServiceRelationship"
 
     # ------------------------------------------------------------------
+    # Governance Map Read Model (Epic 1, PR 4)
+    # ------------------------------------------------------------------
+    # Composes the existing structural surface for a single business
+    # service. Includes only active surfaces; includes AI systems
+    # regardless of status. The recent_decisions field is intentionally
+    # omitted in PR 4 — see Step 0.5 deferral; PR 8 will revisit.
+
+    GovernanceMapResponse:
+      type: object
+      description: >
+        Top-level governance map response. All array fields are always
+        present (never null). authority_summary and coverage are
+        always present even when their counts are zero. recent_decisions
+        is deliberately not included in PR 4 (deferred to PR 8).
+      required:
+        - business_service
+        - relationships
+        - capabilities
+        - processes
+        - surfaces
+        - ai_systems
+        - authority_summary
+        - coverage
+      properties:
+        business_service:
+          $ref: "#/components/schemas/GovernanceMapBusinessService"
+        relationships:
+          $ref: "#/components/schemas/GovernanceMapRelationships"
+        capabilities:
+          type: array
+          items:
+            $ref: "#/components/schemas/GovernanceMapCapability"
+        processes:
+          type: array
+          items:
+            $ref: "#/components/schemas/GovernanceMapProcess"
+        surfaces:
+          type: array
+          items:
+            $ref: "#/components/schemas/GovernanceMapSurface"
+        ai_systems:
+          type: array
+          items:
+            $ref: "#/components/schemas/GovernanceMapAISystem"
+        authority_summary:
+          $ref: "#/components/schemas/GovernanceMapAuthoritySummary"
+        coverage:
+          $ref: "#/components/schemas/GovernanceMapCoverage"
+
+    GovernanceMapBusinessService:
+      type: object
+      description: Root business service node in the governance map.
+      required: [id, name, service_type, status, external_ref]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        service_type:
+          type: string
+        regulatory_scope:
+          type: string
+        status:
+          type: string
+        owner_id:
+          type: string
+        external_ref:
+          allOf:
+            - $ref: "#/components/schemas/ExternalRef"
+          nullable: true
+          description: Optional structured external reference. Always present; null when absent (Epic 1, PR 3).
+
+    GovernanceMapRelationships:
+      type: object
+      description: >
+        Relationships partitioned by direction. Both arrays are always
+        present (never null).
+      required: [outgoing, incoming]
+      properties:
+        outgoing:
+          type: array
+          items:
+            $ref: "#/components/schemas/GovernanceMapRelationship"
+        incoming:
+          type: array
+          items:
+            $ref: "#/components/schemas/GovernanceMapRelationship"
+
+    GovernanceMapRelationship:
+      type: object
+      description: >
+        A single directed relationship rendered for the governance map.
+        other_name is the opposing service's name (target name for
+        outgoing rows, source name for incoming rows). Empty when the
+        opposing service cannot be resolved.
+      required: [id, source_business_service_id, target_business_service_id, relationship_type]
+      properties:
+        id:
+          type: string
+        source_business_service_id:
+          type: string
+        target_business_service_id:
+          type: string
+        other_name:
+          type: string
+        relationship_type:
+          type: string
+          enum: [depends_on, supports, part_of]
+        description:
+          type: string
+
+    GovernanceMapCapability:
+      type: object
+      description: A capability linked to the root business service via BSC.
+      required: [id, name, status]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+
+    GovernanceMapProcess:
+      type: object
+      description: A process under the root business service.
+      required: [id, name, business_service_id, status]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        business_service_id:
+          type: string
+        status:
+          type: string
+
+    GovernanceMapSurface:
+      type: object
+      description: >
+        An active decision surface under one of the root business
+        service's processes, with per-surface AI binding IDs and
+        authority counts. ai_bindings is always present (never null).
+        Per-surface counts use distinct sets at each level
+        (profiles distinct on this surface, grants distinct across
+        those profiles, agents distinct across those grants).
+      required:
+        - id
+        - version
+        - name
+        - process_id
+        - status
+        - ai_bindings
+        - profile_count
+        - grant_count
+        - agent_count
+      properties:
+        id:
+          type: string
+        version:
+          type: integer
+        name:
+          type: string
+        process_id:
+          type: string
+        status:
+          type: string
+        ai_bindings:
+          type: array
+          items:
+            type: string
+          description: AISystemBinding IDs whose surface_id matches this surface.
+        profile_count:
+          type: integer
+        grant_count:
+          type: integer
+        agent_count:
+          type: integer
+
+    GovernanceMapAISystem:
+      type: object
+      description: >
+        An AI system included in the governance map via the four-way OR
+        binding rule. Status is included verbatim; deprecated AI systems
+        with bindings remain visible. active_version may be null when
+        no version is in active status. bindings contains only the
+        bindings relevant to the root business service context — bindings
+        to other business services for the same AI system are excluded.
+      required: [id, name, status, external_ref, active_version, bindings]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        vendor:
+          type: string
+        system_type:
+          type: string
+        status:
+          type: string
+          enum: [active, deprecated, retired]
+        external_ref:
+          allOf:
+            - $ref: "#/components/schemas/ExternalRef"
+          nullable: true
+          description: Optional structured external reference. Always present; null when absent (Epic 1, PR 3).
+        active_version:
+          allOf:
+            - $ref: "#/components/schemas/GovernanceMapAISystemVersion"
+          nullable: true
+          description: The latest version whose status is 'active'. Null when no active version exists.
+        bindings:
+          type: array
+          items:
+            $ref: "#/components/schemas/GovernanceMapAISystemBinding"
+
+    GovernanceMapAISystemVersion:
+      type: object
+      description: >
+        Subset of an AISystemVersion embedded inside a GovernanceMapAISystem.
+        The full version detail is available via
+        GET /v1/aisystems/{id}/versions/{version}.
+      required: [ai_system_id, version, status]
+      properties:
+        ai_system_id:
+          type: string
+        version:
+          type: integer
+          minimum: 1
+        release_label:
+          type: string
+        status:
+          type: string
+          enum: [review, active, deprecated, retired]
+
+    GovernanceMapAISystemBinding:
+      type: object
+      description: >
+        An AI system binding rendered in the governance map. Pointer-typed
+        fields render as JSON null when absent. ai_system_version is
+        nullable; business_service_id, capability_id, process_id, and
+        surface_id are independently nullable.
+      required:
+        - id
+        - ai_system_id
+        - ai_system_version
+        - business_service_id
+        - capability_id
+        - process_id
+        - surface_id
+      properties:
+        id:
+          type: string
+        ai_system_id:
+          type: string
+        ai_system_version:
+          type: integer
+          nullable: true
+        business_service_id:
+          type: string
+          nullable: true
+        capability_id:
+          type: string
+          nullable: true
+        process_id:
+          type: string
+          nullable: true
+        surface_id:
+          type: string
+          nullable: true
+        role:
+          type: string
+        description:
+          type: string
+
+    GovernanceMapAuthoritySummary:
+      type: object
+      description: >
+        Aggregate authority counts across all surfaces in the response.
+        Each count uses distinct sets at its level (profiles distinct
+        across surfaces, grants distinct across profiles, agents
+        distinct across grants). All four fields are always present;
+        zero values are used for empty results.
+      required:
+        - surface_count
+        - active_profile_count
+        - active_grant_count
+        - active_agent_count
+      properties:
+        surface_count:
+          type: integer
+        active_profile_count:
+          type: integer
+        active_grant_count:
+          type: integer
+        active_agent_count:
+          type: integer
+
+    GovernanceMapCoverage:
+      type: object
+      description: >
+        AI binding coverage across the root business service's surfaces.
+        Always present even for empty services. Derived from the
+        surfaces array; never requires additional repository queries.
+      required:
+        - surface_count
+        - surfaces_with_ai_binding
+        - surfaces_without_ai_binding
+      properties:
+        surface_count:
+          type: integer
+        surfaces_with_ai_binding:
+          type: integer
+        surfaces_without_ai_binding:
+          type: integer
+
+    # ------------------------------------------------------------------
     # AI System Registration (Epic 1, PR 2)
     # ------------------------------------------------------------------
 
@@ -3029,6 +3350,73 @@ paths:
                 $ref: "#/components/schemas/Error"
         "501":
           description: BSR reader or structural service not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/businessservices/{id}/governance-map:
+    get:
+      operationId: getBusinessServiceGovernanceMap
+      summary: Get the governance map for a business service
+      description: >
+        Returns a service-centric governance map for the queried business
+        service. The map composes the root BusinessService, its directed
+        relationships, capabilities, processes, active surfaces, AI
+        systems with their active versions and bindings, and authority
+        and coverage summary counts.
+
+        Includes only active surfaces (status = 'active'). Includes AI
+        systems regardless of status — bindings to deprecated AI systems
+        remain visible for audit/compliance review. AI systems are
+        included via a four-way OR over bindings to the root BS, its
+        capabilities, its processes, or its active surfaces; bindings
+        relevant to other business services are excluded per AI system.
+
+        The `recent_decisions` field is intentionally not present in PR 4.
+        It will land in PR 8 alongside the OperationalEnvelope changes
+        for AI system fields. Requires platform.viewer or above.
+        See Epic 1, PR 4 (Service-Centric AI Governance Map read model).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Business service identifier.
+      responses:
+        "200":
+          description: Governance map for the business service.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GovernanceMapResponse"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Business service not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Repository error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: Governance map read service not configured
           content:
             application/json:
               schema:

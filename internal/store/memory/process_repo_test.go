@@ -9,6 +9,53 @@ import (
 	"github.com/accept-io/midas/internal/process"
 )
 
+func TestProcessRepo_ListByBusinessService(t *testing.T) {
+	ctx := context.Background()
+	procRepo := NewProcessRepo()
+	now := time.Now().UTC()
+
+	// Seed three processes across two business services.
+	for _, p := range []*process.Process{
+		{ID: "proc-c", Name: "C", BusinessServiceID: "bs-1", Status: "active", Origin: "manual", Managed: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "proc-a", Name: "A", BusinessServiceID: "bs-1", Status: "active", Origin: "manual", Managed: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "proc-other", Name: "Other", BusinessServiceID: "bs-2", Status: "active", Origin: "manual", Managed: true, CreatedAt: now, UpdatedAt: now},
+	} {
+		if err := procRepo.Create(ctx, p); err != nil {
+			t.Fatalf("seed %s: %v", p.ID, err)
+		}
+	}
+
+	got, err := procRepo.ListByBusinessService(ctx, "bs-1")
+	if err != nil {
+		t.Fatalf("ListByBusinessService: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 processes for bs-1, got %d", len(got))
+	}
+	// Deterministic ordering by process ID.
+	if got[0].ID != "proc-a" || got[1].ID != "proc-c" {
+		t.Errorf("ordering mismatch; got [%s, %s]", got[0].ID, got[1].ID)
+	}
+	for _, p := range got {
+		if p.BusinessServiceID != "bs-1" {
+			t.Errorf("filter leaked: process %s has business_service_id=%q", p.ID, p.BusinessServiceID)
+		}
+	}
+
+	// Empty result for an unknown BS must be a non-nil empty slice
+	// per the interface contract.
+	none, err := procRepo.ListByBusinessService(ctx, "bs-nonexistent")
+	if err != nil {
+		t.Fatalf("ListByBusinessService(unknown): %v", err)
+	}
+	if none == nil {
+		t.Error("empty result should be empty slice, not nil")
+	}
+	if len(none) != 0 {
+		t.Errorf("want 0 processes for unknown BS, got %d", len(none))
+	}
+}
+
 func TestProcessRepo_CreateAndGetByID(t *testing.T) {
 	ctx := context.Background()
 	procRepo := NewProcessRepo()

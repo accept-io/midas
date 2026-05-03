@@ -205,6 +205,7 @@ type Server struct {
 	explicitValidator    explicitModeValidator       // nil when explicit-mode validation is not wired
 	adminAudit           adminaudit.Repository       // nil when admin-audit is not wired (Issue #41)
 	coverageRead         coverageReadService         // nil when coverage read service is not wired (Issue #56)
+	governanceMap        governanceMapReadService    // nil when governance map read service is not wired (Epic 1, PR 4)
 }
 
 type approveSurfaceRequest struct {
@@ -3287,6 +3288,10 @@ func (s *Server) handleGetBusinessService(w http.ResponseWriter, r *http.Request
 
 	if len(parts) == 2 && parts[1] == "relationships" {
 		s.handleGetBusinessServiceRelationships(w, r, id)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "governance-map" {
+		s.handleGetBusinessServiceGovernanceMap(w, r, id)
 		return
 	}
 	if len(parts) > 1 {

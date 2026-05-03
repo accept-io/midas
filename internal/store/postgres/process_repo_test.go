@@ -251,3 +251,77 @@ func TestProcessRepo_List_ReturnsAllRows(t *testing.T) {
 		}
 	}
 }
+
+// TestProcessRepo_ListByBusinessService exercises the new method added
+// in Epic 1 PR 4 to support the governance map read service. Pins the
+// filter behaviour, the deterministic ordering by process_id, and the
+// empty-slice (not nil) contract for unknown business services.
+func TestProcessRepo_ListByBusinessService(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+
+	svcA := "tst-svc-proc-lbs-a"
+	svcB := "tst-svc-proc-lbs-b"
+
+	for _, sv := range []string{svcA, svcB} {
+		if _, err := db.ExecContext(ctx,
+			`INSERT INTO business_services (business_service_id, name, service_type, status, origin, managed, created_at, updated_at)
+			 VALUES ($1, $1, 'internal', 'active', 'manual', true, NOW(), NOW())
+			 ON CONFLICT (business_service_id) DO NOTHING`,
+			sv,
+		); err != nil {
+			t.Fatalf("seed BS %s: %v", sv, err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, `DELETE FROM processes WHERE process_id LIKE 'tst-proc-lbs-%'`)
+		_, _ = db.ExecContext(ctx, `DELETE FROM business_services WHERE business_service_id IN ($1, $2)`, svcA, svcB)
+	})
+
+	repo, err := NewProcessRepo(db)
+	if err != nil {
+		t.Fatalf("NewProcessRepo: %v", err)
+	}
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	// Insert in non-alphabetical order to verify ORDER BY in the query.
+	for _, p := range []*process.Process{
+		{ID: "tst-proc-lbs-c", Name: "C", BusinessServiceID: svcA, Status: "active", Origin: "manual", Managed: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "tst-proc-lbs-a", Name: "A", BusinessServiceID: svcA, Status: "active", Origin: "manual", Managed: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "tst-proc-lbs-other", Name: "Other", BusinessServiceID: svcB, Status: "active", Origin: "manual", Managed: true, CreatedAt: now, UpdatedAt: now},
+	} {
+		if err := repo.Create(ctx, p); err != nil {
+			t.Fatalf("Create %s: %v", p.ID, err)
+		}
+	}
+
+	got, err := repo.ListByBusinessService(ctx, svcA)
+	if err != nil {
+		t.Fatalf("ListByBusinessService: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 processes for %q, got %d", svcA, len(got))
+	}
+	if got[0].ID != "tst-proc-lbs-a" || got[1].ID != "tst-proc-lbs-c" {
+		t.Errorf("ORDER BY process_id violated; got [%s, %s]", got[0].ID, got[1].ID)
+	}
+	for _, p := range got {
+		if p.BusinessServiceID != svcA {
+			t.Errorf("filter leaked: %s has business_service_id=%q", p.ID, p.BusinessServiceID)
+		}
+	}
+
+	// Unknown BS — non-nil empty slice per contract.
+	none, err := repo.ListByBusinessService(ctx, "tst-svc-proc-lbs-nope")
+	if err != nil {
+		t.Fatalf("ListByBusinessService(unknown): %v", err)
+	}
+	if none == nil {
+		t.Error("empty result should be empty slice, not nil")
+	}
+	if len(none) != 0 {
+		t.Errorf("want 0 processes, got %d", len(none))
+	}
+}
