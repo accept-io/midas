@@ -2692,7 +2692,10 @@ func (s *Service) applyCapability(
 		return fmt.Errorf("%w: invalid document payload for kind %q", ErrInvalidBundle, types.KindCapability)
 	}
 
-	c := mapCapabilityDocumentToCapability(capDoc, now, actor)
+	c, err := mapCapabilityDocumentToCapability(capDoc, now, actor)
+	if err != nil {
+		return fmt.Errorf("map capability document: %w", err)
+	}
 
 	if err := repos.Capabilities.Create(ctx, c); err != nil {
 		return fmt.Errorf("create capability: %w", err)

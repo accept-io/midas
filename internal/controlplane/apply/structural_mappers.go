@@ -11,8 +11,12 @@ import (
 	"github.com/accept-io/midas/internal/process"
 )
 
-func mapCapabilityDocumentToCapability(doc types.CapabilityDocument, now time.Time, createdBy string) *capability.Capability {
+func mapCapabilityDocumentToCapability(doc types.CapabilityDocument, now time.Time, createdBy string) (*capability.Capability, error) {
 	now = now.UTC()
+	ref, err := mapExternalRefSpec(doc.Spec.ExternalRef)
+	if err != nil {
+		return nil, err
+	}
 	return &capability.Capability{
 		ID:                 strings.TrimSpace(doc.Metadata.ID),
 		Name:               strings.TrimSpace(doc.Metadata.Name),
@@ -25,7 +29,8 @@ func mapCapabilityDocumentToCapability(doc types.CapabilityDocument, now time.Ti
 		CreatedAt:          now,
 		UpdatedAt:          now,
 		CreatedBy:          strings.TrimSpace(createdBy),
-	}
+		ExternalRef:        ref,
+	}, nil
 }
 
 func mapProcessDocumentToProcess(doc types.ProcessDocument, now time.Time, createdBy string) *process.Process {

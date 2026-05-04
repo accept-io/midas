@@ -1742,6 +1742,19 @@ ALTER TABLE ai_system_bindings ADD COLUMN IF NOT EXISTS ext_source_url     TEXT;
 ALTER TABLE ai_system_bindings ADD COLUMN IF NOT EXISTS ext_source_version TEXT;
 ALTER TABLE ai_system_bindings ADD COLUMN IF NOT EXISTS ext_last_synced_at TIMESTAMPTZ;
 
+-- Phase 0B-2: capabilities receives the same ext_* columns as the
+-- five PR-3 entities. The legacy `external_ref TEXT` column on
+-- capabilities (declared in the original CREATE TABLE block) was never
+-- read or written by any code path; this addition supersedes it via
+-- the structured five-column shape used everywhere else. The legacy
+-- column is left in place as a dead artifact — a destructive cleanup
+-- migration is out of scope for this task.
+ALTER TABLE capabilities ADD COLUMN IF NOT EXISTS ext_source_system  TEXT;
+ALTER TABLE capabilities ADD COLUMN IF NOT EXISTS ext_source_id      TEXT;
+ALTER TABLE capabilities ADD COLUMN IF NOT EXISTS ext_source_url     TEXT;
+ALTER TABLE capabilities ADD COLUMN IF NOT EXISTS ext_source_version TEXT;
+ALTER TABLE capabilities ADD COLUMN IF NOT EXISTS ext_last_synced_at TIMESTAMPTZ;
+
 DO $$ BEGIN
     -- business_services
     ALTER TABLE business_services
@@ -1792,6 +1805,17 @@ DO $$ BEGIN
         DROP CONSTRAINT IF EXISTS chk_ai_system_bindings_ext_consistency;
     ALTER TABLE ai_system_bindings
         ADD CONSTRAINT chk_ai_system_bindings_ext_consistency
+        CHECK (
+            (ext_source_system IS NULL AND ext_source_id IS NULL)
+            OR
+            (ext_source_system IS NOT NULL AND ext_source_id IS NOT NULL)
+        );
+
+    -- capabilities (Phase 0B-2)
+    ALTER TABLE capabilities
+        DROP CONSTRAINT IF EXISTS chk_capabilities_ext_consistency;
+    ALTER TABLE capabilities
+        ADD CONSTRAINT chk_capabilities_ext_consistency
         CHECK (
             (ext_source_system IS NULL AND ext_source_id IS NULL)
             OR

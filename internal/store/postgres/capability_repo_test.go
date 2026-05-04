@@ -2,11 +2,13 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/accept-io/midas/internal/capability"
+	"github.com/accept-io/midas/internal/externalref"
 )
 
 func TestCapabilityRepo_CreateAndGetByID(t *testing.T) {
@@ -365,5 +367,165 @@ func TestCapabilityRepo_Create_AllowsEmptyCreatedBy(t *testing.T) {
 	}
 	if raw != nil {
 		t.Errorf("created_by column: want NULL when CreatedBy is empty, got %q", *raw)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// external_ref round-trip (Phase 0B-2)
+//
+// Capability now carries the structured ExternalRef pattern that the
+// Epic 1 PR 3 entities already use (BS, BSR, AISystem, AISystemVersion,
+// AISystemBinding). The postgres repo writes/reads the five flat
+// ext_* columns via the shared extRefSelectColumns / extRefScan /
+// extRefInsertValues / mapExtRefError helpers; these tests reuse the
+// shared pgExtRefFixture / assertExtRefRoundTrip / pgInconsistentExtRef
+// helpers from external_ref_repo_test.go (same package).
+// ---------------------------------------------------------------------------
+
+// makeCapabilityWithExt is a small constructor that mirrors the
+// makePGBSWithExt helper: produces a Capability struct with the given
+// ExternalRef slot and otherwise minimum-valid lifecycle fields.
+func makeCapabilityWithExt(id string, ref *externalref.ExternalRef) *capability.Capability {
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	return &capability.Capability{
+		ID:          id,
+		Name:        id,
+		Status:      "active",
+		Origin:      "manual",
+		Managed:     true,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		ExternalRef: ref,
+	}
+}
+
+// TestCapabilityRepo_CreateGetByID_PreservesExternalRef confirms a
+// Capability persisted with a populated ExternalRef reads back via
+// GetByID with every field intact.
+func TestCapabilityRepo_CreateGetByID_PreservesExternalRef(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	const id = "tst-cap-ext-rt"
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, `DELETE FROM capabilities WHERE capability_id = $1`, id)
+	})
+
+	repo, err := NewCapabilityRepo(db)
+	if err != nil {
+		t.Fatalf("NewCapabilityRepo: %v", err)
+	}
+
+	if err := repo.Create(ctx, makeCapabilityWithExt(id, pgExtRefFixture())); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	got, err := repo.GetByID(ctx, id)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected capability, got nil")
+	}
+	assertExtRefRoundTrip(t, got.ExternalRef)
+}
+
+// TestCapabilityRepo_List_PreservesExternalRef confirms ExternalRef
+// also round-trips through List's separate SELECT/Scan path.
+func TestCapabilityRepo_List_PreservesExternalRef(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	const id = "tst-cap-ext-list"
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, `DELETE FROM capabilities WHERE capability_id = $1`, id)
+	})
+
+	repo, err := NewCapabilityRepo(db)
+	if err != nil {
+		t.Fatalf("NewCapabilityRepo: %v", err)
+	}
+
+	if err := repo.Create(ctx, makeCapabilityWithExt(id, pgExtRefFixture())); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	all, err := repo.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var found bool
+	for _, c := range all {
+		if c.ID != id {
+			continue
+		}
+		found = true
+		assertExtRefRoundTrip(t, c.ExternalRef)
+		break
+	}
+	if !found {
+		t.Fatalf("seeded capability %q not found in List() result", id)
+	}
+}
+
+// TestCapabilityRepo_Create_AllowsNilExternalRef confirms a Capability
+// persisted with a nil ExternalRef writes the five ext_* columns as
+// NULL and reads back with ExternalRef == nil. This is the canonical
+// "no external reference" state and the most common case.
+func TestCapabilityRepo_Create_AllowsNilExternalRef(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	const id = "tst-cap-ext-nil"
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, `DELETE FROM capabilities WHERE capability_id = $1`, id)
+	})
+
+	repo, err := NewCapabilityRepo(db)
+	if err != nil {
+		t.Fatalf("NewCapabilityRepo: %v", err)
+	}
+
+	if err := repo.Create(ctx, makeCapabilityWithExt(id, nil)); err != nil {
+		t.Fatalf("Create with nil ExternalRef: %v", err)
+	}
+	got, err := repo.GetByID(ctx, id)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected capability, got nil")
+	}
+	if got.ExternalRef != nil {
+		t.Errorf("expected nil ExternalRef from NULL columns; got %+v", got.ExternalRef)
+	}
+}
+
+// TestCapabilityRepo_ExternalRef_RejectsInconsistent_ViaCheckConstraint
+// confirms that the Postgres CHECK constraint
+// chk_capabilities_ext_consistency rejects a Capability whose
+// ExternalRef has source_system set but source_id empty (or vice
+// versa), and that the constraint violation surfaces as the typed
+// externalref.ErrInconsistent sentinel via mapExtRefError. Mirrors
+// the BS/BSR/AISystem/AISystemVersion/AISystemBinding equivalents.
+func TestCapabilityRepo_ExternalRef_RejectsInconsistent_ViaCheckConstraint(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	const id = "tst-cap-ext-bad"
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, `DELETE FROM capabilities WHERE capability_id = $1`, id)
+	})
+
+	repo, err := NewCapabilityRepo(db)
+	if err != nil {
+		t.Fatalf("NewCapabilityRepo: %v", err)
+	}
+
+	err = repo.Create(ctx, makeCapabilityWithExt(id, pgInconsistentExtRef()))
+	if !errors.Is(err, externalref.ErrInconsistent) {
+		t.Errorf("Create with inconsistent ExternalRef: want ErrInconsistent, got %v", err)
 	}
 }

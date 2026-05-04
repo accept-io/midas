@@ -329,6 +329,11 @@ type CapabilitySpec struct {
 	Status             string `json:"status" yaml:"status"`
 	Owner              string `json:"owner,omitempty" yaml:"owner,omitempty"`
 	ParentCapabilityID string `json:"parent_capability_id,omitempty" yaml:"parent_capability_id,omitempty"`
+
+	// ExternalRef is optional structured metadata about the entity in an
+	// external system (Phase 0B-2). Nil when the YAML omits the field.
+	// Mirrors the BusinessServiceSpec / AISystemSpec / etc. posture.
+	ExternalRef *ExternalRefSpec `json:"external_ref,omitempty" yaml:"external_ref,omitempty"`
 }
 
 func (c CapabilityDocument) GetKind() string { return c.Kind }

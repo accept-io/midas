@@ -3,6 +3,8 @@ package capability
 import (
 	"context"
 	"time"
+
+	"github.com/accept-io/midas/internal/externalref"
 )
 
 type Capability struct {
@@ -18,6 +20,12 @@ type Capability struct {
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
 	CreatedBy          string
+
+	// ExternalRef is optional structured metadata about the entity in
+	// an external system (Phase 0B-2 — extends the Epic 1 PR 3 pattern
+	// to Capability). Nil when no external reference is recorded.
+	// Carries no lifecycle behaviour and does not gate apply.
+	ExternalRef *externalref.ExternalRef
 }
 
 type CapabilityRepository interface {

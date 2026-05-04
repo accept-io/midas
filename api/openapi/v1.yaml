@@ -486,6 +486,16 @@ components:
 
     Capability:
       type: object
+      description: >
+        A business capability (Phase 1 wire-complete shape). The
+        persisted record holds hierarchy (parent_capability_id),
+        lifecycle (origin, managed, replaces), audit (created_by), and
+        external-system metadata (external_ref) in addition to the
+        original identity/status/timestamp fields. Mirrors the
+        capabilityResponse wire format. Field nullability conventions
+        match aiSystemResponse: parent_capability_id and replaces are
+        rendered as null (not omitted) when empty so callers can
+        distinguish "absent" from "empty string".
       properties:
         id:
           type: string
@@ -502,12 +512,55 @@ components:
         owner:
           type: string
           description: Owner identifier. Omitted when not set.
+        parent_capability_id:
+          type: string
+          nullable: true
+          description: >
+            Optional parent capability for the hierarchical model. Always
+            present in the response; rendered as null when the capability
+            is a root (no parent).
+        origin:
+          type: string
+          enum: [manual, inferred]
+          description: >
+            Lifecycle provenance: `manual` for operator-applied resources,
+            `inferred` for system-discovered. Always present.
+        managed:
+          type: boolean
+          description: >
+            Lifecycle ownership flag: `true` means the record is fully
+            under operator control. `manual` resources are always
+            managed=true (DB CHECK enforces). Always present.
+        replaces:
+          type: string
+          nullable: true
+          description: >
+            Optional capability_id this record supersedes when promoting
+            an inferred resource. Always present in the response;
+            rendered as null when the capability replaces nothing.
         created_at:
           type: string
           format: date-time
         updated_at:
           type: string
           format: date-time
+        created_by:
+          type: string
+          description: >
+            Optional actor that created the row (e.g. "operator:alice",
+            "service-account:ci-bot"). Omitted when empty. Populated by
+            the control-plane apply path from the actor passed to
+            svc.Apply; absent for capabilities created outside that path
+            (seed fixtures, hand-rolled SQL inserts).
+        external_ref:
+          allOf:
+            - $ref: "#/components/schemas/ExternalRef"
+          nullable: true
+          description: >
+            Optional structured reference to an external system. Always
+            present in the response; rendered as null when no external
+            reference is recorded. See ExternalRef (Epic 1, PR 3 — Phase
+            0B-2 extended the pattern to Capability).
 
     Process:
       type: object

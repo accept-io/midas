@@ -11,13 +11,16 @@ import (
 	"github.com/accept-io/midas/internal/store/memory"
 )
 
-// TestCapabilityList_ReturnsParentCapabilityID confirms that Capability.List()
-// preserves the ParentCapabilityID field through the full stack (repo → service → HTTP).
+// TestCapabilityList_ReturnsParentCapabilityID confirms that
+// Capability.List() preserves the ParentCapabilityID field through the
+// full stack (repo → service → HTTP) AND that the field is exposed on
+// the wire.
 //
-// The postgres capability_repo.List() previously omitted parent_capability_id from its
-// SELECT, causing data loss. This test exercises the memory-backed path (which is
-// correct) to confirm the HTTP response shape includes the field, and to serve as a
-// regression anchor if the field is accidentally dropped again.
+// Historically this test had to inspect the underlying domain because
+// capabilityResponse omitted parent_capability_id from its JSON shape.
+// Phase 1 added the field to the wire format alongside origin, managed,
+// replaces, created_by, and external_ref; this test now asserts the
+// field reaches the JSON body for both List and GetByID.
 func TestCapabilityList_ReturnsParentCapabilityID(t *testing.T) {
 	capRepo := memory.NewCapabilityRepo()
 	now := time.Now()
@@ -46,7 +49,9 @@ func TestCapabilityList_ReturnsParentCapabilityID(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 
-	// Use a raw map to inspect the JSON without depending on capabilityResponse shape.
+	// Use a raw map to inspect the JSON; the field-shape conventions
+	// (parent_capability_id is *string, JSON null when empty) need
+	// shape-agnostic inspection.
 	var raw []map[string]interface{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
 		t.Fatalf("unmarshal list: %v", err)
@@ -55,22 +60,45 @@ func TestCapabilityList_ReturnsParentCapabilityID(t *testing.T) {
 		t.Fatalf("expected 2 capabilities, got %d", len(raw))
 	}
 
+	var foundChild, foundParent bool
 	for _, item := range raw {
 		id, _ := item["id"].(string)
-		if id == "cap-child" {
-			// Verify parent_capability_id reaches the wire.
-			// Note: capabilityResponse currently does not expose parent_capability_id.
-			// This test confirms the field exists in the domain model and will fail
-			// if the response struct is updated to include it and the List() query
-			// regresses to dropping it.
-			_ = item // Field not yet in capabilityResponse — checked at service level below.
+		switch id {
+		case "cap-child":
+			foundChild = true
+			// parent_capability_id must be the literal "cap-parent"
+			// (not absent, not null).
+			parent, _ := item["parent_capability_id"].(string)
+			if parent != "cap-parent" {
+				t.Errorf("List child.parent_capability_id: want %q, got %v",
+					"cap-parent", item["parent_capability_id"])
+			}
+		case "cap-parent":
+			foundParent = true
+			// Root capability — parent_capability_id is rendered as
+			// JSON null (always present, *string in the response).
+			if item["parent_capability_id"] != nil {
+				t.Errorf("List parent.parent_capability_id: want JSON null, got %v",
+					item["parent_capability_id"])
+			}
 		}
 	}
+	if !foundChild || !foundParent {
+		t.Fatalf("List response missing one of the seeded rows; foundChild=%v foundParent=%v", foundChild, foundParent)
+	}
 
-	// Confirm the field is preserved through the service layer (GetByID path already correct).
+	// GetByID — same field must be exposed on the detail endpoint.
 	rec2 := performRequest(t, srv, http.MethodGet, "/v1/capabilities/cap-child", nil)
 	if rec2.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec2.Code)
+	}
+	var detail map[string]interface{}
+	if err := json.Unmarshal(rec2.Body.Bytes(), &detail); err != nil {
+		t.Fatalf("unmarshal detail: %v", err)
+	}
+	if got, _ := detail["parent_capability_id"].(string); got != "cap-parent" {
+		t.Errorf("GetByID detail.parent_capability_id: want %q, got %v",
+			"cap-parent", detail["parent_capability_id"])
 	}
 }
 

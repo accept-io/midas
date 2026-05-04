@@ -323,14 +323,36 @@ type profileResponse struct {
 }
 
 // capabilityResponse is the wire format for GET /v1/capabilities/{id} and list items.
+//
+// Phase 1 expansion — the response was originally a 7-field projection
+// (id, name, description, status, owner, created_at, updated_at) that
+// silently dropped half of the persisted Capability. Phase 1 adds the
+// remaining persisted fields so the wire shape is complete.
+//
+// Field shape conventions mirror aiSystemResponse exactly:
+//   - ParentCapabilityID, Replaces — *string, always present, JSON null
+//     when empty so callers can distinguish "absent" from "empty string"
+//     without consulting the schema.
+//   - Origin, Managed — always present (NOT NULL columns; sensible
+//     defaults exist at every layer).
+//   - CreatedBy — string with omitempty; matches the convention for
+//     audit-by-actor fields elsewhere (BSR, AISystem, AISystemVersion).
+//   - ExternalRef — *externalRefResponse, always present, JSON null when
+//     no external reference is recorded. Mirrors the five PR-3 entities.
 type capabilityResponse struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description,omitempty"`
-	Status      string    `json:"status"`
-	Owner       string    `json:"owner,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID                 string               `json:"id"`
+	Name               string               `json:"name"`
+	Description        string               `json:"description,omitempty"`
+	Status             string               `json:"status"`
+	Owner              string               `json:"owner,omitempty"`
+	ParentCapabilityID *string              `json:"parent_capability_id"`
+	Origin             string               `json:"origin"`
+	Managed            bool                 `json:"managed"`
+	Replaces           *string              `json:"replaces"`
+	CreatedAt          time.Time            `json:"created_at"`
+	UpdatedAt          time.Time            `json:"updated_at"`
+	CreatedBy          string               `json:"created_by,omitempty"`
+	ExternalRef        *externalRefResponse `json:"external_ref"`
 }
 
 // processResponse is the wire format for GET /v1/processes/{id} and list items.
@@ -2875,16 +2897,34 @@ func toGrantResponse(g *authority.AuthorityGrant) grantResponse {
 }
 
 // toCapabilityResponse maps a Capability to its wire format.
+//
+// Pointer-to-string for ParentCapabilityID and Replaces follows the
+// aiSystemResponse precedent: empty domain string → JSON null on the
+// wire. ExternalRef goes through toExternalRefResponse so nil-or-zero
+// refs canonicalise to JSON null without a separate code path here.
 func toCapabilityResponse(c *capability.Capability) capabilityResponse {
-	return capabilityResponse{
+	out := capabilityResponse{
 		ID:          c.ID,
 		Name:        c.Name,
 		Description: c.Description,
 		Status:      c.Status,
 		Owner:       c.Owner,
+		Origin:      c.Origin,
+		Managed:     c.Managed,
 		CreatedAt:   c.CreatedAt,
 		UpdatedAt:   c.UpdatedAt,
+		CreatedBy:   c.CreatedBy,
+		ExternalRef: toExternalRefResponse(c.ExternalRef),
 	}
+	if c.ParentCapabilityID != "" {
+		s := c.ParentCapabilityID
+		out.ParentCapabilityID = &s
+	}
+	if c.Replaces != "" {
+		s := c.Replaces
+		out.Replaces = &s
+	}
+	return out
 }
 
 // toProcessResponse maps a Process to its wire format.

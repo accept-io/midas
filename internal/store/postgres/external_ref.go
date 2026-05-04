@@ -104,14 +104,18 @@ func extRefInsertValues(r *externalref.ExternalRef) []any {
 // CHECK violation (code 23514) on any of these constraints to the
 // externalref.ErrInconsistent sentinel.
 //
-// The five names are spelled out so a renamed constraint surfaces as a
-// missed entry here rather than a silently swallowed wrap.
+// The names are spelled out so a renamed constraint surfaces as a
+// missed entry here rather than a silently swallowed wrap. Phase 0B-2
+// added capabilities to the set; the comment block in external_ref.go's
+// header still lists the original five PR-3 entities for historical
+// orientation.
 var extRefConsistencyConstraints = map[string]struct{}{
 	"chk_business_services_ext_consistency":              {},
 	"chk_business_service_relationships_ext_consistency": {},
 	"chk_ai_systems_ext_consistency":                     {},
 	"chk_ai_system_versions_ext_consistency":             {},
 	"chk_ai_system_bindings_ext_consistency":             {},
+	"chk_capabilities_ext_consistency":                   {},
 }
 
 // mapExtRefError translates a CHECK-violation on the consistency

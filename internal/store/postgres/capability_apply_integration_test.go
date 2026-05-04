@@ -94,3 +94,84 @@ func TestApplyCapability_PostgresPersistsCreatedBy(t *testing.T) {
 			actor, got.CreatedBy)
 	}
 }
+
+// TestApplyCapability_PostgresPersistsExternalRef proves that an
+// external_ref declared in a Capability bundle propagates through the
+// validator + mapper + Postgres repo Create path and lands on the five
+// ext_* columns. The fixture matches pgExtRefFixture so the
+// round-trip assertion below reuses the shared helper.
+func TestApplyCapability_PostgresPersistsExternalRef(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(),
+			`DELETE FROM capabilities WHERE capability_id = 'cap-int-ext-actor'`)
+		db.Close()
+	})
+	// Pre-clean.
+	_, _ = db.ExecContext(ctx,
+		`DELETE FROM capabilities WHERE capability_id = 'cap-int-ext-actor'`)
+
+	s, err := NewStore(db, nil)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	repos, err := s.Repositories()
+	if err != nil {
+		t.Fatalf("Repositories: %v", err)
+	}
+
+	svc := apply.NewServiceWithRepos(apply.RepositorySet{
+		Capabilities: repos.Capabilities,
+		ControlAudit: repos.ControlAudit,
+	})
+
+	bundle := []parser.ParsedDocument{
+		{
+			Kind: types.KindCapability,
+			ID:   "cap-int-ext-actor",
+			Doc: types.CapabilityDocument{
+				APIVersion: types.APIVersionV1,
+				Kind:       types.KindCapability,
+				Metadata:   types.DocumentMetadata{ID: "cap-int-ext-actor", Name: "Ext capability"},
+				Spec: types.CapabilitySpec{
+					Status: "active",
+					ExternalRef: &types.ExternalRefSpec{
+						SourceSystem:  "github",
+						SourceID:      "accept-io/midas-pg-ext",
+						SourceURL:     "https://github.com/accept-io/midas-pg-ext",
+						SourceVersion: "v1.2.0",
+						LastSyncedAt:  "2026-04-30T09:00:00Z",
+					},
+				},
+			},
+		},
+	}
+
+	result := svc.Apply(ctx, bundle, "operator:cap-ext-test")
+	if result.ValidationErrorCount() != 0 {
+		t.Fatalf("validation errors: %+v", result.ValidationErrors)
+	}
+	if result.ApplyErrorCount() != 0 {
+		t.Fatalf("apply errors: %+v", result.Results)
+	}
+	if result.CreatedCount() != 1 {
+		t.Fatalf("CreatedCount: want 1, got %d", result.CreatedCount())
+	}
+
+	capRepo, err := NewCapabilityRepo(db)
+	if err != nil {
+		t.Fatalf("NewCapabilityRepo: %v", err)
+	}
+	got, err := capRepo.GetByID(ctx, "cap-int-ext-actor")
+	if err != nil {
+		t.Fatalf("GetByID after apply: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected capability, got nil")
+	}
+	// The fixture's text fields match pgExtRefFixture exactly; the
+	// timestamp parses to the same UTC value. Reuse the shared
+	// round-trip assertion.
+	assertExtRefRoundTrip(t, got.ExternalRef)
+}

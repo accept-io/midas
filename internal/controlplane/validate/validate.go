@@ -405,6 +405,7 @@ func validateCapability(doc types.CapabilityDocument) []types.ValidationError {
 			errs = append(errs, fieldErr(doc, "spec.parent_capability_id", err.Error()))
 		}
 	}
+	errs = append(errs, validateExternalRefSpec(doc, doc.Spec.ExternalRef)...)
 	return errs
 }
 

@@ -42,11 +42,13 @@ func (r *CapabilityRepo) GetByID(ctx context.Context, id string) (*capability.Ca
 		       COALESCE(description, ''), COALESCE(owner_id, ''),
 		       COALESCE(parent_capability_id, ''),
 		       COALESCE(created_by, ''),
-		       created_at, updated_at
+		       created_at, updated_at,
+		       ` + extRefSelectColumns + `
 		FROM capabilities
 		WHERE capability_id = $1`
 	var c capability.Capability
-	err := r.db.QueryRowContext(ctx, q, id).Scan(
+	var extScan extRefScan
+	dests := append([]any{
 		&c.ID,
 		&c.Name,
 		&c.Status,
@@ -59,13 +61,15 @@ func (r *CapabilityRepo) GetByID(ctx context.Context, id string) (*capability.Ca
 		&c.CreatedBy,
 		&c.CreatedAt,
 		&c.UpdatedAt,
-	)
+	}, extScan.Dests()...)
+	err := r.db.QueryRowContext(ctx, q, id).Scan(dests...)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, err
 	}
+	c.ExternalRef = extScan.ToExternalRef()
 	return &c, nil
 }
 
@@ -79,9 +83,10 @@ func (r *CapabilityRepo) GetByID(ctx context.Context, id string) (*capability.Ca
 func (r *CapabilityRepo) Create(ctx context.Context, c *capability.Capability) error {
 	const q = `
 		INSERT INTO capabilities
-		  (capability_id, name, status, origin, managed, replaces, description, owner_id, parent_capability_id, created_by, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`
-	_, err := r.db.ExecContext(ctx, q,
+		  (capability_id, name, status, origin, managed, replaces, description, owner_id, parent_capability_id, created_by, created_at, updated_at,
+		   ext_source_system, ext_source_id, ext_source_url, ext_source_version, ext_last_synced_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`
+	args := append([]any{
 		c.ID,
 		c.Name,
 		c.Status,
@@ -94,8 +99,9 @@ func (r *CapabilityRepo) Create(ctx context.Context, c *capability.Capability) e
 		sql.NullString{Valid: c.CreatedBy != "", String: c.CreatedBy},
 		c.CreatedAt,
 		c.UpdatedAt,
-	)
-	return err
+	}, extRefInsertValues(c.ExternalRef)...)
+	_, err := r.db.ExecContext(ctx, q, args...)
+	return mapExtRefError(err)
 }
 
 // Update modifies an existing capability record.
@@ -122,7 +128,8 @@ func (r *CapabilityRepo) List(ctx context.Context) ([]*capability.Capability, er
 		       COALESCE(description, ''), COALESCE(owner_id, ''),
 		       COALESCE(parent_capability_id, ''),
 		       COALESCE(created_by, ''),
-		       created_at, updated_at
+		       created_at, updated_at,
+		       ` + extRefSelectColumns + `
 		FROM capabilities
 		ORDER BY capability_id`
 	rows, err := r.db.QueryContext(ctx, q)
@@ -133,9 +140,16 @@ func (r *CapabilityRepo) List(ctx context.Context) ([]*capability.Capability, er
 	var out []*capability.Capability
 	for rows.Next() {
 		var c capability.Capability
-		if err := rows.Scan(&c.ID, &c.Name, &c.Status, &c.Origin, &c.Managed, &c.Replaces, &c.Description, &c.Owner, &c.ParentCapabilityID, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		var extScan extRefScan
+		dests := append([]any{
+			&c.ID, &c.Name, &c.Status, &c.Origin, &c.Managed, &c.Replaces,
+			&c.Description, &c.Owner, &c.ParentCapabilityID, &c.CreatedBy,
+			&c.CreatedAt, &c.UpdatedAt,
+		}, extScan.Dests()...)
+		if err := rows.Scan(dests...); err != nil {
 			return nil, err
 		}
+		c.ExternalRef = extScan.ToExternalRef()
 		out = append(out, &c)
 	}
 	return out, rows.Err()

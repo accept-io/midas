@@ -140,6 +140,28 @@ func TestValidate_ExternalRef_AISystemBinding(t *testing.T) {
 	}
 }
 
+// TestValidate_ExternalRef_Capability — Phase 0B-2 wires Capability
+// into the ExternalRef family. Mirror of the per-entity tests above:
+// confirms a valid ext_ref passes and an inconsistent one is rejected
+// at spec.external_ref.
+func TestValidate_ExternalRef_Capability(t *testing.T) {
+	doc := types.CapabilityDocument{
+		APIVersion: types.APIVersionV1, Kind: types.KindCapability,
+		Metadata: types.DocumentMetadata{ID: "cap-1", Name: "Cap"},
+		Spec: types.CapabilitySpec{
+			Status:      "active",
+			ExternalRef: validExtRefSpec(),
+		},
+	}
+	if errs := validate.ValidateDocument(parser.ParsedDocument{Kind: doc.Kind, ID: doc.Metadata.ID, Doc: doc}); len(errs) != 0 {
+		t.Errorf("valid ext_ref: want no errors, got %+v", errs)
+	}
+	doc.Spec.ExternalRef = inconsistentExtRefSpec()
+	if errs := validate.ValidateDocument(parser.ParsedDocument{Kind: doc.Kind, ID: doc.Metadata.ID, Doc: doc}); !hasFieldErr(errs, "spec.external_ref") {
+		t.Errorf("inconsistent ext_ref: want spec.external_ref error, got %+v", errs)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Shared rules — exercised once via BusinessService since the helper is
 // the same code path for all five.
@@ -178,6 +200,11 @@ func TestValidate_ExternalRef_AcceptsNilOnAllKinds(t *testing.T) {
 			Spec: types.AISystemBindingSpec{
 				AISystemID: "ai-1", BusinessServiceID: "bs-x",
 			},
+		}},
+		{Kind: types.KindCapability, ID: "cap-nil", Doc: types.CapabilityDocument{
+			APIVersion: types.APIVersionV1, Kind: types.KindCapability,
+			Metadata: types.DocumentMetadata{ID: "cap-nil", Name: "Cap"},
+			Spec:     types.CapabilitySpec{Status: "active"},
 		}},
 	}
 	for _, c := range cases {
