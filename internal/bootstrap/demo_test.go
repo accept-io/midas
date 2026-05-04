@@ -625,3 +625,175 @@ func TestSeedDemo_RelationshipRepair_AddsMissingLinksWithoutDuplicating(t *testi
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Test 6: every seeded authority profile uses a schema-compatible
+// consequence_type. (Phase 8 follow-up — Azure regression.)
+// ---------------------------------------------------------------------------
+
+// seededDemoProfileIDs is the canonical list of authority profile IDs
+// that bootstrap.SeedDemo creates. The "uses valid consequence_type"
+// test below iterates over all of them, so adding a new profile to
+// demo.go automatically extends this assertion's coverage as long as
+// the new ID is appended here.
+var seededDemoProfileIDs = []string{
+	"profile-v2-standard",
+	"profile-v2-onboarding",
+}
+
+// schemaAllowedConsequenceTypes is the set of consequence_type values
+// permitted by the Postgres CHECK constraint
+// chk_profiles_consequence_type. Mirrored here as a literal set so this
+// test fails loudly if a seeded profile uses a value that is in the
+// domain enum but not in the schema (the exact failure mode that broke
+// Azure startup with consequence_type='monetary').
+var schemaAllowedConsequenceTypes = map[string]struct{}{
+	"risk_rating":  {},
+	"financial":    {},
+	"temporal":     {},
+	"impact_scope": {},
+	"custom":       {},
+}
+
+// TestSeedDemo_AuthorityProfilesUseValidConsequenceTypes asserts that
+// every seeded profile's consequence_type is non-empty AND in the set
+// the Postgres schema accepts. This is the structural pin that prevents
+// a future seed addition from re-introducing the Azure regression.
+func TestSeedDemo_AuthorityProfilesUseValidConsequenceTypes(t *testing.T) {
+	ctx := context.Background()
+	repos := freshRepos(t)
+
+	if err := SeedDemo(ctx, repos); err != nil {
+		t.Fatalf("SeedDemo: %v", err)
+	}
+
+	for _, id := range seededDemoProfileIDs {
+		// Look up the latest version of the profile. Per-version
+		// idempotency in the seed ensures version 1 always exists; we
+		// use FindByID to keep the test future-proof against later
+		// version bumps to seeded profiles.
+		got, err := repos.Profiles.FindByID(ctx, id)
+		if err != nil {
+			t.Fatalf("FindByID(profile %s): %v", id, err)
+		}
+		if got == nil {
+			t.Fatalf("seeded profile %s missing", id)
+		}
+
+		ct := string(got.ConsequenceThreshold.Type)
+		if ct == "" {
+			t.Errorf("profile %s: consequence_type is empty (schema requires NOT NULL)", id)
+			continue
+		}
+		if _, ok := schemaAllowedConsequenceTypes[ct]; !ok {
+			t.Errorf("profile %s: consequence_type %q is not in the schema's chk_profiles_consequence_type whitelist; "+
+				"allowed values are risk_rating, financial, temporal, impact_scope, custom", id, ct)
+		}
+	}
+}
+
+// TestSeedDemo_FreshCreatesAuthorityProfiles asserts that on a fresh
+// store both seeded profiles exist with valid status, escalation_mode,
+// surface_id, and consequence_type. Complements the broader Phase 8
+// fresh-seed test by focusing on the authority-profile sub-graph that
+// the Azure regression broke.
+func TestSeedDemo_FreshCreatesAuthorityProfiles(t *testing.T) {
+	ctx := context.Background()
+	repos := freshRepos(t)
+
+	if err := SeedDemo(ctx, repos); err != nil {
+		t.Fatalf("SeedDemo: %v", err)
+	}
+
+	// profile-v2-standard
+	std, err := repos.Profiles.FindByIDAndVersion(ctx, "profile-v2-standard", 1)
+	if err != nil {
+		t.Fatalf("FindByIDAndVersion(profile-v2-standard v1): %v", err)
+	}
+	if std == nil {
+		t.Fatal("profile-v2-standard v1 must exist after fresh seed")
+	}
+	if std.Status != authority.ProfileStatusActive {
+		t.Errorf("profile-v2-standard.status: want active, got %q", std.Status)
+	}
+	if std.EscalationMode != authority.EscalationModeAuto {
+		t.Errorf("profile-v2-standard.escalation_mode: want auto, got %q", std.EscalationMode)
+	}
+	if std.SurfaceID != "surf-v2-merchant-payment" {
+		t.Errorf("profile-v2-standard.surface_id: want surf-v2-merchant-payment, got %q", std.SurfaceID)
+	}
+	if _, ok := schemaAllowedConsequenceTypes[string(std.ConsequenceThreshold.Type)]; !ok {
+		t.Errorf("profile-v2-standard.consequence_type %q not schema-valid", std.ConsequenceThreshold.Type)
+	}
+
+	// profile-v2-onboarding
+	onb, err := repos.Profiles.FindByIDAndVersion(ctx, "profile-v2-onboarding", 1)
+	if err != nil {
+		t.Fatalf("FindByIDAndVersion(profile-v2-onboarding v1): %v", err)
+	}
+	if onb == nil {
+		t.Fatal("profile-v2-onboarding v1 must exist after fresh seed")
+	}
+	if onb.Status != authority.ProfileStatusActive {
+		t.Errorf("profile-v2-onboarding.status: want active, got %q", onb.Status)
+	}
+	if onb.EscalationMode != authority.EscalationModeAuto {
+		t.Errorf("profile-v2-onboarding.escalation_mode: want auto, got %q", onb.EscalationMode)
+	}
+	if onb.SurfaceID != "surf-v2-id-verify" {
+		t.Errorf("profile-v2-onboarding.surface_id: want surf-v2-id-verify, got %q", onb.SurfaceID)
+	}
+	if _, ok := schemaAllowedConsequenceTypes[string(onb.ConsequenceThreshold.Type)]; !ok {
+		t.Errorf("profile-v2-onboarding.consequence_type %q not schema-valid", onb.ConsequenceThreshold.Type)
+	}
+}
+
+// TestSeedDemo_RepeatedCallsRemainIdempotent_AuthorityProfiles is a
+// narrowed re-run of the broader idempotency contract focused on the
+// authority sub-graph. Two SeedDemo runs must produce stable
+// profile/grant counts AND identical consequence_type values (a
+// regression that accidentally Update'd the second-run row with a
+// different consequence_type would surface here).
+func TestSeedDemo_RepeatedCallsRemainIdempotent_AuthorityProfiles(t *testing.T) {
+	ctx := context.Background()
+	repos := freshRepos(t)
+
+	if err := SeedDemo(ctx, repos); err != nil {
+		t.Fatalf("first SeedDemo: %v", err)
+	}
+
+	stdBefore, _ := repos.Profiles.FindByIDAndVersion(ctx, "profile-v2-standard", 1)
+	onbBefore, _ := repos.Profiles.FindByIDAndVersion(ctx, "profile-v2-onboarding", 1)
+	stdGrantBefore, _ := repos.Grants.FindByID(ctx, "grant-v2-standard")
+	onbGrantBefore, _ := repos.Grants.FindByID(ctx, "grant-v2-onboarding")
+
+	if err := SeedDemo(ctx, repos); err != nil {
+		t.Fatalf("second SeedDemo: %v", err)
+	}
+
+	stdAfter, _ := repos.Profiles.FindByIDAndVersion(ctx, "profile-v2-standard", 1)
+	onbAfter, _ := repos.Profiles.FindByIDAndVersion(ctx, "profile-v2-onboarding", 1)
+	stdGrantAfter, _ := repos.Grants.FindByID(ctx, "grant-v2-standard")
+	onbGrantAfter, _ := repos.Grants.FindByID(ctx, "grant-v2-onboarding")
+
+	if stdBefore == nil || stdAfter == nil ||
+		stdBefore.ConsequenceThreshold.Type != stdAfter.ConsequenceThreshold.Type ||
+		stdBefore.ConsequenceThreshold.RiskRating != stdAfter.ConsequenceThreshold.RiskRating ||
+		!stdBefore.UpdatedAt.Equal(stdAfter.UpdatedAt) {
+		t.Errorf("profile-v2-standard mutated by second seed:\n  before=%+v\n  after =%+v", stdBefore, stdAfter)
+	}
+	if onbBefore == nil || onbAfter == nil ||
+		onbBefore.ConsequenceThreshold.Type != onbAfter.ConsequenceThreshold.Type ||
+		onbBefore.ConsequenceThreshold.RiskRating != onbAfter.ConsequenceThreshold.RiskRating ||
+		!onbBefore.UpdatedAt.Equal(onbAfter.UpdatedAt) {
+		t.Errorf("profile-v2-onboarding mutated by second seed:\n  before=%+v\n  after =%+v", onbBefore, onbAfter)
+	}
+	if stdGrantBefore == nil || stdGrantAfter == nil ||
+		stdGrantBefore.Status != stdGrantAfter.Status {
+		t.Errorf("grant-v2-standard mutated by second seed:\n  before=%+v\n  after =%+v", stdGrantBefore, stdGrantAfter)
+	}
+	if onbGrantBefore == nil || onbGrantAfter == nil ||
+		onbGrantBefore.Status != onbGrantAfter.Status {
+		t.Errorf("grant-v2-onboarding mutated by second seed:\n  before=%+v\n  after =%+v", onbGrantBefore, onbGrantAfter)
+	}
+}
+

@@ -397,6 +397,17 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 	}
 
 	// --- Profile (standard — merchant payment) ---
+	//
+	// Consequence type: risk_rating. The domain enum and the Postgres
+	// schema constraint chk_profiles_consequence_type only intersect on
+	// 'risk_rating' — the domain's other constant (monetary) is not
+	// accepted by the schema's CHECK, which uses 'financial'. Reconciling
+	// that naming mismatch is a separate cross-cutting refactor; the demo
+	// seed uses the value that's valid in BOTH the domain code and the
+	// schema so it can be re-applied against Postgres on every startup
+	// without violating chk_profiles_consequence_type. RiskRatingHigh
+	// fits the merchant-payment-authorisation narrative (high-impact
+	// transactional decision).
 
 	if err := ensureProfile(ctx, repos.Profiles, &authority.AuthorityProfile{
 		ID:          "profile-v2-standard",
@@ -410,9 +421,8 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 
 		ConfidenceThreshold: 0.85,
 		ConsequenceThreshold: authority.Consequence{
-			Type:     value.ConsequenceTypeMonetary,
-			Amount:   5000,
-			Currency: "GBP",
+			Type:       value.ConsequenceTypeRiskRating,
+			RiskRating: value.RiskRatingHigh,
 		},
 
 		EscalationMode:      authority.EscalationModeAuto,
@@ -443,7 +453,10 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 	// --- Profile (onboarding — identity verification, requires context) ---
 	// Linked to surf-v2-id-verify to enable the Explorer INSUFFICIENT_CONTEXT
 	// and context-satisfied scenarios. RequiredContextKeys forces customer_id
-	// to be present in the request.
+	// to be present in the request. RiskRatingMedium reflects the
+	// onboarding-identity-verification narrative (lower-stakes than the
+	// merchant-payment-authorisation profile above). See the consequence-
+	// type rationale on profile-v2-standard.
 
 	if err := ensureProfile(ctx, repos.Profiles, &authority.AuthorityProfile{
 		ID:          "profile-v2-onboarding",
@@ -457,9 +470,8 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 
 		ConfidenceThreshold: 0.80,
 		ConsequenceThreshold: authority.Consequence{
-			Type:     value.ConsequenceTypeMonetary,
-			Amount:   2000,
-			Currency: "GBP",
+			Type:       value.ConsequenceTypeRiskRating,
+			RiskRating: value.RiskRatingMedium,
 		},
 
 		EscalationMode:      authority.EscalationModeAuto,

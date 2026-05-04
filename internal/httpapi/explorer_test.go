@@ -271,11 +271,15 @@ func TestExplorerEvaluate_UsesIsolatedMemoryStore(t *testing.T) {
 		WithAuthMode(config.AuthModeOpen).
 		WithExplorerEnabled(true)
 
+	// surf-v2-merchant-payment is governed by profile-v2-standard, which
+	// seed bootstrap.SeedDemo configures with consequence_type=risk_rating
+	// at threshold "high". Submit a low-risk consequence so we stay
+	// within authority and the outcome is accept.
 	body := []byte(`{
 		"surface_id": "surf-v2-merchant-payment",
 		"agent_id":   "agent-v2-evaluator",
 		"confidence": 0.95,
-		"consequence": {"type": "monetary", "amount": 500, "currency": "GBP"}
+		"consequence": {"type": "risk_rating", "risk_rating": "low"}
 	}`)
 	rec := performRequest(t, srv, http.MethodPost, "/explorer", body)
 
@@ -565,11 +569,15 @@ func TestExplorerSandbox_V2_ContextSatisfied(t *testing.T) {
 		WithAuthMode(config.AuthModeOpen).
 		WithExplorerEnabled(true)
 
+	// surf-v2-id-verify is governed by profile-v2-onboarding, which
+	// SeedDemo configures with consequence_type=risk_rating at threshold
+	// "medium". Submit a low-risk consequence so we stay within
+	// authority and the outcome is accept.
 	body := []byte(`{
 		"surface_id": "surf-v2-id-verify",
 		"agent_id":   "agent-v2-evaluator",
 		"confidence": 0.95,
-		"consequence": {"type": "monetary", "amount": 100, "currency": "GBP"},
+		"consequence": {"type": "risk_rating", "risk_rating": "low"},
 		"context":     {"customer_id": "cust-12345"}
 	}`)
 	rec := performRequest(t, srv, http.MethodPost, "/explorer", body)
