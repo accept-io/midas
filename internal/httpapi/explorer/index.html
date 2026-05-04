@@ -5372,6 +5372,24 @@
   let capabilityRecordLoading = false;
   let capabilityRecordError = null;
 
+  // Per-capability sub-resource state for the three Phase-3 endpoints
+  // (children / businessservices / ai-bindings). Each map is keyed by
+  // capability id so navigating between records does not blow away
+  // freshly-loaded sub-resources. The three resources are fetched in
+  // parallel after the parent record resolves; each section renders
+  // independently as its loader settles, mirroring the per-section
+  // pattern used by the BS record page (which also fetches sub-data
+  // alongside the BS itself, but in a single envelope call).
+  const capabilityChildrenCache = {};
+  const capabilityChildrenLoading = {};
+  const capabilityChildrenError = {};
+  const capabilityBusinessServicesCache = {};
+  const capabilityBusinessServicesLoading = {};
+  const capabilityBusinessServicesError = {};
+  const capabilityAIBindingsCache = {};
+  const capabilityAIBindingsLoading = {};
+  const capabilityAIBindingsError = {};
+
   function setCapabilitiesSubView(view) {
     capabilitiesSubView = view === 'detail' ? 'detail' : 'catalogue';
     const cat = document.getElementById('capabilities-catalogue-view');
@@ -5509,12 +5527,18 @@
   // the record page. Cache hit → render immediately; otherwise show a
   // loading strip during the fetch. On 404/500 the error strip stays
   // up; the operator returns to the catalogue via the back button.
+  // After the parent record resolves the three sub-resource loaders
+  // are kicked off in parallel; each settles independently into its
+  // own section.
   function loadCapabilityRecord(capId) {
     const cached = capabilityRecordCache[capId];
     if (cached) {
       capabilityRecordLoading = false;
       capabilityRecordError = null;
       renderCapabilityRecord(cached);
+      loadCapabilityChildren(capId);
+      loadCapabilityBusinessServices(capId);
+      loadCapabilityAIBindings(capId);
       return;
     }
     capabilityRecordLoading = true;
@@ -5537,6 +5561,9 @@
         capabilityRecordCache[capId] = payload;
         capabilityRecordError = null;
         renderCapabilityRecord(payload);
+        loadCapabilityChildren(capId);
+        loadCapabilityBusinessServices(capId);
+        loadCapabilityAIBindings(capId);
       })
       .catch(err => {
         capabilityRecordLoading = false;
@@ -5545,15 +5572,129 @@
       });
   }
 
+  // loadCapabilityChildren fetches GET /v1/capabilities/{id}/children
+  // and stores the envelope's `capabilities` array in
+  // capabilityChildrenCache. The envelope shape is { capability_id,
+  // capabilities[] } per Phase 3A; we read .capabilities (Array.isArray
+  // guard) and ignore the echoed capability_id since the caller already
+  // knows it. On error the section's error strip is rendered without
+  // disturbing the parent record or the other two sub-sections.
+  function loadCapabilityChildren(capId) {
+    if (capabilityChildrenCache[capId]) {
+      renderCapabilityChildrenSection(capId);
+      return;
+    }
+    if (capabilityChildrenLoading[capId]) return;
+    capabilityChildrenLoading[capId] = true;
+    capabilityChildrenError[capId] = null;
+    renderCapabilityChildrenSection(capId);
+    const url = '/v1/capabilities/' + encodeURIComponent(capId) + '/children';
+    fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+      .then(resp => {
+        if (!resp.ok) return resp.text().then(t => ({ __status: resp.status, __text: t }));
+        return resp.json();
+      })
+      .then(payload => {
+        capabilityChildrenLoading[capId] = false;
+        if (payload && payload.__status) {
+          capabilityChildrenError[capId] = { status: payload.__status, message: 'HTTP ' + payload.__status };
+          if (capId === currentSelectedCapability) renderCapabilityChildrenSection(capId);
+          return;
+        }
+        capabilityChildrenCache[capId] = (payload && Array.isArray(payload.capabilities)) ? payload.capabilities : [];
+        capabilityChildrenError[capId] = null;
+        if (capId === currentSelectedCapability) renderCapabilityChildrenSection(capId);
+      })
+      .catch(err => {
+        capabilityChildrenLoading[capId] = false;
+        capabilityChildrenError[capId] = { status: 0, message: (err && err.message) || 'fetch failed' };
+        if (capId === currentSelectedCapability) renderCapabilityChildrenSection(capId);
+      });
+  }
+
+  // loadCapabilityBusinessServices fetches GET /v1/capabilities/{id}/businessservices
+  // and stores the envelope's `business_services` array. Mirror of
+  // loadCapabilityChildren.
+  function loadCapabilityBusinessServices(capId) {
+    if (capabilityBusinessServicesCache[capId]) {
+      renderCapabilityBusinessServicesSection(capId);
+      return;
+    }
+    if (capabilityBusinessServicesLoading[capId]) return;
+    capabilityBusinessServicesLoading[capId] = true;
+    capabilityBusinessServicesError[capId] = null;
+    renderCapabilityBusinessServicesSection(capId);
+    const url = '/v1/capabilities/' + encodeURIComponent(capId) + '/businessservices';
+    fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+      .then(resp => {
+        if (!resp.ok) return resp.text().then(t => ({ __status: resp.status, __text: t }));
+        return resp.json();
+      })
+      .then(payload => {
+        capabilityBusinessServicesLoading[capId] = false;
+        if (payload && payload.__status) {
+          capabilityBusinessServicesError[capId] = { status: payload.__status, message: 'HTTP ' + payload.__status };
+          if (capId === currentSelectedCapability) renderCapabilityBusinessServicesSection(capId);
+          return;
+        }
+        capabilityBusinessServicesCache[capId] = (payload && Array.isArray(payload.business_services)) ? payload.business_services : [];
+        capabilityBusinessServicesError[capId] = null;
+        if (capId === currentSelectedCapability) renderCapabilityBusinessServicesSection(capId);
+      })
+      .catch(err => {
+        capabilityBusinessServicesLoading[capId] = false;
+        capabilityBusinessServicesError[capId] = { status: 0, message: (err && err.message) || 'fetch failed' };
+        if (capId === currentSelectedCapability) renderCapabilityBusinessServicesSection(capId);
+      });
+  }
+
+  // loadCapabilityAIBindings fetches GET /v1/capabilities/{id}/ai-bindings
+  // and stores the envelope's `bindings` array. The bindings are
+  // direct Capability-scope only (Phase 3C contract); the section is
+  // intentionally non-clickable — there is no per-binding record page
+  // to navigate to today.
+  function loadCapabilityAIBindings(capId) {
+    if (capabilityAIBindingsCache[capId]) {
+      renderCapabilityAIBindingsSection(capId);
+      return;
+    }
+    if (capabilityAIBindingsLoading[capId]) return;
+    capabilityAIBindingsLoading[capId] = true;
+    capabilityAIBindingsError[capId] = null;
+    renderCapabilityAIBindingsSection(capId);
+    const url = '/v1/capabilities/' + encodeURIComponent(capId) + '/ai-bindings';
+    fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+      .then(resp => {
+        if (!resp.ok) return resp.text().then(t => ({ __status: resp.status, __text: t }));
+        return resp.json();
+      })
+      .then(payload => {
+        capabilityAIBindingsLoading[capId] = false;
+        if (payload && payload.__status) {
+          capabilityAIBindingsError[capId] = { status: payload.__status, message: 'HTTP ' + payload.__status };
+          if (capId === currentSelectedCapability) renderCapabilityAIBindingsSection(capId);
+          return;
+        }
+        capabilityAIBindingsCache[capId] = (payload && Array.isArray(payload.bindings)) ? payload.bindings : [];
+        capabilityAIBindingsError[capId] = null;
+        if (capId === currentSelectedCapability) renderCapabilityAIBindingsSection(capId);
+      })
+      .catch(err => {
+        capabilityAIBindingsLoading[capId] = false;
+        capabilityAIBindingsError[capId] = { status: 0, message: (err && err.message) || 'fetch failed' };
+        if (capId === currentSelectedCapability) renderCapabilityAIBindingsSection(capId);
+      });
+  }
+
   // Defensive renderer: tolerates null payload, missing optional fields,
-  // and renders "—" for empty values via formatFieldValue() (the same
-  // helper the Business Service record page uses). Renders only the
-  // fields actually exposed on the wire today (id, name, description,
-  // status, owner, created_at, updated_at). Fields present in the
-  // domain but not on the wire (parent_capability_id, origin, managed,
-  // replaces, created_by) are NOT rendered — adding a row for them
-  // would either fabricate a value or surface "—" everywhere, both of
-  // which are dishonest UX.
+  // and renders "—" for empty values. Renders the full Phase-1 wire
+  // shape (id, name, description, status, owner, parent_capability_id,
+  // origin, managed, replaces, created_by, created_at, updated_at,
+  // external_ref) plus three sub-resource sections that are populated
+  // by the Phase-3 endpoints (children / business services / AI
+  // bindings). Sub-section containers are rendered as empty placeholders
+  // here; their contents are filled in by the per-section renderers
+  // when the matching loader settles.
   function renderCapabilityRecord(payload) {
     const body = document.getElementById('capabilities-record-body');
     const nameEl = document.getElementById('capabilities-record-name');
@@ -5594,12 +5735,18 @@
 
     const sections = [];
 
-    // 1. Identity strip — pills along the top of the body. Only fields
-    // actually on the wire today (status, owner). Parent capability is
-    // intentionally absent — the wire format does not expose it.
+    // 1. Identity strip — pills along the top of the body. Each pill
+    // surfaces a single Phase-1 wire field; the EXT-REF marker mirrors
+    // the BS record page convention (presence-only, value rendered in
+    // the Core details grid).
     const identityPills = [];
-    if (payload.status) identityPills.push({ key: 'status', val: payload.status });
-    if (payload.owner)  identityPills.push({ key: 'owner',  val: payload.owner });
+    if (payload.status)               identityPills.push({ key: 'status',   val: payload.status });
+    if (payload.owner)                identityPills.push({ key: 'owner',    val: payload.owner });
+    if (payload.parent_capability_id) identityPills.push({ key: 'parent',   val: payload.parent_capability_id });
+    if (payload.origin)               identityPills.push({ key: 'origin',   val: payload.origin });
+    if (payload.managed != null)      identityPills.push({ key: 'managed',  val: String(payload.managed) });
+    if (payload.replaces)             identityPills.push({ key: 'replaces', val: payload.replaces });
+    if (payload.external_ref)         identityPills.push({ key: 'ext',      val: 'EXT-REF' });
     if (identityPills.length) {
       const pills = identityPills.map(p =>
         '<span class="capabilities-record-identity-pill"><span class="key">' + escHtml(p.key) + '</span>' + escHtml(p.val) + '</span>'
@@ -5612,20 +5759,25 @@
       );
     }
 
-    // 2. Core details — field grid. Field present in payload, value
-    // missing → "—" via formatFieldValue. Field NOT in the payload at
-    // all is also rendered as "—" for the seven canonical wire fields,
-    // because the response contract guarantees they exist (status,
-    // created_at, updated_at) or are documented as optional (description,
-    // owner). No fields are added beyond this canonical set.
+    // 2. Core details — field grid. Every Phase-1 wire field gets a
+    // row; missing optional values render as "—". external_ref renders
+    // via formatExternalRef so the row matches the BS record page
+    // treatment exactly.
+    const managedVal = payload.managed == null ? '' : String(payload.managed);
     const cells = [
-      ['id',          payload.id],
-      ['name',        payload.name],
-      ['description', payload.description],
-      ['status',      payload.status],
-      ['owner',       payload.owner],
-      ['created_at',  payload.created_at],
-      ['updated_at',  payload.updated_at],
+      ['id',                   payload.id],
+      ['name',                 payload.name],
+      ['description',          payload.description],
+      ['status',               payload.status],
+      ['owner',                payload.owner],
+      ['parent_capability_id', payload.parent_capability_id],
+      ['origin',               payload.origin],
+      ['managed',              managedVal],
+      ['replaces',             payload.replaces],
+      ['created_by',           payload.created_by],
+      ['created_at',           payload.created_at],
+      ['updated_at',           payload.updated_at],
+      ['external_ref',         payload.external_ref ? formatExternalRef(payload.external_ref) : ''],
     ].map(([k, v]) =>
       '<div class="capabilities-record-field-key">' + escHtml(k) + '</div>' +
       (v == null || v === ''
@@ -5639,7 +5791,171 @@
       '</section>'
     );
 
+    // 3. Child capabilities — populated by renderCapabilityChildrenSection
+    //    once GET /v1/capabilities/{id}/children settles. Click-through
+    //    on a row navigates to that child's record page.
+    sections.push(
+      '<section class="capabilities-record-section">' +
+        '<div class="capabilities-record-section-title">Child capabilities</div>' +
+        '<div id="capabilities-record-children"></div>' +
+      '</section>'
+    );
+
+    // 4. Business Services using this Capability — populated by
+    //    renderCapabilityBusinessServicesSection once
+    //    GET /v1/capabilities/{id}/businessservices settles. Click-through
+    //    on a row navigates to that BS's record page.
+    sections.push(
+      '<section class="capabilities-record-section">' +
+        '<div class="capabilities-record-section-title">Business Services using this Capability</div>' +
+        '<div id="capabilities-record-business-services"></div>' +
+      '</section>'
+    );
+
+    // 5. AI System bindings at Capability scope — populated by
+    //    renderCapabilityAIBindingsSection once
+    //    GET /v1/capabilities/{id}/ai-bindings settles. NO click-through
+    //    is wired: there is no per-binding record page today, so the
+    //    rows render purely informationally (action area absent rather
+    //    than a disabled button).
+    sections.push(
+      '<section class="capabilities-record-section">' +
+        '<div class="capabilities-record-section-title">AI System bindings</div>' +
+        '<div id="capabilities-record-ai-bindings"></div>' +
+      '</section>'
+    );
+
     body.innerHTML = sections.join('');
+
+    // Render whatever sub-resource state already exists on each cap
+    // (cache hit → list, in-flight → loading strip, error → error
+    // strip). The matching loaders fire from loadCapabilityRecord and
+    // re-call these renderers when their fetches settle.
+    const capId = payload.id || currentSelectedCapability;
+    if (capId) {
+      renderCapabilityChildrenSection(capId);
+      renderCapabilityBusinessServicesSection(capId);
+      renderCapabilityAIBindingsSection(capId);
+    }
+  }
+
+  // Per-section renderer for the child-capabilities section. Reads the
+  // per-cap state maps and writes loading / error / empty / list to
+  // the section container. Click-through wires showCapabilityRecord on
+  // each row so the operator can drill into a child's own record page.
+  function renderCapabilityChildrenSection(capId) {
+    const el = document.getElementById('capabilities-record-children');
+    if (!el) return;
+    if (capabilityChildrenLoading[capId]) {
+      el.innerHTML = '<div class="capabilities-record-loading">Loading child capabilities…</div>';
+      return;
+    }
+    const err = capabilityChildrenError[capId];
+    if (err) {
+      const status = err.status ? ('HTTP ' + err.status) : 'Network error';
+      el.innerHTML =
+        '<div class="capabilities-record-error">' +
+          '<div><strong>Could not load child capabilities</strong></div>' +
+          '<div>' + escHtml(status) + (err.message ? ' — ' + escHtml(err.message) : '') + '</div>' +
+        '</div>';
+      return;
+    }
+    const children = capabilityChildrenCache[capId];
+    if (!Array.isArray(children)) {
+      el.innerHTML = '<div class="capabilities-record-loading">Loading child capabilities…</div>';
+      return;
+    }
+    const rows = children.map(c => ({
+      id: c.id,
+      name: c.name || c.id,
+      meta: c.status || '',
+    }));
+    el.innerHTML = renderRelatedList(rows, 'No child capabilities');
+    el.querySelectorAll('.services-related-row').forEach((row, idx) => {
+      const child = children[idx];
+      if (child && child.id) {
+        row.style.cursor = 'pointer';
+        row.addEventListener('click', () => showCapabilityRecord(child.id));
+      }
+    });
+  }
+
+  // Per-section renderer for the BS-using-this-Capability section.
+  // Click-through wires showBusinessServiceRecord on each row.
+  function renderCapabilityBusinessServicesSection(capId) {
+    const el = document.getElementById('capabilities-record-business-services');
+    if (!el) return;
+    if (capabilityBusinessServicesLoading[capId]) {
+      el.innerHTML = '<div class="capabilities-record-loading">Loading business services…</div>';
+      return;
+    }
+    const err = capabilityBusinessServicesError[capId];
+    if (err) {
+      const status = err.status ? ('HTTP ' + err.status) : 'Network error';
+      el.innerHTML =
+        '<div class="capabilities-record-error">' +
+          '<div><strong>Could not load business services</strong></div>' +
+          '<div>' + escHtml(status) + (err.message ? ' — ' + escHtml(err.message) : '') + '</div>' +
+        '</div>';
+      return;
+    }
+    const services = capabilityBusinessServicesCache[capId];
+    if (!Array.isArray(services)) {
+      el.innerHTML = '<div class="capabilities-record-loading">Loading business services…</div>';
+      return;
+    }
+    const rows = services.map(bs => ({
+      id: bs.id,
+      name: bs.name || bs.id,
+      meta: [bs.service_type, bs.status].filter(Boolean).join(' · '),
+    }));
+    el.innerHTML = renderRelatedList(rows, 'No business services use this capability');
+    el.querySelectorAll('.services-related-row').forEach((row, idx) => {
+      const bs = services[idx];
+      if (bs && bs.id) {
+        row.style.cursor = 'pointer';
+        row.addEventListener('click', () => showBusinessServiceRecord(bs.id));
+      }
+    });
+  }
+
+  // Per-section renderer for the Capability-scoped AI bindings section.
+  // Intentionally NO click-through: there is no per-binding record
+  // page today, so the rows render informationally only. The action
+  // area is absent rather than a disabled button.
+  function renderCapabilityAIBindingsSection(capId) {
+    const el = document.getElementById('capabilities-record-ai-bindings');
+    if (!el) return;
+    if (capabilityAIBindingsLoading[capId]) {
+      el.innerHTML = '<div class="capabilities-record-loading">Loading AI bindings…</div>';
+      return;
+    }
+    const err = capabilityAIBindingsError[capId];
+    if (err) {
+      const status = err.status ? ('HTTP ' + err.status) : 'Network error';
+      el.innerHTML =
+        '<div class="capabilities-record-error">' +
+          '<div><strong>Could not load AI bindings</strong></div>' +
+          '<div>' + escHtml(status) + (err.message ? ' — ' + escHtml(err.message) : '') + '</div>' +
+        '</div>';
+      return;
+    }
+    const bindings = capabilityAIBindingsCache[capId];
+    if (!Array.isArray(bindings)) {
+      el.innerHTML = '<div class="capabilities-record-loading">Loading AI bindings…</div>';
+      return;
+    }
+    const rows = bindings.map(b => {
+      const verSuffix = b.ai_system_version != null ? '·v' + b.ai_system_version : '';
+      const meta = [b.role, b.ai_system_id ? 'system=' + b.ai_system_id + verSuffix : ''].filter(Boolean).join(' · ');
+      return {
+        id: b.id,
+        name: b.role || b.id,
+        meta,
+      };
+    });
+    el.innerHTML = renderRelatedList(rows, 'No AI bindings at this capability scope');
+    // No click-through wiring — see comment above.
   }
 
   // Wire the catalogue search input + back-to-catalogue affordance.
@@ -5865,6 +6181,16 @@
     });
     while (svg.firstChild) svg.removeChild(svg.firstChild);
     gmapPositions = {};
+    // Drop tracked connectors so the next render starts with a fresh
+    // list — otherwise the array accumulates stale path-element refs
+    // across BS switches.
+    gmapConnectors = [];
+    // Drop dragged-position overrides so each new map render starts
+    // from layout positions. Overrides are session-local in-memory
+    // only; this clear is the only resetter (no persisted store to
+    // wipe). A future "reset layout" affordance is intentionally
+    // deferred — Phase 6 ships drag without a reset button.
+    gmapDragOverrides = {};
   }
 
   function renderGovernanceMapEmpty(message, bsId) {
@@ -5938,6 +6264,102 @@
   function topAnchor(p)    { return [p.x + GMAP.NODE_W/2, p.y]; }
   function bottomAnchor(p) { return [p.x + GMAP.NODE_W/2, p.y + GMAP.NODE_H]; }
   function leftAnchor(p)   { return [p.x, p.y + GMAP.NODE_H/2]; }
+  function rightAnchor(p)  { return [p.x + GMAP.NODE_W, p.y + GMAP.NODE_H/2]; }
+
+  // ── Drag overrides + effective-position lookup ────────────────────────────
+  // gmapDragOverrides is a plain in-memory JavaScript object keyed by node
+  // id. It holds the {x, y} top-left coordinates a user has dragged a node
+  // to. It is intentionally NOT persisted: not to backend, not to
+  // localStorage / sessionStorage / cookies / IndexedDB, not transmitted
+  // over fetch. A page reload returns every node to its layout position.
+  // (sessionStorage appears elsewhere in this file for auth + simulator
+  // state — that is unrelated; the drag code path never touches it.)
+  let gmapDragOverrides = {};
+
+  // effectiveGmapPosition is the single source of truth for "where is
+  // node X right now" used by both the node-card transform AND the
+  // connector repaint pass. Returns the dragged override when present,
+  // otherwise the layout position. Both endpoints of every connector
+  // resolve through this lookup, so a connector between a dragged node
+  // and a non-dragged node remains attached at both ends.
+  function effectiveGmapPosition(id) {
+    if (Object.prototype.hasOwnProperty.call(gmapDragOverrides, id)) {
+      return gmapDragOverrides[id];
+    }
+    return gmapPositions[id] || null;
+  }
+
+  // Anchor lookup table — maps the four cardinal anchor names used by
+  // addLiveConnector to their position-to-coords functions. Keeping
+  // these as named string keys (rather than passing function refs
+  // through to the connector tracker) keeps the per-connector metadata
+  // serialisable / inspectable and avoids retaining stale closures.
+  const GMAP_ANCHORS = {
+    top:    topAnchor,
+    bottom: bottomAnchor,
+    left:   leftAnchor,
+    right:  rightAnchor,
+  };
+
+  // gmapConnectors tracks every live connector with its src/dst node ids
+  // and anchor kinds. repaintGmapConnectors() walks this list and
+  // re-issues curvePath() for each entry from current effective
+  // positions, so a node drag updates only the connectors attached to
+  // the moved node (every entry recomputes both endpoints — cheap and
+  // robust to multi-end drags). Reset to [] in clearGovernanceMapCanvas
+  // so successive renders don't accumulate stale paths.
+  let gmapConnectors = [];
+
+  // addLiveConnector adds a connector by node ids + anchor names. The
+  // drawn path is registered in gmapConnectors so it can be repainted
+  // when one of its endpoints moves under drag. Returns the rendered
+  // SVG path element (or null when either endpoint cannot be resolved).
+  function addLiveConnector(srcId, srcAnchor, dstId, dstAnchor, cls) {
+    const sp = effectiveGmapPosition(srcId);
+    const dp = effectiveGmapPosition(dstId);
+    if (!sp || !dp) return null;
+    const sFn = GMAP_ANCHORS[srcAnchor];
+    const dFn = GMAP_ANCHORS[dstAnchor];
+    if (!sFn || !dFn) return null;
+    const pathEl = addConnector(sFn(sp), dFn(dp), cls);
+    if (!pathEl) return null;
+    gmapConnectors.push({ srcId: srcId, srcAnchor: srcAnchor, dstId: dstId, dstAnchor: dstAnchor, pathEl: pathEl });
+    return pathEl;
+  }
+
+  // repaintGmapConnectors recomputes every connector's `d` attribute
+  // from current effective positions. Called from the drag pointermove
+  // handler so a connector remains visually attached at BOTH ends as
+  // either endpoint moves. Each iteration looks up both endpoints
+  // through effectiveGmapPosition — the SAME helper the node card uses
+  // — so a non-dragged endpoint stays anchored to its layout position
+  // and a dragged endpoint follows the cursor.
+  function repaintGmapConnectors() {
+    for (let i = 0; i < gmapConnectors.length; i++) {
+      const c = gmapConnectors[i];
+      const sp = effectiveGmapPosition(c.srcId);
+      const dp = effectiveGmapPosition(c.dstId);
+      if (!sp || !dp) continue;
+      const sFn = GMAP_ANCHORS[c.srcAnchor];
+      const dFn = GMAP_ANCHORS[c.dstAnchor];
+      if (!sFn || !dFn) continue;
+      const a = sFn(sp);
+      const b = dFn(dp);
+      c.pathEl.setAttribute('d', curvePath(a[0], a[1], b[0], b[1]));
+    }
+  }
+
+  // ── Drag interaction state ────────────────────────────────────────────────
+  // gmapDragState is the per-gesture bookkeeping object. Set on
+  // pointerdown, mutated on pointermove (when the threshold is crossed),
+  // cleared on pointerup / pointercancel. Null when no drag is active.
+  // The 4-pixel CSS-pixel threshold (max of |dx|, |dy|) is the
+  // click-vs-drag boundary: at or below the threshold the gesture is
+  // treated as a click and the existing select/drill-down handler
+  // fires; above the threshold the click is suppressed for that
+  // gesture only.
+  let gmapDragState = null;
+  const GMAP_DRAG_THRESHOLD_PX = 4;
 
   // Smooth cubic curve between two points — vertical-biased control points
   // produce ServiceNow-style flowing connectors.
@@ -6207,6 +6629,12 @@
         label: 'CAPABILITY', name: c.name || c.id,
         meta: c.status ? [c.status] : [],
         details: { 'id': c.id, 'status': c.status || '—' },
+        // Drill-down: the capability id (no `cap:` prefix) is the
+        // catalogue/record cache key, so showCapabilityRecord receives
+        // it directly.
+        actions: c.id
+          ? [{ kind: 'view-capability-record', target_id: c.id, label: 'View record' }]
+          : [],
       }, positions[id]);
     });
     if (capOmitted > 0) {
@@ -6354,67 +6782,76 @@
     gmapPositions = positions;
 
     // ── Connectors ─────────────────────────────────────────────────────
+    // Every callsite here uses addLiveConnector, which routes both
+    // endpoints through effectiveGmapPosition so a dragged node moves
+    // its connectors with it.
+    //
     // BS → related services (Layer 2 → Layer 1, drawn upward via top anchor).
     relSlice.forEach(rel => {
-      const target = positions['rel:' + rel.id];
-      const src = positions[bsId];
-      if (target && src) addConnector(topAnchor(src), bottomAnchor(target), 'connector-service');
+      const targetId = 'rel:' + rel.id;
+      if (positions[targetId] && positions[bsId]) {
+        addLiveConnector(bsId, 'top', targetId, 'bottom', 'connector-service');
+      }
     });
 
     // BS → capabilities, BS → processes (Layer 2 → Layer 3).
     caps.forEach(c => {
-      const target = positions['cap:' + c.id];
-      const src = positions[bsId];
-      if (target && src) addConnector(bottomAnchor(src), topAnchor(target), 'connector-service');
+      const targetId = 'cap:' + c.id;
+      if (positions[targetId] && positions[bsId]) {
+        addLiveConnector(bsId, 'bottom', targetId, 'top', 'connector-service');
+      }
     });
     procs.forEach(p => {
-      const target = positions['proc:' + p.id];
-      const src = positions[bsId];
-      if (target && src) addConnector(bottomAnchor(src), topAnchor(target), 'connector-service');
+      const targetId = 'proc:' + p.id;
+      if (positions[targetId] && positions[bsId]) {
+        addLiveConnector(bsId, 'bottom', targetId, 'top', 'connector-service');
+      }
     });
 
     // Process → decision surfaces (match by surface.process_id).
     surfaces.forEach(s => {
-      const target = positions['surf:' + s.id];
-      if (!target) return;
-      const procPos = positions['proc:' + s.process_id];
-      if (procPos) addConnector(bottomAnchor(procPos), topAnchor(target), 'connector-service');
-      else if (positions[bsId]) addConnector(bottomAnchor(positions[bsId]), topAnchor(target), 'connector-service');
+      const targetId = 'surf:' + s.id;
+      if (!positions[targetId]) return;
+      const procId = 'proc:' + s.process_id;
+      if (positions[procId]) {
+        addLiveConnector(procId, 'bottom', targetId, 'top', 'connector-service');
+      } else if (positions[bsId]) {
+        addLiveConnector(bsId, 'bottom', targetId, 'top', 'connector-service');
+      }
     });
 
     // Surface → AI systems via binding.surface_id.
     aiSystems.forEach(ai => {
-      const target = positions['ai:' + ai.id];
-      if (!target) return;
+      const targetId = 'ai:' + ai.id;
+      if (!positions[targetId]) return;
       let drewBindingEdge = false;
       (ai.bindings || []).forEach(b => {
         if (b.surface_id) {
-          const sp = positions['surf:' + b.surface_id];
-          if (sp) { addConnector(bottomAnchor(sp), topAnchor(target), 'connector-ai-binding'); drewBindingEdge = true; }
+          const sId = 'surf:' + b.surface_id;
+          if (positions[sId]) { addLiveConnector(sId, 'bottom', targetId, 'top', 'connector-ai-binding'); drewBindingEdge = true; }
         } else if (b.process_id) {
-          const pp = positions['proc:' + b.process_id];
-          if (pp) { addConnector(bottomAnchor(pp), topAnchor(target), 'connector-ai-binding'); drewBindingEdge = true; }
+          const pId = 'proc:' + b.process_id;
+          if (positions[pId]) { addLiveConnector(pId, 'bottom', targetId, 'top', 'connector-ai-binding'); drewBindingEdge = true; }
         } else if (b.capability_id) {
-          const cp = positions['cap:' + b.capability_id];
-          if (cp) { addConnector(bottomAnchor(cp), topAnchor(target), 'connector-ai-binding'); drewBindingEdge = true; }
+          const cId = 'cap:' + b.capability_id;
+          if (positions[cId]) { addLiveConnector(cId, 'bottom', targetId, 'top', 'connector-ai-binding'); drewBindingEdge = true; }
         } else if (b.business_service_id) {
-          const bp = positions[bsId];
-          if (bp) { addConnector(bottomAnchor(bp), topAnchor(target), 'connector-ai-binding'); drewBindingEdge = true; }
+          if (positions[bsId]) { addLiveConnector(bsId, 'bottom', targetId, 'top', 'connector-ai-binding'); drewBindingEdge = true; }
         }
       });
       // Fallback: if we couldn't resolve any binding edge, link from BS so
       // the AI node never floats disconnected.
       if (!drewBindingEdge && positions[bsId]) {
-        addConnector(bottomAnchor(positions[bsId]), topAnchor(target), 'connector-ai-binding');
+        addLiveConnector(bsId, 'bottom', targetId, 'top', 'connector-ai-binding');
       }
     });
 
     // Surface → Authority (dashed) when the surface has any active profile.
     surfaces.forEach(s => {
-      const sp = positions['surf:' + s.id];
-      if (!sp) return;
-      if ((s.profile_count || 0) > 0) {
-        addConnector([sp.x + GMAP.NODE_W, sp.y + GMAP.NODE_H/2], leftAnchor(positions['authority']), 'connector-authority');
+      const sId = 'surf:' + s.id;
+      if (!positions[sId]) return;
+      if ((s.profile_count || 0) > 0 && positions['authority']) {
+        addLiveConnector(sId, 'right', 'authority', 'left', 'connector-authority');
       }
     });
 
@@ -6422,11 +6859,11 @@
     // Surface → Evidence (green) when surface has bindings (treated as
     // governance evidence available signal until /evidence/ ships).
     surfaces.forEach(s => {
-      const sp = positions['surf:' + s.id];
-      if (!sp) return;
+      const sId = 'surf:' + s.id;
+      if (!positions[sId] || !positions['coverage']) return;
       const hasBinding = (s.ai_bindings || []).length > 0;
       const cls = hasBinding ? 'connector-evidence' : 'connector-gap';
-      addConnector([sp.x + GMAP.NODE_W, sp.y + GMAP.NODE_H/2], leftAnchor(positions['coverage']), cls);
+      addLiveConnector(sId, 'right', 'coverage', 'left', cls);
     });
 
     // Render summary + initial selection (BS).
@@ -6502,16 +6939,115 @@
     node.addEventListener('keydown', e => {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectGovernanceMapNode(spec.id); }
     });
+    // Drag interaction. Pointer events cover both mouse and touch in a
+    // single handler set; setPointerCapture keeps the gesture flowing
+    // even when the cursor leaves the node card. The threshold +
+    // click-suppression logic ensures click/select still fires for
+    // gestures that don't move past 4 CSS px.
+    attachGmapDragHandlers(node, spec.id);
     scene.appendChild(node);
+  }
+
+  // attachGmapDragHandlers wires pointer events on a node so the user
+  // can drag it. The flow:
+  //
+  //   pointerdown   → record start client (x,y) + start node (x,y) +
+  //                   capture the pointer; mark hasDragged=false.
+  //   pointermove   → if max(|dx|,|dy|) <= 4 (CSS px) keep treating
+  //                   as a potential click; otherwise flip hasDragged
+  //                   true and update the node's effective position +
+  //                   repaint connectors. Pointer-space delta is
+  //                   divided by gmapZoom so the node tracks the
+  //                   cursor 1:1 in screen space at any zoom level.
+  //   pointerup /
+  //   pointercancel → release the pointer; if a drag actually occurred,
+  //                   install a one-shot capture-phase click swallower
+  //                   so the existing click handler does NOT fire for
+  //                   that gesture (no accidental selection /
+  //                   drill-down on drop).
+  //
+  // No data leaves this function: positions go to gmapDragOverrides
+  // (in-memory), no fetch/XHR, no localStorage / sessionStorage /
+  // cookie / IndexedDB.
+  function attachGmapDragHandlers(node, nodeId) {
+    node.addEventListener('pointerdown', function (e) {
+      // Only primary button (mouse left / touch / pen). Ignore
+      // middle/right so context-menu and middle-scroll don't start a
+      // drag.
+      if (e.button !== undefined && e.button !== 0) return;
+      const startPos = effectiveGmapPosition(nodeId);
+      if (!startPos) return;
+      gmapDragState = {
+        nodeId: nodeId,
+        node: node,
+        pointerId: e.pointerId,
+        startClientX: e.clientX,
+        startClientY: e.clientY,
+        startNodeX: startPos.x,
+        startNodeY: startPos.y,
+        hasDragged: false,
+      };
+      try { node.setPointerCapture(e.pointerId); } catch (_) { /* unsupported, ignore */ }
+    });
+
+    node.addEventListener('pointermove', function (e) {
+      if (!gmapDragState || gmapDragState.pointerId !== e.pointerId) return;
+      const dx = e.clientX - gmapDragState.startClientX;
+      const dy = e.clientY - gmapDragState.startClientY;
+      if (!gmapDragState.hasDragged) {
+        // 4 CSS-pixel click-vs-drag threshold (max of |dx|, |dy|).
+        // Movement at or below the threshold stays a click; movement
+        // above it commits the gesture to a drag.
+        if (Math.max(Math.abs(dx), Math.abs(dy)) <= GMAP_DRAG_THRESHOLD_PX) return;
+        gmapDragState.hasDragged = true;
+      }
+      // Pointer-space delta → scene-space delta. Dividing by the
+      // current zoom factor keeps the node under the cursor at any
+      // zoom level (the scene is CSS-scaled by gmapZoom; node x/y
+      // values live in unscaled scene coordinates).
+      const z = gmapZoom || 1;
+      const newX = gmapDragState.startNodeX + dx / z;
+      const newY = gmapDragState.startNodeY + dy / z;
+      gmapDragOverrides[nodeId] = { x: newX, y: newY };
+      gmapDragState.node.style.left = newX + 'px';
+      gmapDragState.node.style.top  = newY + 'px';
+      // Re-route every connector through effectiveGmapPosition so the
+      // dragged node's edges follow it AND every other node's edges
+      // remain anchored at their layout/dragged positions.
+      repaintGmapConnectors();
+    });
+
+    function endGmapDrag(e) {
+      if (!gmapDragState || gmapDragState.pointerId !== e.pointerId) return;
+      try { node.releasePointerCapture(e.pointerId); } catch (_) { /* ignore */ }
+      const wasDrag = gmapDragState.hasDragged;
+      gmapDragState = null;
+      if (wasDrag) {
+        // Suppress the synthetic click that follows pointerup for the
+        // gesture that just ended. A capture-phase one-shot listener
+        // catches the click before the per-node click handler installed
+        // in addNode (which calls selectGovernanceMapNode), so a
+        // dragged drop does NOT change selection or fire drill-down.
+        const swallow = function (ev) {
+          ev.stopPropagation();
+          ev.preventDefault();
+          node.removeEventListener('click', swallow, true);
+        };
+        node.addEventListener('click', swallow, true);
+      }
+    }
+    node.addEventListener('pointerup', endGmapDrag);
+    node.addEventListener('pointercancel', endGmapDrag);
   }
 
   function addConnector(p1, p2, cls) {
     const svg = document.getElementById('gmap-svg');
-    if (!svg) return;
+    if (!svg) return null;
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     path.setAttribute('class', cls);
     path.setAttribute('d', curvePath(p1[0], p1[1], p2[0], p2[1]));
     svg.appendChild(path);
+    return path;
   }
 
   function selectGovernanceMapNode(nodeId) {
@@ -6550,7 +7086,8 @@
     if (!Array.isArray(actions) || actions.length === 0) return;
     actions.forEach(action => {
       if (!action || typeof action !== 'object') return;
-      if (action.kind === 'view-business-service-record') {
+      if (action.kind === 'view-business-service-record' ||
+          action.kind === 'view-capability-record') {
         if (!action.target_id) return;
         const btn = document.createElement('button');
         btn.type = 'button';
@@ -6577,6 +7114,11 @@
       case 'view-business-service-record':
         if (action.target_id && typeof showBusinessServiceRecord === 'function') {
           showBusinessServiceRecord(action.target_id);
+        }
+        return;
+      case 'view-capability-record':
+        if (action.target_id && typeof showCapabilityRecord === 'function') {
+          showCapabilityRecord(action.target_id);
         }
         return;
       default:

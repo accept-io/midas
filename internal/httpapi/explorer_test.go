@@ -1876,13 +1876,14 @@ func TestExplorer_HTML_GovernanceMap_TruncationIndicators(t *testing.T) {
 //  1. Click on a node selects (populates the details panel) — it does NOT
 //     navigate. Navigation is gated behind an explicit "View record"
 //     button rendered into a per-selection action area.
-//  2. Only Business Service and Related Service nodes carry the action.
-//     Other node types (Capability, Process, Decision Surface, AI System,
+//  2. Business Service, Related Service, and Capability nodes carry the
+//     action. Other node types (Process, Decision Surface, AI System,
 //     Authority, Coverage, +N more) intentionally have no action and the
 //     wrapper stays empty — no disabled buttons, no placeholder text.
 //  3. The dispatcher is whitelisted to `view-business-service-record`
-//     and routes through the existing showBusinessServiceRecord function.
-//     No hash routes, no new navigation primitive.
+//     and `view-capability-record` and routes through the existing
+//     showBusinessServiceRecord / showCapabilityRecord functions. No
+//     hash routes, no new navigation primitive.
 //
 // Source-level pins are the only granularity available here (Explorer is
 // served as static HTML); the assertions below are deliberately literal
@@ -1971,30 +1972,47 @@ func TestExplorer_HTML_GovernanceMap_NodeDrillDownActions(t *testing.T) {
 		}
 	}
 
-	// 7. Whitelisted action kind. The dispatcher routes ONLY known
-	// kinds; the BS + Related Service nodes attach this exact kind. A
-	// future record-page kind for capabilities/processes would add a
-	// new case branch — this assertion deliberately pins the current
-	// (single) supported kind so adding a new one without a real
-	// destination shows up in this test.
-	if !strings.Contains(body, `'view-business-service-record'`) {
-		t.Error(`Drill-down: action kind 'view-business-service-record' missing`)
+	// 7. Whitelisted action kinds. The dispatcher routes ONLY known
+	// kinds; the BS + Related Service nodes attach
+	// `view-business-service-record`, the Capability node attaches
+	// `view-capability-record`. Both kinds must appear; an additional
+	// kind for processes / surfaces / AI systems would require a
+	// corresponding record-page destination, which does not exist
+	// today.
+	for _, kind := range []string{
+		`'view-business-service-record'`,
+		`'view-capability-record'`,
+	} {
+		if !strings.Contains(body, kind) {
+			t.Errorf("Drill-down: whitelisted action kind %s missing", kind)
+		}
 	}
 
 	// 8. Dispatcher routes through the existing record-page entry
-	// point. Pinning the call form (not just the function name) is
-	// the load-bearing assertion that the action is not a fake route:
-	// it shares its destination with the catalogue's "open record"
-	// click handler.
-	if !strings.Contains(body, `showBusinessServiceRecord(action.target_id)`) {
-		t.Error(`Drill-down: dispatcher must call showBusinessServiceRecord(action.target_id)`)
+	// points. Pinning the call form (not just the function name) is
+	// the load-bearing assertion that each action is not a fake
+	// route: each shares its destination with the catalogue's "open
+	// record" click handler for that resource type.
+	for _, marker := range []string{
+		`showBusinessServiceRecord(action.target_id)`,
+		`showCapabilityRecord(action.target_id)`,
+	} {
+		if !strings.Contains(body, marker) {
+			t.Errorf("Drill-down: dispatcher must call %s", marker)
+		}
 	}
 
-	// 9. Business Service node attaches the view-business-service-record
-	// action. target_id is the bare BS id (no `bs:` prefix) so the
-	// existing record loader receives the cache key directly.
-	if !strings.Contains(body, `kind: 'view-business-service-record', target_id: bs.id`) {
-		t.Error(`Drill-down: BS node must attach a 'view-business-service-record' action with target_id: bs.id`)
+	// 9. Business Service + Capability nodes each attach their
+	// matching record-action kind. target_id carries the bare id (no
+	// `bs:` / `cap:` prefix) so the existing record loader receives
+	// the cache key directly.
+	for _, marker := range []string{
+		`kind: 'view-business-service-record', target_id: bs.id`,
+		`kind: 'view-capability-record', target_id: c.id`,
+	} {
+		if !strings.Contains(body, marker) {
+			t.Errorf("Drill-down: node action attachment %q missing", marker)
+		}
 	}
 
 	// 10. Related Service node attaches the action only when a real
@@ -2010,43 +2028,64 @@ func TestExplorer_HTML_GovernanceMap_NodeDrillDownActions(t *testing.T) {
 		}
 	}
 
-	// 11. Unsupported node types must not receive a fake record action.
-	// The cap, proc, surface, AI, authority, coverage, and more-node
-	// addNode calls each remain free of any view-business-service-record
-	// metadata. We assert by grepping the source for the exact (kind:
-	// 'view-business-service-record', target_id: <expr>) pattern and
-	// confirming the only target_id expressions are bs.id and the
-	// related-service id — anything else means a regression that
-	// attached a fake action to an unsupported node type.
-	const actionKindPrefix = `kind: 'view-business-service-record', target_id: `
-	idx := 0
-	allowedTargets := map[string]struct{}{
-		`bs.id`:                          {},
-		`rel.target_business_service_id`: {},
+	// 11. Unsupported node types must not receive a fake record
+	// action. The proc, surface, AI, authority, coverage, and
+	// more-node addNode calls each remain free of any record-action
+	// metadata. We assert by walking every (kind: '<x>',
+	// target_id: <expr>) site for the two whitelisted kinds and
+	// confirming each target_id expression is in the per-kind
+	// allowlist; an unrecognised expression for a known kind
+	// indicates a fake action attached to an unsupported node type.
+	type actionSite struct {
+		prefix       string
+		allowed      map[string]struct{}
+		minOccurr    int
+		minOccurrFor string
 	}
-	occurrences := 0
-	for {
-		hit := strings.Index(body[idx:], actionKindPrefix)
-		if hit < 0 {
-			break
-		}
-		occurrences++
-		start := idx + hit + len(actionKindPrefix)
-		// Find the next ',' or '}' that terminates the target_id expression.
-		end := start
-		for end < len(body) && body[end] != ',' && body[end] != '}' && body[end] != '\n' {
-			end++
-		}
-		expr := strings.TrimSpace(body[start:end])
-		if _, ok := allowedTargets[expr]; !ok {
-			t.Errorf("Drill-down: unsupported node type carries fake record action; "+
-				"target_id expression %q is not in the BS/Related Service whitelist", expr)
-		}
-		idx = end
+	sites := []actionSite{
+		{
+			prefix: `kind: 'view-business-service-record', target_id: `,
+			allowed: map[string]struct{}{
+				`bs.id`:                          {},
+				`rel.target_business_service_id`: {},
+			},
+			minOccurr:    2,
+			minOccurrFor: "BS + Related Service nodes",
+		},
+		{
+			prefix: `kind: 'view-capability-record', target_id: `,
+			allowed: map[string]struct{}{
+				`c.id`: {},
+			},
+			minOccurr:    1,
+			minOccurrFor: "Capability node",
+		},
 	}
-	if occurrences < 2 {
-		t.Errorf("Drill-down: expected at least 2 view-business-service-record action sites "+
-			"(BS node + Related Service node), found %d", occurrences)
+	for _, site := range sites {
+		idx := 0
+		occurrences := 0
+		for {
+			hit := strings.Index(body[idx:], site.prefix)
+			if hit < 0 {
+				break
+			}
+			occurrences++
+			start := idx + hit + len(site.prefix)
+			end := start
+			for end < len(body) && body[end] != ',' && body[end] != '}' && body[end] != '\n' {
+				end++
+			}
+			expr := strings.TrimSpace(body[start:end])
+			if _, ok := site.allowed[expr]; !ok {
+				t.Errorf("Drill-down: unsupported node type carries fake record action for kind %q; "+
+					"target_id expression %q is not in the whitelist", site.prefix, expr)
+			}
+			idx = end
+		}
+		if occurrences < site.minOccurr {
+			t.Errorf("Drill-down: expected at least %d %q action site(s) (%s), found %d",
+				site.minOccurr, site.prefix, site.minOccurrFor, occurrences)
+		}
 	}
 
 	// 12. Existing node click remains selection-only. The handler
@@ -2072,6 +2111,311 @@ func TestExplorer_HTML_GovernanceMap_NodeDrillDownActions(t *testing.T) {
 	// would skip the kind/target_id validation.
 	if !strings.Contains(body, `handleGovernanceMapAction(action)`) {
 		t.Error(`Drill-down: action button click must route through handleGovernanceMapAction(action)`)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Governance Map node dragging (Phase 6)
+// ---------------------------------------------------------------------------
+
+// TestExplorer_HTML_GovernanceMap_NodeDragging pins the interactive
+// node-drag behaviour added in Phase 6. The contract has six pillars:
+//
+//  1. Dragged positions live in a plain in-memory JS object keyed by
+//     node id (gmapDragOverrides). They are NEVER persisted to
+//     localStorage / sessionStorage / cookies / IndexedDB and are
+//     never sent in a fetch / XHR payload.
+//  2. A single helper (effectiveGmapPosition) is the source of truth
+//     for "where is node X right now". Both endpoints of every
+//     connector pass through this helper, so a connector between a
+//     dragged node and a non-dragged node remains attached at both
+//     ends.
+//  3. Drag is wired through pointer events (pointerdown, pointermove,
+//     pointerup, pointercancel) and uses setPointerCapture so the
+//     gesture continues even when the cursor leaves the node card.
+//     releasePointerCapture is called on pointerup/pointercancel.
+//  4. Pointer-space deltas are divided by gmapZoom before being
+//     applied to node coordinates so the node tracks the cursor 1:1
+//     in screen space at any zoom level.
+//  5. A 4 CSS-pixel max(|dx|,|dy|) threshold separates click from
+//     drag. Movement at or below the threshold leaves the existing
+//     click/select handler intact; movement above suppresses the
+//     click for that gesture only via a one-shot capture-phase
+//     swallower.
+//  6. The drag code path performs no persistence calls — no
+//     localStorage / sessionStorage / cookie / indexedDB / fetch /
+//     XMLHttpRequest references appear inside the
+//     attachGmapDragHandlers function body or the gmapDragOverrides
+//     declaration site.
+//
+// Source-level pins are the only granularity available here (Explorer
+// is served as static HTML); the assertions below are deliberately
+// literal so a refactor that drops a class, a handler, or the zoom
+// arithmetic fails this test loudly.
+func TestExplorer_HTML_GovernanceMap_NodeDragging(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// 1. In-memory override store. Pinning the literal `let
+	// gmapDragOverrides = {}` form guarantees a plain object literal
+	// (not a Map, not a Proxy, not a storage call). A regression
+	// that switched the declaration to a storage-backed structure
+	// would change the right-hand side and surface here.
+	if !strings.Contains(body, `let gmapDragOverrides = {}`) {
+		t.Error("Drag state: must declare `let gmapDragOverrides = {}` (plain in-memory object)")
+	}
+
+	// 2. Effective-position lookup helper exists and is the single
+	// resolver for both node cards and connectors. Pinning the
+	// `function effectiveGmapPosition(` form keeps the entry point
+	// stable.
+	if !strings.Contains(body, `function effectiveGmapPosition(`) {
+		t.Error("Effective-position lookup: function effectiveGmapPosition must be defined")
+	}
+	// The lookup must consult gmapDragOverrides first, then fall back
+	// to gmapPositions. Pin both call sites so a refactor that drops
+	// the override branch surfaces here.
+	for _, marker := range []string{
+		`gmapDragOverrides[id]`,
+		`gmapPositions[id]`,
+	} {
+		if !strings.Contains(body, marker) {
+			t.Errorf("Effective-position lookup: missing %q", marker)
+		}
+	}
+
+	// 3. addLiveConnector + repaint helper exist; both endpoints in
+	// the repaint walker resolve through effectiveGmapPosition. The
+	// repaint helper is what keeps the SAME effective-position
+	// lookup applied to both endpoints during a drag — assert it
+	// looks up BOTH src and dst through that helper.
+	for _, decl := range []string{
+		`function addLiveConnector(`,
+		`function repaintGmapConnectors(`,
+	} {
+		if !strings.Contains(body, decl) {
+			t.Errorf("Connector tracking: declaration %q missing", decl)
+		}
+	}
+	// Carve out the repaintGmapConnectors function body and assert
+	// it calls effectiveGmapPosition twice — once for the src
+	// endpoint (sp), once for the dst endpoint (dp). The slice ends
+	// at the function's closing brace at 2-space indent.
+	const repaintAnchor = `function repaintGmapConnectors(`
+	repaintStart := strings.Index(body, repaintAnchor)
+	if repaintStart < 0 {
+		t.Fatalf("Connector tracking: could not locate %s", repaintAnchor)
+	}
+	repaintRest := body[repaintStart+len(repaintAnchor):]
+	repaintEnd := strings.Index(repaintRest, "\n  }")
+	if repaintEnd < 0 {
+		t.Fatalf("Connector tracking: could not locate function-body terminator after %s", repaintAnchor)
+	}
+	repaintBody := repaintRest[:repaintEnd]
+	if strings.Count(repaintBody, `effectiveGmapPosition(`) < 2 {
+		t.Error("Connector repaint: both endpoints must resolve through effectiveGmapPosition (expected ≥2 calls in repaintGmapConnectors)")
+	}
+	// Connector array: registered for repaint. Pin the literal
+	// declaration so a regression to a single-pass renderer (no
+	// stored connectors) is caught.
+	if !strings.Contains(body, `let gmapConnectors = []`) {
+		t.Error("Connector tracking: must declare `let gmapConnectors = []`")
+	}
+
+	// 4. Pointer event handlers — all four required for mouse + touch
+	// + cancel paths. Pin the literal addEventListener('<event>'
+	// form so a refactor to a different handler shape (e.g. inline
+	// onpointerdown attribute) surfaces here.
+	for _, evt := range []string{
+		`addEventListener('pointerdown'`,
+		`addEventListener('pointermove'`,
+		`addEventListener('pointerup'`,
+		`addEventListener('pointercancel'`,
+	} {
+		if !strings.Contains(body, evt) {
+			t.Errorf("Pointer events: missing handler registration %q", evt)
+		}
+	}
+
+	// 5. Pointer capture is acquired on pointerdown and released on
+	// pointerup/pointercancel. Pinning both call literals keeps the
+	// capture pair balanced (capture without release leaks the
+	// gesture; release without capture is benign but indicates a
+	// regression).
+	for _, marker := range []string{
+		`setPointerCapture(`,
+		`releasePointerCapture(`,
+	} {
+		if !strings.Contains(body, marker) {
+			t.Errorf("Pointer capture: missing call %q", marker)
+		}
+	}
+
+	// 6. Drag-state declaration. The per-gesture bookkeeping must
+	// be a module-level `let`, not a global / window assignment.
+	if !strings.Contains(body, `let gmapDragState = null`) {
+		t.Error("Drag state: must declare `let gmapDragState = null`")
+	}
+
+	// 7. Threshold literal. Pin both the named constant declaration
+	// and a representative occurrence of the comparison so a
+	// regression that drops the constant or compares with the wrong
+	// operand surfaces here.
+	if !strings.Contains(body, `const GMAP_DRAG_THRESHOLD_PX = 4`) {
+		t.Error("Drag threshold: must declare `const GMAP_DRAG_THRESHOLD_PX = 4`")
+	}
+	if !strings.Contains(body, `Math.max(Math.abs(dx), Math.abs(dy)) <= GMAP_DRAG_THRESHOLD_PX`) {
+		t.Error("Drag threshold: must compare `Math.max(Math.abs(dx), Math.abs(dy)) <= GMAP_DRAG_THRESHOLD_PX` (≤4 stays a click)")
+	}
+
+	// 8. Zoom-aware drag arithmetic. Pointer-space deltas MUST be
+	// divided by gmapZoom (or a local alias of it) before being
+	// applied to node coordinates. Pinning both literals keeps the
+	// arithmetic intact.
+	for _, marker := range []string{
+		`const z = gmapZoom || 1`,
+		`gmapDragState.startNodeX + dx / z`,
+		`gmapDragState.startNodeY + dy / z`,
+	} {
+		if !strings.Contains(body, marker) {
+			t.Errorf("Zoom-aware drag: missing arithmetic literal %q", marker)
+		}
+	}
+
+	// 9. attachGmapDragHandlers is the single drag-wire helper. Pin
+	// its declaration AND the call from addNode so the wiring is
+	// guaranteed for every node (cap, proc, surface, AI, BS, more,
+	// authority, coverage — all go through addNode).
+	if !strings.Contains(body, `function attachGmapDragHandlers(`) {
+		t.Error("Drag wiring: function attachGmapDragHandlers must be defined")
+	}
+	if !strings.Contains(body, `attachGmapDragHandlers(node, spec.id)`) {
+		t.Error("Drag wiring: addNode must call attachGmapDragHandlers(node, spec.id) so every node is draggable")
+	}
+
+	// 10. Click-vs-drag suppression. After a real drag the gesture
+	// must NOT fire the existing click → selectGovernanceMapNode
+	// handler. The implementation installs a one-shot capture-phase
+	// click swallower; pin the call form (third argument `true`
+	// for capture) and the stopPropagation+preventDefault pair.
+	const dragHandlerAnchor = `function attachGmapDragHandlers(`
+	dhStart := strings.Index(body, dragHandlerAnchor)
+	if dhStart < 0 {
+		t.Fatalf("Drag wiring: could not locate %s", dragHandlerAnchor)
+	}
+	dhRest := body[dhStart+len(dragHandlerAnchor):]
+	// The drag-handler function body ends at its closing brace at
+	// 2-space indent — same termination convention used elsewhere
+	// in this test file. Inner blocks close at 4+ spaces.
+	dhEnd := strings.Index(dhRest, "\n  }")
+	if dhEnd < 0 {
+		t.Fatalf("Drag wiring: could not locate function-body terminator after %s", dragHandlerAnchor)
+	}
+	dhBody := dhRest[:dhEnd]
+	for _, marker := range []string{
+		`addEventListener('click', swallow, true)`,
+		`ev.stopPropagation()`,
+		`ev.preventDefault()`,
+		`removeEventListener('click', swallow, true)`,
+	} {
+		if !strings.Contains(dhBody, marker) {
+			t.Errorf("Drag click suppression: marker %q missing inside attachGmapDragHandlers", marker)
+		}
+	}
+	// And the gating: the swallower must only be installed when the
+	// gesture actually crossed the threshold (hasDragged true). The
+	// `if (wasDrag)` literal pins that gating so a regression to
+	// "always-suppress" (which would break click → select for
+	// non-dragged taps) surfaces here.
+	if !strings.Contains(dhBody, `if (wasDrag)`) {
+		t.Error("Drag click suppression: must be gated on `if (wasDrag)` so clicks without a drag still fire selection")
+	}
+
+	// 11. NEGATIVE pins — no persistence inside the drag code path.
+	// Scope to the attachGmapDragHandlers function body (already
+	// carved above) so unrelated sessionStorage usage elsewhere in
+	// the file (auth, simulator) does NOT trigger a false positive.
+	for _, illegal := range []string{
+		`localStorage`,
+		`sessionStorage`,
+		`document.cookie`,
+		`indexedDB`,
+		`fetch(`,
+		`XMLHttpRequest`,
+		`navigator.sendBeacon`,
+	} {
+		if strings.Contains(dhBody, illegal) {
+			t.Errorf("Drag persistence: %q must NOT appear in attachGmapDragHandlers — drag positions are session-local in-memory only", illegal)
+		}
+	}
+	// Same negative scope applied to the gmapDragOverrides
+	// declaration site. Carve a small 200-char window around the
+	// `let gmapDragOverrides = {}` literal and assert no storage
+	// call leaks into that neighbourhood.
+	doStart := strings.Index(body, `let gmapDragOverrides = {}`)
+	if doStart < 0 {
+		t.Fatal("Drag state: gmapDragOverrides declaration not found for negative-pin scope")
+	}
+	doEnd := doStart + 400
+	if doEnd > len(body) {
+		doEnd = len(body)
+	}
+	overridesNeighbourhood := body[doStart:doEnd]
+	for _, illegal := range []string{
+		`localStorage`,
+		`sessionStorage.setItem`,
+		`sessionStorage.getItem`,
+		`document.cookie`,
+		`indexedDB.open`,
+	} {
+		if strings.Contains(overridesNeighbourhood, illegal) {
+			t.Errorf("Drag state declaration: %q must NOT appear near gmapDragOverrides — overrides are in-memory only", illegal)
+		}
+	}
+
+	// 12. clearGovernanceMapCanvas resets gmapDragOverrides + the
+	// connector tracker so each new render starts with a fresh
+	// list. Without these resets, switching BS would leave stale
+	// overrides on shared node ids (authority/coverage) or stale
+	// path-element refs in the connectors array.
+	for _, marker := range []string{
+		`gmapDragOverrides = {}`,
+		`gmapConnectors = []`,
+	} {
+		// Note: `gmapDragOverrides = {}` appears in BOTH the `let`
+		// declaration and the canvas-clear reassignment — the
+		// `Contains` check is satisfied by either, and the `let`
+		// declaration assertion above already pins the declaration
+		// site, so this loop guarantees the reset literal exists.
+		if !strings.Contains(body, marker) {
+			t.Errorf("Canvas clear: must reset %q", marker)
+		}
+	}
+	// Pin the reset is invoked from the canvas-clear function body.
+	const clearAnchor = `function clearGovernanceMapCanvas(`
+	clrStart := strings.Index(body, clearAnchor)
+	if clrStart < 0 {
+		t.Fatalf("Canvas clear: could not locate %s", clearAnchor)
+	}
+	clrRest := body[clrStart+len(clearAnchor):]
+	clrEnd := strings.Index(clrRest, "\n  }")
+	if clrEnd < 0 {
+		t.Fatalf("Canvas clear: could not locate function-body terminator after %s", clearAnchor)
+	}
+	clrBody := clrRest[:clrEnd]
+	for _, marker := range []string{
+		`gmapDragOverrides = {}`,
+		`gmapConnectors = []`,
+	} {
+		if !strings.Contains(clrBody, marker) {
+			t.Errorf("Canvas clear: %q must be invoked inside clearGovernanceMapCanvas", marker)
+		}
 	}
 }
 
@@ -2253,30 +2597,36 @@ func TestExplorer_HTML_ServicesView_CatalogueRecordNavigation(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestExplorer_HTML_CapabilitiesView_CatalogueRecordNavigation pins the
-// Business Capabilities catalogue + thin record page contract. The
+// Business Capabilities catalogue + enriched record page contract. The
 // Capabilities view mirrors the Services catalogue/record pattern but
-// is deliberately narrower: there is no per-capability governance map,
-// no related-services / child-capabilities / AI-bindings sub-list, and
-// no governance summary — none of those endpoints exist today, so
-// inventing UI for them would violate the platform guardrail.
+// has its own narrower record shape: identity + core details + three
+// sub-resource sections (child capabilities, business services using
+// the capability, capability-scope AI bindings). There is no
+// per-capability governance map and no governance summary — those
+// endpoints do not exist today.
 //
 // Pins span four layers:
 //
-//   - Markup: nav button + view section + two sub-view containers, each
-//     with the stable IDs the JS state machine targets.
-//   - State machine: the seven `let`/`const` declarations + the seven
-//     transition / loader / renderer functions, by `function name(` form.
-//   - Wire: the catalogue fetches /v1/capabilities and consumes the
-//     bare-array shape (Array.isArray check, NOT payload.capabilities);
-//     the record fetches /v1/capabilities/{id} via encodeURIComponent.
+//   - Markup: nav button + view section + two sub-view containers + the
+//     three sub-resource section containers (children, business
+//     services, AI bindings), each with the stable IDs the JS state
+//     machine targets.
+//   - State machine: the seven `let`/`const` declarations for the
+//     parent record, the nine maps for the three sub-resources, and the
+//     transition / loader / renderer functions by `function name(` form.
+//   - Wire: the catalogue fetches /v1/capabilities (bare-array); the
+//     record fetches /v1/capabilities/{id}; the three sub-resource
+//     loaders fetch /v1/capabilities/{id}/{children, businessservices,
+//     ai-bindings} via encodeURIComponent.
 //   - Guardrails: no STRUCTURAL_CONTEXT consultation in the capabilities
-//     module; no fake governance-map action / governance summary /
-//     related-BS / AI-binding sections.
+//     module; no fake governance summary; no per-capability governance
+//     map.
 //
 // State strips (loading / error / empty / no-match for the catalogue,
-// loading / error / no-record for the record page) and core-fields
-// row labels are pinned literally so a regression that drops one
-// surfaces here.
+// loading / error / no-record for the record page, and per-section
+// loading / error / empty for the three sub-resource sections) and
+// core-fields row labels are pinned literally so a regression that
+// drops one surfaces here.
 func TestExplorer_HTML_CapabilitiesView_CatalogueRecordNavigation(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
@@ -2320,7 +2670,10 @@ func TestExplorer_HTML_CapabilitiesView_CatalogueRecordNavigation(t *testing.T) 
 	// is intentionally absent from this view (no /governance-map for
 	// capabilities); the test pins the absence implicitly by NOT
 	// asserting a `capabilities-map-view` id and asserting the
-	// guardrails block below.
+	// guardrails block below. The three sub-resource section
+	// containers (children / business-services / ai-bindings) are
+	// rendered into the body dynamically by renderCapabilityRecord
+	// and pinned here as source-level literals.
 	for _, marker := range []string{
 		`id="capabilities-catalogue-view"`,
 		`id="capabilities-record-view"`,
@@ -2329,6 +2682,9 @@ func TestExplorer_HTML_CapabilitiesView_CatalogueRecordNavigation(t *testing.T) 
 		`id="capabilities-record-name"`,
 		`id="capabilities-record-id"`,
 		`id="capabilities-record-status"`,
+		`id="capabilities-record-children"`,
+		`id="capabilities-record-business-services"`,
+		`id="capabilities-record-ai-bindings"`,
 	} {
 		if !strings.Contains(body, marker) {
 			t.Errorf("Capabilities view: missing sub-view marker %q", marker)
@@ -2388,19 +2744,36 @@ func TestExplorer_HTML_CapabilitiesView_CatalogueRecordNavigation(t *testing.T) 
 			t.Errorf("Capabilities module: must NOT consume STRUCTURAL_CONTEXT — found usage pattern %q", illegalUse)
 		}
 	}
-	// 7b. Capabilities module must NOT read `payload.capabilities` —
-	// the endpoint is bare array, not envelope. (The string appears
-	// elsewhere in the file inside the BS governance-map renderer
-	// where `payload.capabilities` is the BS-payload's caps array;
-	// that is unrelated and legitimate.)
-	if strings.Contains(capabilitiesModule, `payload.capabilities`) {
-		t.Error("Capabilities module: must NOT read payload.capabilities — /v1/capabilities is bare array, not envelope")
+	// 7b. The /v1/capabilities catalogue endpoint is bare-array; the
+	// list loader must NOT read `payload.capabilities`. The
+	// /v1/capabilities/{id}/children sub-resource endpoint, by
+	// contrast, has envelope shape `{capability_id, capabilities[]}`,
+	// so its loader legitimately reads `payload.capabilities`. To
+	// pin only the catalogue path we carve out the loadCapabilitiesList
+	// function body and assert the negative against THAT slice. (The
+	// other call sites — the BS governance-map renderer reading the
+	// BS-payload's caps array, and the children envelope loader — are
+	// outside this slice and remain untouched.)
+	const listLoaderAnchor = `function loadCapabilitiesList`
+	listStart := strings.Index(capabilitiesModule, listLoaderAnchor)
+	if listStart < 0 {
+		t.Fatalf("Capabilities catalogue: could not locate %s in module slice", listLoaderAnchor)
+	}
+	listSlice := capabilitiesModule[listStart:]
+	listEnd := strings.Index(listSlice[1:], "\n  function ")
+	if listEnd > 0 {
+		listSlice = listSlice[:listEnd+1]
+	}
+	if strings.Contains(listSlice, `payload.capabilities`) {
+		t.Error("Capabilities catalogue list loader: must NOT read payload.capabilities — /v1/capabilities is bare array, not envelope")
 	}
 
 	// 8. State variables + helpers — pinning the declarations keeps
 	// the documented surface stable. `let` for state, `function NAME(`
 	// for callable functions; the parentheses suffix prevents matches
-	// against e.g. comment mentions of the function name.
+	// against e.g. comment mentions of the function name. The nine
+	// per-cap maps (children / business-services / ai-bindings × cache
+	// / loading / error) back the three sub-resource sections.
 	for _, decl := range []string{
 		`let capabilitiesSubView`,
 		`let currentSelectedCapability`,
@@ -2410,6 +2783,15 @@ func TestExplorer_HTML_CapabilitiesView_CatalogueRecordNavigation(t *testing.T) 
 		`const capabilityRecordCache`,
 		`let capabilityRecordLoading`,
 		`let capabilityRecordError`,
+		`const capabilityChildrenCache`,
+		`const capabilityChildrenLoading`,
+		`const capabilityChildrenError`,
+		`const capabilityBusinessServicesCache`,
+		`const capabilityBusinessServicesLoading`,
+		`const capabilityBusinessServicesError`,
+		`const capabilityAIBindingsCache`,
+		`const capabilityAIBindingsLoading`,
+		`const capabilityAIBindingsError`,
 	} {
 		if !strings.Contains(body, decl) {
 			t.Errorf("Capabilities view: state declaration %q missing", decl)
@@ -2423,6 +2805,12 @@ func TestExplorer_HTML_CapabilitiesView_CatalogueRecordNavigation(t *testing.T) 
 		`function loadCapabilityRecord`,
 		`function renderCapabilitiesCatalogue`,
 		`function renderCapabilityRecord`,
+		`function loadCapabilityChildren`,
+		`function loadCapabilityBusinessServices`,
+		`function loadCapabilityAIBindings`,
+		`function renderCapabilityChildrenSection`,
+		`function renderCapabilityBusinessServicesSection`,
+		`function renderCapabilityAIBindingsSection`,
 	} {
 		if !strings.Contains(body, fn) {
 			t.Errorf("Capabilities view: function declaration %q missing", fn)
@@ -2431,27 +2819,75 @@ func TestExplorer_HTML_CapabilitiesView_CatalogueRecordNavigation(t *testing.T) 
 
 	// 9. Record page fetches /v1/capabilities/<id>. Pin the
 	// encodeURIComponent form so an id with a slash or space cannot
-	// land a request on a partial path.
+	// land a request on a partial path. The three sub-resource loaders
+	// share the same encodeURIComponent posture and append their
+	// canonical sub-paths; pinning each literal keeps a typo from
+	// landing requests on the wrong endpoint.
 	if !strings.Contains(body, `'/v1/capabilities/' + encodeURIComponent(capId)`) {
 		t.Error(`Capabilities record: must fetch '/v1/capabilities/' + encodeURIComponent(capId)`)
 	}
+	for _, marker := range []string{
+		`'/v1/capabilities/' + encodeURIComponent(capId) + '/children'`,
+		`'/v1/capabilities/' + encodeURIComponent(capId) + '/businessservices'`,
+		`'/v1/capabilities/' + encodeURIComponent(capId) + '/ai-bindings'`,
+	} {
+		if !strings.Contains(body, marker) {
+			t.Errorf("Capabilities sub-resources: missing fetch URL literal %q", marker)
+		}
+	}
 
-	// 10. Core-fields row labels — id, name, description, status,
-	// owner, created_at, updated_at. These are the seven canonical
-	// wire fields; the renderer must surface each one. Pinning the
-	// literal `['<key>',` array form keeps the labels stable across
-	// gofmt-driven realignment.
+	// 10. Core-fields row labels — full Phase-1 wire shape. The
+	// renderer surfaces every field on the wire; missing optional
+	// values render as "—" via the muted span. Pinning the literal
+	// `['<key>',` array form keeps the labels stable across
+	// gofmt-driven realignment. The external_ref row uses
+	// formatExternalRef so the value matches the BS record page.
 	for _, key := range []string{
-		`['id',          payload.id]`,
-		`['name',        payload.name]`,
-		`['description', payload.description]`,
-		`['status',      payload.status]`,
-		`['owner',       payload.owner]`,
-		`['created_at',  payload.created_at]`,
-		`['updated_at',  payload.updated_at]`,
+		`['id',                   payload.id]`,
+		`['name',                 payload.name]`,
+		`['description',          payload.description]`,
+		`['status',               payload.status]`,
+		`['owner',                payload.owner]`,
+		`['parent_capability_id', payload.parent_capability_id]`,
+		`['origin',               payload.origin]`,
+		`['managed',              managedVal]`,
+		`['replaces',             payload.replaces]`,
+		`['created_by',           payload.created_by]`,
+		`['created_at',           payload.created_at]`,
+		`['updated_at',           payload.updated_at]`,
+		`['external_ref',         payload.external_ref ? formatExternalRef(payload.external_ref) : '']`,
 	} {
 		if !strings.Contains(body, key) {
 			t.Errorf("Capabilities record: core-field row %q missing", key)
+		}
+	}
+
+	// 10a. Identity pill keys for the Phase-1 fields the renderer
+	// surfaces above the core grid. Each key is rendered only when
+	// the underlying field is populated; pinning the `key: '<x>'`
+	// form makes a regression that drops a pill surface here.
+	for _, marker := range []string{
+		`{ key: 'parent',   val: payload.parent_capability_id }`,
+		`{ key: 'origin',   val: payload.origin }`,
+		`{ key: 'managed',  val: String(payload.managed) }`,
+		`{ key: 'replaces', val: payload.replaces }`,
+		`{ key: 'ext',      val: 'EXT-REF' }`,
+	} {
+		if !strings.Contains(body, marker) {
+			t.Errorf("Capabilities identity strip: pill marker %q missing", marker)
+		}
+	}
+
+	// 10b. Click-through wiring — child rows navigate to that
+	// capability's record page; BS rows navigate to that BS's record
+	// page. Pin the call form (target_id-bearing showXRecord(...))
+	// so a refactor that drops navigation is caught here.
+	for _, marker := range []string{
+		`showCapabilityRecord(child.id)`,
+		`showBusinessServiceRecord(bs.id)`,
+	} {
+		if !strings.Contains(body, marker) {
+			t.Errorf("Capabilities sub-resources: click wiring %q missing", marker)
 		}
 	}
 
@@ -2490,36 +2926,92 @@ func TestExplorer_HTML_CapabilitiesView_CatalogueRecordNavigation(t *testing.T) 
 		}
 	}
 
-	// 14. Guardrails — none of the deferred / unsupported sections
-	// must leak into the capabilities module. If any of these
-	// strings appears inside the capabilities slice, an unsupported
-	// section was added without a real backing endpoint.
+	// 13a. Sub-resource section titles. Each is rendered as an
+	// operator-visible string by renderCapabilityRecord; pinning the
+	// literal protects the copy from drift. The BS section title
+	// deliberately spells "using this Capability" rather than
+	// "Related Business Services" so the operator sees the
+	// Capability-centric framing the endpoint actually returns.
+	for _, literal := range []string{
+		`Child capabilities`,
+		`Business Services using this Capability`,
+		`AI System bindings`,
+	} {
+		if !strings.Contains(body, literal) {
+			t.Errorf("Capabilities sub-resource section title %q missing", literal)
+		}
+	}
+
+	// 13b. Per-sub-resource state strips. Each loader produces its
+	// own loading and error strip; an empty success state renders an
+	// "empty" message inside the renderRelatedList helper. Pinning
+	// each literal makes a relabel surface here.
+	for _, literal := range []string{
+		`Loading child capabilities…`,
+		`Could not load child capabilities`,
+		`No child capabilities`,
+		`Loading business services…`,
+		`Could not load business services`,
+		`No business services use this capability`,
+		`Loading AI bindings…`,
+		`Could not load AI bindings`,
+		`No AI bindings at this capability scope`,
+	} {
+		if !strings.Contains(body, literal) {
+			t.Errorf("Capabilities sub-resource state-strip literal %q missing", literal)
+		}
+	}
+
+	// 13c. AI bindings section is intentionally non-clickable: the
+	// renderer must NOT wire a click handler on its rows. We carve
+	// out the renderCapabilityAIBindingsSection function body
+	// (bounded by its `function ` declaration on the start side and
+	// the function's closing brace at 2-space indent on the end
+	// side) and assert the slice contains no addEventListener call.
+	// Inner blocks close at 4+ space indent and so do not match the
+	// `\n  }` terminator.
+	const aiRendererAnchor = `function renderCapabilityAIBindingsSection`
+	aiStart := strings.Index(body, aiRendererAnchor)
+	if aiStart < 0 {
+		t.Fatalf("AI bindings renderer: could not locate %s in served HTML", aiRendererAnchor)
+	}
+	rest := body[aiStart+len(aiRendererAnchor):]
+	end := strings.Index(rest, "\n  }")
+	if end < 0 {
+		t.Fatalf("AI bindings renderer: could not locate function-body terminator after %s", aiRendererAnchor)
+	}
+	aiRendererBody := rest[:end]
+	if strings.Contains(aiRendererBody, `addEventListener`) {
+		t.Error("AI bindings renderer: must NOT call addEventListener — section is intentionally non-clickable")
+	}
+	if strings.Contains(aiRendererBody, `showCapabilityRecord`) ||
+		strings.Contains(aiRendererBody, `showBusinessServiceRecord`) {
+		t.Error("AI bindings renderer: must NOT route clicks to other record pages — there is no per-binding record page today")
+	}
+
+	// 14. Guardrails — neither the per-capability governance map nor
+	// the BS-only "Open Governance Map" affordance must leak into
+	// the capabilities module. The three sub-resource sections
+	// (children / business services / AI bindings) have real
+	// Phase-3 backing endpoints, so they are NOT in this list.
 	for _, illegal := range []string{
 		// Governance summary strip — no /governance-map for capabilities.
 		`gmap-action`,
 		// Open-Governance-Map button copy from the BS record page.
 		`Open Governance Map`,
-		// Related-BS / AI-bindings section titles that would imply
-		// a backing endpoint.
-		`Related Business Services`,
-		`AI System bindings`,
-		// View-capability-record action would mean the dispatcher's
-		// whitelist was extended without a record-page destination
-		// for cap nodes.
-		`view-capability-record`,
 	} {
 		if strings.Contains(capabilitiesModule, illegal) {
 			t.Errorf("Capabilities module: must NOT contain %q — that section/action has no real backing endpoint", illegal)
 		}
 	}
 
-	// 15. Governance Map dispatcher whitelist remains unchanged in
-	// this PR — the only allowed action kind is still
-	// view-business-service-record. Adding view-capability-record
-	// or any other kind would require a corresponding record-page
-	// destination, which this PR does NOT add for cap nodes.
+	// 15. Governance Map dispatcher whitelist remains narrow:
+	// view-business-service-record (BS + Related Service nodes) and
+	// view-capability-record (this PR) are the only supported kinds.
+	// Adding a process / surface / AI-system record kind would
+	// require a corresponding record-page destination, none of
+	// which exists today.
 	for _, illegalKind := range []string{
-		`'view-capability-record'`,
 		`'view-process-record'`,
 		`'view-surface-record'`,
 		`'view-aisystem-record'`,
