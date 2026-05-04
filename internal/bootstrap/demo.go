@@ -21,8 +21,28 @@ import (
 // business_service_capabilities M:N junction; BusinessServices deliver
 // Processes (1:N); Processes contain DecisionSurfaces (1:N).
 //
-// The seed is idempotent: if the bs-consumer-lending business service already
-// exists the function returns nil without modifying any data.
+// Idempotency contract:
+//
+// SeedDemo is per-entity self-healing. It is safe to run on every startup
+// against any backend (memory or postgres). For each demo entity and each
+// link, the seed:
+//
+//   - looks up the row by its stable identity (ID, or natural key for
+//     junction tables, or (ID, Version) for versioned types);
+//   - if the row exists, leaves every field of the existing row unchanged
+//     (no overwrite, no delete, no Update);
+//   - if the row does not exist, creates it with the seed's canonical
+//     values.
+//
+// This is a deliberate departure from the previous global-anchor guard
+// that returned early when bs-consumer-lending already existed. That
+// guard meant a deployment which was first seeded before a later demo
+// entity was added (e.g. profile-v2-onboarding for Consumer Lending,
+// added 2026-04-07) could never pick up the missing rows on a restart —
+// the dataset was permanently stuck at its first-seed shape. With
+// per-entity idempotency, adding a new demo entity in a future release
+// is automatically backfilled on the next restart of any deployment
+// running with MIDAS_DEV_SEED_DEMO_DATA=true.
 //
 // Seeding order mirrors the apply path's kindOrder dependency tiers:
 // BusinessService → Capability → BusinessServiceCapability → Process →
@@ -67,20 +87,13 @@ import (
 //
 //	Agent / Profile / Grant:
 //	  agent-v2-evaluator
-//	  profile-v2-standard  (linked to surf-v2-merchant-payment)
-//	  grant-v2-standard
+//	  profile-v2-standard    (linked to surf-v2-merchant-payment)
+//	  profile-v2-onboarding  (linked to surf-v2-id-verify)
+//	  grant-v2-standard      (profile-v2-standard ↔ agent-v2-evaluator)
+//	  grant-v2-onboarding    (profile-v2-onboarding ↔ agent-v2-evaluator)
 //
 // Supports both memory and postgres backends.
 func SeedDemo(ctx context.Context, repos *store.Repositories) error {
-	// Idempotency guard: if the anchor business service already exists, skip.
-	existing, err := repos.BusinessServices.GetByID(ctx, "bs-consumer-lending")
-	if err != nil {
-		return err
-	}
-	if existing != nil {
-		return nil
-	}
-
 	now := time.Now().UTC()
 	effective := now.Add(-time.Hour)
 
@@ -114,8 +127,8 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 		},
 	}
 	for _, s := range bsvcs {
-		if err := repos.BusinessServices.Create(ctx, s); err != nil {
-			return fmt.Errorf("create business service %s: %w", s.ID, err)
+		if err := ensureBusinessService(ctx, repos.BusinessServices, s); err != nil {
+			return err
 		}
 	}
 
@@ -164,8 +177,8 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 		},
 	}
 	for _, c := range caps {
-		if err := repos.Capabilities.Create(ctx, c); err != nil {
-			return fmt.Errorf("create capability %s: %w", c.ID, err)
+		if err := ensureCapability(ctx, repos.Capabilities, c); err != nil {
+			return err
 		}
 	}
 
@@ -182,8 +195,8 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 		{BusinessServiceID: "bs-merchant-services", CapabilityID: "cap-payment-authorization", CreatedAt: now},
 	}
 	for _, bsc := range bscLinks {
-		if err := repos.BusinessServiceCapabilities.Create(ctx, bsc); err != nil {
-			return fmt.Errorf("create business_service_capability %s↔%s: %w", bsc.BusinessServiceID, bsc.CapabilityID, err)
+		if err := ensureBSC(ctx, repos.BusinessServiceCapabilities, bsc); err != nil {
+			return err
 		}
 	}
 
@@ -235,8 +248,8 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 		},
 	}
 	for _, p := range procs {
-		if err := repos.Processes.Create(ctx, p); err != nil {
-			return fmt.Errorf("create process %s: %w", p.ID, err)
+		if err := ensureProcess(ctx, repos.Processes, p); err != nil {
+			return err
 		}
 	}
 
@@ -362,14 +375,14 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 		},
 	}
 	for _, s := range surfs {
-		if err := repos.Surfaces.Create(ctx, s); err != nil {
-			return fmt.Errorf("create surface %s: %w", s.ID, err)
+		if err := ensureSurface(ctx, repos.Surfaces, s); err != nil {
+			return err
 		}
 	}
 
 	// --- Agent ---
 
-	if err := repos.Agents.Create(ctx, &agent.Agent{
+	if err := ensureAgent(ctx, repos.Agents, &agent.Agent{
 		ID:               "agent-v2-evaluator",
 		Name:             "V2 Demo Evaluator",
 		Type:             agent.AgentTypeAI,
@@ -380,12 +393,12 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}); err != nil {
-		return fmt.Errorf("create agent: %w", err)
+		return err
 	}
 
-	// --- Profile ---
+	// --- Profile (standard — merchant payment) ---
 
-	if err := repos.Profiles.Create(ctx, &authority.AuthorityProfile{
+	if err := ensureProfile(ctx, repos.Profiles, &authority.AuthorityProfile{
 		ID:          "profile-v2-standard",
 		Version:     1,
 		SurfaceID:   "surf-v2-merchant-payment",
@@ -409,12 +422,12 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 		CreatedAt: now,
 		UpdatedAt: now,
 	}); err != nil {
-		return fmt.Errorf("create profile: %w", err)
+		return err
 	}
 
 	// --- Grant (standard — merchant payment) ---
 
-	if err := repos.Grants.Create(ctx, &authority.AuthorityGrant{
+	if err := ensureGrant(ctx, repos.Grants, &authority.AuthorityGrant{
 		ID:            "grant-v2-standard",
 		AgentID:       "agent-v2-evaluator",
 		ProfileID:     "profile-v2-standard",
@@ -424,7 +437,7 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}); err != nil {
-		return fmt.Errorf("create grant: %w", err)
+		return err
 	}
 
 	// --- Profile (onboarding — identity verification, requires context) ---
@@ -432,7 +445,7 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 	// and context-satisfied scenarios. RequiredContextKeys forces customer_id
 	// to be present in the request.
 
-	if err := repos.Profiles.Create(ctx, &authority.AuthorityProfile{
+	if err := ensureProfile(ctx, repos.Profiles, &authority.AuthorityProfile{
 		ID:          "profile-v2-onboarding",
 		Version:     1,
 		SurfaceID:   "surf-v2-id-verify",
@@ -456,12 +469,12 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 		CreatedAt: now,
 		UpdatedAt: now,
 	}); err != nil {
-		return fmt.Errorf("create profile-v2-onboarding: %w", err)
+		return err
 	}
 
 	// --- Grant (onboarding — identity verification) ---
 
-	if err := repos.Grants.Create(ctx, &authority.AuthorityGrant{
+	if err := ensureGrant(ctx, repos.Grants, &authority.AuthorityGrant{
 		ID:            "grant-v2-onboarding",
 		AgentID:       "agent-v2-evaluator",
 		ProfileID:     "profile-v2-onboarding",
@@ -471,8 +484,148 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}); err != nil {
-		return fmt.Errorf("create grant-v2-onboarding: %w", err)
+		return err
 	}
 
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Per-entity ensure helpers
+//
+// Each helper looks up the row by its stable identity, and only Creates
+// when no row exists. Existing rows are returned unchanged — the seed
+// never calls Update, never overwrites fields, never deletes. This is
+// the load-bearing property that makes SeedDemo safe to re-run on every
+// startup and self-healing when a future release adds new demo entities
+// to a deployment that was first seeded with an older dataset.
+//
+// Errors from the lookup are wrapped with the entity kind + identity so
+// the failing row is obvious in startup logs. A Create failure is
+// reported the same way.
+// ---------------------------------------------------------------------------
+
+func ensureBusinessService(ctx context.Context, repo businessservice.BusinessServiceRepository, bs *businessservice.BusinessService) error {
+	existing, err := repo.GetByID(ctx, bs.ID)
+	if err != nil {
+		return fmt.Errorf("lookup business service %s: %w", bs.ID, err)
+	}
+	if existing != nil {
+		return nil
+	}
+	if err := repo.Create(ctx, bs); err != nil {
+		return fmt.Errorf("create business service %s: %w", bs.ID, err)
+	}
+	return nil
+}
+
+func ensureCapability(ctx context.Context, repo capability.CapabilityRepository, c *capability.Capability) error {
+	existing, err := repo.GetByID(ctx, c.ID)
+	if err != nil {
+		return fmt.Errorf("lookup capability %s: %w", c.ID, err)
+	}
+	if existing != nil {
+		return nil
+	}
+	if err := repo.Create(ctx, c); err != nil {
+		return fmt.Errorf("create capability %s: %w", c.ID, err)
+	}
+	return nil
+}
+
+// ensureBSC uses the natural key (business_service_id, capability_id) via
+// the repository's Exists method — the BSC table has no synthetic ID.
+func ensureBSC(ctx context.Context, repo businessservicecapability.BusinessServiceCapabilityRepository, bsc *businessservicecapability.BusinessServiceCapability) error {
+	exists, err := repo.Exists(ctx, bsc.BusinessServiceID, bsc.CapabilityID)
+	if err != nil {
+		return fmt.Errorf("lookup business_service_capability %s↔%s: %w", bsc.BusinessServiceID, bsc.CapabilityID, err)
+	}
+	if exists {
+		return nil
+	}
+	if err := repo.Create(ctx, bsc); err != nil {
+		return fmt.Errorf("create business_service_capability %s↔%s: %w", bsc.BusinessServiceID, bsc.CapabilityID, err)
+	}
+	return nil
+}
+
+func ensureProcess(ctx context.Context, repo process.ProcessRepository, p *process.Process) error {
+	existing, err := repo.GetByID(ctx, p.ID)
+	if err != nil {
+		return fmt.Errorf("lookup process %s: %w", p.ID, err)
+	}
+	if existing != nil {
+		return nil
+	}
+	if err := repo.Create(ctx, p); err != nil {
+		return fmt.Errorf("create process %s: %w", p.ID, err)
+	}
+	return nil
+}
+
+// ensureSurface uses FindLatestByID. A surface ID may exist at any version
+// (the seed always inserts Version=1, but a deployment may have already
+// promoted a v2). Either way, "ID exists at any version" is the correct
+// presence check for the seed: if any version is present we do not insert
+// the seeded v1, since doing so would conflict with the (id, version)
+// uniqueness constraint AND silently downgrade an existing v2.
+func ensureSurface(ctx context.Context, repo surface.SurfaceRepository, s *surface.DecisionSurface) error {
+	existing, err := repo.FindLatestByID(ctx, s.ID)
+	if err != nil {
+		return fmt.Errorf("lookup surface %s: %w", s.ID, err)
+	}
+	if existing != nil {
+		return nil
+	}
+	if err := repo.Create(ctx, s); err != nil {
+		return fmt.Errorf("create surface %s: %w", s.ID, err)
+	}
+	return nil
+}
+
+func ensureAgent(ctx context.Context, repo agent.AgentRepository, a *agent.Agent) error {
+	existing, err := repo.GetByID(ctx, a.ID)
+	if err != nil {
+		return fmt.Errorf("lookup agent %s: %w", a.ID, err)
+	}
+	if existing != nil {
+		return nil
+	}
+	if err := repo.Create(ctx, a); err != nil {
+		return fmt.Errorf("create agent %s: %w", a.ID, err)
+	}
+	return nil
+}
+
+// ensureProfile uses FindByIDAndVersion: profiles are versioned, the seed
+// always inserts Version=1, and the desired idempotency property is
+// "create if (id, version) does not yet exist". Using FindByID (latest)
+// instead would refuse to insert a missing v1 when only a later version
+// happens to exist, which would be wrong for stale-partial-seed repair.
+func ensureProfile(ctx context.Context, repo authority.ProfileRepository, p *authority.AuthorityProfile) error {
+	existing, err := repo.FindByIDAndVersion(ctx, p.ID, p.Version)
+	if err != nil {
+		return fmt.Errorf("lookup profile %s v%d: %w", p.ID, p.Version, err)
+	}
+	if existing != nil {
+		return nil
+	}
+	if err := repo.Create(ctx, p); err != nil {
+		return fmt.Errorf("create profile %s v%d: %w", p.ID, p.Version, err)
+	}
+	return nil
+}
+
+func ensureGrant(ctx context.Context, repo authority.GrantRepository, g *authority.AuthorityGrant) error {
+	existing, err := repo.FindByID(ctx, g.ID)
+	if err != nil {
+		return fmt.Errorf("lookup grant %s: %w", g.ID, err)
+	}
+	if existing != nil {
+		return nil
+	}
+	if err := repo.Create(ctx, g); err != nil {
+		return fmt.Errorf("create grant %s: %w", g.ID, err)
+	}
 	return nil
 }

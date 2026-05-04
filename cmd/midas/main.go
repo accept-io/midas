@@ -274,16 +274,22 @@ func main() {
 		repos.AISystemBindings,
 	))
 	srv.WithStructuralMode(cfg.Structural.Mode)
-	if authenticator != nil {
-		srv.WithAuthenticator(authenticator)
-	}
+	// NOTE: WithAuthenticator is called below, AFTER the optional Local IAM
+	// service is constructed, so /v1/* can accept either a static bearer
+	// token or a Local IAM session cookie when both are configured. See
+	// composeAuthenticator for the wiring rule and ordering rationale.
 	srv.WithStoreBackend(cfg.Store.Backend)
 	srv.WithDemoSeeded(demoSeeded)
 	srv.WithSeedDemoUser(cfg.Dev.SeedDemoUser)
 
+	// iamSvc is captured outside the headless branch so the post-headless
+	// composeAuthenticator call sees the correct value (nil when Local IAM
+	// is disabled or when the server is headless).
+	var iamSvc *localiam.Service
+
 	if !cfg.Server.Headless {
 		if cfg.LocalIAM.Enabled {
-			iamSvc := localiam.NewService(repos.LocalUsers, repos.LocalSessions, localiam.Config{
+			iamSvc = localiam.NewService(repos.LocalUsers, repos.LocalSessions, localiam.Config{
 				Enabled:       true,
 				SessionTTL:    cfg.LocalIAM.SessionTTL.D(),
 				SecureCookies: cfg.LocalIAM.SecureCookies,
@@ -336,6 +342,18 @@ func main() {
 			}
 			slog.Info("explorer_ready", "path", "/explorer", "auth", authHint)
 		}
+	}
+
+	// --- Compose final authenticator ---
+	// Combine the static-token authenticator (when MIDAS_AUTH_TOKENS is
+	// configured) with the Local IAM session authenticator (when Local IAM
+	// is enabled) so /v1/* can accept either credential under
+	// AuthModeRequired. Static comes first so a present-but-invalid bearer
+	// token is rejected, never silently bypassed by a session cookie. The
+	// helper returns nil when neither scheme is configured; in that case
+	// requireAuth's existing fail-closed branch handles AuthModeRequired.
+	if finalAuth := composeAuthenticator(authenticator, iamSvc); finalAuth != nil {
+		srv.WithAuthenticator(finalAuth)
 	}
 
 	// --- Dispatcher ---
