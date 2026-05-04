@@ -16,6 +16,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/accept-io/midas/internal/capability"
 	"github.com/accept-io/midas/internal/controlplane/apply"
 	"github.com/accept-io/midas/internal/controlplane/parser"
 	"github.com/accept-io/midas/internal/controlplane/types"
@@ -442,5 +443,239 @@ func TestG5G6_ProcessHierarchy_CrossBusinessService_Rejected(t *testing.T) {
 	child, _ := repos.Processes.GetByID(ctx, "proc-g-child")
 	if child != nil {
 		t.Error("cross-business-service process must not be persisted")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Phase 0A — Capability apply ordering: parent-before-child within tier
+// ---------------------------------------------------------------------------
+//
+// Plan validation is bundle-aware, so a child Capability whose parent is
+// declared later in the same bundle passes plan. Apply, however, used to
+// preserve document order within the Capability tier — which under
+// Postgres caused fk_capabilities_parent to fail at INSERT time when the
+// child landed before its parent. Memory mode hid the bug because the
+// memory repo enforces no FK.
+//
+// orderCapabilityCreatesByParent (in service.go) topologically sorts the
+// Capability tier so parents always land first when both are in-bundle.
+// These tests pin the contract by recording the actual Create call
+// order via a wrapper repo. Asserting against the wire-level Create
+// sequence is the same property the Postgres FK would enforce, without
+// requiring a Postgres-backed test in the apply package.
+
+// recordingCapabilityRepo wraps a CapabilityRepository and records the
+// IDs passed to Create in the order they were called. Used to verify
+// the apply tier's intra-Capability ordering.
+type recordingCapabilityRepo struct {
+	inner capability.CapabilityRepository
+	order *[]string
+}
+
+func (r *recordingCapabilityRepo) Exists(ctx context.Context, id string) (bool, error) {
+	return r.inner.Exists(ctx, id)
+}
+func (r *recordingCapabilityRepo) GetByID(ctx context.Context, id string) (*capability.Capability, error) {
+	return r.inner.GetByID(ctx, id)
+}
+func (r *recordingCapabilityRepo) Create(ctx context.Context, c *capability.Capability) error {
+	*r.order = append(*r.order, c.ID)
+	return r.inner.Create(ctx, c)
+}
+
+// indexInOrder returns the position of id in the recorded create order,
+// or -1 if not present.
+func indexInOrder(order []string, id string) int {
+	for i, s := range order {
+		if s == id {
+			return i
+		}
+	}
+	return -1
+}
+
+// TestApplyCapability_ChildBeforeParentInBundle_OrdersParentFirst is the
+// primary regression anchor for the Phase 0A fix. The bundle declares
+// the child Capability before its parent in document order; apply must
+// reorder so that the parent's Create call hits the repo first. Without
+// the fix, this test passes against memory (no FK) but the Postgres
+// runtime would fail with fk_capabilities_parent — pinning the order at
+// the apply-tier level catches the bug independently of FK enforcement.
+func TestApplyCapability_ChildBeforeParentInBundle_OrdersParentFirst(t *testing.T) {
+	repos := memory.NewRepositories()
+	var createOrder []string
+	recRepo := &recordingCapabilityRepo{inner: repos.Capabilities, order: &createOrder}
+
+	svc := apply.NewServiceWithRepos(apply.RepositorySet{
+		Capabilities: recRepo,
+	})
+	ctx := context.Background()
+
+	// Bundle declares CHILD before PARENT in document order.
+	bundle := []parser.ParsedDocument{
+		hierCapDoc("cap-child-cbp", "cap-parent-cbp"),
+		hierCapDoc("cap-parent-cbp", ""),
+	}
+	result := svc.Apply(ctx, bundle, "test")
+
+	assertNoErrors(t, result)
+	if result.CreatedCount() != 2 {
+		t.Fatalf("expected 2 created, got %d", result.CreatedCount())
+	}
+
+	// Both rows must be persisted with parent link intact.
+	parent, _ := repos.Capabilities.GetByID(ctx, "cap-parent-cbp")
+	if parent == nil {
+		t.Fatal("parent capability not persisted")
+	}
+	child, _ := repos.Capabilities.GetByID(ctx, "cap-child-cbp")
+	if child == nil {
+		t.Fatal("child capability not persisted")
+	}
+	if child.ParentCapabilityID != "cap-parent-cbp" {
+		t.Errorf("child.ParentCapabilityID = %q, want %q", child.ParentCapabilityID, "cap-parent-cbp")
+	}
+
+	// Apply ordering contract: parent's Create must have been called
+	// before child's Create. This is the property the Postgres FK
+	// enforces at INSERT time.
+	parentIdx := indexInOrder(createOrder, "cap-parent-cbp")
+	childIdx := indexInOrder(createOrder, "cap-child-cbp")
+	if parentIdx < 0 || childIdx < 0 {
+		t.Fatalf("expected both creates recorded, got order=%v", createOrder)
+	}
+	if parentIdx >= childIdx {
+		t.Errorf("parent must be created before child (FK ordering); got parent=%d child=%d order=%v",
+			parentIdx, childIdx, createOrder)
+	}
+}
+
+// TestApplyCapability_GrandchildBeforeParentChain_OrdersTopologically
+// covers the multi-level case: bundle declares grandchild first, child
+// second, root last. The topological sort must produce root → child →
+// grandchild Create order regardless of document order.
+func TestApplyCapability_GrandchildBeforeParentChain_OrdersTopologically(t *testing.T) {
+	repos := memory.NewRepositories()
+	var createOrder []string
+	recRepo := &recordingCapabilityRepo{inner: repos.Capabilities, order: &createOrder}
+
+	svc := apply.NewServiceWithRepos(apply.RepositorySet{
+		Capabilities: recRepo,
+	})
+	ctx := context.Background()
+
+	// Bundle declares grandchild → child → root in REVERSE order.
+	bundle := []parser.ParsedDocument{
+		hierCapDoc("cap-grand-gbp", "cap-mid-gbp"),
+		hierCapDoc("cap-mid-gbp", "cap-root-gbp"),
+		hierCapDoc("cap-root-gbp", ""),
+	}
+	result := svc.Apply(ctx, bundle, "test")
+
+	assertNoErrors(t, result)
+	if result.CreatedCount() != 3 {
+		t.Fatalf("expected 3 created, got %d", result.CreatedCount())
+	}
+
+	// All three rows persisted with correct parent links.
+	root, _ := repos.Capabilities.GetByID(ctx, "cap-root-gbp")
+	mid, _ := repos.Capabilities.GetByID(ctx, "cap-mid-gbp")
+	grand, _ := repos.Capabilities.GetByID(ctx, "cap-grand-gbp")
+	if root == nil || mid == nil || grand == nil {
+		t.Fatalf("expected all 3 persisted; root=%v mid=%v grand=%v", root, mid, grand)
+	}
+	if mid.ParentCapabilityID != "cap-root-gbp" {
+		t.Errorf("mid parent = %q, want cap-root-gbp", mid.ParentCapabilityID)
+	}
+	if grand.ParentCapabilityID != "cap-mid-gbp" {
+		t.Errorf("grand parent = %q, want cap-mid-gbp", grand.ParentCapabilityID)
+	}
+
+	// Topological order: root before mid before grand.
+	rootIdx := indexInOrder(createOrder, "cap-root-gbp")
+	midIdx := indexInOrder(createOrder, "cap-mid-gbp")
+	grandIdx := indexInOrder(createOrder, "cap-grand-gbp")
+	if rootIdx < 0 || midIdx < 0 || grandIdx < 0 {
+		t.Fatalf("expected all three creates recorded, got order=%v", createOrder)
+	}
+	if !(rootIdx < midIdx && midIdx < grandIdx) {
+		t.Errorf("expected root < mid < grand in create order; got root=%d mid=%d grand=%d order=%v",
+			rootIdx, midIdx, grandIdx, createOrder)
+	}
+}
+
+// TestApplyCapability_ParentInStore_NoOrderingConstraint verifies that a
+// child Capability whose parent already exists in the store imposes no
+// in-bundle ordering constraint. Multiple unrelated children may be
+// declared in any document order.
+func TestApplyCapability_ParentInStore_NoOrderingConstraint(t *testing.T) {
+	repos := memory.NewRepositories()
+	ctx := context.Background()
+
+	// Seed the parent in store first via a separate apply.
+	seedSvc := apply.NewServiceWithRepos(apply.RepositorySet{Capabilities: repos.Capabilities})
+	seedResult := seedSvc.Apply(ctx, []parser.ParsedDocument{hierCapDoc("cap-store-parent", "")}, "test")
+	assertNoErrors(t, seedResult)
+
+	// Now record the second apply.
+	var createOrder []string
+	recRepo := &recordingCapabilityRepo{inner: repos.Capabilities, order: &createOrder}
+	svc := apply.NewServiceWithRepos(apply.RepositorySet{Capabilities: recRepo})
+
+	// Bundle of three sibling children, all with the in-store parent.
+	// No ordering constraint between siblings → they should be applied
+	// in document order.
+	bundle := []parser.ParsedDocument{
+		hierCapDoc("cap-store-child-a", "cap-store-parent"),
+		hierCapDoc("cap-store-child-b", "cap-store-parent"),
+		hierCapDoc("cap-store-child-c", "cap-store-parent"),
+	}
+	result := svc.Apply(ctx, bundle, "test")
+	assertNoErrors(t, result)
+	if result.CreatedCount() != 3 {
+		t.Fatalf("expected 3 created, got %d", result.CreatedCount())
+	}
+
+	// Document order is preserved — no spurious reordering when the
+	// parent is in the store, not in the bundle.
+	want := []string{"cap-store-child-a", "cap-store-child-b", "cap-store-child-c"}
+	if len(createOrder) != 3 {
+		t.Fatalf("expected 3 creates, got %d: %v", len(createOrder), createOrder)
+	}
+	for i, id := range want {
+		if createOrder[i] != id {
+			t.Errorf("createOrder[%d] = %q, want %q (full order=%v)", i, createOrder[i], id, createOrder)
+		}
+	}
+}
+
+// TestApplyCapability_NoParents_PreservesDocumentOrder verifies the
+// stable-sort property: when no Capability declares a parent, the apply
+// order matches the input document order exactly. A regression that
+// inadvertently reordered roots would fail this test.
+func TestApplyCapability_NoParents_PreservesDocumentOrder(t *testing.T) {
+	repos := memory.NewRepositories()
+	var createOrder []string
+	recRepo := &recordingCapabilityRepo{inner: repos.Capabilities, order: &createOrder}
+
+	svc := apply.NewServiceWithRepos(apply.RepositorySet{Capabilities: recRepo})
+	ctx := context.Background()
+
+	bundle := []parser.ParsedDocument{
+		hierCapDoc("cap-stable-z", ""),
+		hierCapDoc("cap-stable-m", ""),
+		hierCapDoc("cap-stable-a", ""),
+	}
+	result := svc.Apply(ctx, bundle, "test")
+	assertNoErrors(t, result)
+
+	want := []string{"cap-stable-z", "cap-stable-m", "cap-stable-a"}
+	if len(createOrder) != len(want) {
+		t.Fatalf("expected %d creates, got %d: %v", len(want), len(createOrder), createOrder)
+	}
+	for i, id := range want {
+		if createOrder[i] != id {
+			t.Errorf("createOrder[%d] = %q, want %q", i, createOrder[i], id)
+		}
 	}
 }

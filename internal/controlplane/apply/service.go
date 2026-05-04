@@ -2261,7 +2261,7 @@ func (s *Service) appendControlAudit(ctx context.Context, rec *controlaudit.Cont
 // order. Create entries are emitted in the following sequence:
 //
 //  1. BusinessService           — no dependencies
-//  2. Capability                — no dependencies
+//  2. Capability                — no dependencies (intra-tier topologically sorted by parent_capability_id)
 //  3. BusinessServiceCapability — depends on BusinessService and Capability
 //  4. BusinessServiceRelationship — depends on BusinessService (source/target FK)
 //  5. Process                   — depends on BusinessService (v1 service-led model)
@@ -2277,9 +2277,17 @@ func (s *Service) appendControlAudit(ctx context.Context, rec *controlaudit.Cont
 //
 // 14. Other                     — unknown kinds, emitted after known kinds
 //
-// Within each tier, relative document order is preserved. Conflict and unchanged
-// entries are emitted after all create entries, in their original document order,
-// because they produce no persisted output and carry no dependency implications.
+// Within most tiers, relative document order is preserved. The Capability
+// tier additionally enforces parent-before-child ordering when a parent
+// Capability is being created in the same bundle as its child — without
+// this, a bundle that declares a child Capability before its parent in
+// document order would pass plan validation (which is bundle-aware) but
+// fail at apply time against Postgres because fk_capabilities_parent is
+// non-deferrable. See orderCapabilityCreatesByParent.
+//
+// Conflict and unchanged entries are emitted after all create entries, in
+// their original document order, because they produce no persisted output
+// and carry no dependency implications.
 func orderedEntries(entries []ApplyPlanEntry) []ApplyPlanEntry {
 	kindOrder := map[string]int{
 		types.KindBusinessService:             0,
@@ -2313,12 +2321,130 @@ func orderedEntries(entries []ApplyPlanEntry) []ApplyPlanEntry {
 		creates[tier] = append(creates[tier], e)
 	}
 
+	// Intra-tier topological reorder: Capability creates must place
+	// parents before children when both are in the same bundle. Plan
+	// validation has already rejected cycles, missing parents, and
+	// self-parenting (see checkCapabilityHierarchy). The sort treats
+	// any unresolvable dependency defensively by falling back to
+	// document order, so a degraded planner cannot wedge apply.
+	creates[1] = orderCapabilityCreatesByParent(creates[1])
+
 	ordered := make([]ApplyPlanEntry, 0, len(entries))
 	for _, tier := range creates {
 		ordered = append(ordered, tier...)
 	}
 	ordered = append(ordered, nonCreates...)
 	return ordered
+}
+
+// orderCapabilityCreatesByParent topologically sorts Capability create
+// entries so that a parent Capability is emitted before any child whose
+// parent_capability_id refers to it AND that parent is also in the same
+// bundle (i.e. also being created in this apply).
+//
+// In-bundle dependency only: a child whose parent already exists in the
+// store does not create an in-bundle ordering constraint — that parent
+// is durable from a prior apply, so the child's INSERT can proceed in
+// any position. This keeps the sort O(N) over the tier and avoids
+// re-querying the repository at apply-ordering time.
+//
+// Tie-breaking: among entries with no in-bundle parent (roots) and
+// among siblings, original document order is preserved. The sort is
+// therefore stable: a bundle that already declares parents before
+// children produces an identical ordering to its input.
+//
+// Defensive on cycles: plan validation has already rejected cycles via
+// checkCapabilityHierarchy. If a cycle nonetheless reaches this code
+// (e.g. from a future code path that bypasses planning), the sort
+// returns the input slice unchanged and apply may fail at the FK — the
+// loud failure is preferable to silent reordering.
+func orderCapabilityCreatesByParent(entries []ApplyPlanEntry) []ApplyPlanEntry {
+	if len(entries) < 2 {
+		return entries
+	}
+
+	// Build the in-bundle ID set so we can distinguish "parent is in
+	// this bundle" (ordering constraint) from "parent is in store"
+	// (no constraint).
+	inBundle := make(map[string]int, len(entries))
+	for i, e := range entries {
+		if e.ID != "" {
+			inBundle[e.ID] = i
+		}
+	}
+
+	// Per-entry parent ID for in-bundle parents only. Empty string
+	// means root-for-ordering-purposes (either no parent at all, or
+	// parent is in the store — both cases impose no in-bundle order).
+	parentOf := make([]string, len(entries))
+	for i, e := range entries {
+		capDoc, ok := e.Doc.Doc.(types.CapabilityDocument)
+		if !ok {
+			continue
+		}
+		parentID := strings.TrimSpace(capDoc.Spec.ParentCapabilityID)
+		if parentID == "" {
+			continue
+		}
+		if _, isInBundle := inBundle[parentID]; isInBundle {
+			parentOf[i] = parentID
+		}
+	}
+
+	// Kahn's algorithm with stable iteration order. We build the
+	// adjacency forward (parent → children) and the in-degree count
+	// (number of in-bundle parents per entry — at most 1, since a
+	// capability has at most one parent). Roots are entries with
+	// in-degree 0; we drain them in original document order, append
+	// to the output, and decrement their children's in-degree.
+	indegree := make([]int, len(entries))
+	children := make(map[string][]int) // parent ID → child indices
+	for i, p := range parentOf {
+		if p == "" {
+			continue
+		}
+		indegree[i] = 1
+		children[p] = append(children[p], i)
+	}
+
+	// Roots: entries with no in-bundle parent. Iteration order is the
+	// original document order (the for-i loop), so the input order is
+	// preserved among same-rank entries.
+	queue := make([]int, 0, len(entries))
+	for i := range entries {
+		if indegree[i] == 0 {
+			queue = append(queue, i)
+		}
+	}
+
+	out := make([]ApplyPlanEntry, 0, len(entries))
+	for len(queue) > 0 {
+		// Pop head — preserves document order among ready entries.
+		idx := queue[0]
+		queue = queue[1:]
+		out = append(out, entries[idx])
+
+		// Children become ready. Append in document order: children
+		// are recorded in the slice in the order they were scanned,
+		// which is document order, so this preserves stable ordering
+		// among siblings.
+		for _, childIdx := range children[entries[idx].ID] {
+			indegree[childIdx]--
+			if indegree[childIdx] == 0 {
+				queue = append(queue, childIdx)
+			}
+		}
+	}
+
+	// Defensive: if a cycle slipped past plan validation, some entries
+	// will not have made it into `out`. Returning the unmodified input
+	// preserves whatever order the planner produced, so apply will
+	// surface the problem (likely as an FK violation) rather than this
+	// sort silently dropping entries.
+	if len(out) != len(entries) {
+		return entries
+	}
+	return out
 }
 
 // applySurface creates a governed surface version in review state.
