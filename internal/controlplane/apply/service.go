@@ -2264,7 +2264,7 @@ func (s *Service) appendControlAudit(ctx context.Context, rec *controlaudit.Cont
 //  2. Capability                — no dependencies (intra-tier topologically sorted by parent_capability_id)
 //  3. BusinessServiceCapability — depends on BusinessService and Capability
 //  4. BusinessServiceRelationship — depends on BusinessService (source/target FK)
-//  5. Process                   — depends on BusinessService (v1 service-led model)
+//  5. Process                   — depends on BusinessService (v1 service-led model); intra-tier topologically sorted by parent_process_id
 //  6. Surface                   — depends on Process
 //  7. Agent                     — no dependencies
 //  8. Profile                   — depends on Surface
@@ -2277,13 +2277,15 @@ func (s *Service) appendControlAudit(ctx context.Context, rec *controlaudit.Cont
 //
 // 14. Other                     — unknown kinds, emitted after known kinds
 //
-// Within most tiers, relative document order is preserved. The Capability
-// tier additionally enforces parent-before-child ordering when a parent
-// Capability is being created in the same bundle as its child — without
-// this, a bundle that declares a child Capability before its parent in
-// document order would pass plan validation (which is bundle-aware) but
-// fail at apply time against Postgres because fk_capabilities_parent is
-// non-deferrable. See orderCapabilityCreatesByParent.
+// Within most tiers, relative document order is preserved. The
+// Capability and Process tiers additionally enforce parent-before-child
+// ordering when a parent is being created in the same bundle as its
+// child — without this, a bundle that declares a child before its
+// parent in document order would pass plan validation (which is
+// bundle-aware) but fail at apply time against Postgres because
+// fk_capabilities_parent and fk_processes_parent are non-deferrable.
+// See orderCapabilityCreatesByParent / orderProcessCreatesByParent
+// (both thin wrappers around the shared orderCreatesByParent helper).
 //
 // Conflict and unchanged entries are emitted after all create entries, in
 // their original document order, because they produce no persisted output
@@ -2321,13 +2323,15 @@ func orderedEntries(entries []ApplyPlanEntry) []ApplyPlanEntry {
 		creates[tier] = append(creates[tier], e)
 	}
 
-	// Intra-tier topological reorder: Capability creates must place
-	// parents before children when both are in the same bundle. Plan
-	// validation has already rejected cycles, missing parents, and
-	// self-parenting (see checkCapabilityHierarchy). The sort treats
-	// any unresolvable dependency defensively by falling back to
-	// document order, so a degraded planner cannot wedge apply.
+	// Intra-tier topological reorder: Capability and Process creates
+	// must place parents before children when both are in the same
+	// bundle. Plan validation has already rejected cycles, missing
+	// parents, and self-parenting for both kinds (see
+	// checkCapabilityHierarchy / checkProcessHierarchy). The sort
+	// treats any unresolvable dependency defensively by falling back
+	// to document order, so a degraded planner cannot wedge apply.
 	creates[1] = orderCapabilityCreatesByParent(creates[1])
+	creates[4] = orderProcessCreatesByParent(creates[4])
 
 	ordered := make([]ApplyPlanEntry, 0, len(entries))
 	for _, tier := range creates {
@@ -2337,10 +2341,15 @@ func orderedEntries(entries []ApplyPlanEntry) []ApplyPlanEntry {
 	return ordered
 }
 
-// orderCapabilityCreatesByParent topologically sorts Capability create
-// entries so that a parent Capability is emitted before any child whose
-// parent_capability_id refers to it AND that parent is also in the same
-// bundle (i.e. also being created in this apply).
+// orderCreatesByParent topologically sorts a single tier of create
+// entries so that a parent entity is emitted before any child whose
+// in-bundle parent reference points at it.
+//
+// `getParent` returns the parent ID for an entry, or empty string when
+// the entry has no parent (root) or its parent already exists in the
+// store (no in-bundle ordering constraint). The caller is responsible
+// for the kind-specific document type assertion and field access — this
+// function only sees the resulting parent-id string.
 //
 // In-bundle dependency only: a child whose parent already exists in the
 // store does not create an in-bundle ordering constraint — that parent
@@ -2353,12 +2362,13 @@ func orderedEntries(entries []ApplyPlanEntry) []ApplyPlanEntry {
 // therefore stable: a bundle that already declares parents before
 // children produces an identical ordering to its input.
 //
-// Defensive on cycles: plan validation has already rejected cycles via
-// checkCapabilityHierarchy. If a cycle nonetheless reaches this code
+// Defensive on cycles: plan validation has already rejected cycles for
+// every kind that uses this helper (checkCapabilityHierarchy,
+// checkProcessHierarchy). If a cycle nonetheless reaches this code
 // (e.g. from a future code path that bypasses planning), the sort
 // returns the input slice unchanged and apply may fail at the FK — the
 // loud failure is preferable to silent reordering.
-func orderCapabilityCreatesByParent(entries []ApplyPlanEntry) []ApplyPlanEntry {
+func orderCreatesByParent(entries []ApplyPlanEntry, getParent func(ApplyPlanEntry) string) []ApplyPlanEntry {
 	if len(entries) < 2 {
 		return entries
 	}
@@ -2378,11 +2388,7 @@ func orderCapabilityCreatesByParent(entries []ApplyPlanEntry) []ApplyPlanEntry {
 	// parent is in the store — both cases impose no in-bundle order).
 	parentOf := make([]string, len(entries))
 	for i, e := range entries {
-		capDoc, ok := e.Doc.Doc.(types.CapabilityDocument)
-		if !ok {
-			continue
-		}
-		parentID := strings.TrimSpace(capDoc.Spec.ParentCapabilityID)
+		parentID := strings.TrimSpace(getParent(e))
 		if parentID == "" {
 			continue
 		}
@@ -2393,10 +2399,11 @@ func orderCapabilityCreatesByParent(entries []ApplyPlanEntry) []ApplyPlanEntry {
 
 	// Kahn's algorithm with stable iteration order. We build the
 	// adjacency forward (parent → children) and the in-degree count
-	// (number of in-bundle parents per entry — at most 1, since a
-	// capability has at most one parent). Roots are entries with
-	// in-degree 0; we drain them in original document order, append
-	// to the output, and decrement their children's in-degree.
+	// (number of in-bundle parents per entry — at most 1, since each
+	// kind in this helper supports at most one parent). Roots are
+	// entries with in-degree 0; we drain them in original document
+	// order, append to the output, and decrement their children's
+	// in-degree.
 	indegree := make([]int, len(entries))
 	children := make(map[string][]int) // parent ID → child indices
 	for i, p := range parentOf {
@@ -2445,6 +2452,44 @@ func orderCapabilityCreatesByParent(entries []ApplyPlanEntry) []ApplyPlanEntry {
 		return entries
 	}
 	return out
+}
+
+// orderCapabilityCreatesByParent reorders Capability create entries so a
+// parent Capability is emitted before any child whose
+// parent_capability_id refers to an in-bundle parent. Thin wrapper
+// around orderCreatesByParent that supplies the Capability-specific
+// parent extraction. See orderCreatesByParent for the full contract.
+func orderCapabilityCreatesByParent(entries []ApplyPlanEntry) []ApplyPlanEntry {
+	return orderCreatesByParent(entries, func(e ApplyPlanEntry) string {
+		capDoc, ok := e.Doc.Doc.(types.CapabilityDocument)
+		if !ok {
+			return ""
+		}
+		return capDoc.Spec.ParentCapabilityID
+	})
+}
+
+// orderProcessCreatesByParent reorders Process create entries so a
+// parent Process is emitted before any child whose parent_process_id
+// refers to an in-bundle parent. Thin wrapper around
+// orderCreatesByParent that supplies the Process-specific parent
+// extraction. See orderCreatesByParent for the full contract.
+//
+// Same root cause as the Capability ordering bug fixed in Phase 0A:
+// fk_processes_parent on the postgres processes table is non-deferrable,
+// so a child INSERT before its parent's INSERT in the same transaction
+// fails with a referential-integrity error. Plan validation
+// (checkProcessHierarchy) is already bundle-aware and resolves
+// in-bundle parent references regardless of document order, so the
+// fix is purely at the apply-ordering layer.
+func orderProcessCreatesByParent(entries []ApplyPlanEntry) []ApplyPlanEntry {
+	return orderCreatesByParent(entries, func(e ApplyPlanEntry) string {
+		procDoc, ok := e.Doc.Doc.(types.ProcessDocument)
+		if !ok {
+			return ""
+		}
+		return procDoc.Spec.ParentProcessID
+	})
 }
 
 // applySurface creates a governed surface version in review state.

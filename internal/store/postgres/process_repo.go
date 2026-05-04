@@ -42,6 +42,7 @@ func (r *ProcessRepo) GetByID(ctx context.Context, id string) (*process.Process,
 		SELECT process_id, name, status, origin, managed, COALESCE(replaces, ''),
 		       COALESCE(description, ''), COALESCE(owner_id, ''),
 		       business_service_id,
+		       COALESCE(parent_process_id, ''),
 		       created_at, updated_at
 		FROM processes
 		WHERE process_id = $1`
@@ -56,6 +57,7 @@ func (r *ProcessRepo) GetByID(ctx context.Context, id string) (*process.Process,
 		&p.Description,
 		&p.Owner,
 		&p.BusinessServiceID,
+		&p.ParentProcessID,
 		&p.CreatedAt,
 		&p.UpdatedAt,
 	)
@@ -121,6 +123,7 @@ func (r *ProcessRepo) List(ctx context.Context) ([]*process.Process, error) {
 		SELECT process_id, name, status, origin, managed, COALESCE(replaces, ''),
 		       COALESCE(description, ''), COALESCE(owner_id, ''),
 		       business_service_id,
+		       COALESCE(parent_process_id, ''),
 		       created_at, updated_at
 		FROM processes
 		ORDER BY process_id`
@@ -132,7 +135,7 @@ func (r *ProcessRepo) List(ctx context.Context) ([]*process.Process, error) {
 	out := make([]*process.Process, 0)
 	for rows.Next() {
 		var p process.Process
-		if err := rows.Scan(&p.ID, &p.Name, &p.Status, &p.Origin, &p.Managed, &p.Replaces, &p.Description, &p.Owner, &p.BusinessServiceID, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Status, &p.Origin, &p.Managed, &p.Replaces, &p.Description, &p.Owner, &p.BusinessServiceID, &p.ParentProcessID, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, &p)
@@ -152,6 +155,7 @@ func (r *ProcessRepo) ListByBusinessService(ctx context.Context, businessService
 		SELECT process_id, name, status, origin, managed, COALESCE(replaces, ''),
 		       COALESCE(description, ''), COALESCE(owner_id, ''),
 		       business_service_id,
+		       COALESCE(parent_process_id, ''),
 		       created_at, updated_at
 		FROM processes
 		WHERE business_service_id = $1
@@ -164,7 +168,7 @@ func (r *ProcessRepo) ListByBusinessService(ctx context.Context, businessService
 	out := make([]*process.Process, 0)
 	for rows.Next() {
 		var p process.Process
-		if err := rows.Scan(&p.ID, &p.Name, &p.Status, &p.Origin, &p.Managed, &p.Replaces, &p.Description, &p.Owner, &p.BusinessServiceID, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Status, &p.Origin, &p.Managed, &p.Replaces, &p.Description, &p.Owner, &p.BusinessServiceID, &p.ParentProcessID, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, &p)

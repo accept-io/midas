@@ -41,6 +41,14 @@ CREATE TABLE IF NOT EXISTS capabilities (
 
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL,
+    -- Phase 0B-1: created_by carries the apply actor (e.g.
+    -- "operator:alice", "service-account:ci-bot"). Nullable so historical
+    -- rows applied before this column existed read back as the empty
+    -- string via the COALESCE in the SELECT path; new rows always carry
+    -- the populated actor. Kept untyped (TEXT, no FK) — actor identity
+    -- may reference principals outside the capabilities table's
+    -- referential graph.
+    created_by TEXT,
 
     CONSTRAINT fk_capabilities_parent
         FOREIGN KEY (parent_capability_id) REFERENCES capabilities(capability_id),
@@ -1470,6 +1478,12 @@ ALTER TABLE platform_sessions ADD COLUMN IF NOT EXISTS principal_json TEXT;
 ALTER TABLE capabilities     ADD COLUMN IF NOT EXISTS origin   TEXT    NOT NULL DEFAULT 'manual';
 ALTER TABLE capabilities     ADD COLUMN IF NOT EXISTS managed  BOOLEAN NOT NULL DEFAULT TRUE;
 ALTER TABLE capabilities     ADD COLUMN IF NOT EXISTS replaces TEXT;
+
+-- Phase 0B-1: created_by on capabilities. Nullable so existing rows
+-- created before this column existed read back as NULL (the SELECT
+-- path COALESCEs to the empty string). New rows applied via the
+-- control-plane carry the actor.
+ALTER TABLE capabilities     ADD COLUMN IF NOT EXISTS created_by TEXT;
 ALTER TABLE processes        ADD COLUMN IF NOT EXISTS origin   TEXT    NOT NULL DEFAULT 'manual';
 ALTER TABLE processes        ADD COLUMN IF NOT EXISTS managed  BOOLEAN NOT NULL DEFAULT TRUE;
 ALTER TABLE processes        ADD COLUMN IF NOT EXISTS replaces TEXT;

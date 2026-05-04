@@ -20,6 +20,7 @@ import (
 	"github.com/accept-io/midas/internal/controlplane/apply"
 	"github.com/accept-io/midas/internal/controlplane/parser"
 	"github.com/accept-io/midas/internal/controlplane/types"
+	"github.com/accept-io/midas/internal/process"
 	"github.com/accept-io/midas/internal/store/memory"
 )
 
@@ -670,6 +671,251 @@ func TestApplyCapability_NoParents_PreservesDocumentOrder(t *testing.T) {
 	assertNoErrors(t, result)
 
 	want := []string{"cap-stable-z", "cap-stable-m", "cap-stable-a"}
+	if len(createOrder) != len(want) {
+		t.Fatalf("expected %d creates, got %d: %v", len(want), len(createOrder), createOrder)
+	}
+	for i, id := range want {
+		if createOrder[i] != id {
+			t.Errorf("createOrder[%d] = %q, want %q", i, createOrder[i], id)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Phase 0A-bis — Process apply ordering: parent-before-child within tier
+// ---------------------------------------------------------------------------
+//
+// Mirror of the Phase 0A Capability ordering fix. parent_process_id has
+// the same non-deferrable FK posture in postgres
+// (fk_processes_parent), and checkProcessHierarchy is bundle-aware in
+// the same way as checkCapabilityHierarchy — so a bundle that declares
+// a child Process before its parent in document order would pass plan
+// but fail at apply time against postgres without the intra-tier
+// topological sort.
+
+// recordingProcessRepo wraps a ProcessRepository and records the IDs
+// passed to Create in the order they were called. Mirrors
+// recordingCapabilityRepo.
+type recordingProcessRepo struct {
+	inner process.ProcessRepository
+	order *[]string
+}
+
+func (r *recordingProcessRepo) Exists(ctx context.Context, id string) (bool, error) {
+	return r.inner.Exists(ctx, id)
+}
+func (r *recordingProcessRepo) GetByID(ctx context.Context, id string) (*process.Process, error) {
+	return r.inner.GetByID(ctx, id)
+}
+func (r *recordingProcessRepo) Create(ctx context.Context, p *process.Process) error {
+	*r.order = append(*r.order, p.ID)
+	return r.inner.Create(ctx, p)
+}
+
+// TestApplyProcess_ChildBeforeParentInBundle_OrdersParentFirst is the
+// primary regression anchor for the Phase 0A-bis fix. The bundle
+// declares the child Process before its parent in document order;
+// apply must reorder so that the parent's Create call hits the repo
+// first. Both processes share the same business service so the
+// existing same-business-service hierarchy invariant is satisfied.
+func TestApplyProcess_ChildBeforeParentInBundle_OrdersParentFirst(t *testing.T) {
+	repos := memory.NewRepositories()
+	var createOrder []string
+	recRepo := &recordingProcessRepo{inner: repos.Processes, order: &createOrder}
+
+	svc := apply.NewServiceWithRepos(apply.RepositorySet{
+		BusinessServices: repos.BusinessServices,
+		Processes:        recRepo,
+	})
+	ctx := context.Background()
+
+	// Seed the BS first via a separate apply (the BS tier always runs
+	// before the Process tier; the recording wrapper only watches the
+	// Process repo).
+	seedSvc := apply.NewServiceWithRepos(apply.RepositorySet{
+		BusinessServices: repos.BusinessServices,
+		Processes:        repos.Processes,
+	})
+	seedResult := seedSvc.Apply(ctx, []parser.ParsedDocument{hierBSDoc("bs-proc-cbp")}, "test")
+	assertNoErrors(t, seedResult)
+
+	// Bundle declares CHILD before PARENT in document order.
+	bundle := []parser.ParsedDocument{
+		hierProcDoc("proc-child-cbp", "bs-proc-cbp", "proc-parent-cbp"),
+		hierProcDoc("proc-parent-cbp", "bs-proc-cbp", ""),
+	}
+	result := svc.Apply(ctx, bundle, "test")
+
+	assertNoErrors(t, result)
+	if result.CreatedCount() != 2 {
+		t.Fatalf("expected 2 created, got %d", result.CreatedCount())
+	}
+
+	parent, _ := repos.Processes.GetByID(ctx, "proc-parent-cbp")
+	if parent == nil {
+		t.Fatal("parent process not persisted")
+	}
+	child, _ := repos.Processes.GetByID(ctx, "proc-child-cbp")
+	if child == nil {
+		t.Fatal("child process not persisted")
+	}
+	if child.ParentProcessID != "proc-parent-cbp" {
+		t.Errorf("child.ParentProcessID = %q, want %q", child.ParentProcessID, "proc-parent-cbp")
+	}
+
+	// Apply ordering contract: parent's Create must have been called
+	// before child's Create. This is the property the Postgres
+	// fk_processes_parent enforces at INSERT time.
+	parentIdx := indexInOrder(createOrder, "proc-parent-cbp")
+	childIdx := indexInOrder(createOrder, "proc-child-cbp")
+	if parentIdx < 0 || childIdx < 0 {
+		t.Fatalf("expected both creates recorded, got order=%v", createOrder)
+	}
+	if parentIdx >= childIdx {
+		t.Errorf("parent must be created before child (FK ordering); got parent=%d child=%d order=%v",
+			parentIdx, childIdx, createOrder)
+	}
+}
+
+// TestApplyProcess_GrandchildBeforeParentChain_OrdersTopologically
+// covers the multi-level case for Process: bundle declares grandchild
+// first, child second, root last. The topological sort must produce
+// root → child → grandchild Create order regardless of document
+// order.
+func TestApplyProcess_GrandchildBeforeParentChain_OrdersTopologically(t *testing.T) {
+	repos := memory.NewRepositories()
+	var createOrder []string
+	recRepo := &recordingProcessRepo{inner: repos.Processes, order: &createOrder}
+
+	svc := apply.NewServiceWithRepos(apply.RepositorySet{
+		BusinessServices: repos.BusinessServices,
+		Processes:        recRepo,
+	})
+	ctx := context.Background()
+
+	// Seed the BS.
+	seedSvc := apply.NewServiceWithRepos(apply.RepositorySet{
+		BusinessServices: repos.BusinessServices,
+		Processes:        repos.Processes,
+	})
+	seedResult := seedSvc.Apply(ctx, []parser.ParsedDocument{hierBSDoc("bs-proc-gbp")}, "test")
+	assertNoErrors(t, seedResult)
+
+	// Bundle declares grandchild → child → root in REVERSE order.
+	bundle := []parser.ParsedDocument{
+		hierProcDoc("proc-grand-gbp", "bs-proc-gbp", "proc-mid-gbp"),
+		hierProcDoc("proc-mid-gbp", "bs-proc-gbp", "proc-root-gbp"),
+		hierProcDoc("proc-root-gbp", "bs-proc-gbp", ""),
+	}
+	result := svc.Apply(ctx, bundle, "test")
+
+	assertNoErrors(t, result)
+	if result.CreatedCount() != 3 {
+		t.Fatalf("expected 3 created, got %d", result.CreatedCount())
+	}
+
+	root, _ := repos.Processes.GetByID(ctx, "proc-root-gbp")
+	mid, _ := repos.Processes.GetByID(ctx, "proc-mid-gbp")
+	grand, _ := repos.Processes.GetByID(ctx, "proc-grand-gbp")
+	if root == nil || mid == nil || grand == nil {
+		t.Fatalf("expected all 3 persisted; root=%v mid=%v grand=%v", root, mid, grand)
+	}
+	if mid.ParentProcessID != "proc-root-gbp" {
+		t.Errorf("mid parent = %q, want proc-root-gbp", mid.ParentProcessID)
+	}
+	if grand.ParentProcessID != "proc-mid-gbp" {
+		t.Errorf("grand parent = %q, want proc-mid-gbp", grand.ParentProcessID)
+	}
+
+	// Topological order: root before mid before grand.
+	rootIdx := indexInOrder(createOrder, "proc-root-gbp")
+	midIdx := indexInOrder(createOrder, "proc-mid-gbp")
+	grandIdx := indexInOrder(createOrder, "proc-grand-gbp")
+	if rootIdx < 0 || midIdx < 0 || grandIdx < 0 {
+		t.Fatalf("expected all three creates recorded, got order=%v", createOrder)
+	}
+	if !(rootIdx < midIdx && midIdx < grandIdx) {
+		t.Errorf("expected root < mid < grand in create order; got root=%d mid=%d grand=%d order=%v",
+			rootIdx, midIdx, grandIdx, createOrder)
+	}
+}
+
+// TestApplyProcess_ParentInStore_NoOrderingConstraint verifies that a
+// child Process whose parent already exists in the store imposes no
+// in-bundle ordering constraint. Multiple unrelated children may be
+// declared in any document order.
+func TestApplyProcess_ParentInStore_NoOrderingConstraint(t *testing.T) {
+	repos := memory.NewRepositories()
+	ctx := context.Background()
+
+	// Seed the BS and the parent process.
+	seedSvc := apply.NewServiceWithRepos(apply.RepositorySet{
+		BusinessServices: repos.BusinessServices,
+		Processes:        repos.Processes,
+	})
+	seedResult := seedSvc.Apply(ctx, []parser.ParsedDocument{
+		hierBSDoc("bs-proc-store"),
+		hierProcDoc("proc-store-parent", "bs-proc-store", ""),
+	}, "test")
+	assertNoErrors(t, seedResult)
+
+	// Now record the second apply.
+	var createOrder []string
+	recRepo := &recordingProcessRepo{inner: repos.Processes, order: &createOrder}
+	svc := apply.NewServiceWithRepos(apply.RepositorySet{
+		BusinessServices: repos.BusinessServices,
+		Processes:        recRepo,
+	})
+
+	// Bundle of three sibling children, all with the in-store parent.
+	// No ordering constraint between siblings → they should be applied
+	// in document order.
+	bundle := []parser.ParsedDocument{
+		hierProcDoc("proc-store-child-a", "bs-proc-store", "proc-store-parent"),
+		hierProcDoc("proc-store-child-b", "bs-proc-store", "proc-store-parent"),
+		hierProcDoc("proc-store-child-c", "bs-proc-store", "proc-store-parent"),
+	}
+	result := svc.Apply(ctx, bundle, "test")
+	assertNoErrors(t, result)
+	if result.CreatedCount() != 3 {
+		t.Fatalf("expected 3 created, got %d", result.CreatedCount())
+	}
+
+	want := []string{"proc-store-child-a", "proc-store-child-b", "proc-store-child-c"}
+	if len(createOrder) != 3 {
+		t.Fatalf("expected 3 creates, got %d: %v", len(createOrder), createOrder)
+	}
+	for i, id := range want {
+		if createOrder[i] != id {
+			t.Errorf("createOrder[%d] = %q, want %q (full order=%v)", i, createOrder[i], id, createOrder)
+		}
+	}
+}
+
+// TestApplyProcess_NoParents_PreservesDocumentOrder verifies the
+// stable-sort property for Process: when no Process declares a parent,
+// the apply order matches the input document order exactly.
+func TestApplyProcess_NoParents_PreservesDocumentOrder(t *testing.T) {
+	repos := memory.NewRepositories()
+	var createOrder []string
+	recRepo := &recordingProcessRepo{inner: repos.Processes, order: &createOrder}
+
+	svc := apply.NewServiceWithRepos(apply.RepositorySet{
+		BusinessServices: repos.BusinessServices,
+		Processes:        recRepo,
+	})
+	ctx := context.Background()
+
+	bundle := []parser.ParsedDocument{
+		hierBSDoc("bs-proc-stable"),
+		hierProcDoc("proc-stable-z", "bs-proc-stable", ""),
+		hierProcDoc("proc-stable-m", "bs-proc-stable", ""),
+		hierProcDoc("proc-stable-a", "bs-proc-stable", ""),
+	}
+	result := svc.Apply(ctx, bundle, "test")
+	assertNoErrors(t, result)
+
+	want := []string{"proc-stable-z", "proc-stable-m", "proc-stable-a"}
 	if len(createOrder) != len(want) {
 		t.Fatalf("expected %d creates, got %d: %v", len(want), len(createOrder), createOrder)
 	}

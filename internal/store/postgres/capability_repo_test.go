@@ -196,3 +196,174 @@ func TestCapabilityRepo_List(t *testing.T) {
 		t.Errorf("List: want %d test capabilities in result, got %d", len(ids), found)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// created_by round-trip (Phase 0B-1)
+//
+// Capability.CreatedBy is populated by the control-plane mapper from
+// the apply actor (e.g. "operator:alice"). Prior to Phase 0B-1 the
+// Postgres schema had no created_by column on capabilities, so the
+// field was silently dropped on every persist — memory mode preserved
+// it (struct-by-value), Postgres mode lost it. The fix added the
+// column + the round-trip in Create / GetByID / List. These tests pin
+// the round-trip and the empty-actor edge case so a regression in any
+// of the three touched code paths surfaces here.
+// ---------------------------------------------------------------------------
+
+// TestCapabilityRepo_CreateGetByID_PreservesCreatedBy confirms that a
+// Capability persisted with a non-empty CreatedBy reads back via
+// GetByID with the same value.
+func TestCapabilityRepo_CreateGetByID_PreservesCreatedBy(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	repo, err := NewCapabilityRepo(db)
+	if err != nil {
+		t.Fatalf("NewCapabilityRepo: %v", err)
+	}
+
+	const id = "tst-cap-cb-getbyid"
+	const actor = "operator:cap-cb-test"
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	c := &capability.Capability{
+		ID:        id,
+		Name:      "Capability with creator",
+		Status:    "active",
+		Origin:    "manual",
+		Managed:   true,
+		CreatedAt: now,
+		UpdatedAt: now,
+		CreatedBy: actor,
+	}
+	if err := repo.Create(ctx, c); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, `DELETE FROM capabilities WHERE capability_id = $1`, id)
+	})
+
+	got, err := repo.GetByID(ctx, id)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected capability, got nil")
+	}
+	if got.CreatedBy != actor {
+		t.Errorf("CreatedBy: want %q, got %q", actor, got.CreatedBy)
+	}
+}
+
+// TestCapabilityRepo_List_PreservesCreatedBy confirms that
+// CreatedBy survives the List() read path (separate SELECT/Scan call
+// site from GetByID).
+func TestCapabilityRepo_List_PreservesCreatedBy(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	repo, err := NewCapabilityRepo(db)
+	if err != nil {
+		t.Fatalf("NewCapabilityRepo: %v", err)
+	}
+
+	const id = "tst-cap-cb-list"
+	const actor = "operator:cap-cb-list-test"
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	c := &capability.Capability{
+		ID:        id,
+		Name:      "Capability with creator (list)",
+		Status:    "active",
+		Origin:    "manual",
+		Managed:   true,
+		CreatedAt: now,
+		UpdatedAt: now,
+		CreatedBy: actor,
+	}
+	if err := repo.Create(ctx, c); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, `DELETE FROM capabilities WHERE capability_id = $1`, id)
+	})
+
+	all, err := repo.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var foundActor string
+	var foundRow bool
+	for _, c := range all {
+		if c.ID == id {
+			foundRow = true
+			foundActor = c.CreatedBy
+			break
+		}
+	}
+	if !foundRow {
+		t.Fatalf("seeded capability %q not found in List() result", id)
+	}
+	if foundActor != actor {
+		t.Errorf("CreatedBy via List: want %q, got %q", actor, foundActor)
+	}
+}
+
+// TestCapabilityRepo_Create_AllowsEmptyCreatedBy confirms that
+// persisting a Capability with an empty CreatedBy is accepted (the
+// column is nullable; the repo writes NULL via sql.NullString) and
+// that GetByID round-trips it as the empty string. This is the
+// fixture / hand-rolled-INSERT path; the control-plane apply path
+// always populates CreatedBy with an actor.
+func TestCapabilityRepo_Create_AllowsEmptyCreatedBy(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	repo, err := NewCapabilityRepo(db)
+	if err != nil {
+		t.Fatalf("NewCapabilityRepo: %v", err)
+	}
+
+	const id = "tst-cap-cb-empty"
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	c := &capability.Capability{
+		ID:        id,
+		Name:      "Capability without creator",
+		Status:    "active",
+		Origin:    "manual",
+		Managed:   true,
+		CreatedAt: now,
+		UpdatedAt: now,
+		// CreatedBy intentionally empty.
+	}
+	if err := repo.Create(ctx, c); err != nil {
+		t.Fatalf("Create with empty CreatedBy: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, `DELETE FROM capabilities WHERE capability_id = $1`, id)
+	})
+
+	got, err := repo.GetByID(ctx, id)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected capability, got nil")
+	}
+	if got.CreatedBy != "" {
+		t.Errorf("CreatedBy: want empty string, got %q", got.CreatedBy)
+	}
+
+	// Defence-in-depth: verify the column actually wrote NULL (rather
+	// than the empty string) so the storage shape is honest about
+	// "no actor" vs "actor was the empty string".
+	var raw *string
+	if err := db.QueryRowContext(ctx,
+		`SELECT created_by FROM capabilities WHERE capability_id = $1`, id).Scan(&raw); err != nil {
+		t.Fatalf("direct SQL probe: %v", err)
+	}
+	if raw != nil {
+		t.Errorf("created_by column: want NULL when CreatedBy is empty, got %q", *raw)
+	}
+}

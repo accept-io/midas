@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
@@ -323,5 +324,217 @@ func TestProcessRepo_ListByBusinessService(t *testing.T) {
 	}
 	if len(none) != 0 {
 		t.Errorf("want 0 processes, got %d", len(none))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// parent_process_id round-trip
+//
+// Regression suite for the bug where the postgres ProcessRepo's SELECT
+// statements (GetByID / List / ListByBusinessService) omitted
+// parent_process_id from the column list and the Scan target. Create
+// persisted parent_process_id correctly, but every read returned an
+// empty ParentProcessID — silently masking process hierarchy from any
+// caller that consumed the repo's read API. The Phase 0A-test
+// integration test detected the divergence and worked around it by
+// querying the column directly via SQL; this suite replaces the
+// workaround with proper round-trip coverage at the repo boundary.
+//
+// Mirrors the existing TestCapabilityList_ReturnsParentCapabilityID /
+// TestCapabilityGetByID_PreservesParentCapabilityID coverage that
+// guards the same shape of bug for the Capability repo.
+// ---------------------------------------------------------------------------
+
+// seedProcessHierarchy is a small helper that creates a Business
+// Service plus a (parent, child) Process pair with parent_process_id
+// set on the child. Returns the (parent, child) Process IDs after the
+// test cleanup is registered.
+func seedProcessHierarchy(t *testing.T, db interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}, repo *ProcessRepo, svcID, parentID, childID string) (now time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO business_services (business_service_id, name, service_type, status, origin, managed, created_at, updated_at)
+		 VALUES ($1, $1, 'internal', 'active', 'manual', true, NOW(), NOW())
+		 ON CONFLICT (business_service_id) DO NOTHING`,
+		svcID,
+	); err != nil {
+		t.Fatalf("seed BS: %v", err)
+	}
+
+	now = time.Now().UTC().Truncate(time.Millisecond)
+	parent := &process.Process{
+		ID:                parentID,
+		Name:              parentID,
+		BusinessServiceID: svcID,
+		Status:            "active",
+		Origin:            "manual",
+		Managed:           true,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+	if err := repo.Create(ctx, parent); err != nil {
+		t.Fatalf("Create parent: %v", err)
+	}
+	child := &process.Process{
+		ID:                childID,
+		Name:              childID,
+		BusinessServiceID: svcID,
+		ParentProcessID:   parentID,
+		Status:            "active",
+		Origin:            "manual",
+		Managed:           true,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+	if err := repo.Create(ctx, child); err != nil {
+		t.Fatalf("Create child: %v", err)
+	}
+	return now
+}
+
+// TestProcessRepo_GetByID_PreservesParentProcessID confirms the
+// SELECT/Scan pair includes parent_process_id and that a process
+// created with a parent reads back with ParentProcessID intact.
+func TestProcessRepo_GetByID_PreservesParentProcessID(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	const svcID = "tst-svc-proc-ppi-getbyid"
+	const parentID = "tst-proc-ppi-getbyid-parent"
+	const childID = "tst-proc-ppi-getbyid-child"
+
+	repo, err := NewProcessRepo(db)
+	if err != nil {
+		t.Fatalf("NewProcessRepo: %v", err)
+	}
+
+	t.Cleanup(func() {
+		// Children before parents (FK), then BS.
+		_, _ = db.ExecContext(ctx, `DELETE FROM processes WHERE process_id = $1`, childID)
+		_, _ = db.ExecContext(ctx, `DELETE FROM processes WHERE process_id = $1`, parentID)
+		_, _ = db.ExecContext(ctx, `DELETE FROM business_services WHERE business_service_id = $1`, svcID)
+	})
+
+	seedProcessHierarchy(t, db, repo, svcID, parentID, childID)
+
+	got, err := repo.GetByID(ctx, childID)
+	if err != nil {
+		t.Fatalf("GetByID child: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected child process, got nil")
+	}
+	if got.ParentProcessID != parentID {
+		t.Errorf("ParentProcessID: want %q, got %q", parentID, got.ParentProcessID)
+	}
+
+	// Parent's own ParentProcessID should be empty (no grandparent).
+	gotParent, err := repo.GetByID(ctx, parentID)
+	if err != nil {
+		t.Fatalf("GetByID parent: %v", err)
+	}
+	if gotParent == nil {
+		t.Fatal("expected parent process, got nil")
+	}
+	if gotParent.ParentProcessID != "" {
+		t.Errorf("root.ParentProcessID: want empty, got %q", gotParent.ParentProcessID)
+	}
+}
+
+// TestProcessRepo_List_PreservesParentProcessID confirms List's
+// SELECT/Scan pair includes parent_process_id.
+func TestProcessRepo_List_PreservesParentProcessID(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	const svcID = "tst-svc-proc-ppi-list"
+	const parentID = "tst-proc-ppi-list-parent"
+	const childID = "tst-proc-ppi-list-child"
+
+	repo, err := NewProcessRepo(db)
+	if err != nil {
+		t.Fatalf("NewProcessRepo: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, `DELETE FROM processes WHERE process_id = $1`, childID)
+		_, _ = db.ExecContext(ctx, `DELETE FROM processes WHERE process_id = $1`, parentID)
+		_, _ = db.ExecContext(ctx, `DELETE FROM business_services WHERE business_service_id = $1`, svcID)
+	})
+
+	seedProcessHierarchy(t, db, repo, svcID, parentID, childID)
+
+	all, err := repo.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+
+	// Find the seeded child by ID; List returns every process in the
+	// table, so other tests' rows may share the result set.
+	var foundChild bool
+	for _, p := range all {
+		if p.ID != childID {
+			continue
+		}
+		foundChild = true
+		if p.ParentProcessID != parentID {
+			t.Errorf("child.ParentProcessID via List: want %q, got %q", parentID, p.ParentProcessID)
+		}
+	}
+	if !foundChild {
+		t.Fatalf("seeded child %q not found in List() result", childID)
+	}
+}
+
+// TestProcessRepo_ListByBusinessService_PreservesParentProcessID
+// confirms ListByBusinessService's SELECT/Scan pair includes
+// parent_process_id.
+func TestProcessRepo_ListByBusinessService_PreservesParentProcessID(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	const svcID = "tst-svc-proc-ppi-lbs"
+	const parentID = "tst-proc-ppi-lbs-parent"
+	const childID = "tst-proc-ppi-lbs-child"
+
+	repo, err := NewProcessRepo(db)
+	if err != nil {
+		t.Fatalf("NewProcessRepo: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, `DELETE FROM processes WHERE process_id = $1`, childID)
+		_, _ = db.ExecContext(ctx, `DELETE FROM processes WHERE process_id = $1`, parentID)
+		_, _ = db.ExecContext(ctx, `DELETE FROM business_services WHERE business_service_id = $1`, svcID)
+	})
+
+	seedProcessHierarchy(t, db, repo, svcID, parentID, childID)
+
+	got, err := repo.ListByBusinessService(ctx, svcID)
+	if err != nil {
+		t.Fatalf("ListByBusinessService: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 processes for %q, got %d", svcID, len(got))
+	}
+
+	var foundChild bool
+	for _, p := range got {
+		if p.ID != childID {
+			continue
+		}
+		foundChild = true
+		if p.ParentProcessID != parentID {
+			t.Errorf("child.ParentProcessID via ListByBusinessService: want %q, got %q",
+				parentID, p.ParentProcessID)
+		}
+	}
+	if !foundChild {
+		t.Fatalf("seeded child %q not found in ListByBusinessService(%q) result", childID, svcID)
 	}
 }
