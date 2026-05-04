@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"sort"
 
 	"github.com/accept-io/midas/internal/capability"
 )
@@ -38,6 +39,29 @@ func (r *CapabilityRepo) List(_ context.Context) ([]*capability.Capability, erro
 	for _, c := range r.items {
 		out = append(out, c)
 	}
+	return out, nil
+}
+
+// ListByParentCapabilityID returns the direct children of parentID.
+// Empty parentID short-circuits to an empty slice — a deliberate
+// rejection of "all roots" semantics for this method (a future
+// ListRoots can take that role if it ever becomes useful).
+//
+// Postgres iteration over the underlying map is non-deterministic, so
+// results are sorted by ID ascending to match the postgres
+// implementation's `ORDER BY capability_id` and to give a stable list
+// to consumers (e.g. a future Explorer hierarchy view).
+func (r *CapabilityRepo) ListByParentCapabilityID(_ context.Context, parentID string) ([]*capability.Capability, error) {
+	out := make([]*capability.Capability, 0)
+	if parentID == "" {
+		return out, nil
+	}
+	for _, c := range r.items {
+		if c.ParentCapabilityID == parentID {
+			out = append(out, c)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
 }
 

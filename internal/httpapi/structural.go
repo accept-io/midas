@@ -3,18 +3,26 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"sort"
 
 	"github.com/accept-io/midas/internal/aisystem"
 	"github.com/accept-io/midas/internal/businessservice"
+	"github.com/accept-io/midas/internal/businessservicecapability"
 	"github.com/accept-io/midas/internal/capability"
 	"github.com/accept-io/midas/internal/process"
 	"github.com/accept-io/midas/internal/surface"
 )
 
 // CapabilityReader is the capability repository subset needed for structural reads.
+//
+// ListByParentCapabilityID was added in Phase 2 to back the children
+// read endpoint (Phase 3A). The method returns direct children only —
+// the handler must walk the hierarchy itself if recursive descendants
+// are ever needed (currently they are not).
 type CapabilityReader interface {
 	GetByID(ctx context.Context, id string) (*capability.Capability, error)
 	List(ctx context.Context) ([]*capability.Capability, error)
+	ListByParentCapabilityID(ctx context.Context, parentID string) ([]*capability.Capability, error)
 }
 
 // ProcessReader is the process repository subset needed for structural reads.
@@ -41,6 +49,15 @@ type BusinessServiceRelationshipReader interface {
 	ListByTargetBusinessService(ctx context.Context, targetID string) ([]*businessservice.BusinessServiceRelationship, error)
 }
 
+// BusinessServiceCapabilityReader is the BSC repository subset needed
+// to back the reverse-direction Capability → BusinessService lookup
+// (Phase 3B): GET /v1/capabilities/{id}/businessservices. Only the
+// capability-side List method is exposed here; the BS-side List is
+// already covered by governancemap's reader, which is wired separately.
+type BusinessServiceCapabilityReader interface {
+	ListByCapabilityID(ctx context.Context, capabilityID string) ([]*businessservicecapability.BusinessServiceCapability, error)
+}
+
 // AISystemReader is the AISystem repository subset needed for the
 // /v1/aisystems read endpoints (Epic 1, PR 2).
 type AISystemReader interface {
@@ -56,9 +73,14 @@ type AISystemVersionReader interface {
 }
 
 // AISystemBindingReader is the binding repository subset needed for the
-// /v1/aisystems/{id}/bindings read endpoint.
+// /v1/aisystems/{id}/bindings read endpoint and the Capability-scoped
+// AI bindings endpoint added in Phase 3C
+// (GET /v1/capabilities/{id}/ai-bindings). The same domain reader
+// (aisystem.BindingRepository) backs both methods, so wiring is shared
+// — no separate option/predicate needed.
 type AISystemBindingReader interface {
 	ListByAISystem(ctx context.Context, aiSystemID string) ([]*aisystem.AISystemBinding, error)
+	ListByCapability(ctx context.Context, capabilityID string) ([]*aisystem.AISystemBinding, error)
 }
 
 // StructuralService satisfies the structuralService interface by delegating
@@ -69,6 +91,7 @@ type StructuralService struct {
 	surfaces         ProcessSurfaceReader
 	businessServices BusinessServiceReader
 	bsRelationships  BusinessServiceRelationshipReader
+	bsCapabilities   BusinessServiceCapabilityReader
 	aiSystems        AISystemReader
 	aiVersions       AISystemVersionReader
 	aiBindings       AISystemBindingReader
@@ -99,6 +122,16 @@ func (s *StructuralService) WithBusinessServiceRelationships(r BusinessServiceRe
 	return s
 }
 
+// WithBusinessServiceCapabilities attaches a BSC reader, enabling the
+// /v1/capabilities/{id}/businessservices endpoint (Phase 3B). The
+// reader supplies BSC junction rows for a given capability; the
+// service then dereferences each row's BusinessServiceID via the
+// already-wired BS reader. Returns the receiver for chaining.
+func (s *StructuralService) WithBusinessServiceCapabilities(r BusinessServiceCapabilityReader) *StructuralService {
+	s.bsCapabilities = r
+	return s
+}
+
 // WithAISystems attaches the three AI System Registration readers
 // (Epic 1, PR 2), enabling the /v1/aisystems/* endpoints. Any of the
 // three readers may be nil — the handler returns 501 when the relevant
@@ -118,6 +151,34 @@ func (s *StructuralService) GetCapability(ctx context.Context, id string) (*capa
 // ListCapabilities returns all capabilities.
 func (s *StructuralService) ListCapabilities(ctx context.Context) ([]*capability.Capability, error) {
 	return s.capabilities.List(ctx)
+}
+
+// ListChildCapabilities returns the direct children of parentID.
+//
+// Returns:
+//   - (nil, false, nil) when the parent does not exist (handler maps to 404)
+//   - (children, true, nil) on success — children may be empty (handler maps to 200 with [])
+//   - (_, _, err) on repository error
+//
+// Recursive descendants are NOT returned; the underlying repository
+// method is intentionally direct-children-only. A future caller that
+// needs the full subtree must walk the hierarchy itself.
+func (s *StructuralService) ListChildCapabilities(ctx context.Context, parentID string) ([]*capability.Capability, bool, error) {
+	parent, err := s.capabilities.GetByID(ctx, parentID)
+	if err != nil {
+		return nil, false, err
+	}
+	if parent == nil {
+		return nil, false, nil
+	}
+	children, err := s.capabilities.ListByParentCapabilityID(ctx, parentID)
+	if err != nil {
+		return nil, true, err
+	}
+	if children == nil {
+		children = []*capability.Capability{}
+	}
+	return children, true, nil
 }
 
 // GetProcess returns a process by ID. Returns nil, nil when not found.
@@ -221,6 +282,74 @@ func (s *StructuralService) ListRelationshipsForBusinessService(ctx context.Cont
 // (200 with empty arrays).
 func (s *StructuralService) HasBusinessServiceRelationships() bool {
 	return s.bsRelationships != nil
+}
+
+// HasBusinessServiceCapabilities reports whether both the BSC reader
+// AND the BS reader have been wired. The
+// /v1/capabilities/{id}/businessservices handler needs both to
+// resolve BSC junction rows into full BusinessService responses;
+// either one missing produces a 501.
+func (s *StructuralService) HasBusinessServiceCapabilities() bool {
+	return s.bsCapabilities != nil && s.businessServices != nil
+}
+
+// ListBusinessServicesByCapability returns the Business Services
+// linked to the given capability via the business_service_capabilities
+// junction (Phase 3B).
+//
+// Returns:
+//   - (nil, false, nil) when the capability does not exist (handler maps to 404)
+//   - (services, true, nil) on success — services may be empty when the
+//     capability has no BSC links (handler maps to 200 with [])
+//   - (_, _, err) on repository error
+//
+// Dangling-link convention (matches governancemap.read_service): a BSC
+// row whose business_service_id resolves to nil (deleted BS) is
+// silently skipped rather than surfaced as a 500. The control plane's
+// BSC junction has FK=ON DELETE RESTRICT in postgres so this can only
+// occur in a degraded path; skipping protects the read API's shape.
+//
+// Results are ordered by business_service_id ascending (delivered by
+// the underlying BSCRepo iteration plus a final sort here for
+// determinism — memory iteration is non-deterministic). The caller's
+// chosen sort key matches what GET /v1/businessservices already uses.
+func (s *StructuralService) ListBusinessServicesByCapability(ctx context.Context, capabilityID string) ([]*businessservice.BusinessService, bool, error) {
+	if s.capabilities == nil {
+		return nil, false, nil
+	}
+	cap, err := s.capabilities.GetByID(ctx, capabilityID)
+	if err != nil {
+		return nil, false, err
+	}
+	if cap == nil {
+		return nil, false, nil
+	}
+	if s.bsCapabilities == nil || s.businessServices == nil {
+		// Both readers must be wired to dereference junction rows; the
+		// handler enforces 501 via HasBusinessServiceCapabilities
+		// before reaching this method, but be defensive.
+		return []*businessservice.BusinessService{}, true, nil
+	}
+	links, err := s.bsCapabilities.ListByCapabilityID(ctx, capabilityID)
+	if err != nil {
+		return nil, true, err
+	}
+	out := make([]*businessservice.BusinessService, 0, len(links))
+	for _, link := range links {
+		bs, err := s.businessServices.GetByID(ctx, link.BusinessServiceID)
+		if err != nil {
+			return nil, true, err
+		}
+		if bs == nil {
+			// Dangling BSC row — see method doc. Skip silently.
+			continue
+		}
+		out = append(out, bs)
+	}
+	// Stable, ID-ascending order so the wire shape is deterministic
+	// across memory and postgres backends.
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, true, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -371,6 +500,60 @@ func (s *StructuralService) ListAISystemBindings(ctx context.Context, aiSystemID
 	if bindings == nil {
 		bindings = []*aisystem.AISystemBinding{}
 	}
+	return bindings, true, nil
+}
+
+// ListAIBindingsByCapability returns the AI System bindings whose
+// capability_id matches the given capability (Phase 3C — backs
+// GET /v1/capabilities/{id}/ai-bindings).
+//
+// Returns:
+//   - (nil, false, nil) when the capability does not exist (handler maps to 404)
+//   - (bindings, true, nil) on success — bindings may be empty
+//     (handler maps to 200 with [])
+//   - (_, _, err) on repository error
+//
+// Direct Capability scope only: results are exactly the bindings that
+// the BindingRepository.ListByCapability returns. Bindings that
+// reference the capability indirectly (via a Process whose BS the
+// capability is linked to, etc.) are NOT returned — that broader
+// inference is out of scope for this read endpoint.
+//
+// Bindings carry their own multi-context fields (BS, Cap, Process,
+// Surface IDs) so there is no dereferencing to do; the dangling-link
+// concern that applies to BSC junctions does not apply here.
+//
+// Ordering: the underlying repository decides. Memory's
+// ListByCapability iterates the map (non-deterministic in Go); the
+// service sorts by binding ID ascending here so the wire shape is
+// deterministic across memory and postgres backends, matching the
+// posture established for ListBusinessServicesByCapability (Phase 3B).
+func (s *StructuralService) ListAIBindingsByCapability(ctx context.Context, capabilityID string) ([]*aisystem.AISystemBinding, bool, error) {
+	if s.capabilities == nil {
+		return nil, false, nil
+	}
+	cap, err := s.capabilities.GetByID(ctx, capabilityID)
+	if err != nil {
+		return nil, false, err
+	}
+	if cap == nil {
+		return nil, false, nil
+	}
+	if s.aiBindings == nil {
+		// Reader not configured → handler converts to 501 via
+		// HasAISystemBindings before reaching this method, but be
+		// defensive: return an empty slice rather than nil so the
+		// envelope shape is honest if the handler is bypassed.
+		return []*aisystem.AISystemBinding{}, true, nil
+	}
+	bindings, err := s.aiBindings.ListByCapability(ctx, capabilityID)
+	if err != nil {
+		return nil, true, err
+	}
+	if bindings == nil {
+		bindings = []*aisystem.AISystemBinding{}
+	}
+	sort.Slice(bindings, func(i, j int) bool { return bindings[i].ID < bindings[j].ID })
 	return bindings, true, nil
 }
 

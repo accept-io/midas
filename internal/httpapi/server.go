@@ -122,6 +122,33 @@ type grantLifecycleService interface {
 type structuralService interface {
 	GetCapability(ctx context.Context, id string) (*capability.Capability, error)
 	ListCapabilities(ctx context.Context) ([]*capability.Capability, error)
+	// ListChildCapabilities returns the direct children of parentID.
+	// Returns (nil, false, nil) when the parent does not exist
+	// (handler maps to 404); (children, true, nil) including empty
+	// slice when found. Recursive descendants are NOT returned.
+	// (Phase 3A — backs GET /v1/capabilities/{id}/children.)
+	ListChildCapabilities(ctx context.Context, parentID string) (children []*capability.Capability, found bool, err error)
+	// HasBusinessServiceCapabilities reports whether the BSC + BS
+	// readers needed to back the businessservices sub-endpoint are
+	// both wired. Used by the handler to distinguish 501 (not
+	// configured) from 200-with-empty (configured but no links).
+	// (Phase 3B.)
+	HasBusinessServiceCapabilities() bool
+	// ListBusinessServicesByCapability returns the Business Services
+	// linked to capabilityID via the business_service_capabilities
+	// junction. (nil, false, nil) when the capability does not exist
+	// (handler maps to 404); (services, true, nil) including empty
+	// slice when found. Dangling BSC rows (BS deleted) are skipped.
+	// (Phase 3B — backs GET /v1/capabilities/{id}/businessservices.)
+	ListBusinessServicesByCapability(ctx context.Context, capabilityID string) (services []*businessservice.BusinessService, found bool, err error)
+	// ListAIBindingsByCapability returns the AI System bindings whose
+	// capability_id matches the given capability. (nil, false, nil)
+	// when the capability does not exist (handler maps to 404);
+	// (bindings, true, nil) including empty slice when found. Direct
+	// Capability scope only — no inference through BS/Process/Surface.
+	// (Phase 3C — backs GET /v1/capabilities/{id}/ai-bindings.) Wiring
+	// is shared with the existing AI bindings reader (HasAISystemBindings).
+	ListAIBindingsByCapability(ctx context.Context, capabilityID string) (bindings []*aisystem.AISystemBinding, found bool, err error)
 	GetProcess(ctx context.Context, id string) (*process.Process, error)
 	ListProcesses(ctx context.Context) ([]*process.Process, error)
 	// ListSurfacesByProcess returns (nil, false, nil) when process not found,
@@ -353,6 +380,46 @@ type capabilityResponse struct {
 	UpdatedAt          time.Time            `json:"updated_at"`
 	CreatedBy          string               `json:"created_by,omitempty"`
 	ExternalRef        *externalRefResponse `json:"external_ref"`
+}
+
+// capabilityChildrenResponse is the wire format for the children
+// endpoint (Phase 3A): GET /v1/capabilities/{id}/children.
+//
+// Envelope shape: { capability_id, capabilities[] }. Both keys are
+// always present. capabilities is always a non-nil array (empty []
+// when the parent has no children) so callers can iterate without a
+// nil check. Mirrors the businessServiceRelationshipsResponse posture
+// for sub-resource lists.
+type capabilityChildrenResponse struct {
+	CapabilityID string               `json:"capability_id"`
+	Capabilities []capabilityResponse `json:"capabilities"`
+}
+
+// capabilityBusinessServicesResponse is the wire format for the
+// reverse Capability → BusinessService lookup (Phase 3B):
+// GET /v1/capabilities/{id}/businessservices.
+//
+// Envelope shape: { capability_id, business_services[] }. Both keys
+// are always present. business_services is always a non-nil array
+// (empty [] when the capability has no BSC links). Same envelope
+// posture as capabilityChildrenResponse.
+type capabilityBusinessServicesResponse struct {
+	CapabilityID     string                    `json:"capability_id"`
+	BusinessServices []businessServiceResponse `json:"business_services"`
+}
+
+// capabilityAIBindingsResponse is the wire format for the
+// Capability-scoped AI bindings endpoint (Phase 3C):
+// GET /v1/capabilities/{id}/ai-bindings.
+//
+// Envelope shape: { capability_id, bindings[] }. Both keys are always
+// present. bindings is always a non-nil array (empty [] when the
+// capability has no direct Capability-scoped bindings). Each binding
+// uses the existing aiSystemBindingResponse shape, so the wire
+// representation matches GET /v1/aisystems/{id}/bindings exactly.
+type capabilityAIBindingsResponse struct {
+	CapabilityID string                    `json:"capability_id"`
+	Bindings     []aiSystemBindingResponse `json:"bindings"`
 }
 
 // processResponse is the wire format for GET /v1/processes/{id} and list items.
@@ -3169,34 +3236,51 @@ func (s *Server) handleListCapabilities(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, out)
 }
 
-// handleGetCapability serves GET /v1/capabilities/{id}.
+// handleGetCapability serves GET /v1/capabilities/{id} and the
+// sub-path GET /v1/capabilities/{id}/children (Phase 3A).
 //
-// In the v1 service-led model this handler no longer dispatches a sub-path:
-// the previous /v1/capabilities/{id}/processes endpoint has been removed
-// because Process is no longer owned by Capability. The route registration
-// for the prefix /v1/capabilities/ is preserved so that {id} requests
-// continue to resolve via the net/http subtree match.
+// Sub-path routing mirrors handleGetBusinessService: the path tail
+// after /{id}/ is matched against a small, explicit set of supported
+// sub-paths. Unknown sub-paths return 404. The previous
+// /v1/capabilities/{id}/processes endpoint was removed in the v1
+// service-led model because Process is no longer owned by Capability.
 func (s *Server) handleGetCapability(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		methodNotAllowed(w, http.MethodGet)
 		return
 	}
 	const prefix = "/v1/capabilities/"
-	rest := strings.TrimPrefix(r.URL.Path, prefix)
-	rest = strings.Trim(rest, "/")
-	if rest == "" {
+	tail := strings.TrimPrefix(r.URL.Path, prefix)
+	tail = strings.Trim(tail, "/")
+	if tail == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing capability id"})
 		return
 	}
-	if strings.Contains(rest, "/") {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
-		return
-	}
-	id := strings.TrimSpace(rest)
+
+	parts := strings.Split(tail, "/")
+	id := strings.TrimSpace(parts[0])
 	if !isValidIdentifier(id) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid capability id"})
 		return
 	}
+
+	if len(parts) == 2 && parts[1] == "children" {
+		s.handleGetCapabilityChildren(w, r, id)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "businessservices" {
+		s.handleGetCapabilityBusinessServices(w, r, id)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "ai-bindings" {
+		s.handleGetCapabilityAIBindings(w, r, id)
+		return
+	}
+	if len(parts) > 1 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+
 	if s.structural == nil {
 		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "structural service not configured"})
 		return
@@ -3211,6 +3295,148 @@ func (s *Server) handleGetCapability(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, toCapabilityResponse(cap))
+}
+
+// handleGetCapabilityChildren serves GET /v1/capabilities/{id}/children
+// (Phase 3A).
+//
+// Response shape: { capability_id, capabilities[] }. The capabilities
+// array is always present (never null); empty when the parent has no
+// children.
+//
+// Status codes:
+//   - 200 OK on success (including empty children array)
+//   - 404 Not Found when the parent capability_id does not exist
+//   - 500 Internal Server Error on repository failure
+//   - 501 Not Implemented when the structural service is not configured
+//
+// Auth is enforced by the same middleware as the parent endpoint
+// (requireAuth + requireRole at route registration time).
+func (s *Server) handleGetCapabilityChildren(w http.ResponseWriter, r *http.Request, parentID string) {
+	if s.structural == nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "structural service not configured"})
+		return
+	}
+	children, found, err := s.structural.ListChildCapabilities(r.Context(), parentID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "capability not found"})
+		return
+	}
+	out := capabilityChildrenResponse{
+		CapabilityID: parentID,
+		Capabilities: make([]capabilityResponse, 0, len(children)),
+	}
+	for _, c := range children {
+		out.Capabilities = append(out.Capabilities, toCapabilityResponse(c))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleGetCapabilityBusinessServices serves
+// GET /v1/capabilities/{id}/businessservices (Phase 3B).
+//
+// Response shape: { capability_id, business_services[] }. The
+// business_services array is always present (never null); empty
+// when the capability has no BSC links. Each business service
+// renders via the existing toBusinessServiceResponse mapper, so the
+// shape matches GET /v1/businessservices/{id}.
+//
+// Status codes:
+//   - 200 OK on success (including empty business_services array)
+//   - 404 Not Found when the capability_id does not exist
+//   - 500 Internal Server Error on repository failure
+//   - 501 Not Implemented when the BSC reader OR the BS reader is
+//     not configured (the service needs both to dereference junction
+//     rows). Mirrors the BSR endpoint's 501 posture.
+//
+// Auth is enforced by the same middleware as the parent endpoint
+// (requireAuth + requireRole at route registration time).
+func (s *Server) handleGetCapabilityBusinessServices(w http.ResponseWriter, r *http.Request, capabilityID string) {
+	if s.structural == nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "structural service not configured"})
+		return
+	}
+	if !s.structural.HasBusinessServiceCapabilities() {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{
+			"error": "business service capabilities reader not configured",
+		})
+		return
+	}
+	services, found, err := s.structural.ListBusinessServicesByCapability(r.Context(), capabilityID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "capability not found"})
+		return
+	}
+	out := capabilityBusinessServicesResponse{
+		CapabilityID:     capabilityID,
+		BusinessServices: make([]businessServiceResponse, 0, len(services)),
+	}
+	for _, bs := range services {
+		out.BusinessServices = append(out.BusinessServices, toBusinessServiceResponse(bs))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleGetCapabilityAIBindings serves
+// GET /v1/capabilities/{id}/ai-bindings (Phase 3C).
+//
+// Response shape: { capability_id, bindings[] }. The bindings array
+// is always present (never null); empty when the capability has no
+// direct Capability-scoped bindings. Each binding renders via the
+// existing toAISystemBindingResponse mapper, so the shape matches
+// GET /v1/aisystems/{id}/bindings exactly.
+//
+// Direct Capability scope only: results are exactly the bindings
+// where binding.capability_id == path id. Bindings that reference
+// the capability indirectly (via a Process whose BS is BSC-linked,
+// etc.) are NOT inferred — that broader view is out of scope.
+//
+// Status codes:
+//   - 200 OK on success (including empty bindings array)
+//   - 404 Not Found when the capability_id does not exist
+//   - 500 Internal Server Error on repository failure
+//   - 501 Not Implemented when the AI binding reader is not configured
+//     (the same wiring as GET /v1/aisystems/{id}/bindings — both
+//     endpoints share the AISystemBindingReader configuration).
+//
+// Auth is enforced by the same middleware as the parent endpoint
+// (requireAuth + requireRole at route registration time).
+func (s *Server) handleGetCapabilityAIBindings(w http.ResponseWriter, r *http.Request, capabilityID string) {
+	if s.structural == nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "structural service not configured"})
+		return
+	}
+	if !s.structural.HasAISystemBindings() {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{
+			"error": "ai system binding reader not configured",
+		})
+		return
+	}
+	bindings, found, err := s.structural.ListAIBindingsByCapability(r.Context(), capabilityID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "capability not found"})
+		return
+	}
+	out := capabilityAIBindingsResponse{
+		CapabilityID: capabilityID,
+		Bindings:     make([]aiSystemBindingResponse, 0, len(bindings)),
+	}
+	for _, b := range bindings {
+		out.Bindings = append(out.Bindings, toAISystemBindingResponse(b))
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // handleListProcesses serves GET /v1/processes.

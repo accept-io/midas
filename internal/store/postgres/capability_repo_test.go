@@ -529,3 +529,331 @@ func TestCapabilityRepo_ExternalRef_RejectsInconsistent_ViaCheckConstraint(t *te
 		t.Errorf("Create with inconsistent ExternalRef: want ErrInconsistent, got %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// ListByParentCapabilityID (Phase 2)
+//
+// Direct-children lookup against postgres. Index-backed by
+// idx_capabilities_parent_capability_id (existing in schema.sql) —
+// no schema change required. Mirrors the memory-repo contract:
+// returns direct children only (no recursive descendants), ordered
+// by capability_id ascending, non-nil empty slice on no-match,
+// empty parentID short-circuits.
+// ---------------------------------------------------------------------------
+
+// seedCapPG inserts a capability with the given ID and parent. Mirrors
+// the memory repo's seedCap helper. Caller is responsible for cleanup.
+func seedCapPG(t *testing.T, repo *CapabilityRepo, id, parentID string) {
+	t.Helper()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	if err := repo.Create(context.Background(), &capability.Capability{
+		ID:                 id,
+		Name:               id,
+		Status:             "active",
+		Origin:             "manual",
+		Managed:            true,
+		ParentCapabilityID: parentID,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}); err != nil {
+		t.Fatalf("Create %s: %v", id, err)
+	}
+}
+
+func TestCapabilityRepo_ListByParentCapabilityID_Empty(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, `DELETE FROM capabilities WHERE capability_id = 'tst-cap-lbp-leaf'`)
+	})
+
+	repo, err := NewCapabilityRepo(db)
+	if err != nil {
+		t.Fatalf("NewCapabilityRepo: %v", err)
+	}
+
+	// Lookup against a non-existent parent — non-nil empty slice.
+	out, err := repo.ListByParentCapabilityID(ctx, "tst-cap-lbp-no-such-parent")
+	if err != nil {
+		t.Fatalf("ListByParentCapabilityID: %v", err)
+	}
+	if out == nil {
+		t.Fatal("expected non-nil empty slice, got nil")
+	}
+	if len(out) != 0 {
+		t.Errorf("expected 0 children for non-existent parent, got %d", len(out))
+	}
+
+	// Populated parent that has no children.
+	seedCapPG(t, repo, "tst-cap-lbp-leaf", "")
+	out2, err := repo.ListByParentCapabilityID(ctx, "tst-cap-lbp-leaf")
+	if err != nil {
+		t.Fatalf("ListByParentCapabilityID(leaf): %v", err)
+	}
+	if out2 == nil || len(out2) != 0 {
+		t.Errorf("want non-nil empty slice for leaf parent, got %v", out2)
+	}
+
+	// Empty parentID short-circuits.
+	out3, err := repo.ListByParentCapabilityID(ctx, "")
+	if err != nil {
+		t.Fatalf("ListByParentCapabilityID(\"\"): %v", err)
+	}
+	if out3 == nil || len(out3) != 0 {
+		t.Errorf("empty parentID must short-circuit to non-nil empty slice; got %v", out3)
+	}
+}
+
+func TestCapabilityRepo_ListByParentCapabilityID_FiltersByParent(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	ids := []string{
+		"tst-cap-lbp-fp-parent-a",
+		"tst-cap-lbp-fp-parent-b",
+		"tst-cap-lbp-fp-other-root",
+		"tst-cap-lbp-fp-a-child-1",
+		"tst-cap-lbp-fp-a-child-2",
+		"tst-cap-lbp-fp-b-child-1",
+	}
+	t.Cleanup(func() {
+		// Children before parents (FK order).
+		for _, id := range []string{
+			"tst-cap-lbp-fp-a-child-1", "tst-cap-lbp-fp-a-child-2", "tst-cap-lbp-fp-b-child-1",
+			"tst-cap-lbp-fp-parent-a", "tst-cap-lbp-fp-parent-b", "tst-cap-lbp-fp-other-root",
+		} {
+			_, _ = db.ExecContext(ctx, `DELETE FROM capabilities WHERE capability_id = $1`, id)
+		}
+	})
+
+	repo, err := NewCapabilityRepo(db)
+	if err != nil {
+		t.Fatalf("NewCapabilityRepo: %v", err)
+	}
+
+	seedCapPG(t, repo, ids[0], "")     // parent-a (root)
+	seedCapPG(t, repo, ids[1], "")     // parent-b (root)
+	seedCapPG(t, repo, ids[2], "")     // other-root (root)
+	seedCapPG(t, repo, ids[3], ids[0]) // a-child-1
+	seedCapPG(t, repo, ids[4], ids[0]) // a-child-2
+	seedCapPG(t, repo, ids[5], ids[1]) // b-child-1
+
+	got, err := repo.ListByParentCapabilityID(ctx, ids[0])
+	if err != nil {
+		t.Fatalf("ListByParentCapabilityID(parent-a): %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 children of parent-a, got %d", len(got))
+	}
+	for _, c := range got {
+		if c.ParentCapabilityID != ids[0] {
+			t.Errorf("filter leaked: %s has parent_capability_id=%q", c.ID, c.ParentCapabilityID)
+		}
+	}
+
+	gotB, err := repo.ListByParentCapabilityID(ctx, ids[1])
+	if err != nil {
+		t.Fatalf("ListByParentCapabilityID(parent-b): %v", err)
+	}
+	if len(gotB) != 1 || gotB[0].ID != ids[5] {
+		t.Errorf("want [%s] for parent-b, got %+v", ids[5], gotB)
+	}
+}
+
+func TestCapabilityRepo_ListByParentCapabilityID_DirectChildrenOnly(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	t.Cleanup(func() {
+		// Children before parents.
+		for _, id := range []string{"tst-cap-lbp-dco-leaf", "tst-cap-lbp-dco-mid", "tst-cap-lbp-dco-top"} {
+			_, _ = db.ExecContext(ctx, `DELETE FROM capabilities WHERE capability_id = $1`, id)
+		}
+	})
+
+	repo, err := NewCapabilityRepo(db)
+	if err != nil {
+		t.Fatalf("NewCapabilityRepo: %v", err)
+	}
+
+	seedCapPG(t, repo, "tst-cap-lbp-dco-top", "")
+	seedCapPG(t, repo, "tst-cap-lbp-dco-mid", "tst-cap-lbp-dco-top")
+	seedCapPG(t, repo, "tst-cap-lbp-dco-leaf", "tst-cap-lbp-dco-mid")
+
+	got, err := repo.ListByParentCapabilityID(ctx, "tst-cap-lbp-dco-top")
+	if err != nil {
+		t.Fatalf("ListByParentCapabilityID(top): %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "tst-cap-lbp-dco-mid" {
+		t.Fatalf("want only direct child mid, got %+v", got)
+	}
+	for _, c := range got {
+		if c.ID == "tst-cap-lbp-dco-leaf" {
+			t.Error("recursive descendant leaf must NOT be returned by ListByParentCapabilityID(top)")
+		}
+	}
+}
+
+func TestCapabilityRepo_ListByParentCapabilityID_OrdersByID(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	ids := []string{
+		"tst-cap-lbp-ord-parent",
+		"tst-cap-lbp-ord-z-child",
+		"tst-cap-lbp-ord-m-child",
+		"tst-cap-lbp-ord-a-child",
+	}
+	t.Cleanup(func() {
+		// Children first (FK).
+		for _, id := range []string{ids[1], ids[2], ids[3], ids[0]} {
+			_, _ = db.ExecContext(ctx, `DELETE FROM capabilities WHERE capability_id = $1`, id)
+		}
+	})
+
+	repo, err := NewCapabilityRepo(db)
+	if err != nil {
+		t.Fatalf("NewCapabilityRepo: %v", err)
+	}
+	seedCapPG(t, repo, ids[0], "")
+	// Insert deliberately out of lexical order.
+	seedCapPG(t, repo, ids[1], ids[0])
+	seedCapPG(t, repo, ids[2], ids[0])
+	seedCapPG(t, repo, ids[3], ids[0])
+
+	got, err := repo.ListByParentCapabilityID(ctx, ids[0])
+	if err != nil {
+		t.Fatalf("ListByParentCapabilityID: %v", err)
+	}
+	want := []string{ids[3], ids[2], ids[1]} // a-child, m-child, z-child
+	if len(got) != len(want) {
+		t.Fatalf("want %d children, got %d", len(want), len(got))
+	}
+	for i, id := range want {
+		if got[i].ID != id {
+			t.Errorf("got[%d] = %q, want %q (full=%v)", i, got[i].ID, id, got)
+		}
+	}
+}
+
+// TestCapabilityRepo_ListByParentCapabilityID_PreservesFullCapabilityFields
+// proves the new SELECT projects every wire-relevant field — including
+// the post-Phase-0B-1 created_by and the post-Phase-0B-2 ext_* columns
+// — and that the structured ExternalRef materialises correctly through
+// extRefScan.ToExternalRef. A regression that copy-pasted only the
+// pre-0B-1 column set would silently drop CreatedBy + ExternalRef from
+// the new method's results.
+func TestCapabilityRepo_ListByParentCapabilityID_PreservesFullCapabilityFields(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	const (
+		parentID = "tst-cap-lbp-full-parent"
+		childID  = "tst-cap-lbp-full-child"
+	)
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, `DELETE FROM capabilities WHERE capability_id = $1`, childID)
+		_, _ = db.ExecContext(ctx, `DELETE FROM capabilities WHERE capability_id = $1`, parentID)
+	})
+
+	repo, err := NewCapabilityRepo(db)
+	if err != nil {
+		t.Fatalf("NewCapabilityRepo: %v", err)
+	}
+
+	const replacedID = "tst-cap-lbp-full-replaced"
+	t.Cleanup(func() {
+		// fk_capabilities_replaces is enforced so we must delete the
+		// child BEFORE the row it replaces. The cleanup defined for
+		// parent/child above runs in registration order; this final
+		// cleanup runs first (LIFO), so the deletes here precede them.
+		_, _ = db.ExecContext(ctx, `DELETE FROM capabilities WHERE capability_id = $1`, replacedID)
+	})
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	// Parent must exist before the child's parent_capability_id FK is
+	// validated; the replaced row must exist before the child's
+	// replaces FK is validated. Seed both before the child INSERT.
+	if err := repo.Create(ctx, &capability.Capability{
+		ID: parentID, Name: parentID, Status: "active", Origin: "manual", Managed: true,
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("Create parent: %v", err)
+	}
+	if err := repo.Create(ctx, &capability.Capability{
+		ID: replacedID, Name: "replaced", Status: "deprecated",
+		Origin: "manual", Managed: true,
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("Create replaced: %v", err)
+	}
+
+	// Child carries the full field set. ExternalRef matches
+	// pgExtRefFixture so the shared assertExtRefRoundTrip helper can
+	// be reused here.
+	if err := repo.Create(ctx, &capability.Capability{
+		ID:                 childID,
+		Name:               "child name",
+		Description:        "child description",
+		Status:             "active",
+		Origin:             "manual",
+		Managed:            true,
+		Replaces:           replacedID,
+		Owner:              "team-platform",
+		ParentCapabilityID: parentID,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+		CreatedBy:          "operator:lbp-full",
+		ExternalRef:        pgExtRefFixture(),
+	}); err != nil {
+		t.Fatalf("Create child: %v", err)
+	}
+
+	got, err := repo.ListByParentCapabilityID(ctx, parentID)
+	if err != nil {
+		t.Fatalf("ListByParentCapabilityID: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want 1 child, got %d", len(got))
+	}
+	c := got[0]
+
+	// Field-by-field assertions for the full wire-relevant set.
+	if c.ID != childID {
+		t.Errorf("ID: want %q, got %q", childID, c.ID)
+	}
+	if c.Name != "child name" {
+		t.Errorf("Name: want %q, got %q", "child name", c.Name)
+	}
+	if c.Description != "child description" {
+		t.Errorf("Description: want %q, got %q", "child description", c.Description)
+	}
+	if c.Status != "active" {
+		t.Errorf("Status: want active, got %q", c.Status)
+	}
+	if c.Owner != "team-platform" {
+		t.Errorf("Owner: want team-platform, got %q", c.Owner)
+	}
+	if c.Origin != "manual" {
+		t.Errorf("Origin: want manual, got %q", c.Origin)
+	}
+	if !c.Managed {
+		t.Error("Managed: want true, got false")
+	}
+	if c.Replaces != replacedID {
+		t.Errorf("Replaces: want %q, got %q", replacedID, c.Replaces)
+	}
+	if c.ParentCapabilityID != parentID {
+		t.Errorf("ParentCapabilityID: want %q, got %q", parentID, c.ParentCapabilityID)
+	}
+	if c.CreatedBy != "operator:lbp-full" {
+		t.Errorf("CreatedBy: want operator:lbp-full, got %q", c.CreatedBy)
+	}
+	assertExtRefRoundTrip(t, c.ExternalRef)
+}

@@ -207,6 +207,7 @@ func main() {
 	structuralSvc := httpapi.NewStructuralService(repos.Capabilities, repos.Processes, repos.Surfaces).
 		WithBusinessServices(repos.BusinessServices).
 		WithBusinessServiceRelationships(repos.BusinessServiceRelationships).
+		WithBusinessServiceCapabilities(repos.BusinessServiceCapabilities).
 		WithAISystems(repos.AISystems, repos.AISystemVersions, repos.AISystemBindings)
 	explicitValidationSvc := httpapi.NewExplicitValidationService(repos.Processes, repos.Surfaces)
 

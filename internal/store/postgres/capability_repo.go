@@ -121,6 +121,56 @@ func (r *CapabilityRepo) Update(ctx context.Context, c *capability.Capability) e
 	return err
 }
 
+// ListByParentCapabilityID returns the direct children of parentID,
+// ordered by capability_id ascending. Recursive descendants are NOT
+// returned. Returns a non-nil empty slice when no children exist,
+// when the parent does not exist, or when parentID is empty.
+//
+// Empty parentID short-circuits to []. Without the short-circuit the
+// query would still return zero rows (root capabilities are stored
+// with parent_capability_id = NULL, not the empty string, so
+// `WHERE parent_capability_id = ”` matches nothing) — but
+// short-circuiting makes the intent explicit and avoids the round-trip.
+//
+// idx_capabilities_parent_capability_id (existing in schema.sql)
+// makes the WHERE clause index-backed.
+func (r *CapabilityRepo) ListByParentCapabilityID(ctx context.Context, parentID string) ([]*capability.Capability, error) {
+	out := make([]*capability.Capability, 0)
+	if parentID == "" {
+		return out, nil
+	}
+	const q = `
+		SELECT capability_id, name, status, origin, managed, COALESCE(replaces, ''),
+		       COALESCE(description, ''), COALESCE(owner_id, ''),
+		       COALESCE(parent_capability_id, ''),
+		       COALESCE(created_by, ''),
+		       created_at, updated_at,
+		       ` + extRefSelectColumns + `
+		FROM capabilities
+		WHERE parent_capability_id = $1
+		ORDER BY capability_id`
+	rows, err := r.db.QueryContext(ctx, q, parentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var c capability.Capability
+		var extScan extRefScan
+		dests := append([]any{
+			&c.ID, &c.Name, &c.Status, &c.Origin, &c.Managed, &c.Replaces,
+			&c.Description, &c.Owner, &c.ParentCapabilityID, &c.CreatedBy,
+			&c.CreatedAt, &c.UpdatedAt,
+		}, extScan.Dests()...)
+		if err := rows.Scan(dests...); err != nil {
+			return nil, err
+		}
+		c.ExternalRef = extScan.ToExternalRef()
+		out = append(out, &c)
+	}
+	return out, rows.Err()
+}
+
 // List returns all capabilities ordered by capability_id.
 func (r *CapabilityRepo) List(ctx context.Context) ([]*capability.Capability, error) {
 	const q = `

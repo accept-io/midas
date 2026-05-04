@@ -32,6 +32,14 @@ type CapabilityRepository interface {
 	Exists(ctx context.Context, id string) (bool, error)
 	GetByID(ctx context.Context, id string) (*Capability, error)
 	List(ctx context.Context) ([]*Capability, error)
+	// ListByParentCapabilityID returns the direct children of the given
+	// parent capability. Recursive descendants are NOT returned — a
+	// caller that wants the full subtree must walk the hierarchy
+	// itself. Returns an empty (non-nil) slice when no children exist
+	// or when parentID is empty; the method does not validate that the
+	// parent itself exists. Results are ordered by capability_id
+	// ascending so consumers see a deterministic list.
+	ListByParentCapabilityID(ctx context.Context, parentID string) ([]*Capability, error)
 	Create(ctx context.Context, c *Capability) error
 	Update(ctx context.Context, c *Capability) error
 }

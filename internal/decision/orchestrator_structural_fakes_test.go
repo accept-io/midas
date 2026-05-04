@@ -222,6 +222,23 @@ func (r *fakeCapabilityRepo) Update(_ context.Context, c *capability.Capability)
 	return nil
 }
 
+// ListByParentCapabilityID satisfies the Phase 2 interface addition.
+// Used here only to keep the fake compatible with the domain
+// CapabilityRepository interface; decision-package tests don't
+// exercise the hierarchy traversal directly.
+func (r *fakeCapabilityRepo) ListByParentCapabilityID(_ context.Context, parentID string) ([]*capability.Capability, error) {
+	out := make([]*capability.Capability, 0)
+	if parentID == "" {
+		return out, nil
+	}
+	for _, c := range r.caps {
+		if c.ParentCapabilityID == parentID {
+			out = append(out, c)
+		}
+	}
+	return out, nil
+}
+
 // seedStructuralChain seeds the four fake repos with a minimal valid
 // service-led chain so that an orchestrator test calling Evaluate gets
 // past the structural-resolution step. It matches the surface fixture

@@ -562,6 +562,76 @@ components:
             reference is recorded. See ExternalRef (Epic 1, PR 3 — Phase
             0B-2 extended the pattern to Capability).
 
+    CapabilityChildrenResponse:
+      type: object
+      description: >
+        Envelope for the children read endpoint
+        (GET /v1/capabilities/{id}/children, Phase 3A). Both keys are
+        always present. The `capabilities` array contains direct
+        children only — recursive descendants are NOT returned. The
+        array is empty when the parent has no children.
+      required:
+        - capability_id
+        - capabilities
+      properties:
+        capability_id:
+          type: string
+          description: The parent capability identifier.
+        capabilities:
+          type: array
+          items:
+            $ref: "#/components/schemas/Capability"
+
+    CapabilityBusinessServicesResponse:
+      type: object
+      description: >
+        Envelope for the reverse Capability → BusinessService lookup
+        (GET /v1/capabilities/{id}/businessservices, Phase 3B). Both
+        keys are always present. The `business_services` array
+        contains the Business Services directly linked to the
+        capability via the canonical BusinessServiceCapability M:N
+        junction. Business Services are NOT inferred through
+        Processes, Surfaces, or AI bindings. The array is empty when
+        the capability has no BSC links. Dangling links (BSC row
+        whose business_service_id resolves to a deleted BS) are
+        silently skipped, matching governancemap's read-service
+        convention.
+      required:
+        - capability_id
+        - business_services
+      properties:
+        capability_id:
+          type: string
+          description: The capability identifier.
+        business_services:
+          type: array
+          items:
+            $ref: "#/components/schemas/BusinessService"
+
+    CapabilityAIBindingsResponse:
+      type: object
+      description: >
+        Envelope for the Capability-scoped AI bindings endpoint
+        (GET /v1/capabilities/{id}/ai-bindings, Phase 3C). Both keys
+        are always present. The `bindings` array contains the AI
+        System bindings whose `capability_id` matches the path id —
+        direct Capability scope only. Bindings that reference the
+        capability indirectly (e.g. via a Process whose BS is
+        BSC-linked) are NOT inferred. Each binding uses the same
+        shape as items in AISystemBindingsResponse, so consumers can
+        share the AISystemBinding model across both endpoints.
+      required:
+        - capability_id
+        - bindings
+      properties:
+        capability_id:
+          type: string
+          description: The capability identifier.
+        bindings:
+          type: array
+          items:
+            $ref: "#/components/schemas/AISystemBinding"
+
     Process:
       type: object
       properties:
@@ -3167,6 +3237,170 @@ paths:
                 $ref: "#/components/schemas/Error"
               example:
                 error: capability not found
+
+  /v1/capabilities/{id}/children:
+    get:
+      operationId: listCapabilityChildren
+      summary: List direct child capabilities of a parent capability
+      description: >
+        Returns the direct children of the parent capability — i.e. the
+        capabilities whose `parent_capability_id` equals the path id.
+        Recursive descendants are NOT returned; a caller that wants the
+        full subtree walks the hierarchy itself. Requires platform.viewer
+        or above (Phase 3A).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Parent capability identifier.
+      responses:
+        "200":
+          description: >
+            Children list. Always returns the envelope shape with the
+            `capabilities` array present (empty when the parent has no
+            children).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CapabilityChildrenResponse"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Parent capability not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: capability not found
+        "501":
+          description: Structural service not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/capabilities/{id}/businessservices:
+    get:
+      operationId: listCapabilityBusinessServices
+      summary: List Business Services that use a capability
+      description: >
+        Returns the Business Services linked to the capability through
+        the canonical BusinessServiceCapability M:N junction. Direct
+        links only — Business Services are NOT inferred through
+        Processes, Surfaces, or AI bindings (Phase 3B). Requires
+        platform.viewer or above.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Capability identifier.
+      responses:
+        "200":
+          description: >
+            Linked Business Services. Always returns the envelope
+            shape with the `business_services` array present (empty
+            when the capability has no BSC links).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CapabilityBusinessServicesResponse"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Capability not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: capability not found
+        "501":
+          description: BSC or BS reader not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/capabilities/{id}/ai-bindings:
+    get:
+      operationId: listCapabilityAIBindings
+      summary: List AI System bindings scoped directly to a capability
+      description: >
+        Returns the AI System bindings whose `capability_id` matches
+        the path id. Direct Capability scope only — bindings that
+        reference the capability indirectly (e.g. via a Process whose
+        BS is BSC-linked to the capability) are NOT inferred. Each
+        binding renders with the same shape as the items in
+        GET /v1/aisystems/{id}/bindings (Phase 3C). Requires
+        platform.viewer or above.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Capability identifier.
+      responses:
+        "200":
+          description: >
+            Capability-scoped AI bindings. Always returns the envelope
+            shape with the `bindings` array present (empty when the
+            capability has no direct Capability-scoped bindings).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CapabilityAIBindingsResponse"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Capability not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: capability not found
+        "501":
+          description: AI System binding reader not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /v1/processes:
     get:
