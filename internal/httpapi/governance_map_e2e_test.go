@@ -275,10 +275,12 @@ func TestGovernanceMap_E2E_ApplyThenRead(t *testing.T) {
 		t.Errorf("authority_summary: %+v", resp.AuthoritySummary)
 	}
 
-	// Coverage — the surface has an AI binding attached.
+	// Coverage — the surface has a direct AI binding attached, no
+	// inherited bindings, no gap.
 	if resp.Coverage.SurfaceCount != 1 ||
-		resp.Coverage.SurfacesWithAIBinding != 1 ||
-		resp.Coverage.SurfacesWithoutAIBinding != 0 {
+		resp.Coverage.SurfacesWithDirectAIBinding != 1 ||
+		resp.Coverage.SurfacesWithScopedAIBinding != 0 ||
+		resp.Coverage.SurfacesWithNoAIBinding != 0 {
 		t.Errorf("coverage: %+v", resp.Coverage)
 	}
 }

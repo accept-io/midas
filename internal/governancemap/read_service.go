@@ -200,13 +200,25 @@ type ProcessNode struct {
 }
 
 // SurfaceNode is an active surface plus per-surface counts and AI
-// binding IDs. AIBindingIDs is non-nil (possibly empty).
+// binding IDs.
+//
+// AIBindingIDs holds binding IDs whose surface_id matches this surface
+// (direct surface-scope bindings). Non-nil; possibly empty.
+//
+// InheritedAIBindingIDs holds binding IDs whose process_id, capability_id,
+// or business_service_id covers this surface but whose surface_id is
+// empty (i.e. inherited / scoped bindings — not direct). Non-nil;
+// possibly empty. Disjoint from AIBindingIDs by construction: a binding
+// row is either direct (its surface_id is set and matches) or inherited
+// (its surface_id is empty and a higher-scope ID matches), never both
+// for the same (binding, surface) pair.
 type SurfaceNode struct {
-	Surface      *surface.DecisionSurface
-	AIBindingIDs []string
-	ProfileCount int
-	GrantCount   int
-	AgentCount   int
+	Surface               *surface.DecisionSurface
+	AIBindingIDs          []string
+	InheritedAIBindingIDs []string
+	ProfileCount          int
+	GrantCount            int
+	AgentCount            int
 }
 
 // AISystemNode wraps an included AI system. ActiveVersion may be nil
@@ -231,10 +243,25 @@ type AuthoritySummary struct {
 }
 
 // Coverage captures AI binding coverage across the root BS's surfaces.
+//
+// The three AI-binding counters are mutually exclusive at the surface
+// level (a surface counts in exactly one of direct / scoped / none):
+//
+//   - SurfacesWithDirectAIBinding — surfaces with at least one direct
+//     surface-scope binding (len(SurfaceNode.AIBindingIDs) > 0).
+//   - SurfacesWithScopedAIBinding — surfaces with NO direct binding but
+//     covered by an inherited binding from process / capability /
+//     business-service scope (len(InheritedAIBindingIDs) > 0 AND the
+//     direct count is zero).
+//   - SurfacesWithNoAIBinding    — surfaces with neither a direct nor
+//     an inherited binding at any scope.
+//
+// Direct + Scoped + None == SurfaceCount, by construction.
 type Coverage struct {
-	SurfaceCount             int
-	SurfacesWithAIBinding    int
-	SurfacesWithoutAIBinding int
+	SurfaceCount                int
+	SurfacesWithDirectAIBinding int
+	SurfacesWithScopedAIBinding int
+	SurfacesWithNoAIBinding     int
 }
 
 // RecentDecisions is reserved for PR 8. Always nil in PR 4.
@@ -388,13 +415,23 @@ func (s *ReadService) GetGovernanceMap(ctx context.Context, businessServiceID st
 		return nil, err
 	}
 
-	// 7. Coverage counts derive from the surfaces array.
+	// 7. Coverage counts derive from the surfaces array. Each surface
+	// is classified into exactly one of direct / scoped / none using
+	// the precedence rule: direct surface bindings take priority over
+	// any inherited (process / capability / BS-scope) bindings. The
+	// inherited classification reads SurfaceNode.InheritedAIBindingIDs,
+	// which is populated by loadAISystems above (zero today; populated
+	// when the inherited-binding propagator lands). The three counters
+	// are mutually exclusive and sum to SurfaceCount by construction.
 	out.Coverage.SurfaceCount = len(out.Surfaces)
 	for _, sn := range out.Surfaces {
-		if len(sn.AIBindingIDs) > 0 {
-			out.Coverage.SurfacesWithAIBinding++
-		} else {
-			out.Coverage.SurfacesWithoutAIBinding++
+		switch {
+		case len(sn.AIBindingIDs) > 0:
+			out.Coverage.SurfacesWithDirectAIBinding++
+		case len(sn.InheritedAIBindingIDs) > 0:
+			out.Coverage.SurfacesWithScopedAIBinding++
+		default:
+			out.Coverage.SurfacesWithNoAIBinding++
 		}
 	}
 	out.AuthoritySummary.SurfaceCount = len(out.Surfaces)
@@ -530,8 +567,9 @@ func (s *ReadService) buildSurfaceNode(
 	distinctActiveProfiles, distinctActiveGrants, distinctActiveAgents map[string]struct{},
 ) (*SurfaceNode, error) {
 	node := &SurfaceNode{
-		Surface:      surf,
-		AIBindingIDs: []string{},
+		Surface:               surf,
+		AIBindingIDs:          []string{},
+		InheritedAIBindingIDs: []string{},
 	}
 
 	// AI binding IDs for this surface.

@@ -1121,16 +1121,519 @@ components:
         AI binding coverage across the root business service's surfaces.
         Always present even for empty services. Derived from the
         surfaces array; never requires additional repository queries.
+
+        The three AI-binding counters are mutually exclusive at the
+        surface level (a surface counts in exactly one of direct,
+        scoped, or none) and sum to surface_count by construction.
       required:
         - surface_count
-        - surfaces_with_ai_binding
-        - surfaces_without_ai_binding
+        - surfaces_with_direct_ai_binding
+        - surfaces_with_scoped_ai_binding
+        - surfaces_with_no_ai_binding
       properties:
         surface_count:
           type: integer
-        surfaces_with_ai_binding:
+          description: Total number of active surfaces under the business service.
+        surfaces_with_direct_ai_binding:
           type: integer
-        surfaces_without_ai_binding:
+          description: >
+            Surfaces with at least one direct surface-scope AI binding
+            (a binding whose surface_id matches the surface).
+        surfaces_with_scoped_ai_binding:
+          type: integer
+          description: >
+            Surfaces with no direct binding but covered by an inherited
+            binding from process, capability, or business-service scope.
+        surfaces_with_no_ai_binding:
+          type: integer
+          description: >
+            Surfaces with neither a direct nor an inherited AI binding
+            at any scope.
+
+    # ------------------------------------------------------------------
+    # Authority Graph (Phase 1 — view=service only)
+    # ------------------------------------------------------------------
+    #
+    # Generic node/edge projection rooted at a single entity. Phase 1
+    # only emits the kinds documented under the `enum` lists below.
+    # Forbidden Phase 1 kinds (authority_profile, authority_grant,
+    # agent, ai_system_version, governed_by, has_grant, granted_to,
+    # has_active_version) are not in the enums and never appear on the
+    # wire.
+
+    AuthorityGraphNodeRef:
+      type: object
+      description: >
+        (kind, id) pair uniquely identifying a node within a single
+        projection.
+      required:
+        - kind
+        - id
+      properties:
+        kind:
+          type: string
+          description: Node kind (one of the AuthorityGraphNode kinds).
+        id:
+          type: string
+          description: Entity identifier within its kind.
+
+    AuthorityGraphNode:
+      type: object
+      description: >
+        One projected entity. Phase 1 fields (kind, id, label) are
+        always populated. Phase 2A adds typed per-kind data pointers
+        — exactly one is populated per node and matches the node's
+        kind. Unused pointers are omitted from the wire payload, so a
+        node carries only its kind's data block. There is no generic
+        attrs map.
+      required:
+        - kind
+        - id
+        - label
+      properties:
+        kind:
+          type: string
+          enum:
+            - business_service
+            - related_business_service
+            - capability
+            - process
+            - decision_surface
+            - ai_system
+            - ai_system_binding
+            - authority_summary
+            - coverage
+        id:
+          type: string
+          description: Entity identifier within its kind. Synthetic
+            kinds (authority_summary, coverage) use the form
+            `<kind>:<business_service_id>`.
+        label:
+          type: string
+          description: Human-readable display name.
+        # Typed per-kind data. Exactly one is populated per node and
+        # matches `kind`; the rest are omitted from the wire payload.
+        business_service:
+          $ref: "#/components/schemas/AuthorityGraphBusinessServiceData"
+        related_business_service:
+          $ref: "#/components/schemas/AuthorityGraphRelatedBusinessServiceData"
+        capability:
+          $ref: "#/components/schemas/AuthorityGraphCapabilityData"
+        process:
+          $ref: "#/components/schemas/AuthorityGraphProcessData"
+        decision_surface:
+          $ref: "#/components/schemas/AuthorityGraphDecisionSurfaceData"
+        ai_system:
+          $ref: "#/components/schemas/AuthorityGraphAISystemData"
+        ai_system_binding:
+          $ref: "#/components/schemas/AuthorityGraphAISystemBindingData"
+        authority_summary:
+          $ref: "#/components/schemas/AuthorityGraphAuthoritySummaryData"
+        coverage:
+          $ref: "#/components/schemas/AuthorityGraphCoverageData"
+
+    AuthorityGraphEdge:
+      type: object
+      description: >
+        One directed link in the projection. Direction is encoded as
+        (src → dst) per the kind contract documented on
+        /v1/authority-graph.
+      required:
+        - kind
+        - src
+        - dst
+      properties:
+        kind:
+          type: string
+          enum:
+            - relates_to
+            - has_capability
+            - has_process
+            - has_surface
+            - bound_to
+            - system_of
+            - summarises
+            - reports_coverage
+        src:
+          $ref: "#/components/schemas/AuthorityGraphNodeRef"
+        dst:
+          $ref: "#/components/schemas/AuthorityGraphNodeRef"
+        label:
+          type: string
+          description: >
+            Optional human-readable description. Omitted (rather than
+            empty) when not populated. Phase 1 emits no edge labels;
+            reserved for the inline edge explanation epic.
+
+    AuthorityGraphProjection:
+      type: object
+      description: >
+        Top-level response shape for GET /v1/authority-graph. Nodes are
+        sorted by (kind, id) ascending; edges are sorted by
+        (kind, src.kind, src.id, dst.kind, dst.id) ascending. Both
+        arrays are always present (never null); an empty depth=0
+        projection still carries the root in `nodes`.
+      required:
+        - root
+        - view
+        - depth
+        - nodes
+        - edges
+      properties:
+        root:
+          $ref: "#/components/schemas/AuthorityGraphNodeRef"
+        view:
+          type: string
+          enum: [service]
+          description: >
+            Perspective the projection was computed in. Phase 1 always
+            returns `service`; later phases will introduce additional
+            views.
+        depth:
+          type: integer
+          minimum: 0
+          maximum: 5
+          description: >
+            Effective depth (BFS hops from root, undirected) used to
+            compute the projection. Equals the requested depth when in
+            range, or the silent clamp value (5) when the request
+            exceeded the maximum.
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuthorityGraphNode"
+        edges:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuthorityGraphEdge"
+
+    # ------------------------------------------------------------------
+    # Authority Graph per-kind typed data (Phase 2A)
+    # ------------------------------------------------------------------
+    #
+    # Each schema carries the typed information for one node kind. The
+    # field set mirrors the equivalent governance-map DTO for the
+    # fields available on the underlying domain type. There is NO
+    # generic attrs map — every projected datum is a typed field.
+
+    AuthorityGraphExternalRefData:
+      type: object
+      description: >
+        External reference structure mirroring the governance-map
+        external_ref wire shape (httpapi.externalRefResponse). Same
+        field names and JSON tags so consumers can share parsing
+        logic across both endpoints.
+      required:
+        - source_system
+        - source_id
+      properties:
+        source_system:
+          type: string
+        source_id:
+          type: string
+        source_url:
+          type: string
+        source_version:
+          type: string
+        last_synced_at:
+          type: string
+          format: date-time
+          description: RFC3339 UTC timestamp.
+
+    AuthorityGraphBusinessServiceData:
+      type: object
+      description: >
+        Typed data for a node of kind `business_service`. Mirrors the
+        governance-map businessService DTO for the fields available on
+        the businessservice.BusinessService domain type.
+      required:
+        - id
+        - name
+        - status
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+        owner:
+          type: string
+        service_type:
+          type: string
+          description: >
+            Classification of the service (e.g. customer_facing,
+            internal, technical). Mirrors the governance-map
+            business_service.service_type field.
+        regulatory_scope:
+          type: string
+          description: >
+            Free-form regulatory-scope label. Mirrors the
+            governance-map business_service.regulatory_scope field.
+        external_ref:
+          $ref: "#/components/schemas/AuthorityGraphExternalRefData"
+
+    AuthorityGraphRelatedBusinessServiceData:
+      type: object
+      description: >
+        Typed data for a node of kind `related_business_service`.
+        Phase 2A projects only outgoing relationships, so `direction`
+        is always `outgoing`; the field is kept explicit for forward
+        compatibility with bidirectional projections.
+      required:
+        - id
+        - relationship_type
+        - direction
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        relationship_type:
+          type: string
+          description: e.g. depends_on, supports, part_of
+        direction:
+          type: string
+          enum: [outgoing]
+
+    AuthorityGraphCapabilityData:
+      type: object
+      description: Typed data for a node of kind `capability`.
+      required:
+        - id
+        - name
+        - status
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+        owner:
+          type: string
+        parent_capability_id:
+          type: string
+        external_ref:
+          $ref: "#/components/schemas/AuthorityGraphExternalRefData"
+
+    AuthorityGraphProcessData:
+      type: object
+      description: >
+        Typed data for a node of kind `process`. The process domain
+        type does not currently carry an external_ref field, so this
+        struct has no external_ref attribute. If the domain gains it,
+        the schema will be extended additively.
+      required:
+        - id
+        - name
+        - status
+        - business_service_id
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+        owner:
+          type: string
+        business_service_id:
+          type: string
+
+    AuthorityGraphDecisionSurfaceData:
+      type: object
+      description: >
+        Typed data for a node of kind `decision_surface`. The two
+        binding-id arrays are non-nil (possibly empty) and disjoint
+        per the governance-map contract.
+      required:
+        - id
+        - version
+        - name
+        - status
+        - process_id
+        - ai_binding_ids
+        - inherited_ai_binding_ids
+        - profile_count
+        - grant_count
+        - agent_count
+      properties:
+        id:
+          type: string
+        version:
+          type: integer
+        name:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+        process_id:
+          type: string
+        ai_binding_ids:
+          type: array
+          items:
+            type: string
+        inherited_ai_binding_ids:
+          type: array
+          items:
+            type: string
+        profile_count:
+          type: integer
+        grant_count:
+          type: integer
+        agent_count:
+          type: integer
+
+    AuthorityGraphAISystemData:
+      type: object
+      description: >
+        Typed data for a node of kind `ai_system`. `active_version`,
+        `active_version_label`, and `active_version_status` are
+        populated when the AI system has an active version on the
+        governance map, omitted otherwise.
+      required:
+        - id
+        - name
+        - status
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+        vendor:
+          type: string
+        system_type:
+          type: string
+        active_version:
+          type: integer
+          description: The integer version number of the active
+            AISystemVersion. Omitted when no active version exists.
+        active_version_label:
+          type: string
+          description: Optional release label associated with the
+            active version.
+        active_version_status:
+          type: string
+          description: Status of the active AISystemVersion (e.g.
+            draft, active, retired). Mirrors the governance-map
+            ai_systems[].active_version.status field.
+        external_ref:
+          $ref: "#/components/schemas/AuthorityGraphExternalRefData"
+
+    AuthorityGraphAISystemBindingData:
+      type: object
+      description: >
+        Typed data for a node of kind `ai_system_binding`. The four
+        scope-id pointers mirror the governance-map binding DTO;
+        `scope_kind` / `scope_id` / `scope_label` record the
+        most-specific scope (matching the bound_to edge target and
+        the node label format `binding: <ai_system> → <scope>`).
+      required:
+        - id
+        - ai_system_id
+        - business_service_id
+        - capability_id
+        - process_id
+        - surface_id
+        - scope_kind
+        - scope_id
+        - scope_label
+      properties:
+        id:
+          type: string
+        ai_system_id:
+          type: string
+        ai_system_name:
+          type: string
+        business_service_id:
+          type: string
+          nullable: true
+        capability_id:
+          type: string
+          nullable: true
+        process_id:
+          type: string
+          nullable: true
+        surface_id:
+          type: string
+          nullable: true
+        role:
+          type: string
+          description: >
+            Optional role marker on the binding (e.g. primary,
+            shadow). Mirrors the governance-map binding.role field.
+        description:
+          type: string
+          description: >
+            Optional free-form description. Mirrors the
+            governance-map binding.description field.
+        scope_kind:
+          type: string
+          description: One of decision_surface, process, capability,
+            business_service. Always set unless the binding has no
+            scope (which the schema's chk_ai_bindings_at_least_one_target
+            prevents at apply time).
+        scope_id:
+          type: string
+        scope_label:
+          type: string
+          description: Human-readable token in the form
+            `<short_kind>:<id>` (e.g. `surface:surf-x`). `unscoped`
+            when no scope is set.
+
+    AuthorityGraphAuthoritySummaryData:
+      type: object
+      description: >
+        Typed data for the synthetic `authority_summary` node.
+        Mirrors the governance-map AuthoritySummary DTO field-for-field
+        so the values are directly comparable across both endpoints.
+      required:
+        - surface_count
+        - active_profile_count
+        - active_grant_count
+        - active_agent_count
+      properties:
+        surface_count:
+          type: integer
+        active_profile_count:
+          type: integer
+        active_grant_count:
+          type: integer
+        active_agent_count:
+          type: integer
+
+    AuthorityGraphCoverageData:
+      type: object
+      description: >
+        Typed data for the synthetic `coverage` node. Mirrors the
+        governance-map Coverage DTO (Phase 9 explicit field naming);
+        the three AI-binding counters are mutually exclusive at the
+        surface level and sum to surface_count by construction.
+      required:
+        - surface_count
+        - surfaces_with_direct_ai_binding
+        - surfaces_with_scoped_ai_binding
+        - surfaces_with_no_ai_binding
+      properties:
+        surface_count:
+          type: integer
+        surfaces_with_direct_ai_binding:
+          type: integer
+        surfaces_with_scoped_ai_binding:
+          type: integer
+        surfaces_with_no_ai_binding:
           type: integer
 
     # ------------------------------------------------------------------
@@ -3975,6 +4478,108 @@ paths:
                 $ref: "#/components/schemas/Error"
         "501":
           description: AI system binding reader not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/authority-graph:
+    get:
+      operationId: getAuthorityGraph
+      summary: Project a depth-bounded authority graph rooted at an entity
+      description: >
+        Returns a generic node/edge projection of the authority graph
+        rooted at the entity identified by (view, id). Phase 1 supports
+        only view=service, which projects the same core information as
+        GET /v1/businessservices/{id}/governance-map but in a generic
+        nodes/edges shape suitable for traversal and depth-bounded
+        queries.
+
+        Phase 1 node kinds:
+        business_service, related_business_service, capability, process,
+        decision_surface, ai_system, ai_system_binding, authority_summary,
+        coverage.
+
+        Phase 1 edge kinds (all directed):
+        relates_to, has_capability, has_process, has_surface, bound_to
+        (ai_system_binding to most-specific scope), system_of
+        (ai_system_binding to ai_system), summarises, reports_coverage.
+
+        The `depth` parameter is interpreted as undirected BFS hops
+        from the root. Default is 3; values above 5 are silently
+        clamped to 5. Forbidden Phase 1 kinds (authority_profile,
+        authority_grant, agent, ai_system_version, governed_by,
+        has_grant, granted_to, has_active_version) never appear in
+        the response — they are reserved for later phases.
+      parameters:
+        - name: view
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [service]
+          description: >
+            Perspective. Phase 1 supports only `service`. Other views
+            (agent, ai_system, decision, risk) are reserved for Phase 2.
+        - name: id
+          in: query
+          required: true
+          schema:
+            type: string
+          description: >
+            Root entity id. For view=service this is the
+            business_service id.
+        - name: depth
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 5
+            default: 3
+          description: >
+            Maximum BFS hops from the root, treating edges as
+            undirected. Values above 5 are silently clamped to 5;
+            negative or non-numeric values return 400.
+      responses:
+        "200":
+          description: Authority graph projection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthorityGraphProjection"
+        "400":
+          description: Invalid view, id, or depth
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Root entity not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "405":
+          description: Wrong HTTP method (only GET allowed)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: Authority graph projection service not configured
           content:
             application/json:
               schema:

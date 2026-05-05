@@ -233,6 +233,7 @@ type Server struct {
 	adminAudit           adminaudit.Repository       // nil when admin-audit is not wired (Issue #41)
 	coverageRead         coverageReadService         // nil when coverage read service is not wired (Issue #56)
 	governanceMap        governanceMapReadService    // nil when governance map read service is not wired (Epic 1, PR 4)
+	authorityGraph       authorityGraphService       // nil when authority-graph projection service is not wired (Phase 1)
 }
 
 type approveSurfaceRequest struct {
@@ -1524,6 +1525,11 @@ func (s *Server) routes() {
 	// posture as the rest of the structural surface: viewer or above.
 	s.mux.HandleFunc("/v1/aisystems/", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleGetAISystemOrSubpath)))
 	s.mux.HandleFunc("/v1/aisystems", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleListAISystems)))
+
+	// Authority Graph projection (Phase 1). Generic node/edge graph
+	// rooted at a single business service (view=service); reuses the
+	// governance-map read service rather than re-querying repositories.
+	s.mux.HandleFunc("/v1/authority-graph", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleGetAuthorityGraph)))
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {

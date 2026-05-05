@@ -646,11 +646,18 @@ func TestGetGovernanceMap_Coverage_WithBindingVsWithout(t *testing.T) {
 	if got.Coverage.SurfaceCount != 2 {
 		t.Errorf("SurfaceCount: want 2, got %d", got.Coverage.SurfaceCount)
 	}
-	if got.Coverage.SurfacesWithAIBinding != 1 {
-		t.Errorf("SurfacesWithAIBinding: want 1, got %d", got.Coverage.SurfacesWithAIBinding)
+	// surf-with has a direct surface-scope binding → counts as direct.
+	if got.Coverage.SurfacesWithDirectAIBinding != 1 {
+		t.Errorf("SurfacesWithDirectAIBinding: want 1, got %d", got.Coverage.SurfacesWithDirectAIBinding)
 	}
-	if got.Coverage.SurfacesWithoutAIBinding != 1 {
-		t.Errorf("SurfacesWithoutAIBinding: want 1, got %d", got.Coverage.SurfacesWithoutAIBinding)
+	// Neither surface is reached by an inherited (process / capability /
+	// BS-scope) binding in this fixture, so the scoped counter is zero.
+	if got.Coverage.SurfacesWithScopedAIBinding != 0 {
+		t.Errorf("SurfacesWithScopedAIBinding: want 0, got %d", got.Coverage.SurfacesWithScopedAIBinding)
+	}
+	// surf-without has neither a direct nor an inherited binding.
+	if got.Coverage.SurfacesWithNoAIBinding != 1 {
+		t.Errorf("SurfacesWithNoAIBinding: want 1, got %d", got.Coverage.SurfacesWithNoAIBinding)
 	}
 }
 

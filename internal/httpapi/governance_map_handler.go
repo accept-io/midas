@@ -196,9 +196,10 @@ type governanceMapAuthoritySummary struct {
 }
 
 type governanceMapCoverage struct {
-	SurfaceCount             int `json:"surface_count"`
-	SurfacesWithAIBinding    int `json:"surfaces_with_ai_binding"`
-	SurfacesWithoutAIBinding int `json:"surfaces_without_ai_binding"`
+	SurfaceCount                int `json:"surface_count"`
+	SurfacesWithDirectAIBinding int `json:"surfaces_with_direct_ai_binding"`
+	SurfacesWithScopedAIBinding int `json:"surfaces_with_scoped_ai_binding"`
+	SurfacesWithNoAIBinding     int `json:"surfaces_with_no_ai_binding"`
 }
 
 // ---------------------------------------------------------------------------
@@ -223,9 +224,10 @@ func toGovernanceMapResponse(m *governancemap.Map) governanceMapResponse {
 			ActiveAgentCount:   m.AuthoritySummary.ActiveAgentCount,
 		},
 		Coverage: governanceMapCoverage{
-			SurfaceCount:             m.Coverage.SurfaceCount,
-			SurfacesWithAIBinding:    m.Coverage.SurfacesWithAIBinding,
-			SurfacesWithoutAIBinding: m.Coverage.SurfacesWithoutAIBinding,
+			SurfaceCount:                m.Coverage.SurfaceCount,
+			SurfacesWithDirectAIBinding: m.Coverage.SurfacesWithDirectAIBinding,
+			SurfacesWithScopedAIBinding: m.Coverage.SurfacesWithScopedAIBinding,
+			SurfacesWithNoAIBinding:     m.Coverage.SurfacesWithNoAIBinding,
 		},
 	}
 	for _, rn := range m.Relationships.Outgoing {

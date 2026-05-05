@@ -23,6 +23,7 @@ import (
 	"github.com/accept-io/midas/internal/controlplane/approval"
 	"github.com/accept-io/midas/internal/decision"
 	"github.com/accept-io/midas/internal/governancecoverage"
+	"github.com/accept-io/midas/internal/authoritygraph"
 	"github.com/accept-io/midas/internal/governancemap"
 	"github.com/accept-io/midas/internal/httpapi"
 	"github.com/accept-io/midas/internal/identity"
@@ -260,7 +261,7 @@ func main() {
 	// Epic 1, PR 4: wire the governance map read service that powers
 	// GET /v1/businessservices/{id}/governance-map. Composes existing
 	// repository readers via narrow per-entity interfaces.
-	srv.WithGovernanceMap(governancemap.NewReadService(
+	governanceMapReader := governancemap.NewReadService(
 		repos.BusinessServices,
 		repos.BusinessServiceRelationships,
 		repos.BusinessServiceCapabilities,
@@ -272,7 +273,13 @@ func main() {
 		repos.AISystems,
 		repos.AISystemVersions,
 		repos.AISystemBindings,
-	))
+	)
+	srv.WithGovernanceMap(governanceMapReader)
+	// Authority Graph (Phase 1): generic node/edge projection. Reuses
+	// the governance-map read service rather than re-querying
+	// repositories — adding a new graph view is a new compose function
+	// in the authoritygraph package, not new repository calls.
+	srv.WithAuthorityGraph(authoritygraph.NewService(governanceMapReader))
 	srv.WithStructuralMode(cfg.Structural.Mode)
 	// NOTE: WithAuthenticator is called below, AFTER the optional Local IAM
 	// service is constructed, so /v1/* can accept either a static bearer

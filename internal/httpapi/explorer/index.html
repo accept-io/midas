@@ -5282,8 +5282,8 @@
       { label: 'Active profiles', value: auth.active_profile_count || 0 },
       { label: 'Active grants',   value: auth.active_grant_count || 0 },
       { label: 'Active agents',   value: auth.active_agent_count || 0 },
-      { label: 'AI-bound',        value: cov.surfaces_with_ai_binding || 0 },
-      { label: 'Coverage gaps',   value: cov.surfaces_without_ai_binding || 0, gap: (cov.surfaces_without_ai_binding || 0) > 0 },
+      { label: 'AI-bound',        value: cov.surfaces_with_direct_ai_binding || 0 },
+      { label: 'Coverage gaps',   value: cov.surfaces_with_no_ai_binding || 0, gap: (cov.surfaces_with_no_ai_binding || 0) > 0 },
     ];
     const chipHtml = '<div class="services-record-chips">' +
       chips.map(c =>
@@ -6117,6 +6117,291 @@
     if (mapBtn)      mapBtn.addEventListener('click', () => setServicesMode('map'));
   })();
 
+  // Phase 2B Step 2: feature flag for the authority-graph migration.
+  // When true, refreshGovernanceMap() fetches /v1/authority-graph and
+  // adapts the response into the existing governance-map shape via
+  // mapAuthorityGraphToGovernanceMapShape() before passing it to the
+  // unchanged renderGovernanceMap(). When false, the legacy
+  // /v1/businessservices/{id}/governance-map fetch path is used. The
+  // flag is module-scoped so flipping it is a one-line rollback.
+  //
+  // Step 2 extends the Step 1 mapping (business_service, ai_systems,
+  // coverage, authority_summary) to cover the remaining gmap sections:
+  // relationships.outgoing, capabilities, processes, surfaces. After
+  // Step 2 the adapted shape is parity with the gmap wire shape for
+  // every layer the workbench renders, with two known limitations:
+  //
+  //   - relationships[].id: the projection does not surface the
+  //     underlying relationship-row id, only the target-BS node id.
+  //     The adapted `id` therefore equals `target_business_service_id`.
+  //     Renderer uses `id` only as a DOM-key prefix (`rel:<id>`); the
+  //     details-panel `edge_id` field will reflect the target id
+  //     rather than the row id.
+  //   - inherited_ai_binding_ids on surfaces is intentionally NOT
+  //     mapped — the gmap wire shape has no equivalent and the
+  //     workbench renderer does not consume it.
+  //
+  // Phase 2B Step 4 cutover: flag flipped to true after Phase 2B
+  // Step 3 closed the five backend typed-data gaps and the adapter
+  // gained matching pass-through for service_type, regulatory_scope,
+  // active_version_status, binding role, and binding description.
+  // The legacy /v1/businessservices/{id}/governance-map fetch path
+  // remains intact below; flip back to false to roll back without
+  // any other change.
+  const USE_AUTHORITY_GRAPH = true;
+  let _authorityGraphAdapterLogged = false;
+
+  // mapAuthorityGraphToGovernanceMapShape adapts an authority-graph
+  // projection (GET /v1/authority-graph?view=service&id=…) into the
+  // governance-map response shape that renderGovernanceMap() already
+  // understands. The transformation is pure (no DOM, no fetch), so
+  // it is safe to unit-test or replay.
+  //
+  // Field-mapping rules (Phase 2B Step 2 — strict gmap-wire parity):
+  //
+  //   business_service ← projection.nodes[kind=business_service].business_service
+  //     id, name, description, status, owner→owner_id, external_ref
+  //
+  //   relationships.outgoing[] ← projection.nodes[kind=related_business_service].related_business_service
+  //     id (= target_business_service_id; row id not on projection),
+  //     source_business_service_id (= projection.root.id),
+  //     target_business_service_id (= related node id),
+  //     other_name (← related_business_service.name),
+  //     relationship_type, description ('' — projection has none)
+  //   relationships.incoming[] is always empty (Phase 2A projects only
+  //     outgoing relationships; the existing gmap wire's incoming
+  //     array is currently unused by the workbench renderer anyway).
+  //
+  //   capabilities[] ← projection.nodes[kind=capability].capability
+  //     FLAT shape: id, name, description, status
+  //     (owner / parent_capability_id / external_ref are on the
+  //     projection but absent from the gmap wire — omitted here for
+  //     strict parity.)
+  //
+  //   processes[] ← projection.nodes[kind=process].process
+  //     FLAT shape: id, name, business_service_id, status
+  //     (description / owner are on the projection but absent from
+  //     the gmap wire — omitted here for strict parity.)
+  //
+  //   surfaces[] ← projection.nodes[kind=decision_surface].decision_surface
+  //     FLAT shape: id, version, name, process_id, status,
+  //     ai_bindings (renamed from ai_binding_ids), profile_count,
+  //     grant_count, agent_count
+  //
+  //   ai_systems ← projection.nodes[kind=ai_system].ai_system
+  //     id, name, vendor, system_type, status, external_ref
+  //     active_version is reshaped from the projection's flat
+  //     active_version (int) + active_version_label into the
+  //     gmap-shape object { version, release_label }.
+  //     bindings[] are collected from projection.nodes[kind=
+  //     ai_system_binding].ai_system_binding and grouped per AI
+  //     system by ai_system_id. Each binding carries the four
+  //     scope-id pointers; role and description are not present on
+  //     the projection's typed data (Phase 2A typed-data gap).
+  //
+  //   coverage ← projection.nodes[kind=coverage].coverage (4 fields)
+  //   authority_summary ← projection.nodes[kind=authority_summary].
+  //                       authority_summary (4 fields)
+  //
+  // Defensive against missing projection / nodes / typed-data slots:
+  // returns a shape with empty arrays and null scalars rather than
+  // throwing.
+  function mapAuthorityGraphToGovernanceMapShape(projection) {
+    const empty = {
+      business_service: null,
+      ai_systems: [],
+      coverage: null,
+      authority_summary: null,
+      capabilities: [],
+      processes: [],
+      surfaces: [],
+      relationships: { outgoing: [], incoming: [] },
+    };
+    if (!projection || !Array.isArray(projection.nodes)) return empty;
+    const rootId = projection.root && projection.root.id;
+
+    let businessService = null;
+    let coverage = null;
+    let authoritySummary = null;
+    const aiSystemMap = {}; // id → { …, bindings: [] }
+    const collectedBindings = [];
+    const outgoing = [];
+    const capabilities = [];
+    const processes = [];
+    const surfaces = [];
+
+    for (const n of projection.nodes) {
+      if (!n || !n.kind) continue;
+      switch (n.kind) {
+        case 'business_service': {
+          // Only the root BS is folded into business_service; related
+          // BS nodes are handled under kind=related_business_service.
+          if (rootId && n.id === rootId && n.business_service) {
+            const bs = n.business_service;
+            businessService = {
+              id: bs.id,
+              name: bs.name,
+              description: bs.description || '',
+              status: bs.status,
+              owner_id: bs.owner || '',
+              service_type: bs.service_type || '',
+              regulatory_scope: bs.regulatory_scope || '',
+              external_ref: bs.external_ref || null,
+            };
+          }
+          break;
+        }
+        case 'related_business_service': {
+          if (!n.related_business_service) break;
+          const r = n.related_business_service;
+          // The projection's related-BS node id IS the target BS id
+          // (see internal/authoritygraph/service.go: nodes for outgoing
+          // relationships use relID as Node.ID). The relationship-row
+          // id is not surfaced by Phase 2A typed data; we set the
+          // adapted `id` to the target id so the renderer's DOM-key
+          // prefix `rel:<id>` stays unique and stable.
+          outgoing.push({
+            id: r.id,
+            source_business_service_id: rootId || '',
+            target_business_service_id: r.id,
+            other_name: r.name || '',
+            relationship_type: r.relationship_type || '',
+            description: '',
+          });
+          break;
+        }
+        case 'capability': {
+          if (!n.capability) break;
+          const c = n.capability;
+          capabilities.push({
+            id: c.id,
+            name: c.name,
+            description: c.description || '',
+            status: c.status,
+          });
+          break;
+        }
+        case 'process': {
+          if (!n.process) break;
+          const p = n.process;
+          processes.push({
+            id: p.id,
+            name: p.name,
+            business_service_id: p.business_service_id || '',
+            status: p.status,
+          });
+          break;
+        }
+        case 'decision_surface': {
+          if (!n.decision_surface) break;
+          const d = n.decision_surface;
+          // ai_binding_ids → ai_bindings: gmap wire and renderer
+          // (e.g. line 6668: `(s.ai_bindings || []).length > 0`)
+          // both expect the array under `ai_bindings`. The projection
+          // exposes the same data under `ai_binding_ids` — pure
+          // rename, defensive non-nil copy so the renderer never
+          // sees null.
+          surfaces.push({
+            id: d.id,
+            version: d.version,
+            name: d.name,
+            process_id: d.process_id || '',
+            status: d.status,
+            ai_bindings: Array.isArray(d.ai_binding_ids) ? d.ai_binding_ids.slice() : [],
+            profile_count: d.profile_count || 0,
+            grant_count: d.grant_count || 0,
+            agent_count: d.agent_count || 0,
+          });
+          break;
+        }
+        case 'ai_system': {
+          if (!n.ai_system) break;
+          const a = n.ai_system;
+          let activeVersion = null;
+          // The projection emits active_version as a bare int
+          // (omitted when no active version exists); reshape into
+          // the gmap object form the renderer expects.
+          if (a.active_version != null) {
+            activeVersion = {
+              version: a.active_version,
+              release_label: a.active_version_label || '',
+              status: a.active_version_status || '',
+            };
+          }
+          aiSystemMap[a.id] = {
+            id: a.id,
+            name: a.name,
+            vendor: a.vendor || '',
+            system_type: a.system_type || '',
+            status: a.status,
+            active_version: activeVersion,
+            external_ref: a.external_ref || null,
+            bindings: [],
+          };
+          break;
+        }
+        case 'ai_system_binding': {
+          if (!n.ai_system_binding) break;
+          const b = n.ai_system_binding;
+          // Preserve the four scope-id pointers verbatim — null
+          // when the projection emitted null. The renderer's
+          // connector-resolution code branches on these values.
+          collectedBindings.push({
+            id: b.id,
+            ai_system_id: b.ai_system_id,
+            business_service_id: b.business_service_id,
+            capability_id: b.capability_id,
+            process_id: b.process_id,
+            surface_id: b.surface_id,
+            role: b.role || '',
+            description: b.description || '',
+          });
+          break;
+        }
+        case 'coverage': {
+          if (!n.coverage) break;
+          coverage = {
+            surface_count: n.coverage.surface_count,
+            surfaces_with_direct_ai_binding: n.coverage.surfaces_with_direct_ai_binding,
+            surfaces_with_scoped_ai_binding: n.coverage.surfaces_with_scoped_ai_binding,
+            surfaces_with_no_ai_binding: n.coverage.surfaces_with_no_ai_binding,
+          };
+          break;
+        }
+        case 'authority_summary': {
+          if (!n.authority_summary) break;
+          authoritySummary = {
+            surface_count: n.authority_summary.surface_count,
+            active_profile_count: n.authority_summary.active_profile_count,
+            active_grant_count: n.authority_summary.active_grant_count,
+            active_agent_count: n.authority_summary.active_agent_count,
+          };
+          break;
+        }
+      }
+    }
+
+    // Group collected bindings under their AI system. Bindings whose
+    // ai_system_id has no matching system node are dropped (the
+    // projection emits both kinds atomically, so this should not
+    // happen in practice).
+    for (const b of collectedBindings) {
+      const sys = aiSystemMap[b.ai_system_id];
+      if (sys) sys.bindings.push(b);
+    }
+
+    return {
+      business_service: businessService,
+      relationships: { outgoing: outgoing, incoming: [] },
+      capabilities: capabilities,
+      processes: processes,
+      surfaces: surfaces,
+      ai_systems: Object.values(aiSystemMap),
+      coverage: coverage,
+      authority_summary: authoritySummary,
+    };
+  }
+
   function refreshGovernanceMap() {
     if (gmapMode !== 'map') return; // only fetch when the pane is visible
     const bsId = currentSelectedService;
@@ -6125,6 +6410,51 @@
     gmapSelectedId = null;
     setGovernanceMapStatus('Loading…');
     const fetchToken = ++gmapInFlight;
+
+    if (USE_AUTHORITY_GRAPH) {
+      if (!_authorityGraphAdapterLogged) {
+        console.log('Authority Graph adapter active');
+        _authorityGraphAdapterLogged = true;
+      }
+      // Phase 2A endpoint — depth=5 = MaxDepth so every projected
+      // node is visible regardless of layer. The adapter discards
+      // edges; the existing renderer derives connectors from the
+      // adapted shape itself.
+      const agUrl = '/v1/authority-graph?view=service&id=' + encodeURIComponent(bsId) + '&depth=5';
+      fetch(agUrl, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+        .then(resp => {
+          if (resp.status === 404) return { __status: 404 };
+          if (resp.status === 501) return { __status: 501 };
+          if (!resp.ok)            return resp.text().then(t => ({ __status: resp.status, __text: t }));
+          return resp.json();
+        })
+        .then(payload => {
+          if (fetchToken !== gmapInFlight) return;
+          if (payload && payload.__status === 404) {
+            renderGovernanceMapEmpty('No governance map for this service yet.', bsId);
+            return;
+          }
+          if (payload && payload.__status === 501) {
+            renderGovernanceMapEmpty('Governance map is not configured on this server.', bsId);
+            return;
+          }
+          if (payload && payload.__status) {
+            renderGovernanceMapError('Governance map fetch failed (HTTP ' + payload.__status + ').');
+            return;
+          }
+          const adapted = mapAuthorityGraphToGovernanceMapShape(payload);
+          gmapData = adapted;
+          renderGovernanceMap(adapted);
+        })
+        .catch(err => {
+          if (fetchToken !== gmapInFlight) return;
+          renderGovernanceMapError('Network error: ' + (err && err.message || 'fetch failed'));
+        });
+      return;
+    }
+
+    // Legacy path (USE_AUTHORITY_GRAPH = false). Kept verbatim for
+    // easy rollback.
     // PR 4 endpoint — keep this URL literal here so the explorer test
     // can pin it via substring match.
     const url = '/v1/businessservices/' + encodeURIComponent(bsId) + '/governance-map';
@@ -6765,17 +7095,20 @@
     }, positions['authority']);
 
     positions['coverage'] = { x: govX, y: GMAP.LAYERS.SURFACE.y, kind: 'coverage' };
-    const covGap = (cov.surfaces_without_ai_binding || 0);
+    const covDirect = (cov.surfaces_with_direct_ai_binding || 0);
+    const covScoped = (cov.surfaces_with_scoped_ai_binding || 0);
+    const covGap    = (cov.surfaces_with_no_ai_binding || 0);
     addNode({
       id: 'coverage', kind: 'coverage', cls: 'coverage-node',
       label: 'COVERAGE',
-      name: (cov.surfaces_with_ai_binding || 0) + ' bound · ' + covGap + ' unbound',
+      name: covDirect + ' bound · ' + covGap + ' unbound',
       meta: ['surfaces ' + (cov.surface_count || 0)],
       badges: covGap > 0 ? [{ cls: 'warn', text: 'gap' }] : [{ cls: 'ok', text: 'covered' }],
       details: {
         'surface_count': cov.surface_count || 0,
-        'surfaces_with_ai_binding': cov.surfaces_with_ai_binding || 0,
-        'surfaces_without_ai_binding': cov.surfaces_without_ai_binding || 0,
+        'surfaces_with_direct_ai_binding': covDirect,
+        'surfaces_with_scoped_ai_binding': covScoped,
+        'surfaces_with_no_ai_binding':     covGap,
       },
     }, positions['coverage']);
 
@@ -6881,7 +7214,7 @@
       ['Surfaces (active)',    String((data.surfaces || []).length)],
       ['AI systems',           String((data.ai_systems || []).length)],
       ['Authority profiles',   String(auth.active_profile_count || 0)],
-      ['Coverage gaps',        String(cov.surfaces_without_ai_binding || 0)],
+      ['Coverage gaps',        String(cov.surfaces_with_no_ai_binding || 0)],
     ]);
     selectGovernanceMapNode(bsId);
 
