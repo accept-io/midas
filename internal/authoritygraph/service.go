@@ -228,7 +228,33 @@ func buildServiceGraph(gmap *governancemap.Map, bsID string) ([]Node, []Edge) {
 		BusinessService: bsData,
 	})
 
-	// Related business services — outgoing relationships only.
+	// Related business services — both outgoing and incoming
+	// relationships. One node per related-BS id even when the same
+	// other-BS appears in both directions (the schema's uniq_bsr_triple
+	// constraint allows root↔X via two distinct rows). Direction is
+	// encoded by which sub-row pointer is populated on the typed data;
+	// edges always carry the real business direction.
+	//
+	// Pass 1: walk both direction lists, accumulating sub-rows and
+	// edges keyed by the related-BS id. Outgoing-row id → relationship
+	// target, incoming-row id → relationship source.
+	relatedData := map[string]*RelatedBusinessServiceData{}
+	relatedOrder := []string{}
+	upsertRelated := func(otherID, otherName string) *RelatedBusinessServiceData {
+		if rd, ok := relatedData[otherID]; ok {
+			// Prefer a non-empty name from a later row over an
+			// earlier empty one; otherwise leave alone.
+			if rd.Name == "" && otherName != "" {
+				rd.Name = otherName
+			}
+			return rd
+		}
+		rd := &RelatedBusinessServiceData{ID: otherID, Name: otherName}
+		relatedData[otherID] = rd
+		relatedOrder = append(relatedOrder, otherID)
+		return rd
+	}
+
 	for _, rn := range gmap.Relationships.Outgoing {
 		if rn == nil || rn.Relationship == nil {
 			continue
@@ -237,25 +263,58 @@ func buildServiceGraph(gmap *governancemap.Map, bsID string) ([]Node, []Edge) {
 		if relID == "" {
 			continue
 		}
-		relLabel := rn.OtherName
-		if relLabel == "" {
-			relLabel = relID
+		rd := upsertRelated(relID, rn.OtherName)
+		rd.Outgoing = &RelatedBusinessServiceRow{
+			RelationshipID:   rn.Relationship.ID,
+			RelationshipType: rn.Relationship.RelationshipType,
+			Description:      rn.Relationship.Description,
 		}
-		nodes = append(nodes, Node{
-			Kind:  NodeKindRelatedBusinessService,
-			ID:    relID,
-			Label: relLabel,
-			RelatedBusinessService: &RelatedBusinessServiceData{
-				ID:               relID,
-				Name:             rn.OtherName,
-				RelationshipType: rn.Relationship.RelationshipType,
-				Direction:        RelationshipDirectionOutgoing,
-			},
-		})
+		// relates_to: root → related (outgoing direction).
 		edges = append(edges, Edge{
 			Kind: EdgeKindRelatesTo,
 			Src:  NodeRef{Kind: NodeKindBusinessService, ID: bsID},
 			Dst:  NodeRef{Kind: NodeKindRelatedBusinessService, ID: relID},
+		})
+	}
+
+	for _, rn := range gmap.Relationships.Incoming {
+		if rn == nil || rn.Relationship == nil {
+			continue
+		}
+		// On the incoming list, the "other" BS is the source of the
+		// relationship row.
+		relID := rn.Relationship.SourceBusinessService
+		if relID == "" {
+			continue
+		}
+		rd := upsertRelated(relID, rn.OtherName)
+		rd.Incoming = &RelatedBusinessServiceRow{
+			RelationshipID:   rn.Relationship.ID,
+			RelationshipType: rn.Relationship.RelationshipType,
+			Description:      rn.Relationship.Description,
+		}
+		// relates_to: related → root (incoming direction).
+		edges = append(edges, Edge{
+			Kind: EdgeKindRelatesTo,
+			Src:  NodeRef{Kind: NodeKindRelatedBusinessService, ID: relID},
+			Dst:  NodeRef{Kind: NodeKindBusinessService, ID: bsID},
+		})
+	}
+
+	// Pass 2: emit one node per related-BS id, in the order of first
+	// appearance (downstream slice-level sort by (kind, id) enforces
+	// the final wire order). Label preference: name → id.
+	for _, relID := range relatedOrder {
+		rd := relatedData[relID]
+		relLabel := rd.Name
+		if relLabel == "" {
+			relLabel = relID
+		}
+		nodes = append(nodes, Node{
+			Kind:                   NodeKindRelatedBusinessService,
+			ID:                     relID,
+			Label:                  relLabel,
+			RelatedBusinessService: rd,
 		})
 	}
 

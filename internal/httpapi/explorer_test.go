@@ -1002,12 +1002,13 @@ func TestExplorer_HTML_GovernanceMap_ConnectorClasses(t *testing.T) {
 	}
 }
 
-// TestExplorer_HTML_GovernanceMap_FetchesPR4Endpoint verifies that the
-// embedded JS issues a fetch to the PR 4 read endpoint. The URL literal
-// is pinned because the visual is data-driven from this one endpoint —
-// any future move (renamed prefix, restructured route) must update this
-// test in the same PR.
-func TestExplorer_HTML_GovernanceMap_FetchesPR4Endpoint(t *testing.T) {
+// TestExplorer_HTML_GovernanceMap_FetchesAuthorityGraphEndpoint verifies
+// that the embedded JS issues a fetch to /v1/authority-graph (the
+// post-Phase-2B active source for the Explorer's service map and
+// record page). The URL literal is pinned because the visual is
+// data-driven from this one endpoint — any future move (renamed
+// prefix, restructured route) must update this test in the same PR.
+func TestExplorer_HTML_GovernanceMap_FetchesAuthorityGraphEndpoint(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
 
@@ -1016,17 +1017,26 @@ func TestExplorer_HTML_GovernanceMap_FetchesPR4Endpoint(t *testing.T) {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, "/v1/businessservices/") {
-		t.Error("Governance Map JS must reference the /v1/businessservices/ endpoint prefix")
+	if !strings.Contains(body, "/v1/authority-graph?view=service") {
+		t.Error("Explorer JS must reference the /v1/authority-graph?view=service endpoint")
 	}
-	if !strings.Contains(body, "/governance-map") {
-		t.Error("Governance Map JS must reference the /governance-map suffix (PR 4 endpoint)")
+	// Pin the depth=5 (=MaxDepth) parameter the renderer relies on
+	// so every projected node is visible regardless of layer.
+	if !strings.Contains(body, "&depth=5") {
+		t.Error("Explorer JS must request the authority-graph at depth=5 (MaxDepth)")
 	}
 	// Pin the fetch call site itself so a refactor to a different
 	// transport (e.g., XMLHttpRequest, EventSource) is a deliberate
 	// choice rather than a silent change.
 	if !strings.Contains(body, "fetch(url") && !strings.Contains(body, "fetch(") {
-		t.Error("Governance Map JS must use fetch() to load the read model")
+		t.Error("Explorer JS must use fetch() to load the read model")
+	}
+	// Pin the absence of an active fetch to the legacy gmap endpoint.
+	// The legacy URL substring may still appear in non-active comments
+	// (which is acceptable), but no active fetch literal should remain.
+	if strings.Contains(body, "fetch('/v1/businessservices/' + encodeURIComponent") ||
+		strings.Contains(body, `fetch("/v1/businessservices/" + encodeURIComponent`) {
+		t.Error("Explorer JS must not actively fetch the legacy /v1/businessservices/{id}/governance-map path")
 	}
 }
 
@@ -1569,15 +1579,13 @@ func TestExplorer_HTML_ServicesView_LiveBSListSelector(t *testing.T) {
 			"STRUCTURAL_CONTEXT.filter — that was the previous demo-only path")
 	}
 
-	// 9. The governance-map fetch URL is unchanged (it predates this
-	// change and operates in lockstep with the selector). Pin it again
-	// here to make this test a single-file documentation point for the
-	// two URLs the Services view consumes.
-	if !strings.Contains(body, "/v1/businessservices/") {
-		t.Error("Live BS selector: the governance-map per-BS URL must remain (predates this change)")
-	}
-	if !strings.Contains(body, "/governance-map") {
-		t.Error("Live BS selector: the governance-map URL suffix must remain")
+	// 9. The Services view's per-BS data fetch (used by both the map
+	// sub-view and the record page) is /v1/authority-graph. Pin it
+	// here so this test stays a single-file documentation point for
+	// the two URLs the Services view consumes (catalogue +
+	// authority-graph).
+	if !strings.Contains(body, "/v1/authority-graph?view=service") {
+		t.Error("Live BS selector: the per-BS authority-graph URL must be present")
 	}
 
 	// 10. The init bootstrap calls loadBusinessServicesList() so the
@@ -2442,8 +2450,8 @@ func TestExplorer_HTML_GovernanceMap_NodeDragging(t *testing.T) {
 //     show*Map), the per-record cache + loader
 //   - data plumbing: the catalogue fetches /v1/businessservices
 //     (envelope shape), the record page fetches the per-BS
-//     /governance-map endpoint, both via fetch() — and neither path
-//     falls back to STRUCTURAL_CONTEXT
+//     /v1/authority-graph?view=service endpoint, both via fetch() —
+//     and neither path falls back to STRUCTURAL_CONTEXT
 //
 // Defensive-rendering pins (loading / empty / error states; field-
 // missing fallback to "—") and the no-hardcoded-default rule are
@@ -2516,8 +2524,8 @@ func TestExplorer_HTML_ServicesView_CatalogueRecordNavigation(t *testing.T) {
 	if !strings.Contains(body, `fetch('/v1/businessservices'`) {
 		t.Error("Catalogue/record nav: catalogue must fetch /v1/businessservices")
 	}
-	if !strings.Contains(body, `'/v1/businessservices/' + encodeURIComponent(serviceId) + '/governance-map'`) {
-		t.Error("Catalogue/record nav: record page must fetch the per-BS /governance-map endpoint")
+	if !strings.Contains(body, `'/v1/authority-graph?view=service&id=' + encodeURIComponent(serviceId) + '&depth=5'`) {
+		t.Error("Catalogue/record nav: record page must fetch /v1/authority-graph (Phase 2B Step 5 cutover)")
 	}
 
 	// 5. Record-page consumption of governance-map payload fields. The

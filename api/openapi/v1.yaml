@@ -1378,25 +1378,47 @@ components:
     AuthorityGraphRelatedBusinessServiceData:
       type: object
       description: >
-        Typed data for a node of kind `related_business_service`.
-        Phase 2A projects only outgoing relationships, so `direction`
-        is always `outgoing`; the field is kept explicit for forward
-        compatibility with bidirectional projections.
+        Typed data for a node of kind `related_business_service`. One
+        node is emitted per related-BS id, even when the same other-BS
+        appears in both outgoing and incoming relationships (the
+        schema's uniq_bsr_triple constraint allows root↔X via two
+        distinct rows). Direction is *implicit* in which sub-row
+        pointer is non-nil — `outgoing` for root → related, `incoming`
+        for related → root. At least one of the two sub-rows is
+        populated; both may be populated for bidirectional cases.
       required:
         - id
-        - relationship_type
-        - direction
       properties:
         id:
           type: string
+          description: Related business service id (= the "other" BS).
         name:
           type: string
+        outgoing:
+          $ref: "#/components/schemas/AuthorityGraphRelatedBusinessServiceRow"
+        incoming:
+          $ref: "#/components/schemas/AuthorityGraphRelatedBusinessServiceRow"
+
+    AuthorityGraphRelatedBusinessServiceRow:
+      type: object
+      description: >
+        Per-direction relationship row data carried on a
+        `related_business_service` node. Mirrors the governance-map
+        relationship DTO's per-row fields for the fields available on
+        the businessservice.BusinessServiceRelationship domain type.
+      required:
+        - relationship_id
+        - relationship_type
+      properties:
+        relationship_id:
+          type: string
+          description: The relationship row id from
+            business_service_relationships.
         relationship_type:
           type: string
           description: e.g. depends_on, supports, part_of
-        direction:
+        description:
           type: string
-          enum: [outgoing]
 
     AuthorityGraphCapabilityData:
       type: object

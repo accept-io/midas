@@ -70,13 +70,6 @@ const (
 	EdgeKindReportsCoverage = "reports_coverage"
 )
 
-// Relationship direction values for RelatedBusinessServiceData. Phase 2A
-// projects only outgoing relationships; the constant is kept narrow to
-// keep the wire shape closed.
-const (
-	RelationshipDirectionOutgoing = "outgoing"
-)
-
 // NodeRef is the (kind, id) pair that uniquely identifies a node in a
 // projection. Used by Edge.Src and Edge.Dst, and by Projection.Root.
 type NodeRef struct {
@@ -174,14 +167,37 @@ type BusinessServiceData struct {
 }
 
 // RelatedBusinessServiceData carries the typed information for a node
-// of kind "related_business_service". Phase 2A projects only outgoing
-// relationships, so Direction is always "outgoing"; the field is kept
-// explicit for forward compatibility with bidirectional projections.
+// of kind "related_business_service".
+//
+// One node is emitted per related-BS id, even when the same other-BS
+// appears in both outgoing and incoming relationships (the schema's
+// uniq_bsr_triple constraint enforces uniqueness on
+// (source, target, type), not on the unordered pair, so a root BS
+// can simultaneously have an outgoing row to BS-X AND an incoming
+// row from BS-X with a different relationship_type or row id). The
+// node's typed data carries up to two sub-rows — Outgoing and
+// Incoming — each populated independently when a row exists in that
+// direction. Direction is therefore *implicit* in which sub-row
+// pointer is non-nil.
+//
+// The adapter / consumer reconstructs the gmap wire shape's
+// outgoing[] and incoming[] arrays by walking the populated sub-rows.
 type RelatedBusinessServiceData struct {
-	ID               string `json:"id"`
-	Name             string `json:"name,omitempty"`
+	ID       string                     `json:"id"`
+	Name     string                     `json:"name,omitempty"`
+	Outgoing *RelatedBusinessServiceRow `json:"outgoing,omitempty"`
+	Incoming *RelatedBusinessServiceRow `json:"incoming,omitempty"`
+}
+
+// RelatedBusinessServiceRow carries the per-direction relationship
+// row data for a related_business_service node. Mirrors the
+// governance-map BSR DTO's per-row fields (governanceMapRelationship)
+// for the fields available on the
+// businessservice.BusinessServiceRelationship domain type.
+type RelatedBusinessServiceRow struct {
+	RelationshipID   string `json:"relationship_id"`
 	RelationshipType string `json:"relationship_type"`
-	Direction        string `json:"direction"`
+	Description      string `json:"description,omitempty"`
 }
 
 // CapabilityData carries the typed information for a node of kind

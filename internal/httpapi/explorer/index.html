@@ -4065,7 +4065,8 @@
          identity + primary action. Body shows identity strip, core
          details, related services, capabilities, processes, surfaces,
          AI systems, governance summary. All data comes from
-         GET /v1/businessservices/{id}/governance-map. -->
+         GET /v1/authority-graph?view=service&id={id}&depth=5,
+         adapted via mapAuthorityGraphToGovernanceMapShape(). -->
     <div id="services-record-view" class="services-subview services-record" role="region" aria-label="Business Service record">
       <header class="services-record-header">
         <button type="button" id="services-record-back-btn" class="services-record-back" aria-label="Back to Business Services catalogue">← Business Services</button>
@@ -4820,9 +4821,11 @@
   //
   // No path through this module reads STRUCTURAL_CONTEXT. The catalogue is
   // backed by GET /v1/businessservices (envelope-shape `{business_services}`);
-  // the record page is backed by GET /v1/businessservices/{id}/governance-map;
-  // the map sub-view re-uses the same governance-map endpoint via the
-  // existing PR 5 renderer. Other Explorer views (Records, Settings, the
+  // the record page and the map sub-view both consume
+  // GET /v1/authority-graph?view=service&id={id}&depth=5 and run the
+  // response through mapAuthorityGraphToGovernanceMapShape(), which
+  // adapts to the historical governance-map wire shape the existing
+  // renderers expect. Other Explorer views (Records, Settings, the
   // hidden Resource Reference panel) continue to read STRUCTURAL_CONTEXT —
   // that is a separate scope.
 
@@ -5082,7 +5085,14 @@
     serviceRecordLoading = true;
     serviceRecordError = null;
     renderBusinessServiceRecord(null);
-    const url = '/v1/businessservices/' + encodeURIComponent(serviceId) + '/governance-map';
+    // Phase 2B Step 5: record page now consumes /v1/authority-graph
+    // and runs the projection through mapAuthorityGraphToGovernanceMapShape
+    // before handing it to renderBusinessServiceRecord, which still
+    // expects the gmap wire shape. The legacy
+    // /v1/businessservices/{id}/governance-map endpoint stays alive on
+    // the backend (used by the map view's fallback branch) but the
+    // record page no longer calls it.
+    const url = '/v1/authority-graph?view=service&id=' + encodeURIComponent(serviceId) + '&depth=5';
     fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
       .then(resp => {
         if (!resp.ok) return resp.text().then(t => ({ __status: resp.status, __text: t }));
@@ -5097,9 +5107,10 @@
         }
         // Discard if user navigated to a different service while in flight.
         if (serviceId !== currentSelectedService) return;
-        serviceRecordCache[serviceId] = payload;
+        const adapted = mapAuthorityGraphToGovernanceMapShape(payload);
+        serviceRecordCache[serviceId] = adapted;
         serviceRecordError = null;
-        renderBusinessServiceRecord(payload);
+        renderBusinessServiceRecord(adapted);
       })
       .catch(err => {
         serviceRecordLoading = false;
@@ -5970,8 +5981,10 @@
 
   // ── Governance Map (Epic 1, PR 5) ──────────────────────────────────────────
   // Renders a ServiceNow-style node-link map for the currently-selected
-  // business service. Data comes from GET /v1/businessservices/{id}/governance-map
-  // (PR 4). Layout is static / slot-based so connectors are deterministic.
+  // business service. Data comes from GET /v1/authority-graph?view=service
+  // and is adapted to the historical governance-map wire shape via
+  // mapAuthorityGraphToGovernanceMapShape() before render. Layout is
+  // static / slot-based so connectors are deterministic.
   // The connector SVG layer sits behind absolute-positioned HTML node cards
   // and is drawn from precomputed coordinates — no force-directed physics,
   // no graph library.
@@ -6117,38 +6130,17 @@
     if (mapBtn)      mapBtn.addEventListener('click', () => setServicesMode('map'));
   })();
 
-  // Phase 2B Step 2: feature flag for the authority-graph migration.
-  // When true, refreshGovernanceMap() fetches /v1/authority-graph and
-  // adapts the response into the existing governance-map shape via
-  // mapAuthorityGraphToGovernanceMapShape() before passing it to the
-  // unchanged renderGovernanceMap(). When false, the legacy
-  // /v1/businessservices/{id}/governance-map fetch path is used. The
-  // flag is module-scoped so flipping it is a one-line rollback.
+  // refreshGovernanceMap() and loadBusinessServiceRecord() both
+  // consume /v1/authority-graph?view=service&id={id}&depth=5 and run
+  // the response through mapAuthorityGraphToGovernanceMapShape() so
+  // the existing renderGovernanceMap() / renderBusinessServiceRecord()
+  // continue to operate on the historical governance-map wire shape.
+  // The previous /v1/businessservices/{id}/governance-map path was
+  // removed once cutover validation completed; the backend endpoint
+  // remains available but is no longer called from this Explorer.
   //
-  // Step 2 extends the Step 1 mapping (business_service, ai_systems,
-  // coverage, authority_summary) to cover the remaining gmap sections:
-  // relationships.outgoing, capabilities, processes, surfaces. After
-  // Step 2 the adapted shape is parity with the gmap wire shape for
-  // every layer the workbench renders, with two known limitations:
-  //
-  //   - relationships[].id: the projection does not surface the
-  //     underlying relationship-row id, only the target-BS node id.
-  //     The adapted `id` therefore equals `target_business_service_id`.
-  //     Renderer uses `id` only as a DOM-key prefix (`rel:<id>`); the
-  //     details-panel `edge_id` field will reflect the target id
-  //     rather than the row id.
-  //   - inherited_ai_binding_ids on surfaces is intentionally NOT
-  //     mapped — the gmap wire shape has no equivalent and the
-  //     workbench renderer does not consume it.
-  //
-  // Phase 2B Step 4 cutover: flag flipped to true after Phase 2B
-  // Step 3 closed the five backend typed-data gaps and the adapter
-  // gained matching pass-through for service_type, regulatory_scope,
-  // active_version_status, binding role, and binding description.
-  // The legacy /v1/businessservices/{id}/governance-map fetch path
-  // remains intact below; flip back to false to roll back without
-  // any other change.
-  const USE_AUTHORITY_GRAPH = true;
+  // _authorityGraphAdapterLogged keeps the "Authority Graph adapter
+  // active" diagnostic message to a single emission per session.
   let _authorityGraphAdapterLogged = false;
 
   // mapAuthorityGraphToGovernanceMapShape adapts an authority-graph
@@ -6162,15 +6154,23 @@
   //   business_service ← projection.nodes[kind=business_service].business_service
   //     id, name, description, status, owner→owner_id, external_ref
   //
-  //   relationships.outgoing[] ← projection.nodes[kind=related_business_service].related_business_service
-  //     id (= target_business_service_id; row id not on projection),
+  //   relationships.outgoing[] ← projection.nodes[kind=related_business_service].related_business_service.outgoing
+  //     id (= relationship_id from row, or target_business_service_id
+  //         when the projection lacks the row id),
   //     source_business_service_id (= projection.root.id),
   //     target_business_service_id (= related node id),
   //     other_name (← related_business_service.name),
-  //     relationship_type, description ('' — projection has none)
-  //   relationships.incoming[] is always empty (Phase 2A projects only
-  //     outgoing relationships; the existing gmap wire's incoming
-  //     array is currently unused by the workbench renderer anyway).
+  //     relationship_type, description (← row fields)
+  //   relationships.incoming[] ← projection.nodes[kind=related_business_service].related_business_service.incoming
+  //     id (= relationship_id from row, or source_business_service_id
+  //         when the projection lacks the row id),
+  //     source_business_service_id (= related node id),
+  //     target_business_service_id (= projection.root.id),
+  //     other_name, relationship_type, description as for outgoing.
+  //   When a related_business_service node carries BOTH sub-rows
+  //   (same other-BS in both directions), the adapter emits one row
+  //   per direction, so the gmap-shape outgoing/incoming arrays each
+  //   carry the matching row losslessly.
   //
   //   capabilities[] ← projection.nodes[kind=capability].capability
   //     FLAT shape: id, name, description, status
@@ -6226,6 +6226,7 @@
     const aiSystemMap = {}; // id → { …, bindings: [] }
     const collectedBindings = [];
     const outgoing = [];
+    const incoming = [];
     const capabilities = [];
     const processes = [];
     const surfaces = [];
@@ -6254,20 +6255,32 @@
         case 'related_business_service': {
           if (!n.related_business_service) break;
           const r = n.related_business_service;
-          // The projection's related-BS node id IS the target BS id
-          // (see internal/authoritygraph/service.go: nodes for outgoing
-          // relationships use relID as Node.ID). The relationship-row
-          // id is not surfaced by Phase 2A typed data; we set the
-          // adapted `id` to the target id so the renderer's DOM-key
-          // prefix `rel:<id>` stays unique and stable.
-          outgoing.push({
-            id: r.id,
-            source_business_service_id: rootId || '',
-            target_business_service_id: r.id,
-            other_name: r.name || '',
-            relationship_type: r.relationship_type || '',
-            description: '',
-          });
+          // Phase 2B Step 6: typed data carries up to two sub-rows
+          // (outgoing + incoming) for the same related-BS id. Each
+          // populated sub-row maps to one gmap-shape row in the
+          // matching direction array. The relationship_id is now
+          // surfaced by typed data, so the adapted row's `id` field
+          // is the real BSR row id (was the target BS id pre-Step 6).
+          if (r.outgoing) {
+            outgoing.push({
+              id: r.outgoing.relationship_id || r.id,
+              source_business_service_id: rootId || '',
+              target_business_service_id: r.id,
+              other_name: r.name || '',
+              relationship_type: r.outgoing.relationship_type || '',
+              description: r.outgoing.description || '',
+            });
+          }
+          if (r.incoming) {
+            incoming.push({
+              id: r.incoming.relationship_id || r.id,
+              source_business_service_id: r.id,
+              target_business_service_id: rootId || '',
+              other_name: r.name || '',
+              relationship_type: r.incoming.relationship_type || '',
+              description: r.incoming.description || '',
+            });
+          }
           break;
         }
         case 'capability': {
@@ -6392,7 +6405,7 @@
 
     return {
       business_service: businessService,
-      relationships: { outgoing: outgoing, incoming: [] },
+      relationships: { outgoing: outgoing, incoming: incoming },
       capabilities: capabilities,
       processes: processes,
       surfaces: surfaces,
@@ -6411,53 +6424,14 @@
     setGovernanceMapStatus('Loading…');
     const fetchToken = ++gmapInFlight;
 
-    if (USE_AUTHORITY_GRAPH) {
-      if (!_authorityGraphAdapterLogged) {
-        console.log('Authority Graph adapter active');
-        _authorityGraphAdapterLogged = true;
-      }
-      // Phase 2A endpoint — depth=5 = MaxDepth so every projected
-      // node is visible regardless of layer. The adapter discards
-      // edges; the existing renderer derives connectors from the
-      // adapted shape itself.
-      const agUrl = '/v1/authority-graph?view=service&id=' + encodeURIComponent(bsId) + '&depth=5';
-      fetch(agUrl, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
-        .then(resp => {
-          if (resp.status === 404) return { __status: 404 };
-          if (resp.status === 501) return { __status: 501 };
-          if (!resp.ok)            return resp.text().then(t => ({ __status: resp.status, __text: t }));
-          return resp.json();
-        })
-        .then(payload => {
-          if (fetchToken !== gmapInFlight) return;
-          if (payload && payload.__status === 404) {
-            renderGovernanceMapEmpty('No governance map for this service yet.', bsId);
-            return;
-          }
-          if (payload && payload.__status === 501) {
-            renderGovernanceMapEmpty('Governance map is not configured on this server.', bsId);
-            return;
-          }
-          if (payload && payload.__status) {
-            renderGovernanceMapError('Governance map fetch failed (HTTP ' + payload.__status + ').');
-            return;
-          }
-          const adapted = mapAuthorityGraphToGovernanceMapShape(payload);
-          gmapData = adapted;
-          renderGovernanceMap(adapted);
-        })
-        .catch(err => {
-          if (fetchToken !== gmapInFlight) return;
-          renderGovernanceMapError('Network error: ' + (err && err.message || 'fetch failed'));
-        });
-      return;
+    if (!_authorityGraphAdapterLogged) {
+      console.log('Authority Graph adapter active');
+      _authorityGraphAdapterLogged = true;
     }
-
-    // Legacy path (USE_AUTHORITY_GRAPH = false). Kept verbatim for
-    // easy rollback.
-    // PR 4 endpoint — keep this URL literal here so the explorer test
-    // can pin it via substring match.
-    const url = '/v1/businessservices/' + encodeURIComponent(bsId) + '/governance-map';
+    // depth=5 = MaxDepth so every projected node is visible
+    // regardless of layer. The renderer derives connectors from
+    // the adapted shape itself; projection edges are discarded.
+    const url = '/v1/authority-graph?view=service&id=' + encodeURIComponent(bsId) + '&depth=5';
     fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
       .then(resp => {
         if (resp.status === 404) return { __status: 404 };
@@ -6479,8 +6453,9 @@
           renderGovernanceMapError('Governance map fetch failed (HTTP ' + payload.__status + ').');
           return;
         }
-        gmapData = payload;
-        renderGovernanceMap(payload);
+        const adapted = mapAuthorityGraphToGovernanceMapShape(payload);
+        gmapData = adapted;
+        renderGovernanceMap(adapted);
       })
       .catch(err => {
         if (fetchToken !== gmapInFlight) return;
@@ -6941,11 +6916,35 @@
     // Split the main strip with midGap between the two halves so the
     // groups are visually distinct AND each side has a range wide enough
     // for its row to fit without overlap.
-    const halfW = (mainStripW - midGap) / 2;
+    //
+    // Even-splitting (mainStripW - midGap) / 2 fails when the cap+proc
+    // row is asymmetric: the larger side's required width exceeds the
+    // half it gets, distributeRow's pack-from-x0 overflow path then
+    // runs that row past its strip boundary, and the trailing cards
+    // overlap the other half's leading cards. Fix: compute each
+    // half's width using max(halfNominal, ownReqRow); when one side
+    // overflows the nominal half, the other side's width is reduced
+    // accordingly so the two halves still sum to (mainStripW - midGap).
+    // mainStripW already accounts for capProcReqW = capsReqW + midGap +
+    // procsReqW (set in the sizing pass above), so the reduced side is
+    // always still ≥ its own reqRow — no overlap, no canvas resize.
+    const halfNominal = (mainStripW - midGap) / 2;
+    let capStripW;
+    let procStripW;
+    if (capsReqW > halfNominal) {
+      capStripW  = capsReqW;
+      procStripW = (mainStripW - midGap) - capStripW;
+    } else if (procsReqW > halfNominal) {
+      procStripW = procsReqW;
+      capStripW  = (mainStripW - midGap) - procStripW;
+    } else {
+      capStripW  = halfNominal;
+      procStripW = halfNominal;
+    }
     const capSubX0  = mainX0;
-    const capSubX1  = mainX0 + halfW;
-    const procSubX0 = mainX0 + halfW + midGap;
-    const procSubX1 = mainX1;
+    const capSubX1  = capSubX0 + capStripW;
+    const procSubX0 = capSubX1 + midGap;
+    const procSubX1 = procSubX0 + procStripW;
     // Each half-strip uses its own layout count so a truncated cap row
     // and a non-truncated proc row (or vice versa) each pack their own
     // sub-strip correctly.

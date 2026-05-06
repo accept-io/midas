@@ -79,6 +79,10 @@ type gmapResponseShape struct {
 		ServiceType     string `json:"service_type"`
 		RegulatoryScope string `json:"regulatory_scope"`
 	} `json:"business_service"`
+	Relationships struct {
+		Outgoing []map[string]any `json:"outgoing"`
+		Incoming []map[string]any `json:"incoming"`
+	} `json:"relationships"`
 	Capabilities []map[string]any `json:"capabilities"`
 	Processes    []map[string]any `json:"processes"`
 	Surfaces     []map[string]any `json:"surfaces"`
@@ -148,6 +152,35 @@ func TestContract_AuthorityGraph_AgreesWithGovernanceMap(t *testing.T) {
 		case authoritygraph.NodeKindAuthoritySummary:
 			summaryNode = n
 		}
+	}
+
+	// 0. Relationship parity (Phase 2B Step 6). The projection emits
+	//    one related_business_service node per related-BS id (deduped
+	//    when the same id appears in both directions); the
+	//    outgoing/incoming GMAP arrays each correspond to a populated
+	//    sub-row pointer on the typed data. Counts therefore agree on
+	//    each side independently — projection's outgoing-row count
+	//    equals gmap.Relationships.Outgoing length, and same for
+	//    incoming.
+	projOutgoing := 0
+	projIncoming := 0
+	for i := range ag.Nodes {
+		n := &ag.Nodes[i]
+		if n.Kind != authoritygraph.NodeKindRelatedBusinessService || n.RelatedBusinessService == nil {
+			continue
+		}
+		if n.RelatedBusinessService.Outgoing != nil {
+			projOutgoing++
+		}
+		if n.RelatedBusinessService.Incoming != nil {
+			projIncoming++
+		}
+	}
+	if got, want := projOutgoing, len(gm.Relationships.Outgoing); got != want {
+		t.Errorf("relationships.outgoing count: gmap=%d, projection=%d", want, got)
+	}
+	if got, want := projIncoming, len(gm.Relationships.Incoming); got != want {
+		t.Errorf("relationships.incoming count: gmap=%d, projection=%d", want, got)
 	}
 
 	// 1. Capability count parity.

@@ -499,14 +499,20 @@ func TestService_FullDemo_TypedDataPopulated(t *testing.T) {
 	if rel == nil || rel.RelatedBusinessService == nil {
 		t.Fatalf("related_business_service typed data missing")
 	}
-	if got, want := rel.RelatedBusinessService.RelationshipType, "depends_on"; got != want {
-		t.Errorf("rel type: want %q, got %q", want, got)
-	}
-	if got, want := rel.RelatedBusinessService.Direction, RelationshipDirectionOutgoing; got != want {
-		t.Errorf("rel direction: want %q, got %q", want, got)
-	}
 	if got, want := rel.RelatedBusinessService.Name, "BS Two"; got != want {
 		t.Errorf("rel name: want %q, got %q", want, got)
+	}
+	if rel.RelatedBusinessService.Outgoing == nil {
+		t.Fatalf("rel outgoing sub-row must be populated for the seeded outgoing relationship")
+	}
+	if got, want := rel.RelatedBusinessService.Outgoing.RelationshipType, "depends_on"; got != want {
+		t.Errorf("rel outgoing type: want %q, got %q", want, got)
+	}
+	if got, want := rel.RelatedBusinessService.Outgoing.RelationshipID, "rel-1"; got != want {
+		t.Errorf("rel outgoing relationship_id: want %q, got %q", want, got)
+	}
+	if rel.RelatedBusinessService.Incoming != nil {
+		t.Errorf("rel incoming sub-row must be nil for an outgoing-only seed; got %+v", rel.RelatedBusinessService.Incoming)
 	}
 
 	// capability
@@ -677,6 +683,201 @@ func TestService_FullDemo_TypedDataPopulated(t *testing.T) {
 		cov.Coverage.SurfacesWithScopedAIBinding != 0 ||
 		cov.Coverage.SurfacesWithNoAIBinding != 0 {
 		t.Errorf("coverage counts: %+v", cov.Coverage)
+	}
+}
+
+// TestService_RelatedBusinessService_OutgoingOnly pins the projection
+// of an outgoing-only relationship: one related node, one relates_to
+// edge in the root → related direction, typed data carries the
+// Outgoing sub-row only.
+func TestService_RelatedBusinessService_OutgoingOnly(t *testing.T) {
+	m := makeBSMap("bs-root", "Root")
+	m.Relationships.Outgoing = []*governancemap.RelationshipNode{
+		{
+			Relationship: &businessservice.BusinessServiceRelationship{
+				ID: "rel-out", SourceBusinessService: "bs-root", TargetBusinessService: "bs-other",
+				RelationshipType: "depends_on", Description: "Out desc",
+			},
+			OtherName: "Other BS",
+		},
+	}
+	svc := NewService(&stubReader{items: map[string]*governancemap.Map{"bs-root": m}})
+	p, err := svc.Project(context.Background(), ViewService, "bs-root", MaxDepth)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+
+	var related *Node
+	relatesToEdges := []Edge{}
+	for i := range p.Nodes {
+		n := &p.Nodes[i]
+		if n.Kind == NodeKindRelatedBusinessService && n.ID == "bs-other" {
+			related = n
+		}
+	}
+	for _, e := range p.Edges {
+		if e.Kind == EdgeKindRelatesTo {
+			relatesToEdges = append(relatesToEdges, e)
+		}
+	}
+	if related == nil || related.RelatedBusinessService == nil {
+		t.Fatalf("related_business_service node missing or has nil typed data")
+	}
+	if related.RelatedBusinessService.Outgoing == nil {
+		t.Errorf("outgoing sub-row missing")
+	} else if related.RelatedBusinessService.Outgoing.RelationshipID != "rel-out" {
+		t.Errorf("outgoing relationship_id: want rel-out, got %q", related.RelatedBusinessService.Outgoing.RelationshipID)
+	}
+	if related.RelatedBusinessService.Incoming != nil {
+		t.Errorf("incoming sub-row must be nil; got %+v", related.RelatedBusinessService.Incoming)
+	}
+	if len(relatesToEdges) != 1 {
+		t.Fatalf("want 1 relates_to edge, got %d (%+v)", len(relatesToEdges), relatesToEdges)
+	}
+	got := relatesToEdges[0]
+	if got.Src.Kind != NodeKindBusinessService || got.Src.ID != "bs-root" ||
+		got.Dst.Kind != NodeKindRelatedBusinessService || got.Dst.ID != "bs-other" {
+		t.Errorf("outgoing edge endpoints: want bs-root → bs-other, got %+v", got)
+	}
+}
+
+// TestService_RelatedBusinessService_IncomingOnly pins the projection
+// of an incoming-only relationship: one related node, one relates_to
+// edge in the related → root direction, typed data carries the
+// Incoming sub-row only.
+func TestService_RelatedBusinessService_IncomingOnly(t *testing.T) {
+	m := makeBSMap("bs-root", "Root")
+	m.Relationships.Incoming = []*governancemap.RelationshipNode{
+		{
+			Relationship: &businessservice.BusinessServiceRelationship{
+				ID: "rel-in", SourceBusinessService: "bs-other", TargetBusinessService: "bs-root",
+				RelationshipType: "supports", Description: "In desc",
+			},
+			OtherName: "Other BS",
+		},
+	}
+	svc := NewService(&stubReader{items: map[string]*governancemap.Map{"bs-root": m}})
+	p, err := svc.Project(context.Background(), ViewService, "bs-root", MaxDepth)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+
+	var related *Node
+	relatesToEdges := []Edge{}
+	for i := range p.Nodes {
+		n := &p.Nodes[i]
+		if n.Kind == NodeKindRelatedBusinessService && n.ID == "bs-other" {
+			related = n
+		}
+	}
+	for _, e := range p.Edges {
+		if e.Kind == EdgeKindRelatesTo {
+			relatesToEdges = append(relatesToEdges, e)
+		}
+	}
+	if related == nil || related.RelatedBusinessService == nil {
+		t.Fatalf("related_business_service node missing or has nil typed data")
+	}
+	if related.RelatedBusinessService.Incoming == nil {
+		t.Errorf("incoming sub-row missing")
+	} else if related.RelatedBusinessService.Incoming.RelationshipID != "rel-in" {
+		t.Errorf("incoming relationship_id: want rel-in, got %q", related.RelatedBusinessService.Incoming.RelationshipID)
+	}
+	if related.RelatedBusinessService.Outgoing != nil {
+		t.Errorf("outgoing sub-row must be nil; got %+v", related.RelatedBusinessService.Outgoing)
+	}
+	if len(relatesToEdges) != 1 {
+		t.Fatalf("want 1 relates_to edge, got %d (%+v)", len(relatesToEdges), relatesToEdges)
+	}
+	got := relatesToEdges[0]
+	if got.Src.Kind != NodeKindRelatedBusinessService || got.Src.ID != "bs-other" ||
+		got.Dst.Kind != NodeKindBusinessService || got.Dst.ID != "bs-root" {
+		t.Errorf("incoming edge endpoints: want bs-other → bs-root, got %+v", got)
+	}
+}
+
+// TestService_RelatedBusinessService_BothDirections pins the
+// same-BS-both-directions invariant: one related node, two
+// relates_to edges (one each way), and BOTH Outgoing + Incoming
+// sub-rows populated with their distinct relationship row data.
+// This is the case the projection's one-node-per-(kind,id)
+// invariant exists to handle losslessly.
+func TestService_RelatedBusinessService_BothDirections(t *testing.T) {
+	m := makeBSMap("bs-root", "Root")
+	m.Relationships.Outgoing = []*governancemap.RelationshipNode{
+		{
+			Relationship: &businessservice.BusinessServiceRelationship{
+				ID: "rel-out", SourceBusinessService: "bs-root", TargetBusinessService: "bs-other",
+				RelationshipType: "depends_on", Description: "Out desc",
+			},
+			OtherName: "Other BS",
+		},
+	}
+	m.Relationships.Incoming = []*governancemap.RelationshipNode{
+		{
+			Relationship: &businessservice.BusinessServiceRelationship{
+				ID: "rel-in", SourceBusinessService: "bs-other", TargetBusinessService: "bs-root",
+				RelationshipType: "supports", Description: "In desc",
+			},
+			OtherName: "Other BS",
+		},
+	}
+	svc := NewService(&stubReader{items: map[string]*governancemap.Map{"bs-root": m}})
+	p, err := svc.Project(context.Background(), ViewService, "bs-root", MaxDepth)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+
+	relatedCount := 0
+	var related *Node
+	for i := range p.Nodes {
+		n := &p.Nodes[i]
+		if n.Kind == NodeKindRelatedBusinessService && n.ID == "bs-other" {
+			relatedCount++
+			related = n
+		}
+	}
+	if relatedCount != 1 {
+		t.Fatalf("same-BS-both-directions must produce exactly 1 related node, got %d", relatedCount)
+	}
+	if related.RelatedBusinessService.Outgoing == nil || related.RelatedBusinessService.Incoming == nil {
+		t.Fatalf("both sub-rows must be populated; got Outgoing=%+v Incoming=%+v",
+			related.RelatedBusinessService.Outgoing, related.RelatedBusinessService.Incoming)
+	}
+	if got := related.RelatedBusinessService.Outgoing; got.RelationshipID != "rel-out" || got.RelationshipType != "depends_on" || got.Description != "Out desc" {
+		t.Errorf("outgoing sub-row content: %+v", got)
+	}
+	if got := related.RelatedBusinessService.Incoming; got.RelationshipID != "rel-in" || got.RelationshipType != "supports" || got.Description != "In desc" {
+		t.Errorf("incoming sub-row content: %+v", got)
+	}
+
+	relatesToEdges := []Edge{}
+	for _, e := range p.Edges {
+		if e.Kind == EdgeKindRelatesTo {
+			relatesToEdges = append(relatesToEdges, e)
+		}
+	}
+	if len(relatesToEdges) != 2 {
+		t.Fatalf("want 2 relates_to edges (one each direction), got %d (%+v)", len(relatesToEdges), relatesToEdges)
+	}
+	// Verify both directions present (order is enforced by the
+	// service's slice-level edge sort; assert by membership).
+	wantDirs := map[string]bool{
+		"bs-root|business_service→bs-other|related_business_service": false,
+		"bs-other|related_business_service→bs-root|business_service": false,
+	}
+	for _, e := range relatesToEdges {
+		key := e.Src.ID + "|" + e.Src.Kind + "→" + e.Dst.ID + "|" + e.Dst.Kind
+		if _, ok := wantDirs[key]; ok {
+			wantDirs[key] = true
+		} else {
+			t.Errorf("unexpected relates_to edge: %+v", e)
+		}
+	}
+	for k, seen := range wantDirs {
+		if !seen {
+			t.Errorf("missing relates_to edge for direction: %s", k)
+		}
 	}
 }
 

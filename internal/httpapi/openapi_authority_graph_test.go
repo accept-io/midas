@@ -43,6 +43,10 @@ func TestOpenAPIContract_AuthorityGraphSchemasDefined(t *testing.T) {
 		"AuthorityGraphExternalRefData",
 		"AuthorityGraphBusinessServiceData",
 		"AuthorityGraphRelatedBusinessServiceData",
+		// Phase 2B Step 6: per-direction sub-row schema for related
+		// business services. Used by both outgoing and incoming
+		// pointers on AuthorityGraphRelatedBusinessServiceData.
+		"AuthorityGraphRelatedBusinessServiceRow",
 		"AuthorityGraphCapabilityData",
 		"AuthorityGraphProcessData",
 		"AuthorityGraphDecisionSurfaceData",
@@ -170,6 +174,58 @@ func TestOpenAPIContract_AuthorityGraphAuthoritySummaryData_FieldNames(t *testin
 	} {
 		if _, ok := props[want].(map[string]any); !ok {
 			t.Errorf("AuthorityGraphAuthoritySummaryData.properties.%s missing", want)
+		}
+	}
+}
+
+// TestOpenAPIContract_AuthorityGraphRelatedBusinessService_NestedRows
+// pins the Phase 2B Step 6 shape: outgoing and incoming sub-rows on
+// AuthorityGraphRelatedBusinessServiceData via $ref to
+// AuthorityGraphRelatedBusinessServiceRow. The old flat fields
+// (`relationship_type`, `direction`) MUST NOT be present at the
+// data-level — they belong on the row schema.
+func TestOpenAPIContract_AuthorityGraphRelatedBusinessService_NestedRows(t *testing.T) {
+	schemas := loadSpecComponentSchemas(t)
+
+	data, ok := schemas["AuthorityGraphRelatedBusinessServiceData"].(map[string]any)
+	if !ok {
+		t.Fatal("AuthorityGraphRelatedBusinessServiceData schema not a map")
+	}
+	props, ok := data["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("AuthorityGraphRelatedBusinessServiceData has no properties map")
+	}
+	for _, want := range []string{"id", "name", "outgoing", "incoming"} {
+		if _, ok := props[want].(map[string]any); !ok {
+			t.Errorf("AuthorityGraphRelatedBusinessServiceData.properties.%s missing", want)
+		}
+	}
+	// Forbidden Phase-2A flat fields — must NOT appear on the data-
+	// level schema; they live on the row schema.
+	for _, illegal := range []string{"relationship_type", "direction", "relationship_id", "description"} {
+		if _, ok := props[illegal]; ok {
+			t.Errorf("AuthorityGraphRelatedBusinessServiceData.properties.%s must NOT exist (moved to RelatedBusinessServiceRow)", illegal)
+		}
+	}
+	// Verify outgoing/incoming reference the row schema.
+	for _, slot := range []string{"outgoing", "incoming"} {
+		s, _ := props[slot].(map[string]any)
+		if ref, _ := s["$ref"].(string); ref != "#/components/schemas/AuthorityGraphRelatedBusinessServiceRow" {
+			t.Errorf("AuthorityGraphRelatedBusinessServiceData.properties.%s.$ref = %q, want AuthorityGraphRelatedBusinessServiceRow", slot, ref)
+		}
+	}
+
+	row, ok := schemas["AuthorityGraphRelatedBusinessServiceRow"].(map[string]any)
+	if !ok {
+		t.Fatal("AuthorityGraphRelatedBusinessServiceRow schema not a map")
+	}
+	rowProps, ok := row["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("AuthorityGraphRelatedBusinessServiceRow has no properties map")
+	}
+	for _, want := range []string{"relationship_id", "relationship_type", "description"} {
+		if _, ok := rowProps[want].(map[string]any); !ok {
+			t.Errorf("AuthorityGraphRelatedBusinessServiceRow.properties.%s missing", want)
 		}
 	}
 }
