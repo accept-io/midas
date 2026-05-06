@@ -74,14 +74,17 @@ func TestGetGovernanceMap_SeededConsumerLending_AuthorityNonZero(t *testing.T) {
 		t.Fatal("AuthoritySummary must be non-nil")
 	}
 
-	if got.AuthoritySummary.ActiveProfileCount != 1 {
-		t.Errorf("ActiveProfileCount: want 1, got %d", got.AuthoritySummary.ActiveProfileCount)
+	// Phase 2B Step 11 enrichment pins: Consumer Lending now governs
+	// three surfaces (id-verify, credit-assess, consumer-fraud) with
+	// distinct profiles + grants, against two distinct agents.
+	if got.AuthoritySummary.ActiveProfileCount != 3 {
+		t.Errorf("ActiveProfileCount: want 3, got %d", got.AuthoritySummary.ActiveProfileCount)
 	}
-	if got.AuthoritySummary.ActiveGrantCount != 1 {
-		t.Errorf("ActiveGrantCount: want 1, got %d", got.AuthoritySummary.ActiveGrantCount)
+	if got.AuthoritySummary.ActiveGrantCount != 3 {
+		t.Errorf("ActiveGrantCount: want 3, got %d", got.AuthoritySummary.ActiveGrantCount)
 	}
-	if got.AuthoritySummary.ActiveAgentCount != 1 {
-		t.Errorf("ActiveAgentCount: want 1, got %d", got.AuthoritySummary.ActiveAgentCount)
+	if got.AuthoritySummary.ActiveAgentCount != 2 {
+		t.Errorf("ActiveAgentCount: want 2 (evaluator + fraud-bot), got %d", got.AuthoritySummary.ActiveAgentCount)
 	}
 
 	// surf-v2-id-verify must carry profile_count == 1 so the frontend
@@ -137,10 +140,12 @@ func TestGetGovernanceMap_SeededConsumerLending_RepeatedSeedStillNonZero(t *test
 	if err != nil {
 		t.Fatalf("GetGovernanceMap: %v", err)
 	}
-	if got.AuthoritySummary.ActiveProfileCount != 1 ||
-		got.AuthoritySummary.ActiveGrantCount != 1 ||
-		got.AuthoritySummary.ActiveAgentCount != 1 {
-		t.Errorf("AuthoritySummary after repeated seed: want all=1, got profiles=%d grants=%d agents=%d",
+	// Same Phase 2B Step 11 expanded counts as the fresh-seed
+	// assertion: 3 profiles, 3 grants, 2 distinct agents.
+	if got.AuthoritySummary.ActiveProfileCount != 3 ||
+		got.AuthoritySummary.ActiveGrantCount != 3 ||
+		got.AuthoritySummary.ActiveAgentCount != 2 {
+		t.Errorf("AuthoritySummary after repeated seed: want profiles=3 grants=3 agents=2, got profiles=%d grants=%d agents=%d",
 			got.AuthoritySummary.ActiveProfileCount,
 			got.AuthoritySummary.ActiveGrantCount,
 			got.AuthoritySummary.ActiveAgentCount)

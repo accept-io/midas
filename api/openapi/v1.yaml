@@ -1284,11 +1284,13 @@ components:
           $ref: "#/components/schemas/AuthorityGraphNodeRef"
         view:
           type: string
-          enum: [service]
+          enum: [service, ai_system]
           description: >
-            Perspective the projection was computed in. Phase 1 always
-            returns `service`; later phases will introduce additional
-            views.
+            Perspective the projection was computed in. `service`
+            projects from a business-service root via the
+            governance-map read service. `ai_system` projects from an
+            AI-system root by walking bindings to their scope targets.
+            Future views (decision_surface, agent, risk) are reserved.
         depth:
           type: integer
           minimum: 0
@@ -4539,10 +4541,13 @@ paths:
           required: true
           schema:
             type: string
-            enum: [service]
+            enum: [service, ai_system]
           description: >
-            Perspective. Phase 1 supports only `service`. Other views
-            (agent, ai_system, decision, risk) are reserved for Phase 2.
+            Perspective. `service` is rooted at a business service and
+            reuses the governance-map read service. `ai_system` is
+            rooted at an AI system and walks bindings to their scope
+            targets. Other views (decision_surface, agent, risk) are
+            reserved for later phases.
         - name: id
           in: query
           required: true

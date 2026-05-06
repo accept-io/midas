@@ -1017,8 +1017,12 @@ func TestExplorer_HTML_GovernanceMap_FetchesAuthorityGraphEndpoint(t *testing.T)
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, "/v1/authority-graph?view=service") {
-		t.Error("Explorer JS must reference the /v1/authority-graph?view=service endpoint")
+	// Positive pin: the URL prefix with view as a parameter (not a
+	// hard-coded value). Phase 2B Step 10 introduced reframe support;
+	// view is now driven by currentGraphView, so the literal URL is
+	// composed at runtime.
+	if !strings.Contains(body, "/v1/authority-graph?view=") {
+		t.Error("Explorer JS must reference the /v1/authority-graph?view= endpoint prefix")
 	}
 	// Pin the depth=5 (=MaxDepth) parameter the renderer relies on
 	// so every projected node is visible regardless of layer.
@@ -1031,12 +1035,68 @@ func TestExplorer_HTML_GovernanceMap_FetchesAuthorityGraphEndpoint(t *testing.T)
 	if !strings.Contains(body, "fetch(url") && !strings.Contains(body, "fetch(") {
 		t.Error("Explorer JS must use fetch() to load the read model")
 	}
+	// Negative pin: the hard-coded `view=service` literal must NOT
+	// appear as a JS string-literal in the fetch URL construction
+	// (descriptive doc comments may still mention the URL form).
+	// Phase 2B Step 10 removed the baked-in literal so reframe can
+	// re-target view via currentGraphView.
+	if strings.Contains(body, "'/v1/authority-graph?view=service&id=' +") ||
+		strings.Contains(body, `"/v1/authority-graph?view=service&id=" +`) {
+		t.Error("Explorer JS must not bake `view=service` into the fetch URL string literal — view is parameterised via currentGraphView")
+	}
 	// Pin the absence of an active fetch to the legacy gmap endpoint.
 	// The legacy URL substring may still appear in non-active comments
 	// (which is acceptable), but no active fetch literal should remain.
 	if strings.Contains(body, "fetch('/v1/businessservices/' + encodeURIComponent") ||
 		strings.Contains(body, `fetch("/v1/businessservices/" + encodeURIComponent`) {
 		t.Error("Explorer JS must not actively fetch the legacy /v1/businessservices/{id}/governance-map path")
+	}
+}
+
+// TestExplorer_HTML_GovernanceMap_ReframeAroundAISystemNodes pins the
+// Phase 2B Step 10 reframe affordance for AI system nodes. The action
+// kind, payload key, button label, dispatcher case, and graph-state
+// variable names are all pinned so a regression that drops or renames
+// any of them surfaces here loudly.
+func TestExplorer_HTML_GovernanceMap_ReframeAroundAISystemNodes(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// Positive pins — exact literals.
+	for _, want := range []string{
+		// Action kind literal — tests external consumers of the
+		// dataset.nodeActions JSON pin this exact string.
+		"reframe-around-this",
+		// Action payload key — selects which view to reframe to.
+		"target_view",
+		// Button label — the operator-facing affordance.
+		"Reframe around this",
+		// Dispatcher case — defence-in-depth so unknown kinds drop.
+		"case 'reframe-around-this'",
+		// Graph-state variable names — tests rely on these exact
+		// identifiers.
+		"currentGraphView",
+		"currentGraphRootId",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("Explorer JS missing required reframe literal %q", want)
+		}
+	}
+
+	// Adapter signature must thread the view through. Pin that every
+	// call site passes the (projection, view) pair — this guarantees
+	// the view='service' regression-free behaviour because the second
+	// arg is always present.
+	if strings.Contains(body, "mapAuthorityGraphToGovernanceMapShape(payload)") {
+		t.Error("Explorer JS must call mapAuthorityGraphToGovernanceMapShape with two arguments (projection, view); a single-arg call site would lose the view branch")
+	}
+	if !strings.Contains(body, "mapAuthorityGraphToGovernanceMapShape(payload, ") {
+		t.Error("Explorer JS must call mapAuthorityGraphToGovernanceMapShape with the view as the second argument")
 	}
 }
 
@@ -1580,12 +1640,11 @@ func TestExplorer_HTML_ServicesView_LiveBSListSelector(t *testing.T) {
 	}
 
 	// 9. The Services view's per-BS data fetch (used by both the map
-	// sub-view and the record page) is /v1/authority-graph. Pin it
-	// here so this test stays a single-file documentation point for
-	// the two URLs the Services view consumes (catalogue +
-	// authority-graph).
-	if !strings.Contains(body, "/v1/authority-graph?view=service") {
-		t.Error("Live BS selector: the per-BS authority-graph URL must be present")
+	// sub-view and the record page) is /v1/authority-graph. The view
+	// parameter is now driven by currentGraphView (Phase 2B Step 10
+	// reframe support); pin the URL prefix only.
+	if !strings.Contains(body, "/v1/authority-graph?view=") {
+		t.Error("Live BS selector: the /v1/authority-graph?view= URL prefix must be present")
 	}
 
 	// 10. The init bootstrap calls loadBusinessServicesList() so the
@@ -2524,8 +2583,17 @@ func TestExplorer_HTML_ServicesView_CatalogueRecordNavigation(t *testing.T) {
 	if !strings.Contains(body, `fetch('/v1/businessservices'`) {
 		t.Error("Catalogue/record nav: catalogue must fetch /v1/businessservices")
 	}
-	if !strings.Contains(body, `'/v1/authority-graph?view=service&id=' + encodeURIComponent(serviceId) + '&depth=5'`) {
-		t.Error("Catalogue/record nav: record page must fetch /v1/authority-graph (Phase 2B Step 5 cutover)")
+	// Phase 2B Step 10: the record page's URL is composed from
+	// currentGraphView + currentGraphRootId rather than baking
+	// `view=service` into the literal. Pin the encodeURIComponent +
+	// &depth=5 fragments so a regression that drops the URL composition
+	// pattern (e.g., reverts to a hardcoded literal or to a different
+	// endpoint) surfaces here.
+	if !strings.Contains(body, `'/v1/authority-graph?view=' + encodeURIComponent(currentGraphView)`) {
+		t.Error("Catalogue/record nav: record page must compose URL from currentGraphView (no hard-coded view=service)")
+	}
+	if !strings.Contains(body, `'&id=' + encodeURIComponent(currentGraphRootId) + '&depth=5'`) {
+		t.Error("Catalogue/record nav: record page URL must include &id= + currentGraphRootId + &depth=5 fragments")
 	}
 
 	// 5. Record-page consumption of governance-map payload fields. The

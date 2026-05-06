@@ -275,11 +275,21 @@ func main() {
 		repos.AISystemBindings,
 	)
 	srv.WithGovernanceMap(governanceMapReader)
-	// Authority Graph (Phase 1): generic node/edge projection. Reuses
-	// the governance-map read service rather than re-querying
-	// repositories — adding a new graph view is a new compose function
-	// in the authoritygraph package, not new repository calls.
-	srv.WithAuthorityGraph(authoritygraph.NewService(governanceMapReader))
+	// Authority Graph: multi-view projection. ViewService reuses the
+	// governance-map read service (no new repository reads).
+	// ViewAISystem walks ai_system → bindings → scope targets via the
+	// scope-resolving readers below; new views are new projector
+	// registrations on the authoritygraph.Service, not new repository
+	// calls.
+	srv.WithAuthorityGraph(authoritygraph.NewServiceWithReaders(authoritygraph.Readers{
+		GovernanceMap:    governanceMapReader,
+		AISystem:         repos.AISystems,
+		AISystemBindings: repos.AISystemBindings,
+		BusinessServices: repos.BusinessServices,
+		Capabilities:     repos.Capabilities,
+		Processes:        repos.Processes,
+		Surfaces:         repos.Surfaces,
+	}))
 	srv.WithStructuralMode(cfg.Structural.Mode)
 	// NOTE: WithAuthenticator is called below, AFTER the optional Local IAM
 	// service is constructed, so /v1/* can accept either a static bearer

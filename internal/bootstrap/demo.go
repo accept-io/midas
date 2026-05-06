@@ -2,10 +2,12 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/accept-io/midas/internal/agent"
+	"github.com/accept-io/midas/internal/aisystem"
 	"github.com/accept-io/midas/internal/authority"
 	"github.com/accept-io/midas/internal/businessservice"
 	"github.com/accept-io/midas/internal/businessservicecapability"
@@ -108,6 +110,7 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 			Name:        "Consumer Lending",
 			Description: "Retail lending products for individual consumers",
 			ServiceType: businessservice.ServiceTypeCustomerFacing,
+			OwnerID:     "consumer-lending-team",
 			Status:      "active",
 			Origin:      "manual",
 			Managed:     true,
@@ -119,6 +122,67 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 			Name:        "Merchant Services",
 			Description: "Payment processing and fraud prevention for merchants",
 			ServiceType: businessservice.ServiceTypeCustomerFacing,
+			OwnerID:     "merchant-services-team",
+			Status:      "active",
+			Origin:      "manual",
+			Managed:     true,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		},
+		{
+			ID:          "bs-retail-banking",
+			Name:        "Retail Banking",
+			Description: "Personal accounts, deposits, statements, and everyday banking for individual customers",
+			ServiceType: businessservice.ServiceTypeCustomerFacing,
+			OwnerID:     "retail-banking-team",
+			Status:      "active",
+			Origin:      "manual",
+			Managed:     true,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		},
+		{
+			ID:          "bs-payments",
+			Name:        "Payments",
+			Description: "Domestic and cross-border payment execution, including faster payments and wire transfers",
+			ServiceType: businessservice.ServiceTypeCustomerFacing,
+			OwnerID:     "payments-team",
+			Status:      "active",
+			Origin:      "manual",
+			Managed:     true,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		},
+		{
+			ID:          "bs-cards",
+			Name:        "Cards",
+			Description: "Card issuance, lifecycle management, and dispute resolution for debit and credit cards",
+			ServiceType: businessservice.ServiceTypeCustomerFacing,
+			OwnerID:     "cards-team",
+			Status:      "active",
+			Origin:      "manual",
+			Managed:     true,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		},
+		{
+			ID:          "bs-customer-onboarding",
+			Name:        "Customer Onboarding",
+			Description: "End-to-end customer acquisition: KYC, party authentication, vulnerability assessment, account opening",
+			ServiceType: businessservice.ServiceTypeCustomerFacing,
+			OwnerID:     "onboarding-team",
+			Status:      "active",
+			Origin:      "manual",
+			Managed:     true,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		},
+		{
+			ID:          "bs-fraud-financial-crime",
+			Name:        "Fraud & Financial Crime",
+			Description: "Cross-domain fraud detection, AML screening, and financial-crime case management",
+			ServiceType: businessservice.ServiceTypeInternal,
+			OwnerID:     "ffc-team",
 			Status:      "active",
 			Origin:      "manual",
 			Managed:     true,
@@ -138,42 +202,180 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 	// (M:N); cap-fraud-detection demonstrates this by enabling both
 	// consumer-lending and merchant-services below.
 
+	// BIAN-aligned capability hierarchy. Top-level "domain"
+	// capabilities (no parent) group leaf capabilities into recognised
+	// banking service domains. Existing pre-Phase-2B capabilities
+	// (cap-identity-verification, cap-credit-scoring, cap-fraud-
+	// detection, cap-payment-authorization) remain at the top level
+	// for idempotency — the ensure helper does not Update existing
+	// rows, so retro-fitting parents onto them would silently no-op
+	// on already-seeded deployments. New leaf capabilities use
+	// ParentCapabilityID to nest under domain parents.
 	caps := []*capability.Capability{
+		// --- Existing leaf capabilities (pre-Phase-2B, no parent) ---
 		{
 			ID:        "cap-identity-verification",
 			Name:      "Identity Verification",
-			Status:    "active",
-			Origin:    "manual",
-			Managed:   true,
-			CreatedAt: now,
-			UpdatedAt: now,
+			Status:    "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
 		},
 		{
 			ID:        "cap-credit-scoring",
 			Name:      "Credit Scoring",
-			Status:    "active",
-			Origin:    "manual",
-			Managed:   true,
-			CreatedAt: now,
-			UpdatedAt: now,
+			Status:    "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
 		},
 		{
 			ID:        "cap-fraud-detection",
 			Name:      "Fraud Detection",
-			Status:    "active",
-			Origin:    "manual",
-			Managed:   true,
-			CreatedAt: now,
-			UpdatedAt: now,
+			Status:    "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
 		},
 		{
 			ID:        "cap-payment-authorization",
 			Name:      "Payment Authorization",
-			Status:    "active",
-			Origin:    "manual",
-			Managed:   true,
-			CreatedAt: now,
-			UpdatedAt: now,
+			Status:    "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		// --- BIAN domain parents ---
+		{
+			ID:          "cap-customer",
+			Name:        "Customer",
+			Description: "BIAN service domain: customer-centric capabilities (offer, onboarding, authentication, vulnerability)",
+			Status:      "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID:          "cap-product",
+			Name:        "Product Management",
+			Description: "BIAN service domain: product specification, fulfillment, and lifecycle",
+			Status:      "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID:          "cap-credit",
+			Name:        "Credit",
+			Description: "BIAN service domain: credit risk, scoring, administration, and collections",
+			Status:      "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID:          "cap-payment",
+			Name:        "Payments",
+			Description: "BIAN service domain: payment authorization, execution, clearing, settlement",
+			Status:      "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID:          "cap-financial-crime",
+			Name:        "Financial Crime",
+			Description: "BIAN service domain: fraud, AML, sanctions, and case management",
+			Status:      "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID:          "cap-card-ops",
+			Name:        "Card Operations",
+			Description: "BIAN service domain: card issuance, lifecycle, dispute resolution",
+			Status:      "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		// --- New leaf capabilities under domains ---
+		{
+			ID:                 "cap-customer-offer",
+			Name:               "Customer Offer",
+			Description:        "Tailored product offer presentation",
+			ParentCapabilityID: "cap-customer",
+			Status:             "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID:                 "cap-customer-onboarding",
+			Name:               "Customer Onboarding",
+			Description:        "Customer acquisition and account opening lifecycle",
+			ParentCapabilityID: "cap-customer",
+			Status:             "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID:                 "cap-party-authentication",
+			Name:               "Party Authentication",
+			Description:        "Authentication of customer identity claims",
+			ParentCapabilityID: "cap-customer",
+			Status:             "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID:                 "cap-vulnerability-assessment",
+			Name:               "Customer Vulnerability Assessment",
+			Description:        "Detection and management of vulnerable customer indicators",
+			ParentCapabilityID: "cap-customer",
+			Status:             "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID:                 "cap-product-fulfillment",
+			Name:               "Product Fulfillment",
+			Description:        "Provisioning of products into customer accounts",
+			ParentCapabilityID: "cap-product",
+			Status:             "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID:                 "cap-credit-administration",
+			Name:               "Credit Administration",
+			Description:        "Servicing of credit facilities post-origination",
+			ParentCapabilityID: "cap-credit",
+			Status:             "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID:                 "cap-collections",
+			Name:               "Collections",
+			Description:        "Recovery of overdue credit balances",
+			ParentCapabilityID: "cap-credit",
+			Status:             "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID:                 "cap-payment-execution",
+			Name:               "Payment Execution",
+			Description:        "Outbound payment instruction execution and settlement",
+			ParentCapabilityID: "cap-payment",
+			Status:             "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID:                 "cap-fraud-evaluation",
+			Name:               "Fraud Evaluation",
+			Description:        "Real-time fraud risk evaluation per transaction or event",
+			ParentCapabilityID: "cap-financial-crime",
+			Status:             "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID:                 "cap-aml-screening",
+			Name:               "AML Screening",
+			Description:        "Anti-money-laundering screening of parties and transactions",
+			ParentCapabilityID: "cap-financial-crime",
+			Status:             "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID:                 "cap-card-issuance",
+			Name:               "Card Issuance",
+			Description:        "Production and dispatch of physical and virtual cards",
+			ParentCapabilityID: "cap-card-ops",
+			Status:             "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID:                 "cap-dispute-resolution",
+			Name:               "Dispute Resolution",
+			Description:        "Card transaction dispute and chargeback handling",
+			ParentCapabilityID: "cap-card-ops",
+			Status:             "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
 		},
 	}
 	for _, c := range caps {
@@ -188,11 +390,40 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 	// demonstrating cross-service capability reuse under M:N.
 
 	bscLinks := []*businessservicecapability.BusinessServiceCapability{
+		// Consumer Lending — pre-Phase-2B + new credit-domain caps.
 		{BusinessServiceID: "bs-consumer-lending", CapabilityID: "cap-identity-verification", CreatedAt: now},
 		{BusinessServiceID: "bs-consumer-lending", CapabilityID: "cap-credit-scoring", CreatedAt: now},
 		{BusinessServiceID: "bs-consumer-lending", CapabilityID: "cap-fraud-detection", CreatedAt: now},
+		{BusinessServiceID: "bs-consumer-lending", CapabilityID: "cap-credit-administration", CreatedAt: now},
+		{BusinessServiceID: "bs-consumer-lending", CapabilityID: "cap-collections", CreatedAt: now},
+		// Merchant Services — pre-Phase-2B + payment+ffc reuse.
 		{BusinessServiceID: "bs-merchant-services", CapabilityID: "cap-fraud-detection", CreatedAt: now},
 		{BusinessServiceID: "bs-merchant-services", CapabilityID: "cap-payment-authorization", CreatedAt: now},
+		{BusinessServiceID: "bs-merchant-services", CapabilityID: "cap-payment-execution", CreatedAt: now},
+		{BusinessServiceID: "bs-merchant-services", CapabilityID: "cap-fraud-evaluation", CreatedAt: now},
+		// Retail Banking — customer-facing essentials.
+		{BusinessServiceID: "bs-retail-banking", CapabilityID: "cap-customer-offer", CreatedAt: now},
+		{BusinessServiceID: "bs-retail-banking", CapabilityID: "cap-product-fulfillment", CreatedAt: now},
+		{BusinessServiceID: "bs-retail-banking", CapabilityID: "cap-party-authentication", CreatedAt: now},
+		// Payments — payment + fraud domains.
+		{BusinessServiceID: "bs-payments", CapabilityID: "cap-payment-authorization", CreatedAt: now},
+		{BusinessServiceID: "bs-payments", CapabilityID: "cap-payment-execution", CreatedAt: now},
+		{BusinessServiceID: "bs-payments", CapabilityID: "cap-fraud-evaluation", CreatedAt: now},
+		{BusinessServiceID: "bs-payments", CapabilityID: "cap-aml-screening", CreatedAt: now},
+		// Cards — card-ops + authentication.
+		{BusinessServiceID: "bs-cards", CapabilityID: "cap-card-issuance", CreatedAt: now},
+		{BusinessServiceID: "bs-cards", CapabilityID: "cap-dispute-resolution", CreatedAt: now},
+		{BusinessServiceID: "bs-cards", CapabilityID: "cap-fraud-detection", CreatedAt: now},
+		{BusinessServiceID: "bs-cards", CapabilityID: "cap-payment-authorization", CreatedAt: now},
+		// Customer Onboarding — full customer-domain stack.
+		{BusinessServiceID: "bs-customer-onboarding", CapabilityID: "cap-customer-onboarding", CreatedAt: now},
+		{BusinessServiceID: "bs-customer-onboarding", CapabilityID: "cap-party-authentication", CreatedAt: now},
+		{BusinessServiceID: "bs-customer-onboarding", CapabilityID: "cap-identity-verification", CreatedAt: now},
+		{BusinessServiceID: "bs-customer-onboarding", CapabilityID: "cap-vulnerability-assessment", CreatedAt: now},
+		// Fraud & Financial Crime — full FFC stack.
+		{BusinessServiceID: "bs-fraud-financial-crime", CapabilityID: "cap-fraud-detection", CreatedAt: now},
+		{BusinessServiceID: "bs-fraud-financial-crime", CapabilityID: "cap-fraud-evaluation", CreatedAt: now},
+		{BusinessServiceID: "bs-fraud-financial-crime", CapabilityID: "cap-aml-screening", CreatedAt: now},
 	}
 	for _, bsc := range bscLinks {
 		if err := ensureBSC(ctx, repos.BusinessServiceCapabilities, bsc); err != nil {
@@ -206,45 +437,114 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 	// services have two processes here, exercising the multi-Process case.
 
 	procs := []*process.Process{
+		// --- Existing pre-Phase-2B processes ---
 		{
-			ID:                "proc-consumer-onboarding",
-			Name:              "Consumer Onboarding",
+			ID: "proc-consumer-onboarding", Name: "Consumer Onboarding",
 			BusinessServiceID: "bs-consumer-lending",
-			Status:            "active",
-			Origin:            "manual",
-			Managed:           true,
-			CreatedAt:         now,
-			UpdatedAt:         now,
+			Status:            "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
 		},
 		{
-			ID:                "proc-credit-assessment",
-			Name:              "Credit Assessment",
+			ID: "proc-credit-assessment", Name: "Credit Assessment",
 			BusinessServiceID: "bs-consumer-lending",
-			Status:            "active",
-			Origin:            "manual",
-			Managed:           true,
-			CreatedAt:         now,
-			UpdatedAt:         now,
+			Status:            "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
 		},
 		{
-			ID:                "proc-merchant-risk-screen",
-			Name:              "Merchant Risk Screening",
+			ID: "proc-merchant-risk-screen", Name: "Merchant Risk Screening",
 			BusinessServiceID: "bs-merchant-services",
-			Status:            "active",
-			Origin:            "manual",
-			Managed:           true,
-			CreatedAt:         now,
-			UpdatedAt:         now,
+			Status:            "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
 		},
 		{
-			ID:                "proc-merchant-payment-auth",
-			Name:              "Merchant Payment Authorization",
+			ID: "proc-merchant-payment-auth", Name: "Merchant Payment Authorization",
 			BusinessServiceID: "bs-merchant-services",
-			Status:            "active",
-			Origin:            "manual",
-			Managed:           true,
-			CreatedAt:         now,
-			UpdatedAt:         now,
+			Status:            "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		// --- Consumer Lending: collections process ---
+		{
+			ID: "proc-loan-collections", Name: "Loan Collections",
+			BusinessServiceID: "bs-consumer-lending",
+			Status:            "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		// --- Retail Banking ---
+		{
+			ID: "proc-account-opening", Name: "Account Opening",
+			BusinessServiceID: "bs-retail-banking",
+			Status:            "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "proc-statement-generation", Name: "Statement Generation",
+			BusinessServiceID: "bs-retail-banking",
+			Status:            "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		// --- Payments ---
+		{
+			ID: "proc-payment-initiation", Name: "Payment Initiation",
+			BusinessServiceID: "bs-payments",
+			Status:            "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "proc-payment-clearing", Name: "Payment Clearing & Settlement",
+			BusinessServiceID: "bs-payments",
+			Status:            "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "proc-cross-border-transfer", Name: "Cross-Border Transfer",
+			BusinessServiceID: "bs-payments",
+			Status:            "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		// --- Cards ---
+		{
+			ID: "proc-card-issuance-flow", Name: "Card Issuance",
+			BusinessServiceID: "bs-cards",
+			Status:            "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "proc-card-dispute", Name: "Card Dispute",
+			BusinessServiceID: "bs-cards",
+			Status:            "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		// --- Customer Onboarding ---
+		{
+			ID: "proc-kyc-collection", Name: "KYC Collection",
+			BusinessServiceID: "bs-customer-onboarding",
+			Status:            "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "proc-vulnerability-screen", Name: "Vulnerability Screening",
+			BusinessServiceID: "bs-customer-onboarding",
+			Status:            "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		// --- Fraud & Financial Crime ---
+		{
+			ID: "proc-transaction-monitoring", Name: "Transaction Monitoring",
+			BusinessServiceID: "bs-fraud-financial-crime",
+			Status:            "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "proc-aml-investigation", Name: "AML Investigation",
+			BusinessServiceID: "bs-fraud-financial-crime",
+			Status:            "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "proc-financial-crime-case", Name: "Financial Crime Case Management",
+			BusinessServiceID: "bs-fraud-financial-crime",
+			Status:            "active", Origin: "manual", Managed: true,
+			CreatedAt: now, UpdatedAt: now,
 		},
 	}
 	for _, p := range procs {
@@ -373,6 +673,145 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 			CreatedAt:          now,
 			UpdatedAt:          now,
 		},
+		// --- Phase 2B Step 11 enrichment: surfaces under new processes ---
+		// Density principle: not every process owns a surface (e.g.
+		// proc-payment-clearing, proc-financial-crime-case are
+		// deliberately surfaceless to demonstrate sparse rows in the
+		// graph). Some surfaces are governed (have profile/grant);
+		// others are intentionally ungoverned to demonstrate coverage
+		// gaps in the authority overlay.
+		{
+			ID: "surf-v2-collections-priority", Version: 1,
+			Name: "Collections Call Priority", Description: "Prioritises overdue accounts for collections outreach",
+			Domain: "consumer-lending", ProcessID: "proc-loan-collections",
+			DecisionType: surface.DecisionTypeTactical, ReversibilityClass: surface.ReversibilityReversible,
+			FailureMode:     surface.FailureModeOpen,
+			RequiredContext: surface.ContextSchema{Fields: []surface.ContextField{}},
+			ConsequenceTypes: []surface.ConsequenceType{}, Status: surface.SurfaceStatusActive,
+			EffectiveFrom: effective, BusinessOwner: "consumer-lending-team", TechnicalOwner: "midas",
+			CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "surf-v2-account-eligibility", Version: 1,
+			Name: "Account Opening Eligibility", Description: "Determines eligibility to open a retail account",
+			Domain: "retail-banking", ProcessID: "proc-account-opening",
+			DecisionType: surface.DecisionTypeTactical, ReversibilityClass: surface.ReversibilityConditionallyReversible,
+			FailureMode:     surface.FailureModeClosed,
+			RequiredContext: surface.ContextSchema{Fields: []surface.ContextField{}},
+			ConsequenceTypes: []surface.ConsequenceType{}, Status: surface.SurfaceStatusActive,
+			EffectiveFrom: effective, BusinessOwner: "retail-banking-team", TechnicalOwner: "midas",
+			CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "surf-v2-statement-suppression", Version: 1,
+			Name: "Statement Suppression", Description: "Suppresses statement generation under specified conditions",
+			Domain: "retail-banking", ProcessID: "proc-statement-generation",
+			DecisionType: surface.DecisionTypeOperational, ReversibilityClass: surface.ReversibilityReversible,
+			FailureMode:     surface.FailureModeOpen,
+			RequiredContext: surface.ContextSchema{Fields: []surface.ContextField{}},
+			ConsequenceTypes: []surface.ConsequenceType{}, Status: surface.SurfaceStatusActive,
+			EffectiveFrom: effective, BusinessOwner: "retail-banking-team", TechnicalOwner: "midas",
+			CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "surf-v2-payment-initiation-check", Version: 1,
+			Name: "Payment Initiation Check", Description: "Pre-authorisation checks for outbound payments",
+			Domain: "payments", ProcessID: "proc-payment-initiation",
+			DecisionType: surface.DecisionTypeTactical, ReversibilityClass: surface.ReversibilityConditionallyReversible,
+			FailureMode:     surface.FailureModeClosed,
+			RequiredContext: surface.ContextSchema{Fields: []surface.ContextField{}},
+			ConsequenceTypes: []surface.ConsequenceType{}, Status: surface.SurfaceStatusActive,
+			EffectiveFrom: effective, BusinessOwner: "payments-team", TechnicalOwner: "midas",
+			CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "surf-v2-sanctions-screen", Version: 1,
+			Name: "Cross-Border Sanctions Screen", Description: "Sanctions screening for cross-border transfers",
+			Domain: "payments", ProcessID: "proc-cross-border-transfer",
+			DecisionType: surface.DecisionTypeStrategic, ReversibilityClass: surface.ReversibilityIrreversible,
+			FailureMode:     surface.FailureModeClosed,
+			RequiredContext: surface.ContextSchema{Fields: []surface.ContextField{}},
+			ConsequenceTypes: []surface.ConsequenceType{}, Status: surface.SurfaceStatusActive,
+			EffectiveFrom: effective, BusinessOwner: "payments-team", TechnicalOwner: "midas",
+			CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "surf-v2-card-issuance-decision", Version: 1,
+			Name: "Card Issuance Decision", Description: "Approves or declines card issuance requests",
+			Domain: "cards", ProcessID: "proc-card-issuance-flow",
+			DecisionType: surface.DecisionTypeTactical, ReversibilityClass: surface.ReversibilityConditionallyReversible,
+			FailureMode:     surface.FailureModeClosed,
+			RequiredContext: surface.ContextSchema{Fields: []surface.ContextField{}},
+			ConsequenceTypes: []surface.ConsequenceType{}, Status: surface.SurfaceStatusActive,
+			EffectiveFrom: effective, BusinessOwner: "cards-team", TechnicalOwner: "midas",
+			CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "surf-v2-dispute-triage", Version: 1,
+			Name: "Card Dispute Triage", Description: "Triage of card disputes into chargeback / decline / investigation paths",
+			Domain: "cards", ProcessID: "proc-card-dispute",
+			DecisionType: surface.DecisionTypeTactical, ReversibilityClass: surface.ReversibilityConditionallyReversible,
+			FailureMode:     surface.FailureModeOpen,
+			RequiredContext: surface.ContextSchema{Fields: []surface.ContextField{}},
+			ConsequenceTypes: []surface.ConsequenceType{}, Status: surface.SurfaceStatusActive,
+			EffectiveFrom: effective, BusinessOwner: "cards-team", TechnicalOwner: "midas",
+			CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "surf-v2-kyc-evaluation", Version: 1,
+			Name: "KYC Evaluation", Description: "Evaluates KYC completeness and risk for new customers",
+			Domain: "customer-onboarding", ProcessID: "proc-kyc-collection",
+			DecisionType: surface.DecisionTypeTactical, ReversibilityClass: surface.ReversibilityConditionallyReversible,
+			FailureMode:     surface.FailureModeClosed,
+			RequiredContext: surface.ContextSchema{Fields: []surface.ContextField{}},
+			ConsequenceTypes: []surface.ConsequenceType{}, Status: surface.SurfaceStatusActive,
+			EffectiveFrom: effective, BusinessOwner: "onboarding-team", TechnicalOwner: "midas",
+			CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "surf-v2-vulnerability-flag", Version: 1,
+			Name: "Vulnerability Flag", Description: "Flags potentially vulnerable customers for human review",
+			Domain: "customer-onboarding", ProcessID: "proc-vulnerability-screen",
+			DecisionType: surface.DecisionTypeStrategic, ReversibilityClass: surface.ReversibilityReversible,
+			FailureMode:     surface.FailureModeOpen,
+			RequiredContext: surface.ContextSchema{Fields: []surface.ContextField{}},
+			ConsequenceTypes: []surface.ConsequenceType{}, Status: surface.SurfaceStatusActive,
+			EffectiveFrom: effective, BusinessOwner: "onboarding-team", TechnicalOwner: "midas",
+			CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "surf-v2-tx-anomaly", Version: 1,
+			Name: "Transaction Anomaly Detection", Description: "Real-time anomaly detection on transaction streams",
+			Domain: "fraud-financial-crime", ProcessID: "proc-transaction-monitoring",
+			DecisionType: surface.DecisionTypeTactical, ReversibilityClass: surface.ReversibilityConditionallyReversible,
+			FailureMode:     surface.FailureModeOpen,
+			RequiredContext: surface.ContextSchema{Fields: []surface.ContextField{}},
+			ConsequenceTypes: []surface.ConsequenceType{}, Status: surface.SurfaceStatusActive,
+			EffectiveFrom: effective, BusinessOwner: "ffc-team", TechnicalOwner: "midas",
+			CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "surf-v2-tx-velocity", Version: 1,
+			Name: "Transaction Velocity Check", Description: "Velocity-based screening for unusual transaction frequency",
+			Domain: "fraud-financial-crime", ProcessID: "proc-transaction-monitoring",
+			DecisionType: surface.DecisionTypeTactical, ReversibilityClass: surface.ReversibilityReversible,
+			FailureMode:     surface.FailureModeOpen,
+			RequiredContext: surface.ContextSchema{Fields: []surface.ContextField{}},
+			ConsequenceTypes: []surface.ConsequenceType{}, Status: surface.SurfaceStatusActive,
+			EffectiveFrom: effective, BusinessOwner: "ffc-team", TechnicalOwner: "midas",
+			CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "surf-v2-aml-alert-triage", Version: 1,
+			Name: "AML Alert Triage", Description: "Triages AML alerts into investigation, dismissal, or escalation",
+			Domain: "fraud-financial-crime", ProcessID: "proc-aml-investigation",
+			DecisionType: surface.DecisionTypeTactical, ReversibilityClass: surface.ReversibilityConditionallyReversible,
+			FailureMode:     surface.FailureModeClosed,
+			RequiredContext: surface.ContextSchema{Fields: []surface.ContextField{}},
+			ConsequenceTypes: []surface.ConsequenceType{}, Status: surface.SurfaceStatusActive,
+			EffectiveFrom: effective, BusinessOwner: "ffc-team", TechnicalOwner: "midas",
+			CreatedAt: now, UpdatedAt: now,
+		},
 	}
 	for _, s := range surfs {
 		if err := ensureSurface(ctx, repos.Surfaces, s); err != nil {
@@ -380,13 +819,97 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 		}
 	}
 
-	// --- Agent ---
+	// --- Business-service relationships (Phase 2B Step 11) ---
+	// Realistic banking dependencies. Includes a bidirectional pair
+	// (bs-payments ↔ bs-fraud-financial-crime) using two distinct
+	// relationship types — payments depends_on fraud (for screening)
+	// and fraud supports payments (as the screening provider). The
+	// schema's uniq_bsr_triple constraint is on (source, target,
+	// type), so the two rows coexist legally.
+	bsRels := []*businessservice.BusinessServiceRelationship{
+		{
+			ID:                    "rel-payments-deps-fraud",
+			SourceBusinessService: "bs-payments", TargetBusinessService: "bs-fraud-financial-crime",
+			RelationshipType: "depends_on",
+			Description:      "Payments must invoke fraud screening before authorising outbound transfers",
+			CreatedAt:        now, CreatedBy: "system",
+		},
+		{
+			ID:                    "rel-fraud-supports-payments",
+			SourceBusinessService: "bs-fraud-financial-crime", TargetBusinessService: "bs-payments",
+			RelationshipType: "supports",
+			Description:      "Fraud & Financial Crime supports Payments by providing real-time screening",
+			CreatedAt:        now, CreatedBy: "system",
+		},
+		{
+			ID:                    "rel-cards-supports-retail",
+			SourceBusinessService: "bs-cards", TargetBusinessService: "bs-retail-banking",
+			RelationshipType: "supports",
+			Description:      "Cards extends Retail Banking with debit/credit card products",
+			CreatedAt:        now, CreatedBy: "system",
+		},
+		{
+			ID:                    "rel-consumer-lending-deps-onboarding",
+			SourceBusinessService: "bs-consumer-lending", TargetBusinessService: "bs-customer-onboarding",
+			RelationshipType: "depends_on",
+			Description:      "Consumer Lending requires customer onboarding to have completed before origination",
+			CreatedAt:        now, CreatedBy: "system",
+		},
+		{
+			ID:                    "rel-merchant-services-deps-fraud",
+			SourceBusinessService: "bs-merchant-services", TargetBusinessService: "bs-fraud-financial-crime",
+			RelationshipType: "depends_on",
+			Description:      "Merchant Services routes transactions through Fraud & Financial Crime screening",
+			CreatedAt:        now, CreatedBy: "system",
+		},
+		{
+			ID:                    "rel-payments-supports-cards",
+			SourceBusinessService: "bs-payments", TargetBusinessService: "bs-cards",
+			RelationshipType: "supports",
+			Description:      "Payments executes the payment leg of card transactions",
+			CreatedAt:        now, CreatedBy: "system",
+		},
+		{
+			ID:                    "rel-retail-banking-part-of-onboarding",
+			SourceBusinessService: "bs-retail-banking", TargetBusinessService: "bs-customer-onboarding",
+			RelationshipType: "depends_on",
+			Description:      "Retail Banking onboarding flows are a customer-onboarding consumer",
+			CreatedAt:        now, CreatedBy: "system",
+		},
+		{
+			ID:                    "rel-customer-onboarding-deps-fraud",
+			SourceBusinessService: "bs-customer-onboarding", TargetBusinessService: "bs-fraud-financial-crime",
+			RelationshipType: "depends_on",
+			Description:      "Onboarding requires sanctions / AML screening before account opening",
+			CreatedAt:        now, CreatedBy: "system",
+		},
+	}
+	for _, r := range bsRels {
+		if err := ensureBSR(ctx, repos.BusinessServiceRelationships, r); err != nil {
+			return err
+		}
+	}
+
+	// --- Agents ---
 
 	if err := ensureAgent(ctx, repos.Agents, &agent.Agent{
 		ID:               "agent-v2-evaluator",
 		Name:             "V2 Demo Evaluator",
 		Type:             agent.AgentTypeAI,
 		Owner:            "platform-team",
+		ModelVersion:     "v1",
+		Endpoint:         "local",
+		OperationalState: agent.OperationalStateActive,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}); err != nil {
+		return err
+	}
+	if err := ensureAgent(ctx, repos.Agents, &agent.Agent{
+		ID:               "agent-v2-fraud-bot",
+		Name:             "Fraud Detection Bot",
+		Type:             agent.AgentTypeAI,
+		Owner:            "ffc-team",
 		ModelVersion:     "v1",
 		Endpoint:         "local",
 		OperationalState: agent.OperationalStateActive,
@@ -497,6 +1020,288 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 		UpdatedAt:     now,
 	}); err != nil {
 		return err
+	}
+
+	// --- Additional profiles + grants (Phase 2B Step 11) ---
+	// Spreads governance across more surfaces so the Authority Graph
+	// shows mixed coverage: surf-v2-credit-assess and
+	// surf-v2-consumer-fraud are now governed; many other surfaces
+	// remain ungoverned to illustrate coverage gaps.
+
+	if err := ensureProfile(ctx, repos.Profiles, &authority.AuthorityProfile{
+		ID:          "profile-v2-credit-assess",
+		Version:     1,
+		SurfaceID:   "surf-v2-credit-assess",
+		Name:        "Credit Assessment Authority",
+		Description: "Authority profile for automated credit assessment",
+		Status:      authority.ProfileStatusActive,
+		EffectiveDate: effective, ConfidenceThreshold: 0.82,
+		ConsequenceThreshold: authority.Consequence{
+			Type:       value.ConsequenceTypeRiskRating,
+			RiskRating: value.RiskRatingMedium,
+		},
+		EscalationMode: authority.EscalationModeAuto, FailMode: authority.FailModeClosed,
+		RequiredContextKeys: []string{"customer_id"},
+		CreatedAt:           now, UpdatedAt: now,
+	}); err != nil {
+		return err
+	}
+
+	if err := ensureGrant(ctx, repos.Grants, &authority.AuthorityGrant{
+		ID:            "grant-v2-credit-assess",
+		AgentID:       "agent-v2-evaluator",
+		ProfileID:     "profile-v2-credit-assess",
+		GrantedBy:     "system",
+		EffectiveDate: effective,
+		Status:        authority.GrantStatusActive,
+		CreatedAt:     now, UpdatedAt: now,
+	}); err != nil {
+		return err
+	}
+
+	if err := ensureProfile(ctx, repos.Profiles, &authority.AuthorityProfile{
+		ID:          "profile-v2-fraud-detection",
+		Version:     1,
+		SurfaceID:   "surf-v2-consumer-fraud",
+		Name:        "Consumer Fraud Detection Authority",
+		Description: "Authority profile for automated consumer fraud screening",
+		Status:      authority.ProfileStatusActive,
+		EffectiveDate: effective, ConfidenceThreshold: 0.90,
+		ConsequenceThreshold: authority.Consequence{
+			Type:       value.ConsequenceTypeRiskRating,
+			RiskRating: value.RiskRatingHigh,
+		},
+		EscalationMode: authority.EscalationModeAuto, FailMode: authority.FailModeClosed,
+		RequiredContextKeys: []string{},
+		CreatedAt:           now, UpdatedAt: now,
+	}); err != nil {
+		return err
+	}
+
+	if err := ensureGrant(ctx, repos.Grants, &authority.AuthorityGrant{
+		ID:            "grant-v2-fraud-detection",
+		AgentID:       "agent-v2-fraud-bot",
+		ProfileID:     "profile-v2-fraud-detection",
+		GrantedBy:     "system",
+		EffectiveDate: effective,
+		Status:        authority.GrantStatusActive,
+		CreatedAt:     now, UpdatedAt: now,
+	}); err != nil {
+		return err
+	}
+
+	// --- AI systems (Phase 2B Step 11) ---
+	// Six AI systems modelling realistic banking AI usage. Each has
+	// one active version. Bindings cover all four scopes; one system
+	// (aisys-fraud-detection) is intentionally bound at every scope
+	// kind to demonstrate multi-scope reframe traversal.
+	aiSystems := []*aisystem.AISystem{
+		{
+			ID: "aisys-identity-verification", Name: "Identity Verification AI",
+			Description: "Document and biometric identity verification model",
+			Owner:       "ffc-team", Vendor: "Acme ID", SystemType: "ml-model",
+			Status: aisystem.AISystemStatusActive, Origin: aisystem.AISystemOriginManual, Managed: true,
+			CreatedAt: now, UpdatedAt: now, CreatedBy: "system",
+		},
+		{
+			ID: "aisys-credit-risk-scoring", Name: "Credit Risk Scoring AI",
+			Description: "Probability-of-default model for consumer credit",
+			Owner:       "consumer-lending-team", Vendor: "RiskMetrics", SystemType: "ml-model",
+			Status: aisystem.AISystemStatusActive, Origin: aisystem.AISystemOriginManual, Managed: true,
+			CreatedAt: now, UpdatedAt: now, CreatedBy: "system",
+		},
+		{
+			ID: "aisys-fraud-detection", Name: "Transaction Fraud Detection AI",
+			Description: "Multi-channel real-time transaction fraud detection ensemble",
+			Owner:       "ffc-team", Vendor: "FraudShield", SystemType: "ensemble",
+			Status: aisystem.AISystemStatusActive, Origin: aisystem.AISystemOriginManual, Managed: true,
+			CreatedAt: now, UpdatedAt: now, CreatedBy: "system",
+		},
+		{
+			ID: "aisys-card-dispute-triage", Name: "Card Dispute Triage AI",
+			Description: "Auto-classifies card disputes into chargeback, decline, or investigation",
+			Owner:       "cards-team", Vendor: "DisputeIQ", SystemType: "classifier",
+			Status: aisystem.AISystemStatusActive, Origin: aisystem.AISystemOriginManual, Managed: true,
+			CreatedAt: now, UpdatedAt: now, CreatedBy: "system",
+		},
+		{
+			ID: "aisys-collections-priority", Name: "Collections Prioritisation AI",
+			Description: "Ranks delinquent accounts by recovery probability",
+			Owner:       "consumer-lending-team", Vendor: "Recovery.ai", SystemType: "ranker",
+			Status: aisystem.AISystemStatusActive, Origin: aisystem.AISystemOriginManual, Managed: true,
+			CreatedAt: now, UpdatedAt: now, CreatedBy: "system",
+		},
+		{
+			ID: "aisys-vulnerability-detection", Name: "Customer Vulnerability Detection AI",
+			Description: "Detects indicators of customer vulnerability from interaction signals",
+			Owner:       "onboarding-team", Vendor: "Vista", SystemType: "ml-model",
+			Status: aisystem.AISystemStatusActive, Origin: aisystem.AISystemOriginManual, Managed: true,
+			CreatedAt: now, UpdatedAt: now, CreatedBy: "system",
+		},
+	}
+	for _, s := range aiSystems {
+		if err := ensureAISystem(ctx, repos.AISystems, s); err != nil {
+			return err
+		}
+	}
+
+	aiVersions := []*aisystem.AISystemVersion{
+		{
+			AISystemID: "aisys-identity-verification", Version: 1, ReleaseLabel: "v1.0",
+			ModelArtifact: "model://identity-verify/v1", Status: aisystem.AISystemVersionStatusActive,
+			EffectiveFrom: effective, ComplianceFrameworks: []string{"iso-42001"},
+			CreatedAt: now, UpdatedAt: now, CreatedBy: "system",
+		},
+		{
+			AISystemID: "aisys-credit-risk-scoring", Version: 1, ReleaseLabel: "v1.0",
+			ModelArtifact: "model://credit-risk/v1", Status: aisystem.AISystemVersionStatusActive,
+			EffectiveFrom: effective, ComplianceFrameworks: []string{"iso-42001"},
+			CreatedAt: now, UpdatedAt: now, CreatedBy: "system",
+		},
+		{
+			AISystemID: "aisys-fraud-detection", Version: 1, ReleaseLabel: "v1.0",
+			ModelArtifact: "model://fraud-detect/v1", Status: aisystem.AISystemVersionStatusActive,
+			EffectiveFrom: effective, ComplianceFrameworks: []string{"iso-42001"},
+			CreatedAt: now, UpdatedAt: now, CreatedBy: "system",
+		},
+		{
+			AISystemID: "aisys-card-dispute-triage", Version: 1, ReleaseLabel: "v1.0",
+			ModelArtifact: "model://card-dispute/v1", Status: aisystem.AISystemVersionStatusActive,
+			EffectiveFrom: effective, ComplianceFrameworks: []string{},
+			CreatedAt: now, UpdatedAt: now, CreatedBy: "system",
+		},
+		{
+			AISystemID: "aisys-collections-priority", Version: 1, ReleaseLabel: "v1.0",
+			ModelArtifact: "model://collections-rank/v1", Status: aisystem.AISystemVersionStatusActive,
+			EffectiveFrom: effective, ComplianceFrameworks: []string{},
+			CreatedAt: now, UpdatedAt: now, CreatedBy: "system",
+		},
+		{
+			AISystemID: "aisys-vulnerability-detection", Version: 1, ReleaseLabel: "v1.0",
+			ModelArtifact: "model://vulnerability/v1", Status: aisystem.AISystemVersionStatusActive,
+			EffectiveFrom: effective, ComplianceFrameworks: []string{"iso-42001"},
+			CreatedAt: now, UpdatedAt: now, CreatedBy: "system",
+		},
+	}
+	for _, v := range aiVersions {
+		if err := ensureAISystemVersion(ctx, repos.AISystemVersions, v); err != nil {
+			return err
+		}
+	}
+
+	// AI bindings — exercise all four scope kinds. aisys-fraud-detection
+	// is deliberately bound at every scope so that AI-system reframe
+	// produces a graph with all four target shapes simultaneously.
+	one := 1
+	aiBindings := []*aisystem.AISystemBinding{
+		// === Surface-scoped ===
+		{
+			ID: "bind-id-verify-on-surf", AISystemID: "aisys-identity-verification",
+			AISystemVersion: &one, SurfaceID: "surf-v2-id-verify",
+			Role: "primary", Description: "Primary ID verification on consumer onboarding",
+			CreatedAt: now, CreatedBy: "system",
+		},
+		{
+			ID: "bind-fraud-on-consumer-fraud-surf", AISystemID: "aisys-fraud-detection",
+			AISystemVersion: &one, SurfaceID: "surf-v2-consumer-fraud",
+			Role: "primary", Description: "Primary fraud screening on consumer onboarding fraud check",
+			CreatedAt: now, CreatedBy: "system",
+		},
+		{
+			ID: "bind-fraud-on-merchant-risk-surf", AISystemID: "aisys-fraud-detection",
+			AISystemVersion: &one, SurfaceID: "surf-v2-merchant-risk",
+			Role: "primary", Description: "Primary fraud screening on merchant risk surface",
+			CreatedAt: now, CreatedBy: "system",
+		},
+		{
+			ID: "bind-credit-risk-on-credit-surf", AISystemID: "aisys-credit-risk-scoring",
+			AISystemVersion: &one, SurfaceID: "surf-v2-credit-assess",
+			Role: "primary", Description: "Credit risk model scoring credit assessment surface",
+			CreatedAt: now, CreatedBy: "system",
+		},
+		{
+			ID: "bind-card-dispute-on-dispute-surf", AISystemID: "aisys-card-dispute-triage",
+			AISystemVersion: &one, SurfaceID: "surf-v2-dispute-triage",
+			Role: "primary", Description: "Auto-triage of card disputes",
+			CreatedAt: now, CreatedBy: "system",
+		},
+		{
+			ID: "bind-fraud-on-tx-anomaly-surf", AISystemID: "aisys-fraud-detection",
+			AISystemVersion: &one, SurfaceID: "surf-v2-tx-anomaly",
+			Role: "shadow", Description: "Shadow ensemble on transaction anomaly detection",
+			CreatedAt: now, CreatedBy: "system",
+		},
+		{
+			ID: "bind-vuln-on-vuln-flag-surf", AISystemID: "aisys-vulnerability-detection",
+			AISystemVersion: &one, SurfaceID: "surf-v2-vulnerability-flag",
+			Role: "primary", Description: "Vulnerability detection on flag surface",
+			CreatedAt: now, CreatedBy: "system",
+		},
+		// === Process-scoped ===
+		{
+			ID: "bind-fraud-on-merchant-risk-proc", AISystemID: "aisys-fraud-detection",
+			AISystemVersion: &one, ProcessID: "proc-merchant-risk-screen",
+			Role: "ambient", Description: "Process-level fraud screening across merchant risk processes",
+			CreatedAt: now, CreatedBy: "system",
+		},
+		{
+			ID: "bind-fraud-on-tx-monitoring-proc", AISystemID: "aisys-fraud-detection",
+			AISystemVersion: &one, ProcessID: "proc-transaction-monitoring",
+			Role: "ambient", Description: "Process-level fraud monitoring",
+			CreatedAt: now, CreatedBy: "system",
+		},
+		{
+			ID: "bind-credit-risk-on-credit-proc", AISystemID: "aisys-credit-risk-scoring",
+			AISystemVersion: &one, ProcessID: "proc-credit-assessment",
+			Role: "ambient", Description: "Process-level credit scoring",
+			CreatedAt: now, CreatedBy: "system",
+		},
+		{
+			ID: "bind-collections-on-collections-proc", AISystemID: "aisys-collections-priority",
+			AISystemVersion: &one, ProcessID: "proc-loan-collections",
+			Role: "ambient", Description: "Process-level collections prioritisation",
+			CreatedAt: now, CreatedBy: "system",
+		},
+		// === Capability-scoped ===
+		{
+			ID: "bind-id-verify-on-party-auth-cap", AISystemID: "aisys-identity-verification",
+			AISystemVersion: &one, CapabilityID: "cap-party-authentication",
+			BusinessServiceID: "bs-customer-onboarding",
+			Role: "ambient", Description: "Capability-level ID verification across party authentication",
+			CreatedAt: now, CreatedBy: "system",
+		},
+		{
+			ID: "bind-fraud-on-fraud-eval-cap", AISystemID: "aisys-fraud-detection",
+			AISystemVersion: &one, CapabilityID: "cap-fraud-evaluation",
+			BusinessServiceID: "bs-fraud-financial-crime",
+			Role: "ambient", Description: "Capability-level fraud evaluation",
+			CreatedAt: now, CreatedBy: "system",
+		},
+		{
+			ID: "bind-vuln-on-vuln-cap", AISystemID: "aisys-vulnerability-detection",
+			AISystemVersion: &one, CapabilityID: "cap-vulnerability-assessment",
+			BusinessServiceID: "bs-customer-onboarding",
+			Role: "ambient", Description: "Capability-level vulnerability detection",
+			CreatedAt: now, CreatedBy: "system",
+		},
+		// === Business-service-scoped ===
+		{
+			ID: "bind-fraud-on-ffc-bs", AISystemID: "aisys-fraud-detection",
+			AISystemVersion: &one, BusinessServiceID: "bs-fraud-financial-crime",
+			Role: "ambient", Description: "Service-wide fraud detection coverage",
+			CreatedAt: now, CreatedBy: "system",
+		},
+		{
+			ID: "bind-vuln-on-onboarding-bs", AISystemID: "aisys-vulnerability-detection",
+			AISystemVersion: &one, BusinessServiceID: "bs-customer-onboarding",
+			Role: "ambient", Description: "Service-wide vulnerability monitoring",
+			CreatedAt: now, CreatedBy: "system",
+		},
+	}
+	for _, b := range aiBindings {
+		if err := ensureAISystemBinding(ctx, repos.AISystemBindings, b); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -638,6 +1443,77 @@ func ensureGrant(ctx context.Context, repo authority.GrantRepository, g *authori
 	}
 	if err := repo.Create(ctx, g); err != nil {
 		return fmt.Errorf("create grant %s: %w", g.ID, err)
+	}
+	return nil
+}
+
+// ensureBSR is the per-relationship idempotency helper for the
+// directed business_service_relationships table. The repo's GetByID
+// returns a sentinel ErrRelationshipNotFound on missing rather than
+// (nil, nil) — we treat that error as "not present" and proceed
+// to Create.
+func ensureBSR(ctx context.Context, repo businessservice.RelationshipRepository, rel *businessservice.BusinessServiceRelationship) error {
+	existing, err := repo.GetByID(ctx, rel.ID)
+	if err != nil && !errors.Is(err, businessservice.ErrRelationshipNotFound) {
+		return fmt.Errorf("lookup business_service_relationship %s: %w", rel.ID, err)
+	}
+	if existing != nil {
+		return nil
+	}
+	if err := repo.Create(ctx, rel); err != nil {
+		return fmt.Errorf("create business_service_relationship %s: %w", rel.ID, err)
+	}
+	return nil
+}
+
+// ensureAISystem is the per-system idempotency helper. The repo's
+// GetByID returns ErrAISystemNotFound on missing.
+func ensureAISystem(ctx context.Context, repo aisystem.SystemRepository, sys *aisystem.AISystem) error {
+	existing, err := repo.GetByID(ctx, sys.ID)
+	if err != nil && !errors.Is(err, aisystem.ErrAISystemNotFound) {
+		return fmt.Errorf("lookup ai_system %s: %w", sys.ID, err)
+	}
+	if existing != nil {
+		return nil
+	}
+	if err := repo.Create(ctx, sys); err != nil {
+		return fmt.Errorf("create ai_system %s: %w", sys.ID, err)
+	}
+	return nil
+}
+
+// ensureAISystemVersion uses (ai_system_id, version) — versions are
+// composite-keyed at the schema level and the seed always inserts
+// version=1 today. Repo returns ErrAISystemVersionNotFound on missing.
+func ensureAISystemVersion(ctx context.Context, repo aisystem.VersionRepository, ver *aisystem.AISystemVersion) error {
+	existing, err := repo.GetByIDAndVersion(ctx, ver.AISystemID, ver.Version)
+	if err != nil && !errors.Is(err, aisystem.ErrAISystemVersionNotFound) {
+		return fmt.Errorf("lookup ai_system_version %s v%d: %w", ver.AISystemID, ver.Version, err)
+	}
+	if existing != nil {
+		return nil
+	}
+	if err := repo.Create(ctx, ver); err != nil {
+		return fmt.Errorf("create ai_system_version %s v%d: %w", ver.AISystemID, ver.Version, err)
+	}
+	return nil
+}
+
+// ensureAISystemBinding is the per-binding idempotency helper.
+// Bindings have synthetic IDs and no triple-uniqueness rule (the
+// domain explicitly permits multiple bindings of the same AI system
+// to the same scope target with different roles), so GetByID is the
+// presence check. Repo returns ErrAISystemBindingNotFound on missing.
+func ensureAISystemBinding(ctx context.Context, repo aisystem.BindingRepository, b *aisystem.AISystemBinding) error {
+	existing, err := repo.GetByID(ctx, b.ID)
+	if err != nil && !errors.Is(err, aisystem.ErrAISystemBindingNotFound) {
+		return fmt.Errorf("lookup ai_system_binding %s: %w", b.ID, err)
+	}
+	if existing != nil {
+		return nil
+	}
+	if err := repo.Create(ctx, b); err != nil {
+		return fmt.Errorf("create ai_system_binding %s: %w", b.ID, err)
 	}
 	return nil
 }

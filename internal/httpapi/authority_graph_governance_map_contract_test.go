@@ -66,7 +66,7 @@ func newSeededContractServer(t *testing.T) *Server {
 		WithBusinessServiceCapabilities(repos.BusinessServiceCapabilities).
 		WithAISystems(repos.AISystems, repos.AISystemVersions, repos.AISystemBindings))
 	srv.WithGovernanceMap(gmap)
-	srv.WithAuthorityGraph(authoritygraph.NewService(gmap))
+	srv.WithAuthorityGraph(authoritygraph.NewServiceWithReaders(authoritygraph.Readers{GovernanceMap: gmap}))
 	return srv
 }
 

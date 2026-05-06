@@ -30,25 +30,93 @@ func cleanupSeedDemoRows(t *testing.T, db *sql.DB) {
 	t.Helper()
 	ctx := context.Background()
 
+	// Phase 2B Step 11 enrichment expanded the dataset to 7 BSes,
+	// 18 capabilities (4 leaf + 6 BIAN-domain parents + 8 new
+	// children), 16 processes, 17 surfaces, 2 agents, 4 profiles +
+	// grants, 8 BSRs, 6 AI systems with 6 versions and 16 bindings.
+	// The cleanup must wipe every row the seed writes, in
+	// FK-safe order: AI bindings → AI versions → AI systems →
+	// authority grants → authority profiles → BSRs → agents →
+	// surfaces → BSCs → processes → child capabilities (FK to
+	// parent capability) → parent capabilities → business services.
 	stmts := []string{
-		// Children before parents.
-		`DELETE FROM authority_grants WHERE id IN ('grant-v2-standard', 'grant-v2-onboarding')`,
-		`DELETE FROM authority_profiles WHERE id IN ('profile-v2-standard', 'profile-v2-onboarding')`,
-		`DELETE FROM agents WHERE id = 'agent-v2-evaluator'`,
+		// AI binding family — must come before AI versions / systems
+		// (binding rows reference both).
+		`DELETE FROM ai_system_bindings WHERE ai_system_id IN (
+			'aisys-identity-verification','aisys-credit-risk-scoring',
+			'aisys-fraud-detection','aisys-card-dispute-triage',
+			'aisys-collections-priority','aisys-vulnerability-detection'
+		)`,
+		`DELETE FROM ai_system_versions WHERE ai_system_id IN (
+			'aisys-identity-verification','aisys-credit-risk-scoring',
+			'aisys-fraud-detection','aisys-card-dispute-triage',
+			'aisys-collections-priority','aisys-vulnerability-detection'
+		)`,
+		`DELETE FROM ai_systems WHERE id IN (
+			'aisys-identity-verification','aisys-credit-risk-scoring',
+			'aisys-fraud-detection','aisys-card-dispute-triage',
+			'aisys-collections-priority','aisys-vulnerability-detection'
+		)`,
+		// Authority grants reference profiles + agents.
+		`DELETE FROM authority_grants WHERE id IN (
+			'grant-v2-standard','grant-v2-onboarding',
+			'grant-v2-credit-assess','grant-v2-fraud-detection'
+		)`,
+		`DELETE FROM authority_profiles WHERE id IN (
+			'profile-v2-standard','profile-v2-onboarding',
+			'profile-v2-credit-assess','profile-v2-fraud-detection'
+		)`,
+		// Business service relationships reference business services.
+		`DELETE FROM business_service_relationships WHERE id IN (
+			'rel-payments-deps-fraud','rel-fraud-supports-payments',
+			'rel-cards-supports-retail','rel-consumer-lending-deps-onboarding',
+			'rel-merchant-services-deps-fraud','rel-payments-supports-cards',
+			'rel-retail-banking-part-of-onboarding','rel-customer-onboarding-deps-fraud'
+		)`,
+		`DELETE FROM agents WHERE id IN ('agent-v2-evaluator','agent-v2-fraud-bot')`,
 		`DELETE FROM decision_surfaces WHERE id IN (
 			'surf-v2-id-verify','surf-v2-consumer-fraud','surf-v2-credit-assess',
-			'surf-v2-merchant-risk','surf-v2-merchant-payment','surf-v2-merchant-hv-pay'
+			'surf-v2-merchant-risk','surf-v2-merchant-payment','surf-v2-merchant-hv-pay',
+			'surf-v2-collections-priority','surf-v2-account-eligibility',
+			'surf-v2-statement-suppression','surf-v2-payment-initiation-check',
+			'surf-v2-sanctions-screen','surf-v2-card-issuance-decision',
+			'surf-v2-dispute-triage','surf-v2-kyc-evaluation','surf-v2-vulnerability-flag',
+			'surf-v2-tx-anomaly','surf-v2-tx-velocity','surf-v2-aml-alert-triage'
 		)`,
-		`DELETE FROM business_service_capabilities WHERE business_service_id IN ('bs-consumer-lending','bs-merchant-services')`,
+		`DELETE FROM business_service_capabilities WHERE business_service_id IN (
+			'bs-consumer-lending','bs-merchant-services',
+			'bs-retail-banking','bs-payments','bs-cards',
+			'bs-customer-onboarding','bs-fraud-financial-crime'
+		)`,
 		`DELETE FROM processes WHERE process_id IN (
 			'proc-consumer-onboarding','proc-credit-assessment',
-			'proc-merchant-risk-screen','proc-merchant-payment-auth'
+			'proc-merchant-risk-screen','proc-merchant-payment-auth',
+			'proc-loan-collections','proc-account-opening','proc-statement-generation',
+			'proc-payment-initiation','proc-payment-clearing','proc-cross-border-transfer',
+			'proc-card-issuance-flow','proc-card-dispute',
+			'proc-kyc-collection','proc-vulnerability-screen',
+			'proc-transaction-monitoring','proc-aml-investigation','proc-financial-crime-case'
 		)`,
+		// Child capabilities first (FK to parent capability id).
+		`DELETE FROM capabilities WHERE capability_id IN (
+			'cap-customer-offer','cap-customer-onboarding','cap-party-authentication',
+			'cap-vulnerability-assessment','cap-product-fulfillment',
+			'cap-credit-administration','cap-collections',
+			'cap-payment-execution','cap-fraud-evaluation','cap-aml-screening',
+			'cap-card-issuance','cap-dispute-resolution'
+		)`,
+		// Then parents + pre-Phase-2B leaves.
 		`DELETE FROM capabilities WHERE capability_id IN (
 			'cap-identity-verification','cap-credit-scoring',
-			'cap-fraud-detection','cap-payment-authorization'
+			'cap-fraud-detection','cap-payment-authorization',
+			'cap-customer','cap-product','cap-credit','cap-payment',
+			'cap-financial-crime','cap-card-ops'
 		)`,
-		`DELETE FROM business_services WHERE business_service_id IN ('bs-consumer-lending','bs-merchant-services')`,
+		`DELETE FROM business_services WHERE business_service_id IN (
+			'bs-consumer-lending','bs-merchant-services',
+			'bs-retail-banking','bs-payments','bs-cards',
+			'bs-customer-onboarding','bs-fraud-financial-crime'
+		)`,
 	}
 	for _, s := range stmts {
 		if _, err := db.ExecContext(ctx, s); err != nil {

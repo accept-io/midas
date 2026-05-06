@@ -24,6 +24,104 @@ func (r *stubReader) GetGovernanceMap(_ context.Context, id string) (*governance
 	return r.items[id], nil
 }
 
+// ---------------------------------------------------------------------------
+// Stubs for ai_system view tests.
+//
+// Each stub satisfies one of the narrow reader interfaces declared in
+// service.go. Missing-id behaviour: nil result, no error — matches the
+// "missing scope target" contract the projector exercises.
+// ---------------------------------------------------------------------------
+
+type stubAISystemReader struct {
+	items map[string]*aisystem.AISystem
+}
+
+func (r *stubAISystemReader) GetByID(_ context.Context, id string) (*aisystem.AISystem, error) {
+	return r.items[id], nil
+}
+
+type stubBindingRepo struct {
+	byAISystem map[string][]*aisystem.AISystemBinding
+}
+
+func (r *stubBindingRepo) ListByAISystem(_ context.Context, id string) ([]*aisystem.AISystemBinding, error) {
+	return r.byAISystem[id], nil
+}
+
+type stubBSReader struct {
+	items map[string]*businessservice.BusinessService
+}
+
+func (r *stubBSReader) GetByID(_ context.Context, id string) (*businessservice.BusinessService, error) {
+	return r.items[id], nil
+}
+
+type stubCapReader struct {
+	items map[string]*capability.Capability
+}
+
+func (r *stubCapReader) GetByID(_ context.Context, id string) (*capability.Capability, error) {
+	return r.items[id], nil
+}
+
+type stubProcReader struct {
+	items map[string]*process.Process
+}
+
+func (r *stubProcReader) GetByID(_ context.Context, id string) (*process.Process, error) {
+	return r.items[id], nil
+}
+
+type stubSurfReader struct {
+	items map[string]*surface.DecisionSurface
+}
+
+func (r *stubSurfReader) FindLatestByID(_ context.Context, id string) (*surface.DecisionSurface, error) {
+	return r.items[id], nil
+}
+
+// aiViewStubs bundles the six stubs the ai_system view requires.
+type aiViewStubs struct {
+	systems  *stubAISystemReader
+	bindings *stubBindingRepo
+	bss      *stubBSReader
+	caps     *stubCapReader
+	procs    *stubProcReader
+	surfs    *stubSurfReader
+}
+
+func newAIViewStubs() *aiViewStubs {
+	return &aiViewStubs{
+		systems:  &stubAISystemReader{items: map[string]*aisystem.AISystem{}},
+		bindings: &stubBindingRepo{byAISystem: map[string][]*aisystem.AISystemBinding{}},
+		bss:      &stubBSReader{items: map[string]*businessservice.BusinessService{}},
+		caps:     &stubCapReader{items: map[string]*capability.Capability{}},
+		procs:    &stubProcReader{items: map[string]*process.Process{}},
+		surfs:    &stubSurfReader{items: map[string]*surface.DecisionSurface{}},
+	}
+}
+
+// readers builds the Readers struct for an ai_system-view-only Service
+// (GovernanceMap left nil so view=service is unregistered, allowing
+// the test to assert per-view registration semantics independently).
+func (s *aiViewStubs) readers() Readers {
+	return Readers{
+		AISystem:         s.systems,
+		AISystemBindings: s.bindings,
+		BusinessServices: s.bss,
+		Capabilities:     s.caps,
+		Processes:        s.procs,
+		Surfaces:         s.surfs,
+	}
+}
+
+// readersWithGovMap returns Readers with both views configured.
+func (s *aiViewStubs) readersWithGovMap(gmap GovernanceMapReader) Readers {
+	r := s.readers()
+	r.GovernanceMap = gmap
+	return r
+}
+
 // makeBSMap builds a minimal *governancemap.Map with non-nil collection
 // fields and a labelled root BS. Tests append to its slices to add
 // entities without re-stating the boilerplate.
@@ -139,7 +237,7 @@ func makeFullDemoMap() *governancemap.Map {
 // ---------------------------------------------------------------------------
 
 func TestService_UnsupportedView_ReturnsErrInvalidView(t *testing.T) {
-	svc := NewService(&stubReader{})
+	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{}})
 	_, err := svc.Project(context.Background(), "agent", "bs-1", 3)
 	if !errors.Is(err, ErrInvalidView) {
 		t.Errorf("want ErrInvalidView, got %v", err)
@@ -147,7 +245,7 @@ func TestService_UnsupportedView_ReturnsErrInvalidView(t *testing.T) {
 }
 
 func TestService_EmptyView_ReturnsErrInvalidView(t *testing.T) {
-	svc := NewService(&stubReader{})
+	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{}})
 	_, err := svc.Project(context.Background(), "", "bs-1", 3)
 	if !errors.Is(err, ErrInvalidView) {
 		t.Errorf("want ErrInvalidView for empty view, got %v", err)
@@ -155,7 +253,7 @@ func TestService_EmptyView_ReturnsErrInvalidView(t *testing.T) {
 }
 
 func TestService_EmptyID_ReturnsErrInvalidID(t *testing.T) {
-	svc := NewService(&stubReader{})
+	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{}})
 	_, err := svc.Project(context.Background(), ViewService, "", 3)
 	if !errors.Is(err, ErrInvalidID) {
 		t.Errorf("want ErrInvalidID, got %v", err)
@@ -163,7 +261,7 @@ func TestService_EmptyID_ReturnsErrInvalidID(t *testing.T) {
 }
 
 func TestService_NegativeDepth_ReturnsErrInvalidDepth(t *testing.T) {
-	svc := NewService(&stubReader{})
+	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{}})
 	_, err := svc.Project(context.Background(), ViewService, "bs-1", -1)
 	if !errors.Is(err, ErrInvalidDepth) {
 		t.Errorf("want ErrInvalidDepth, got %v", err)
@@ -171,7 +269,7 @@ func TestService_NegativeDepth_ReturnsErrInvalidDepth(t *testing.T) {
 }
 
 func TestService_NotFoundID_ReturnsErrNotFound(t *testing.T) {
-	svc := NewService(&stubReader{items: map[string]*governancemap.Map{}})
+	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*governancemap.Map{}}})
 	_, err := svc.Project(context.Background(), ViewService, "bs-missing", 3)
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("want ErrNotFound, got %v", err)
@@ -187,7 +285,7 @@ func TestService_NotFoundID_ReturnsErrNotFound(t *testing.T) {
 // is.
 func TestService_DepthZero_RootOnly(t *testing.T) {
 	m := makeFullDemoMap()
-	svc := NewService(&stubReader{items: map[string]*governancemap.Map{"bs-1": m}})
+	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*governancemap.Map{"bs-1": m}}})
 	p, err := svc.Project(context.Background(), ViewService, "bs-1", 0)
 	if err != nil {
 		t.Fatalf("project: %v", err)
@@ -212,7 +310,7 @@ func TestService_DepthZero_RootOnly(t *testing.T) {
 // scope), no AI systems (which are 3-hop via binding).
 func TestService_DepthOne_DirectNeighboursOfRoot(t *testing.T) {
 	m := makeFullDemoMap()
-	svc := NewService(&stubReader{items: map[string]*governancemap.Map{"bs-1": m}})
+	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*governancemap.Map{"bs-1": m}}})
 	p, err := svc.Project(context.Background(), ViewService, "bs-1", 1)
 	if err != nil {
 		t.Fatalf("project: %v", err)
@@ -250,7 +348,7 @@ func TestService_DepthOne_DirectNeighboursOfRoot(t *testing.T) {
 // projection's reported Depth field is the clamped value.
 func TestService_DepthClamp_LargeIsSameAsMax(t *testing.T) {
 	m := makeFullDemoMap()
-	svc := NewService(&stubReader{items: map[string]*governancemap.Map{"bs-1": m}})
+	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*governancemap.Map{"bs-1": m}}})
 	pBig, err := svc.Project(context.Background(), ViewService, "bs-1", 999)
 	if err != nil {
 		t.Fatalf("big depth: %v", err)
@@ -280,7 +378,7 @@ func TestService_DepthClamp_LargeIsSameAsMax(t *testing.T) {
 // no forbidden kinds appear.
 func TestService_FullDemo_AllKindsAndEdges(t *testing.T) {
 	m := makeFullDemoMap()
-	svc := NewService(&stubReader{items: map[string]*governancemap.Map{"bs-1": m}})
+	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*governancemap.Map{"bs-1": m}}})
 	p, err := svc.Project(context.Background(), ViewService, "bs-1", MaxDepth)
 	if err != nil {
 		t.Fatalf("project: %v", err)
@@ -455,7 +553,7 @@ func TestService_FullDemo_AllKindsAndEdges(t *testing.T) {
 //     count fields the governance-map DTOs surface
 func TestService_FullDemo_TypedDataPopulated(t *testing.T) {
 	m := makeFullDemoMap()
-	svc := NewService(&stubReader{items: map[string]*governancemap.Map{"bs-1": m}})
+	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*governancemap.Map{"bs-1": m}}})
 	p, err := svc.Project(context.Background(), ViewService, "bs-1", MaxDepth)
 	if err != nil {
 		t.Fatalf("project: %v", err)
@@ -701,7 +799,7 @@ func TestService_RelatedBusinessService_OutgoingOnly(t *testing.T) {
 			OtherName: "Other BS",
 		},
 	}
-	svc := NewService(&stubReader{items: map[string]*governancemap.Map{"bs-root": m}})
+	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*governancemap.Map{"bs-root": m}}})
 	p, err := svc.Project(context.Background(), ViewService, "bs-root", MaxDepth)
 	if err != nil {
 		t.Fatalf("project: %v", err)
@@ -756,7 +854,7 @@ func TestService_RelatedBusinessService_IncomingOnly(t *testing.T) {
 			OtherName: "Other BS",
 		},
 	}
-	svc := NewService(&stubReader{items: map[string]*governancemap.Map{"bs-root": m}})
+	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*governancemap.Map{"bs-root": m}}})
 	p, err := svc.Project(context.Background(), ViewService, "bs-root", MaxDepth)
 	if err != nil {
 		t.Fatalf("project: %v", err)
@@ -822,7 +920,7 @@ func TestService_RelatedBusinessService_BothDirections(t *testing.T) {
 			OtherName: "Other BS",
 		},
 	}
-	svc := NewService(&stubReader{items: map[string]*governancemap.Map{"bs-root": m}})
+	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*governancemap.Map{"bs-root": m}}})
 	p, err := svc.Project(context.Background(), ViewService, "bs-root", MaxDepth)
 	if err != nil {
 		t.Fatalf("project: %v", err)
@@ -887,7 +985,7 @@ func TestService_RelatedBusinessService_BothDirections(t *testing.T) {
 // edges, regardless of how empty the rest of the Map is.
 func TestService_AuthoritySummaryAndCoverage_AppearOnceEachAtDepth1(t *testing.T) {
 	m := makeBSMap("bs-1", "BS One")
-	svc := NewService(&stubReader{items: map[string]*governancemap.Map{"bs-1": m}})
+	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*governancemap.Map{"bs-1": m}}})
 	p, err := svc.Project(context.Background(), ViewService, "bs-1", 1)
 	if err != nil {
 		t.Fatalf("project: %v", err)
@@ -977,5 +1075,569 @@ func TestParseDepth_PassesThroughInsideRange(t *testing.T) {
 		if n != want {
 			t.Errorf("ParseDepth(%q): want %d, got %d", raw, want, n)
 		}
+	}
+}
+
+// ===========================================================================
+// AI System view (Phase 2B Step 9) — dispatch + projection content
+// ===========================================================================
+//
+// Tests below cover the deliverable's contract:
+//   - dispatch: Project routes view=ai_system to the new projector,
+//     and unregistered views (or services constructed without
+//     ai-system readers) return ErrInvalidView consistently
+//   - projection content: scope-target resolution per binding scope
+//     kind (surface / process / capability / business_service), node
+//     and edge directionality, deduplication, missing-target tolerance
+//   - depth: BFS from the ai_system root produces the documented hop
+//     sets
+//
+// All stubs swallow errors and return nil for unknown ids — exercising
+// the "missing scope target" graceful-degradation path is just adding
+// a binding whose scope id is absent from the corresponding stub.
+
+// ---------------------------------------------------------------------------
+// A. Dispatch and validation
+// ---------------------------------------------------------------------------
+
+// TestService_Dispatch_AIViewWhenReadersMissing_ReturnsErrInvalidView
+// pins that constructing a Service without the ai-system readers does
+// NOT register the ai_system view; requests for it return
+// ErrInvalidView (NOT ErrNotFound).
+func TestService_Dispatch_AIViewWhenReadersMissing_ReturnsErrInvalidView(t *testing.T) {
+	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{}})
+	_, err := svc.Project(context.Background(), ViewAISystem, "ai-1", 3)
+	if !errors.Is(err, ErrInvalidView) {
+		t.Errorf("ai_system view without readers must return ErrInvalidView; got %v", err)
+	}
+}
+
+// TestService_Dispatch_AIViewRegisteredWithFullReaders pins the
+// happy-path registration: NewServiceWithReaders with all six
+// ai-system readers makes view=ai_system addressable.
+func TestService_Dispatch_AIViewRegisteredWithFullReaders(t *testing.T) {
+	stubs := newAIViewStubs()
+	stubs.systems.items["ai-1"] = &aisystem.AISystem{ID: "ai-1", Name: "AI One"}
+	svc := NewServiceWithReaders(stubs.readers())
+	p, err := svc.Project(context.Background(), ViewAISystem, "ai-1", 3)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	if p == nil || p.View != ViewAISystem {
+		t.Errorf("View: want %q, got %+v", ViewAISystem, p)
+	}
+}
+
+// TestService_Dispatch_ServiceViewStillWorksAfterRefactor pins the
+// regression contract: the Phase 1 service-view path is unchanged.
+func TestService_Dispatch_ServiceViewStillWorksAfterRefactor(t *testing.T) {
+	m := makeFullDemoMap()
+	svc := NewServiceWithReaders(Readers{
+		GovernanceMap: &stubReader{items: map[string]*governancemap.Map{"bs-1": m}},
+	})
+	p, err := svc.Project(context.Background(), ViewService, "bs-1", MaxDepth)
+	if err != nil {
+		t.Fatalf("service-view project: %v", err)
+	}
+	if p == nil || p.View != ViewService {
+		t.Errorf("View: want %q, got %+v", ViewService, p)
+	}
+}
+
+// TestService_Dispatch_ValidationOrder_ViewBeforeID confirms that
+// view validation happens BEFORE id validation. An unregistered view
+// with an empty id must report ErrInvalidView, never ErrInvalidID.
+func TestService_Dispatch_ValidationOrder_ViewBeforeID(t *testing.T) {
+	svc := NewServiceWithReaders(Readers{})
+	_, err := svc.Project(context.Background(), "totally-invalid-view", "", 3)
+	if !errors.Is(err, ErrInvalidView) {
+		t.Errorf("validation order: want ErrInvalidView (view checked first), got %v", err)
+	}
+}
+
+// TestService_Dispatch_ValidationOrder_IDBeforeDepth confirms id is
+// checked before depth.
+func TestService_Dispatch_ValidationOrder_IDBeforeDepth(t *testing.T) {
+	stubs := newAIViewStubs()
+	svc := NewServiceWithReaders(stubs.readers())
+	_, err := svc.Project(context.Background(), ViewAISystem, "", -1)
+	if !errors.Is(err, ErrInvalidID) {
+		t.Errorf("validation order: want ErrInvalidID (id checked before depth), got %v", err)
+	}
+}
+
+// TestService_AIView_EmptyID_ReturnsErrInvalidID pins per-view id
+// validation.
+func TestService_AIView_EmptyID_ReturnsErrInvalidID(t *testing.T) {
+	stubs := newAIViewStubs()
+	svc := NewServiceWithReaders(stubs.readers())
+	_, err := svc.Project(context.Background(), ViewAISystem, "", 3)
+	if !errors.Is(err, ErrInvalidID) {
+		t.Errorf("want ErrInvalidID, got %v", err)
+	}
+}
+
+// TestService_AIView_NegativeDepth_ReturnsErrInvalidDepth pins
+// per-view depth validation.
+func TestService_AIView_NegativeDepth_ReturnsErrInvalidDepth(t *testing.T) {
+	stubs := newAIViewStubs()
+	stubs.systems.items["ai-1"] = &aisystem.AISystem{ID: "ai-1"}
+	svc := NewServiceWithReaders(stubs.readers())
+	_, err := svc.Project(context.Background(), ViewAISystem, "ai-1", -1)
+	if !errors.Is(err, ErrInvalidDepth) {
+		t.Errorf("want ErrInvalidDepth, got %v", err)
+	}
+}
+
+// TestService_AIView_DepthClamp_LargeIsSameAsMax pins the depth clamp
+// applies to the ai_system view exactly as it does for the service
+// view.
+func TestService_AIView_DepthClamp_LargeIsSameAsMax(t *testing.T) {
+	stubs := newAIViewStubs()
+	stubs.systems.items["ai-1"] = &aisystem.AISystem{ID: "ai-1"}
+	svc := NewServiceWithReaders(stubs.readers())
+
+	pBig, err := svc.Project(context.Background(), ViewAISystem, "ai-1", 999)
+	if err != nil {
+		t.Fatalf("big depth: %v", err)
+	}
+	pMax, err := svc.Project(context.Background(), ViewAISystem, "ai-1", MaxDepth)
+	if err != nil {
+		t.Fatalf("max depth: %v", err)
+	}
+	if pBig.Depth != MaxDepth {
+		t.Errorf("clamp: want Depth=%d, got %d", MaxDepth, pBig.Depth)
+	}
+	if len(pBig.Nodes) != len(pMax.Nodes) {
+		t.Errorf("clamp: node count differs (big=%d, max=%d)", len(pBig.Nodes), len(pMax.Nodes))
+	}
+	if len(pBig.Edges) != len(pMax.Edges) {
+		t.Errorf("clamp: edge count differs (big=%d, max=%d)", len(pBig.Edges), len(pMax.Edges))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// B. Projection content
+// ---------------------------------------------------------------------------
+
+// B1. Unknown AI system → ErrNotFound.
+func TestService_AIView_NotFound(t *testing.T) {
+	stubs := newAIViewStubs()
+	svc := NewServiceWithReaders(stubs.readers())
+	_, err := svc.Project(context.Background(), ViewAISystem, "ai-missing", 3)
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("want ErrNotFound, got %v", err)
+	}
+}
+
+// B2. Zero bindings: root-only projection.
+func TestService_AIView_ZeroBindings(t *testing.T) {
+	stubs := newAIViewStubs()
+	stubs.systems.items["ai-1"] = &aisystem.AISystem{ID: "ai-1", Name: "AI One"}
+	svc := NewServiceWithReaders(stubs.readers())
+	p, err := svc.Project(context.Background(), ViewAISystem, "ai-1", MaxDepth)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	if len(p.Nodes) != 1 {
+		t.Fatalf("want 1 node, got %d (%+v)", len(p.Nodes), p.Nodes)
+	}
+	if p.Nodes[0].Kind != NodeKindAISystem || p.Nodes[0].ID != "ai-1" {
+		t.Errorf("root node: want ai_system:ai-1, got %+v", p.Nodes[0])
+	}
+	if len(p.Edges) != 0 {
+		t.Errorf("want 0 edges, got %d (%+v)", len(p.Edges), p.Edges)
+	}
+	if p.Root.Kind != NodeKindAISystem || p.Root.ID != "ai-1" {
+		t.Errorf("Root: want (ai_system, ai-1), got %+v", p.Root)
+	}
+	if p.View != ViewAISystem {
+		t.Errorf("View: want %q, got %q", ViewAISystem, p.View)
+	}
+}
+
+// B3. Surface-scoped binding: 5 nodes, 4 edges (system_of, bound_to,
+// has_surface, has_process).
+func TestService_AIView_SurfaceScopedBinding(t *testing.T) {
+	stubs := newAIViewStubs()
+	stubs.systems.items["ai-1"] = &aisystem.AISystem{ID: "ai-1", Name: "AI One"}
+	stubs.bindings.byAISystem["ai-1"] = []*aisystem.AISystemBinding{
+		{ID: "bind-1", AISystemID: "ai-1", SurfaceID: "surf-1", ProcessID: "proc-1"},
+	}
+	stubs.surfs.items["surf-1"] = &surface.DecisionSurface{
+		ID: "surf-1", Version: 1, Name: "Surface One", ProcessID: "proc-1",
+		Status: surface.SurfaceStatusActive,
+	}
+	stubs.procs.items["proc-1"] = &process.Process{
+		ID: "proc-1", Name: "Process One", BusinessServiceID: "bs-1",
+	}
+	stubs.bss.items["bs-1"] = &businessservice.BusinessService{ID: "bs-1", Name: "BS One"}
+
+	svc := NewServiceWithReaders(stubs.readers())
+	p, err := svc.Project(context.Background(), ViewAISystem, "ai-1", MaxDepth)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	if len(p.Nodes) != 5 {
+		t.Errorf("node count: want 5, got %d (%+v)", len(p.Nodes), p.Nodes)
+	}
+	if len(p.Edges) != 4 {
+		t.Errorf("edge count: want 4, got %d (%+v)", len(p.Edges), p.Edges)
+	}
+	wantEdges := map[string]bool{
+		"system_of|ai_system_binding:bind-1->ai_system:ai-1":         false,
+		"bound_to|ai_system_binding:bind-1->decision_surface:surf-1": false,
+		"has_surface|process:proc-1->decision_surface:surf-1":        false,
+		"has_process|business_service:bs-1->process:proc-1":          false,
+	}
+	for _, e := range p.Edges {
+		key := e.Kind + "|" + e.Src.Kind + ":" + e.Src.ID + "->" + e.Dst.Kind + ":" + e.Dst.ID
+		if _, ok := wantEdges[key]; ok {
+			wantEdges[key] = true
+		} else {
+			t.Errorf("unexpected edge: %s", key)
+		}
+	}
+	for k, seen := range wantEdges {
+		if !seen {
+			t.Errorf("missing edge: %s", k)
+		}
+	}
+}
+
+// B4. Process-scoped binding: 4 nodes, 3 edges.
+func TestService_AIView_ProcessScopedBinding(t *testing.T) {
+	stubs := newAIViewStubs()
+	stubs.systems.items["ai-1"] = &aisystem.AISystem{ID: "ai-1"}
+	stubs.bindings.byAISystem["ai-1"] = []*aisystem.AISystemBinding{
+		{ID: "bind-1", AISystemID: "ai-1", ProcessID: "proc-1"},
+	}
+	stubs.procs.items["proc-1"] = &process.Process{
+		ID: "proc-1", Name: "P", BusinessServiceID: "bs-1",
+	}
+	stubs.bss.items["bs-1"] = &businessservice.BusinessService{ID: "bs-1"}
+
+	svc := NewServiceWithReaders(stubs.readers())
+	p, err := svc.Project(context.Background(), ViewAISystem, "ai-1", MaxDepth)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	if len(p.Nodes) != 4 {
+		t.Errorf("node count: want 4, got %d", len(p.Nodes))
+	}
+	if len(p.Edges) != 3 {
+		t.Errorf("edge count: want 3, got %d", len(p.Edges))
+	}
+	want := map[string]bool{
+		"system_of|ai_system_binding:bind-1->ai_system:ai-1":  false,
+		"bound_to|ai_system_binding:bind-1->process:proc-1":   false,
+		"has_process|business_service:bs-1->process:proc-1":   false,
+	}
+	for _, e := range p.Edges {
+		key := e.Kind + "|" + e.Src.Kind + ":" + e.Src.ID + "->" + e.Dst.Kind + ":" + e.Dst.ID
+		if _, ok := want[key]; ok {
+			want[key] = true
+		} else {
+			t.Errorf("unexpected edge: %s", key)
+		}
+	}
+	for k, seen := range want {
+		if !seen {
+			t.Errorf("missing edge: %s", k)
+		}
+	}
+}
+
+// B5. Capability-scoped binding: capability + bs (when binding row
+// names a BS). has_capability bs -> cap.
+func TestService_AIView_CapabilityScopedBinding(t *testing.T) {
+	stubs := newAIViewStubs()
+	stubs.systems.items["ai-1"] = &aisystem.AISystem{ID: "ai-1"}
+	stubs.bindings.byAISystem["ai-1"] = []*aisystem.AISystemBinding{
+		{ID: "bind-1", AISystemID: "ai-1", CapabilityID: "cap-1", BusinessServiceID: "bs-1"},
+	}
+	stubs.caps.items["cap-1"] = &capability.Capability{ID: "cap-1", Name: "C"}
+	stubs.bss.items["bs-1"] = &businessservice.BusinessService{ID: "bs-1"}
+
+	svc := NewServiceWithReaders(stubs.readers())
+	p, err := svc.Project(context.Background(), ViewAISystem, "ai-1", MaxDepth)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	if len(p.Nodes) != 4 {
+		t.Errorf("node count: want 4, got %d", len(p.Nodes))
+	}
+	if len(p.Edges) != 3 {
+		t.Errorf("edge count: want 3, got %d", len(p.Edges))
+	}
+	want := map[string]bool{
+		"system_of|ai_system_binding:bind-1->ai_system:ai-1":      false,
+		"bound_to|ai_system_binding:bind-1->capability:cap-1":     false,
+		"has_capability|business_service:bs-1->capability:cap-1":  false,
+	}
+	for _, e := range p.Edges {
+		key := e.Kind + "|" + e.Src.Kind + ":" + e.Src.ID + "->" + e.Dst.Kind + ":" + e.Dst.ID
+		if _, ok := want[key]; ok {
+			want[key] = true
+		} else {
+			t.Errorf("unexpected edge: %s", key)
+		}
+	}
+	for k, seen := range want {
+		if !seen {
+			t.Errorf("missing edge: %s", k)
+		}
+	}
+}
+
+// B6. Business-service-scoped binding: bs node only, no parent
+// context.
+func TestService_AIView_BusinessServiceScopedBinding(t *testing.T) {
+	stubs := newAIViewStubs()
+	stubs.systems.items["ai-1"] = &aisystem.AISystem{ID: "ai-1"}
+	stubs.bindings.byAISystem["ai-1"] = []*aisystem.AISystemBinding{
+		{ID: "bind-1", AISystemID: "ai-1", BusinessServiceID: "bs-1"},
+	}
+	stubs.bss.items["bs-1"] = &businessservice.BusinessService{ID: "bs-1"}
+
+	svc := NewServiceWithReaders(stubs.readers())
+	p, err := svc.Project(context.Background(), ViewAISystem, "ai-1", MaxDepth)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	if len(p.Nodes) != 3 {
+		t.Errorf("node count: want 3 (system + binding + bs), got %d", len(p.Nodes))
+	}
+	if len(p.Edges) != 2 {
+		t.Errorf("edge count: want 2, got %d", len(p.Edges))
+	}
+	want := map[string]bool{
+		"system_of|ai_system_binding:bind-1->ai_system:ai-1":          false,
+		"bound_to|ai_system_binding:bind-1->business_service:bs-1":    false,
+	}
+	for _, e := range p.Edges {
+		key := e.Kind + "|" + e.Src.Kind + ":" + e.Src.ID + "->" + e.Dst.Kind + ":" + e.Dst.ID
+		if _, ok := want[key]; ok {
+			want[key] = true
+		} else {
+			t.Errorf("unexpected edge: %s", key)
+		}
+	}
+}
+
+// B7. Mixed bindings sharing a parent BS dedupe to one BS node.
+func TestService_AIView_MixedBindings_SharedBSDedup(t *testing.T) {
+	stubs := newAIViewStubs()
+	stubs.systems.items["ai-1"] = &aisystem.AISystem{ID: "ai-1"}
+	stubs.bindings.byAISystem["ai-1"] = []*aisystem.AISystemBinding{
+		{ID: "bind-1", AISystemID: "ai-1", ProcessID: "proc-1"},
+		{ID: "bind-2", AISystemID: "ai-1", SurfaceID: "surf-2", ProcessID: "proc-2"},
+	}
+	stubs.procs.items["proc-1"] = &process.Process{ID: "proc-1", BusinessServiceID: "bs-1"}
+	stubs.procs.items["proc-2"] = &process.Process{ID: "proc-2", BusinessServiceID: "bs-1"}
+	stubs.surfs.items["surf-2"] = &surface.DecisionSurface{ID: "surf-2", ProcessID: "proc-2", Status: surface.SurfaceStatusActive}
+	stubs.bss.items["bs-1"] = &businessservice.BusinessService{ID: "bs-1"}
+
+	svc := NewServiceWithReaders(stubs.readers())
+	p, err := svc.Project(context.Background(), ViewAISystem, "ai-1", MaxDepth)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	bsCount := 0
+	for _, n := range p.Nodes {
+		if n.Kind == NodeKindBusinessService {
+			bsCount++
+		}
+	}
+	if bsCount != 1 {
+		t.Errorf("shared BS must dedup to 1 node, got %d", bsCount)
+	}
+	// Sanity: 2 has_process edges (one per process), 1 has_surface,
+	// 2 system_of, 2 bound_to => 7 edges total.
+	if len(p.Edges) != 7 {
+		t.Errorf("edge count: want 7, got %d (%+v)", len(p.Edges), p.Edges)
+	}
+}
+
+// B8. Edge directionality is fixed: bound_to is always binding ->
+// scope, system_of always binding -> ai_system, has_* always parent
+// -> child.
+func TestService_AIView_EdgeDirectionality(t *testing.T) {
+	stubs := newAIViewStubs()
+	stubs.systems.items["ai-1"] = &aisystem.AISystem{ID: "ai-1"}
+	stubs.bindings.byAISystem["ai-1"] = []*aisystem.AISystemBinding{
+		{ID: "bind-1", AISystemID: "ai-1", SurfaceID: "surf-1", ProcessID: "proc-1"},
+	}
+	stubs.surfs.items["surf-1"] = &surface.DecisionSurface{ID: "surf-1", ProcessID: "proc-1", Status: surface.SurfaceStatusActive}
+	stubs.procs.items["proc-1"] = &process.Process{ID: "proc-1", BusinessServiceID: "bs-1"}
+	stubs.bss.items["bs-1"] = &businessservice.BusinessService{ID: "bs-1"}
+
+	svc := NewServiceWithReaders(stubs.readers())
+	p, err := svc.Project(context.Background(), ViewAISystem, "ai-1", MaxDepth)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	for _, e := range p.Edges {
+		switch e.Kind {
+		case EdgeKindSystemOf:
+			if e.Src.Kind != NodeKindAISystemBinding || e.Dst.Kind != NodeKindAISystem {
+				t.Errorf("system_of must be binding->ai_system; got %+v", e)
+			}
+		case EdgeKindBoundTo:
+			if e.Src.Kind != NodeKindAISystemBinding {
+				t.Errorf("bound_to src must be binding; got %+v", e)
+			}
+		case EdgeKindHasSurface:
+			if e.Src.Kind != NodeKindProcess || e.Dst.Kind != NodeKindDecisionSurface {
+				t.Errorf("has_surface must be process->decision_surface; got %+v", e)
+			}
+		case EdgeKindHasProcess:
+			if e.Src.Kind != NodeKindBusinessService || e.Dst.Kind != NodeKindProcess {
+				t.Errorf("has_process must be business_service->process; got %+v", e)
+			}
+		case EdgeKindHasCapability:
+			if e.Src.Kind != NodeKindBusinessService || e.Dst.Kind != NodeKindCapability {
+				t.Errorf("has_capability must be business_service->capability; got %+v", e)
+			}
+		default:
+			t.Errorf("unexpected edge kind in ai_system view: %q", e.Kind)
+		}
+	}
+}
+
+// B9. Missing scope target: binding + system_of stay; bound_to and
+// missing target node are omitted; no panic; projection succeeds.
+func TestService_AIView_MissingScopeTarget(t *testing.T) {
+	stubs := newAIViewStubs()
+	stubs.systems.items["ai-1"] = &aisystem.AISystem{ID: "ai-1"}
+	stubs.bindings.byAISystem["ai-1"] = []*aisystem.AISystemBinding{
+		{ID: "bind-1", AISystemID: "ai-1", SurfaceID: "surf-missing"},
+	}
+
+	svc := NewServiceWithReaders(stubs.readers())
+	p, err := svc.Project(context.Background(), ViewAISystem, "ai-1", MaxDepth)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	if len(p.Nodes) != 2 {
+		t.Errorf("node count: want 2 (system + binding), got %d (%+v)", len(p.Nodes), p.Nodes)
+	}
+	for _, n := range p.Nodes {
+		if n.Kind == NodeKindDecisionSurface {
+			t.Errorf("missing surface must NOT be emitted as a node; got %+v", n)
+		}
+	}
+	if len(p.Edges) != 1 {
+		t.Errorf("edge count: want 1 (system_of only), got %d (%+v)", len(p.Edges), p.Edges)
+	}
+	if len(p.Edges) == 1 && p.Edges[0].Kind != EdgeKindSystemOf {
+		t.Errorf("only edge must be system_of; got %+v", p.Edges[0])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// C. Depth semantics (ai_system root)
+// ---------------------------------------------------------------------------
+
+// makeAIViewDepthFixture returns stubs with a 4-hop chain (undirected
+// from ai-1):
+//
+//   ai-1 <-(system_of)- bind-1 -(bound_to)-> surf-1 <-(has_surface)- proc-1 <-(has_process)- bs-1
+//
+// Hops from ai-1: bind-1 = 1, surf-1 = 2, proc-1 = 3, bs-1 = 4.
+func makeAIViewDepthFixture() *aiViewStubs {
+	stubs := newAIViewStubs()
+	stubs.systems.items["ai-1"] = &aisystem.AISystem{ID: "ai-1"}
+	stubs.bindings.byAISystem["ai-1"] = []*aisystem.AISystemBinding{
+		{ID: "bind-1", AISystemID: "ai-1", SurfaceID: "surf-1", ProcessID: "proc-1"},
+	}
+	stubs.surfs.items["surf-1"] = &surface.DecisionSurface{ID: "surf-1", ProcessID: "proc-1", Status: surface.SurfaceStatusActive}
+	stubs.procs.items["proc-1"] = &process.Process{ID: "proc-1", BusinessServiceID: "bs-1"}
+	stubs.bss.items["bs-1"] = &businessservice.BusinessService{ID: "bs-1"}
+	return stubs
+}
+
+func TestService_AIView_DepthZero_RootOnly(t *testing.T) {
+	stubs := makeAIViewDepthFixture()
+	svc := NewServiceWithReaders(stubs.readers())
+	p, err := svc.Project(context.Background(), ViewAISystem, "ai-1", 0)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	if len(p.Nodes) != 1 {
+		t.Errorf("depth=0: want 1 node, got %d (%+v)", len(p.Nodes), p.Nodes)
+	}
+	if len(p.Edges) != 0 {
+		t.Errorf("depth=0: want 0 edges, got %d", len(p.Edges))
+	}
+	if p.Depth != 0 {
+		t.Errorf("Depth: want 0, got %d", p.Depth)
+	}
+}
+
+func TestService_AIView_DepthOne_RootPlusBinding(t *testing.T) {
+	stubs := makeAIViewDepthFixture()
+	svc := NewServiceWithReaders(stubs.readers())
+	p, err := svc.Project(context.Background(), ViewAISystem, "ai-1", 1)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	got := map[string]bool{}
+	for _, n := range p.Nodes {
+		got[n.Kind+":"+n.ID] = true
+	}
+	for _, want := range []string{"ai_system:ai-1", "ai_system_binding:bind-1"} {
+		if !got[want] {
+			t.Errorf("depth=1 missing %q (got %v)", want, got)
+		}
+	}
+	for _, illegal := range []string{"decision_surface:surf-1", "process:proc-1", "business_service:bs-1"} {
+		if got[illegal] {
+			t.Errorf("depth=1 must NOT include %q (got %v)", illegal, got)
+		}
+	}
+}
+
+func TestService_AIView_DepthTwo_AddsScopeTarget(t *testing.T) {
+	stubs := makeAIViewDepthFixture()
+	svc := NewServiceWithReaders(stubs.readers())
+	p, err := svc.Project(context.Background(), ViewAISystem, "ai-1", 2)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	got := map[string]bool{}
+	for _, n := range p.Nodes {
+		got[n.Kind+":"+n.ID] = true
+	}
+	for _, want := range []string{"ai_system:ai-1", "ai_system_binding:bind-1", "decision_surface:surf-1"} {
+		if !got[want] {
+			t.Errorf("depth=2 missing %q (got %v)", want, got)
+		}
+	}
+	for _, illegal := range []string{"process:proc-1", "business_service:bs-1"} {
+		if got[illegal] {
+			t.Errorf("depth=2 must NOT include %q (got %v)", illegal, got)
+		}
+	}
+}
+
+func TestService_AIView_DepthThree_AddsParentProcess(t *testing.T) {
+	stubs := makeAIViewDepthFixture()
+	svc := NewServiceWithReaders(stubs.readers())
+	p, err := svc.Project(context.Background(), ViewAISystem, "ai-1", 3)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	got := map[string]bool{}
+	for _, n := range p.Nodes {
+		got[n.Kind+":"+n.ID] = true
+	}
+	for _, want := range []string{"ai_system:ai-1", "ai_system_binding:bind-1", "decision_surface:surf-1", "process:proc-1"} {
+		if !got[want] {
+			t.Errorf("depth=3 missing %q (got %v)", want, got)
+		}
+	}
+	if got["business_service:bs-1"] {
+		t.Errorf("depth=3 must NOT include business_service:bs-1 yet (it's 4 hops away)")
 	}
 }

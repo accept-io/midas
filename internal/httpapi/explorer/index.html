@@ -4861,6 +4861,29 @@
   // "select a business service" placeholder until the live fetch resolves.
   let currentSelectedService = null;
 
+  // currentGraphView and currentGraphRootId drive every authority-graph
+  // fetch the Explorer makes (workbench map AND Business Service record
+  // page). Both are read by the URL-composition sites; the hard-coded
+  // `view=service` literal is gone. Transitions:
+  //
+  //   - On business-service catalogue selection
+  //     (showBusinessServiceRecord / showBusinessServiceMap):
+  //         currentGraphView = 'service'
+  //         currentGraphRootId = <bs id>
+  //     This is the always-on reset path back to the service view.
+  //
+  //   - On a `reframe-around-this` action (handleGovernanceMapAction):
+  //         currentGraphView = action.target_view
+  //         currentGraphRootId = action.target_id
+  //     Then refreshGovernanceMap is invoked with gmapLastBSId reset
+  //     so the deduper does not suppress the new fetch.
+  //
+  // Default 'service' / '' so the first navigation through the
+  // catalogue is a service-view fetch with no surprise from a stale
+  // reframe state.
+  let currentGraphView = 'service';
+  let currentGraphRootId = '';
+
   // ── Live Business Service list state ──────────────────────────────────────
   // The selector that drives currentSelectedService is backed by
   // GET /v1/businessservices (envelope-shape `{business_services: [...]}`).
@@ -4956,6 +4979,12 @@
   function showBusinessServiceRecord(serviceId) {
     if (!serviceId) { showServicesCatalogue(); return; }
     currentSelectedService = serviceId;
+    // Always reset the graph state to service-view rooted at the
+    // newly-selected BS. This guarantees a stale `reframe-around-this`
+    // state from the workbench cannot bleed into a record-page fetch
+    // and confuse it into requesting an AI-system view of a BS id.
+    currentGraphView = 'service';
+    currentGraphRootId = serviceId;
     setServicesSubView('detail');
     if (typeof gmapMode !== 'undefined') gmapMode = 'overview';
     loadBusinessServiceRecord(serviceId);
@@ -4964,6 +4993,11 @@
   function showBusinessServiceMap(serviceId) {
     if (!serviceId) { showServicesCatalogue(); return; }
     currentSelectedService = serviceId;
+    // Always reset the graph state on map-sub-view entry. Operators
+    // re-entering the map from the catalogue see the BS-rooted view,
+    // not whatever reframe state was last active.
+    currentGraphView = 'service';
+    currentGraphRootId = serviceId;
     setServicesSubView('map');
     // Update the back-affordance label to the selected BS name when known
     // (cached payload). Falls back to "Record" if not yet loaded.
@@ -5085,14 +5119,15 @@
     serviceRecordLoading = true;
     serviceRecordError = null;
     renderBusinessServiceRecord(null);
-    // Phase 2B Step 5: record page now consumes /v1/authority-graph
-    // and runs the projection through mapAuthorityGraphToGovernanceMapShape
-    // before handing it to renderBusinessServiceRecord, which still
-    // expects the gmap wire shape. The legacy
-    // /v1/businessservices/{id}/governance-map endpoint stays alive on
-    // the backend (used by the map view's fallback branch) but the
-    // record page no longer calls it.
-    const url = '/v1/authority-graph?view=service&id=' + encodeURIComponent(serviceId) + '&depth=5';
+    // Record-page navigations are always service-rooted: defensively
+    // (re)set the graph state so a stale reframe never bleeds into a
+    // record fetch. showBusinessServiceRecord also sets these on
+    // every catalogue selection — this is belt-and-braces for the
+    // case where loadBusinessServiceRecord is invoked directly.
+    currentGraphView = 'service';
+    currentGraphRootId = serviceId;
+    const url = '/v1/authority-graph?view=' + encodeURIComponent(currentGraphView) +
+      '&id=' + encodeURIComponent(currentGraphRootId) + '&depth=5';
     fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
       .then(resp => {
         if (!resp.ok) return resp.text().then(t => ({ __status: resp.status, __text: t }));
@@ -5107,7 +5142,7 @@
         }
         // Discard if user navigated to a different service while in flight.
         if (serviceId !== currentSelectedService) return;
-        const adapted = mapAuthorityGraphToGovernanceMapShape(payload);
+        const adapted = mapAuthorityGraphToGovernanceMapShape(payload, 'service');
         serviceRecordCache[serviceId] = adapted;
         serviceRecordError = null;
         renderBusinessServiceRecord(adapted);
@@ -6143,11 +6178,30 @@
   // active" diagnostic message to a single emission per session.
   let _authorityGraphAdapterLogged = false;
 
-  // mapAuthorityGraphToGovernanceMapShape adapts an authority-graph
-  // projection (GET /v1/authority-graph?view=service&id=…) into the
-  // governance-map response shape that renderGovernanceMap() already
-  // understands. The transformation is pure (no DOM, no fetch), so
-  // it is safe to unit-test or replay.
+  // mapAuthorityGraphToGovernanceMapShape(projection, view) adapts an
+  // authority-graph projection into the governance-map response shape
+  // that renderGovernanceMap() already understands. The transformation
+  // is pure (no DOM, no fetch), so it is safe to unit-test or replay.
+  //
+  // The view argument selects the per-view branch:
+  //
+  //   - view='service' (default for the legacy/no-arg form):
+  //     identical behaviour to the original adapter — projection root
+  //     IS a business_service, business_service slot populated from
+  //     that node, scope-target sections populated from the
+  //     corresponding kind=... nodes.
+  //
+  //   - view='ai_system':
+  //     projection root IS an ai_system. The renderer requires a
+  //     non-null business_service to render at all; we fill that slot
+  //     with the root AI system's identity so the existing renderer
+  //     pipeline produces a map. The AI system also appears in
+  //     ai_systems[] so the renderer's existing binding-connector
+  //     logic still works. authority_summary and coverage are not
+  //     emitted by the ai_system projection — those sections render
+  //     as empty cards (the accepted "sparse rows" limitation
+  //     documented in the deliverable). When a per-view renderer
+  //     ships, the BS-slot fill becomes unnecessary.
   //
   // Field-mapping rules (Phase 2B Step 2 — strict gmap-wire parity):
   //
@@ -6206,7 +6260,7 @@
   // Defensive against missing projection / nodes / typed-data slots:
   // returns a shape with empty arrays and null scalars rather than
   // throwing.
-  function mapAuthorityGraphToGovernanceMapShape(projection) {
+  function mapAuthorityGraphToGovernanceMapShape(projection, view) {
     const empty = {
       business_service: null,
       ai_systems: [],
@@ -6219,6 +6273,8 @@
     };
     if (!projection || !Array.isArray(projection.nodes)) return empty;
     const rootId = projection.root && projection.root.id;
+    const rootKind = projection.root && projection.root.kind;
+    const isAIView = view === 'ai_system';
 
     let businessService = null;
     let coverage = null;
@@ -6230,6 +6286,10 @@
     const capabilities = [];
     const processes = [];
     const surfaces = [];
+    // For view='ai_system': the projection root is an ai_system node.
+    // Captured here when seen so the post-loop BS-slot synthesis has
+    // the typed-data fields it needs.
+    let rootAISystemData = null;
 
     for (const n of projection.nodes) {
       if (!n || !n.kind) continue;
@@ -6351,6 +6411,13 @@
             external_ref: a.external_ref || null,
             bindings: [],
           };
+          // For view='ai_system': capture the root AI's data for the
+          // post-loop BS-slot synthesis. Only the root participates;
+          // sibling ai_system nodes (none in current projector output,
+          // but defensive) do not overwrite.
+          if (isAIView && rootId && n.id === rootId && rootKind === 'ai_system') {
+            rootAISystemData = a;
+          }
           break;
         }
         case 'ai_system_binding': {
@@ -6403,6 +6470,26 @@
       if (sys) sys.bindings.push(b);
     }
 
+    // ai_system view BS-slot synthesis. The renderer requires a
+    // non-null business_service to render at all; for the ai_system
+    // view we fill the slot with the root AI system's identity. This
+    // is a renderer-compatibility shim — when a per-view renderer
+    // ships, the slot will become unnecessary and this branch can be
+    // removed. The synthesis is deterministic: same projection in,
+    // same shape out.
+    if (isAIView && businessService === null && rootAISystemData !== null) {
+      businessService = {
+        id: rootAISystemData.id,
+        name: rootAISystemData.name,
+        description: rootAISystemData.description || '',
+        status: rootAISystemData.status,
+        owner_id: '',
+        service_type: '',
+        regulatory_scope: '',
+        external_ref: rootAISystemData.external_ref || null,
+      };
+    }
+
     return {
       business_service: businessService,
       relationships: { outgoing: outgoing, incoming: incoming },
@@ -6417,9 +6504,16 @@
 
   function refreshGovernanceMap() {
     if (gmapMode !== 'map') return; // only fetch when the pane is visible
-    const bsId = currentSelectedService;
-    if (!bsId || bsId === gmapLastBSId) return;
-    gmapLastBSId = bsId;
+    // Workbench fetch routes through the (currentGraphView,
+    // currentGraphRootId) state pair. catalogue-selection entry
+    // points (showBusinessServiceRecord / showBusinessServiceMap)
+    // reset both to ('service', <bs id>); a 'reframe-around-this'
+    // action sets them to (<target view>, <target id>) before this
+    // function is called. Either way, by the time we read them here
+    // they describe the graph the operator is asking to see.
+    const rootId = currentGraphRootId;
+    if (!rootId || rootId === gmapLastBSId) return;
+    gmapLastBSId = rootId;
     gmapSelectedId = null;
     setGovernanceMapStatus('Loading…');
     const fetchToken = ++gmapInFlight;
@@ -6431,7 +6525,9 @@
     // depth=5 = MaxDepth so every projected node is visible
     // regardless of layer. The renderer derives connectors from
     // the adapted shape itself; projection edges are discarded.
-    const url = '/v1/authority-graph?view=service&id=' + encodeURIComponent(bsId) + '&depth=5';
+    const fetchView = currentGraphView;
+    const url = '/v1/authority-graph?view=' + encodeURIComponent(fetchView) +
+      '&id=' + encodeURIComponent(rootId) + '&depth=5';
     fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
       .then(resp => {
         if (resp.status === 404) return { __status: 404 };
@@ -6442,18 +6538,18 @@
       .then(payload => {
         if (fetchToken !== gmapInFlight) return; // a newer fetch superseded this
         if (payload && payload.__status === 404) {
-          renderGovernanceMapEmpty('No governance map for this service yet.', bsId);
+          renderGovernanceMapEmpty('No governance map for this service yet.', rootId);
           return;
         }
         if (payload && payload.__status === 501) {
-          renderGovernanceMapEmpty('Governance map is not configured on this server.', bsId);
+          renderGovernanceMapEmpty('Governance map is not configured on this server.', rootId);
           return;
         }
         if (payload && payload.__status) {
           renderGovernanceMapError('Governance map fetch failed (HTTP ' + payload.__status + ').');
           return;
         }
-        const adapted = mapAuthorityGraphToGovernanceMapShape(payload);
+        const adapted = mapAuthorityGraphToGovernanceMapShape(payload, fetchView);
         gmapData = adapted;
         renderGovernanceMap(adapted);
       })
@@ -7065,6 +7161,16 @@
         label: 'AI SYSTEM', name: ai.name || ai.id,
         meta,
         details: aiDetails,
+        // Reframe action: clicking "Reframe around this" on an AI
+        // system node re-roots the graph at that AI system. The
+        // dispatcher (handleGovernanceMapAction) updates
+        // currentGraphView / currentGraphRootId and triggers a
+        // workbench-internal refetch — no sub-view switch, no
+        // record-page navigation. AI system nodes are the only
+        // node kind exposing reframe in this deliverable.
+        actions: ai.id
+          ? [{ kind: 'reframe-around-this', target_view: 'ai_system', target_id: ai.id, label: 'Reframe around this' }]
+          : [],
       }, positions[id]);
     });
     if (aiOmitted > 0) {
@@ -7428,6 +7534,15 @@
         btn.setAttribute('aria-label', (action.label || 'View record') + ' for ' + String(action.target_id));
         btn.addEventListener('click', () => handleGovernanceMapAction(action));
         el.appendChild(btn);
+      } else if (action.kind === 'reframe-around-this') {
+        if (!action.target_id || !action.target_view) return;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-secondary gmap-action-reframe';
+        btn.textContent = action.label || 'Reframe around this';
+        btn.setAttribute('aria-label', (action.label || 'Reframe around this') + ' for ' + String(action.target_id));
+        btn.addEventListener('click', () => handleGovernanceMapAction(action));
+        el.appendChild(btn);
       }
       // Unknown kinds are intentionally dropped here; the dispatcher
       // also enforces this on click as a defence-in-depth check.
@@ -7452,6 +7567,22 @@
         if (action.target_id && typeof showCapabilityRecord === 'function') {
           showCapabilityRecord(action.target_id);
         }
+        return;
+      case 'reframe-around-this':
+        // Stay inside the workbench; redraw the graph rooted at the
+        // action's target. Does NOT switch sub-view, NOT navigate to
+        // a record page, NOT modal. Reset graph-local in-flight
+        // state so the next refresh fires (gmapLastBSId would
+        // otherwise dedup if the user happens to reframe to an id
+        // that matches the prior root). Drag overrides and selected
+        // node are reset by clearGovernanceMapCanvas inside the
+        // renderer pipeline once the new fetch returns.
+        if (!action.target_id || !action.target_view) return;
+        currentGraphView = action.target_view;
+        currentGraphRootId = action.target_id;
+        gmapLastBSId = null;
+        gmapSelectedId = null;
+        if (typeof refreshGovernanceMap === 'function') refreshGovernanceMap();
         return;
       default:
         // Unknown kind — drop silently.

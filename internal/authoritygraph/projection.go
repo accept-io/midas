@@ -23,10 +23,15 @@ package authoritygraph
 
 // View identifies the perspective the projection is computed in.
 //
-// Phase 1/2A supports only ViewService. Other views (agent, AI system,
-// decision, risk) are reserved for later phases.
+// Supported views:
+//   - ViewService:  rooted at a business service; reuses governancemap.ReadService.
+//   - ViewAISystem: rooted at an AI system; walks bindings to scope targets.
+//
+// Other views (agent, decision_surface, risk) are reserved for later
+// phases.
 const (
-	ViewService = "service"
+	ViewService  = "service"
+	ViewAISystem = "ai_system"
 )
 
 // Phase 1 node kinds — the complete allowed set. Forbidden kinds
@@ -232,6 +237,21 @@ type ProcessData struct {
 // "decision_surface". The two binding-id arrays are non-nil (possibly
 // empty) and disjoint per the governance-map contract.
 //
+// View-conditional population:
+//
+//   - view=service:    AIBindingIDs, InheritedAIBindingIDs,
+//                      ProfileCount, GrantCount, AgentCount are all
+//                      populated by governancemap.ReadService's
+//                      surface-aggregation pass (loadSurfacesAndAuthority).
+//   - view=ai_system:  AIBindingIDs and InheritedAIBindingIDs are
+//                      emitted as empty slices, and the three Count
+//                      fields are zero. The ai_system view does not
+//                      run the surface-aggregation pass — operators
+//                      who need per-surface authority counts should
+//                      use view=service. Future view authors must
+//                      either run their own aggregation or accept
+//                      this absence.
+//
 // NOTE: surface.DecisionSurface has no ExternalRef and no Owner on the
 // domain type today; both are omitted from this struct. If the domain
 // gains them, the typed-data struct will be extended additively.
@@ -253,6 +273,21 @@ type DecisionSurfaceData struct {
 // "ai_system". ActiveVersion / ActiveVersionLabel / ActiveVersionStatus
 // are populated when the AI system has an active version on the
 // governance map, and left at the zero value otherwise.
+//
+// View-conditional population:
+//
+//   - view=service:    Active-version fields are populated via
+//                      governancemap.AISystemVersionReader.GetActiveBySystem,
+//                      which the service view's read-service
+//                      construction wires in.
+//   - view=ai_system:  Active-version fields are emitted at the zero
+//                      value (ActiveVersion=nil,
+//                      ActiveVersionLabel="", ActiveVersionStatus="").
+//                      The ai_system view does not inject the
+//                      AI-system-version reader; the version is not
+//                      surfaced on this view. Operators who need it
+//                      should follow a binding to its scope-target
+//                      and view the service that contains the binding.
 type AISystemData struct {
 	ID                  string           `json:"id"`
 	Name                string           `json:"name"`

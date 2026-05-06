@@ -39,19 +39,21 @@ func newSeededService(t *testing.T) *Service {
 	if err := bootstrap.SeedDemo(context.Background(), repos); err != nil {
 		t.Fatalf("bootstrap.SeedDemo: %v", err)
 	}
-	return NewService(governancemap.NewReadService(
-		repos.BusinessServices,
-		repos.BusinessServiceRelationships,
-		repos.BusinessServiceCapabilities,
-		repos.Capabilities,
-		repos.Processes,
-		repos.Surfaces,
-		repos.Profiles,
-		repos.Grants,
-		repos.AISystems,
-		repos.AISystemVersions,
-		repos.AISystemBindings,
-	))
+	return NewServiceWithReaders(Readers{
+		GovernanceMap: governancemap.NewReadService(
+			repos.BusinessServices,
+			repos.BusinessServiceRelationships,
+			repos.BusinessServiceCapabilities,
+			repos.Capabilities,
+			repos.Processes,
+			repos.Surfaces,
+			repos.Profiles,
+			repos.Grants,
+			repos.AISystems,
+			repos.AISystemVersions,
+			repos.AISystemBindings,
+		),
+	})
 }
 
 // TestSeeded_ConsumerLending_TypedDataPopulated asserts that every
@@ -125,17 +127,22 @@ func TestSeeded_ConsumerLending_TypedDataPopulated(t *testing.T) {
 		t.Errorf("authority_summary.surface_count (%d) and coverage.surface_count (%d) must match",
 			as.SurfaceCount, cv.SurfaceCount)
 	}
-	// Phase 9 seed pins: Consumer Lending has profile-v2-onboarding +
-	// grant-v2-onboarding + agent-v2-evaluator under surf-v2-id-verify,
-	// giving exactly one of each on this BS map.
-	if as.ActiveProfileCount != 1 {
-		t.Errorf("authority_summary.active_profile_count: want 1 (Phase 9 seed), got %d", as.ActiveProfileCount)
+	// Phase 2B Step 11 enrichment pins: Consumer Lending now has
+	// three governed surfaces — surf-v2-id-verify (profile-v2-
+	// onboarding / grant-v2-onboarding / agent-v2-evaluator),
+	// surf-v2-credit-assess (profile-v2-credit-assess / grant-v2-
+	// credit-assess / agent-v2-evaluator), and surf-v2-consumer-fraud
+	// (profile-v2-fraud-detection / grant-v2-fraud-detection /
+	// agent-v2-fraud-bot). Distinct counts: 3 profiles, 3 grants,
+	// 2 distinct agents (evaluator + fraud-bot).
+	if as.ActiveProfileCount != 3 {
+		t.Errorf("authority_summary.active_profile_count: want 3, got %d", as.ActiveProfileCount)
 	}
-	if as.ActiveGrantCount != 1 {
-		t.Errorf("authority_summary.active_grant_count: want 1 (Phase 9 seed), got %d", as.ActiveGrantCount)
+	if as.ActiveGrantCount != 3 {
+		t.Errorf("authority_summary.active_grant_count: want 3, got %d", as.ActiveGrantCount)
 	}
-	if as.ActiveAgentCount != 1 {
-		t.Errorf("authority_summary.active_agent_count: want 1 (Phase 9 seed), got %d", as.ActiveAgentCount)
+	if as.ActiveAgentCount != 2 {
+		t.Errorf("authority_summary.active_agent_count: want 2 (evaluator + fraud-bot), got %d", as.ActiveAgentCount)
 	}
 
 	// 3. Decision surface typed data on the canonical onboarding surface.

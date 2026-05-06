@@ -122,9 +122,11 @@ func TestSeedDemo_FreshCreatesCompleteCurrentDataset(t *testing.T) {
 		t.Errorf("proc-consumer-onboarding must link to bs-consumer-lending; got %+v", p)
 	}
 
-	// BusinessService ↔ Capability links. The seed creates five; assert
-	// at least one canonical pair is present, and assert ListBy returns
-	// matching counts on each side of the join.
+	// BusinessService ↔ Capability links. Phase 2B Step 11 expanded
+	// the dataset to a richer banking landscape; bs-consumer-lending
+	// now has five capabilities (id-verification, credit-scoring,
+	// fraud-detection, credit-administration, collections). Assert
+	// at least one canonical pair is present and the count matches.
 	exists, err := repos.BusinessServiceCapabilities.Exists(ctx, "bs-consumer-lending", "cap-fraud-detection")
 	if err != nil {
 		t.Errorf("BSC Exists: %v", err)
@@ -136,8 +138,8 @@ func TestSeedDemo_FreshCreatesCompleteCurrentDataset(t *testing.T) {
 	if err != nil {
 		t.Errorf("ListByBusinessServiceID(bs-consumer-lending): %v", err)
 	}
-	if len(consumerLinks) != 3 {
-		t.Errorf("bs-consumer-lending should have 3 BSC links; got %d", len(consumerLinks))
+	if len(consumerLinks) != 5 {
+		t.Errorf("bs-consumer-lending should have 5 BSC links; got %d", len(consumerLinks))
 	}
 
 	// Agent — single seeded agent.
@@ -609,8 +611,10 @@ func TestSeedDemo_RelationshipRepair_AddsMissingLinksWithoutDuplicating(t *testi
 
 	consumerLinks, _ := repos.BusinessServiceCapabilities.ListByBusinessServiceID(ctx, "bs-consumer-lending")
 	merchantLinks, _ := repos.BusinessServiceCapabilities.ListByBusinessServiceID(ctx, "bs-merchant-services")
-	if len(consumerLinks) != 3 || len(merchantLinks) != 2 {
-		t.Errorf("BSC links after first seed: want 3+2, got %d+%d", len(consumerLinks), len(merchantLinks))
+	// Phase 2B Step 11 enrichment: bs-consumer-lending → 5 caps,
+	// bs-merchant-services → 4 caps.
+	if len(consumerLinks) != 5 || len(merchantLinks) != 4 {
+		t.Errorf("BSC links after first seed: want 5+4, got %d+%d", len(consumerLinks), len(merchantLinks))
 	}
 
 	// Second seed: must NOT duplicate links.
@@ -638,6 +642,9 @@ func TestSeedDemo_RelationshipRepair_AddsMissingLinksWithoutDuplicating(t *testi
 var seededDemoProfileIDs = []string{
 	"profile-v2-standard",
 	"profile-v2-onboarding",
+	// Phase 2B Step 11 enrichment.
+	"profile-v2-credit-assess",
+	"profile-v2-fraud-detection",
 }
 
 // schemaAllowedConsequenceTypes is the set of consequence_type values

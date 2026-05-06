@@ -9,8 +9,12 @@ import (
 	"time"
 
 	"github.com/accept-io/midas/internal/aisystem"
+	"github.com/accept-io/midas/internal/businessservice"
+	"github.com/accept-io/midas/internal/capability"
 	"github.com/accept-io/midas/internal/externalref"
 	"github.com/accept-io/midas/internal/governancemap"
+	"github.com/accept-io/midas/internal/process"
+	"github.com/accept-io/midas/internal/surface"
 )
 
 // Phase 1 depth bounds. Defaulting and clamping happen at the URL
@@ -37,47 +41,112 @@ var (
 	ErrNotFound     = errors.New("authoritygraph: root entity not found")
 )
 
-// GovernanceMapReader is the narrow dependency the projection service
-// requires. *governancemap.ReadService satisfies it. Defined here so
-// tests can swap a stub without dragging the full governancemap
-// surface, mirroring the governanceMapReadService interface in
-// internal/httpapi/governance_map_handler.go.
+// GovernanceMapReader is the narrow dependency the service-view
+// projector requires. *governancemap.ReadService satisfies it.
 type GovernanceMapReader interface {
 	GetGovernanceMap(ctx context.Context, businessServiceID string) (*governancemap.Map, error)
 }
 
-// Service projects the governance map into a generic node/edge graph.
-// Phase 1 supports view=service only.
+// AISystemReader is the narrow read dependency for the ai_system view.
+// *governancemap.ReadService and any wider AI-system repository satisfy
+// it via GetByID.
+type AISystemReader interface {
+	GetByID(ctx context.Context, id string) (*aisystem.AISystem, error)
+}
+
+// AISystemBindingRepository is the narrow read dependency for the
+// ai_system view's binding traversal. The aisystem.BindingRepository
+// implementation satisfies it.
+type AISystemBindingRepository interface {
+	ListByAISystem(ctx context.Context, aiSystemID string) ([]*aisystem.AISystemBinding, error)
+}
+
+// BusinessServiceReader resolves a business-service node by id when
+// the ai_system view encounters a binding scoped to (or transitively
+// scoping through) a business service.
+type BusinessServiceReader interface {
+	GetByID(ctx context.Context, id string) (*businessservice.BusinessService, error)
+}
+
+// CapabilityReader resolves a capability node by id when the
+// ai_system view encounters a capability-scoped binding.
+type CapabilityReader interface {
+	GetByID(ctx context.Context, id string) (*capability.Capability, error)
+}
+
+// ProcessReader resolves a process node by id when the ai_system view
+// encounters a process-scoped binding (or a surface scope's parent
+// process).
+type ProcessReader interface {
+	GetByID(ctx context.Context, id string) (*process.Process, error)
+}
+
+// SurfaceReader resolves the latest version of a decision surface by
+// logical id. The ai_system view emits the latest surface version
+// only; per-version drill-down is reserved for the decision_surface
+// view.
+type SurfaceReader interface {
+	FindLatestByID(ctx context.Context, id string) (*surface.DecisionSurface, error)
+}
+
+// Readers bundles the read dependencies for every view this service
+// supports. A field may be left nil to disable views that depend on
+// it; the constructor only registers a view's projector when its
+// required readers are non-nil.
+type Readers struct {
+	GovernanceMap    GovernanceMapReader
+	AISystem         AISystemReader
+	AISystemBindings AISystemBindingRepository
+	BusinessServices BusinessServiceReader
+	Capabilities     CapabilityReader
+	Processes        ProcessReader
+	Surfaces         SurfaceReader
+}
+
+// viewProjector is the per-view projection function signature. Each
+// supported view registers one projector in Service.projectors; the
+// Project entry point looks up by view name and delegates after
+// validating id/depth.
+type viewProjector func(ctx context.Context, id string, depth int) (*Projection, error)
+
+// Service projects the governance map and adjacent read services into
+// a generic node/edge graph. Multi-view dispatch is via the
+// projectors map populated at construction time.
 type Service struct {
-	governanceMap GovernanceMapReader
+	readers    Readers
+	projectors map[string]viewProjector
 }
 
-// NewService constructs a Service. The reader argument must be
-// non-nil; callers that pass nil get a service that returns
-// ErrNotFound on every call (defensive — production wiring uses the
-// configured *governancemap.ReadService).
-func NewService(governanceMap GovernanceMapReader) *Service {
-	return &Service{governanceMap: governanceMap}
+// NewServiceWithReaders constructs a Service with the full set of
+// view-specific readers. Each view is registered iff all its required
+// readers are non-nil; otherwise requests for that view return
+// ErrInvalidView (the projector is simply absent from the dispatch
+// map).
+func NewServiceWithReaders(r Readers) *Service {
+	s := &Service{readers: r, projectors: map[string]viewProjector{}}
+	if r.GovernanceMap != nil {
+		s.projectors[ViewService] = s.projectServiceViewEntry
+	}
+	if r.AISystem != nil && r.AISystemBindings != nil &&
+		r.BusinessServices != nil && r.Capabilities != nil &&
+		r.Processes != nil && r.Surfaces != nil {
+		s.projectors[ViewAISystem] = s.projectAISystemViewEntry
+	}
+	return s
 }
 
-// Project builds a depth-bounded projection rooted at (view, id).
+// Project dispatches to the view-specific projector after validating
+// inputs in order: view → id → depth.
 //
 // Validation rules:
 //
-//   view must equal ViewService — anything else (including empty)
-//     returns ErrInvalidView.
-//   id must be non-empty — otherwise ErrInvalidID.
-//   depth must be >= 0 — otherwise ErrInvalidDepth. depth > MaxDepth
-//     is silently clamped to MaxDepth (no Truncated signal; the cap
-//     is documented in the Phase 1 contract).
-//
-// On a not-found root the underlying governance-map reader returns
-// (nil, nil); Project converts that to ErrNotFound so the handler
-// can map it to 404, matching the existing
-// /v1/businessservices/{id}/governance-map 404 path
-// (governance_map_handler.go: gmap == nil → 404).
+//	view must be a registered projector — otherwise ErrInvalidView.
+//	id must be non-empty — otherwise ErrInvalidID.
+//	depth must be >= 0 — otherwise ErrInvalidDepth. depth > MaxDepth
+//	  is silently clamped (no Truncated signal).
 func (s *Service) Project(ctx context.Context, view, id string, depth int) (*Projection, error) {
-	if view != ViewService {
+	p, ok := s.projectors[view]
+	if !ok {
 		return nil, fmt.Errorf("%w: %q", ErrInvalidView, view)
 	}
 	if id == "" {
@@ -89,10 +158,15 @@ func (s *Service) Project(ctx context.Context, view, id string, depth int) (*Pro
 	if depth > MaxDepth {
 		depth = MaxDepth
 	}
-	if s.governanceMap == nil {
-		return nil, fmt.Errorf("%w: %s", ErrNotFound, id)
-	}
-	gmap, err := s.governanceMap.GetGovernanceMap(ctx, id)
+	return p(ctx, id, depth)
+}
+
+// projectServiceViewEntry is the registered projector for ViewService.
+// Mirrors the previous Project body: fetches the governance map for
+// the BS and delegates to projectServiceView. ErrNotFound is wrapped
+// to match the existing handler 404 contract.
+func (s *Service) projectServiceViewEntry(ctx context.Context, id string, depth int) (*Projection, error) {
+	gmap, err := s.readers.GovernanceMap.GetGovernanceMap(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -581,6 +655,474 @@ func buildServiceGraph(gmap *governancemap.Map, bsID string) ([]Node, []Edge) {
 	})
 
 	return nodes, edges
+}
+
+// ---------------------------------------------------------------------------
+// AI System view projector
+// ---------------------------------------------------------------------------
+
+// projectAISystemViewEntry is the registered projector for
+// ViewAISystem. Walks ai_system → bindings → scope targets and emits
+// Phase 1 nodes / edges only:
+//
+//	ai_system           one (the root)
+//	ai_system_binding   one per binding
+//	business_service / capability / process / decision_surface
+//	                    one per distinct scope target id (deduped)
+//
+// Edges:
+//
+//	system_of           binding → ai_system          (one per binding)
+//	bound_to            binding → most-specific scope (one per binding,
+//	                    omitted only when scope target cannot be resolved)
+//	has_surface         process → decision_surface    (when surface scope)
+//	has_process         business_service → process    (when surface or
+//	                    process scope, anchoring the parent BS)
+//	has_capability      business_service → capability (when capability scope)
+//
+// No new node or edge kinds. No forbidden kinds. Per-binding scope
+// resolution uses the existing mostSpecificBindingScope /
+// scopeTokenFor helpers to stay consistent with the service view's
+// connector-rendering rule.
+func (s *Service) projectAISystemViewEntry(ctx context.Context, id string, depth int) (*Projection, error) {
+	sys, err := s.readers.AISystem.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if sys == nil {
+		return nil, fmt.Errorf("%w: ai_system:%s", ErrNotFound, id)
+	}
+	bindings, err := s.readers.AISystemBindings.ListByAISystem(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return s.projectAISystemView(ctx, sys, bindings, depth), nil
+}
+
+// projectAISystemView is the deterministic build + filter + sort
+// pipeline for the AI-system view. Side-effect-free except for the
+// scope-target reader calls; pure given the same inputs.
+func (s *Service) projectAISystemView(ctx context.Context, sys *aisystem.AISystem, bindings []*aisystem.AISystemBinding, depth int) *Projection {
+	root := NodeRef{Kind: NodeKindAISystem, ID: sys.ID}
+	nodes, edges := s.buildAISystemGraph(ctx, sys, bindings)
+
+	visible := bfsVisible(root, edges, depth)
+
+	keptNodes := make([]Node, 0, len(nodes))
+	for _, n := range nodes {
+		if _, ok := visible[nodeKey(n.Kind, n.ID)]; ok {
+			keptNodes = append(keptNodes, n)
+		}
+	}
+	sort.Slice(keptNodes, func(i, j int) bool {
+		if keptNodes[i].Kind != keptNodes[j].Kind {
+			return keptNodes[i].Kind < keptNodes[j].Kind
+		}
+		return keptNodes[i].ID < keptNodes[j].ID
+	})
+
+	keptEdges := make([]Edge, 0, len(edges))
+	for _, e := range edges {
+		if _, ok := visible[nodeKey(e.Src.Kind, e.Src.ID)]; !ok {
+			continue
+		}
+		if _, ok := visible[nodeKey(e.Dst.Kind, e.Dst.ID)]; !ok {
+			continue
+		}
+		keptEdges = append(keptEdges, e)
+	}
+	sort.Slice(keptEdges, func(i, j int) bool {
+		a, b := keptEdges[i], keptEdges[j]
+		if a.Kind != b.Kind {
+			return a.Kind < b.Kind
+		}
+		if a.Src.Kind != b.Src.Kind {
+			return a.Src.Kind < b.Src.Kind
+		}
+		if a.Src.ID != b.Src.ID {
+			return a.Src.ID < b.Src.ID
+		}
+		if a.Dst.Kind != b.Dst.Kind {
+			return a.Dst.Kind < b.Dst.Kind
+		}
+		return a.Dst.ID < b.Dst.ID
+	})
+
+	return &Projection{
+		Root:  root,
+		View:  ViewAISystem,
+		Depth: depth,
+		Nodes: keptNodes,
+		Edges: keptEdges,
+	}
+}
+
+// buildAISystemGraph constructs the unfiltered node and edge slices
+// for the ai_system view. Scope-target nodes are deduped by (kind, id).
+//
+// Missing scope target behaviour: when the most-specific scope id is
+// non-empty but the corresponding repository GetByID/FindLatestByID
+// returns (nil, nil) or an error, the binding node and system_of edge
+// are still emitted; the bound_to edge and the missing target node
+// are omitted. This matches the brief's "missing scope target"
+// contract — the projection succeeds with reduced detail rather than
+// failing the whole call.
+//
+// Note on scope context-edges:
+//
+//   - For surface-scoped bindings: also emit the parent process and
+//     parent business_service nodes (using surface.ProcessID and
+//     process.BusinessServiceID), plus has_surface (proc → surf) and
+//     has_process (bs → proc) edges. This keeps the surface anchored
+//     to its real domain context, mirroring the service view.
+//   - For process-scoped bindings: also emit the parent
+//     business_service and has_process (bs → proc) edge.
+//   - For capability-scoped bindings: also emit the parent
+//     business_service and has_capability (bs → cap) edge.
+//   - For business-service-scoped bindings: no further parent.
+//
+// We deliberately do NOT invent capability → process edges (the
+// metamodel has no such relationship).
+func (s *Service) buildAISystemGraph(ctx context.Context, sys *aisystem.AISystem, bindings []*aisystem.AISystemBinding) ([]Node, []Edge) {
+	var nodes []Node
+	var edges []Edge
+
+	// Root AI system node. Typed data mirrors the service view's
+	// AISystemData population for the fields available on the
+	// aisystem.AISystem domain type. Active-version data is only
+	// available via AISystemVersionReader, which this view does NOT
+	// inject — operators wanting per-version detail should use the
+	// service view (or a future ai_system_version-aware view).
+	sysLabel := sys.Name
+	if sysLabel == "" {
+		sysLabel = sys.ID
+	}
+	nodes = append(nodes, Node{
+		Kind:  NodeKindAISystem,
+		ID:    sys.ID,
+		Label: sysLabel,
+		AISystem: &AISystemData{
+			ID:          sys.ID,
+			Name:        sys.Name,
+			Description: sys.Description,
+			Status:      sys.Status,
+			Vendor:      sys.Vendor,
+			SystemType:  sys.SystemType,
+			ExternalRef: toExternalRefData(sys.ExternalRef),
+		},
+	})
+
+	// Dedup scope-target nodes (and their parent context nodes) by
+	// (kind, id). Same map shared across all bindings — a process
+	// referenced as scope for one binding and as parent context for
+	// another collapses to a single node.
+	seen := map[string]struct{}{}
+	mark := func(kind, id string) bool {
+		k := kind + "\x00" + id
+		if _, ok := seen[k]; ok {
+			return false
+		}
+		seen[k] = struct{}{}
+		return true
+	}
+
+	// Sort bindings by ID for deterministic emission order. The
+	// downstream slice-level sort enforces the final wire order.
+	sortedBindings := append([]*aisystem.AISystemBinding(nil), bindings...)
+	sort.Slice(sortedBindings, func(i, j int) bool {
+		if sortedBindings[i] == nil || sortedBindings[j] == nil {
+			return sortedBindings[i] != nil
+		}
+		return sortedBindings[i].ID < sortedBindings[j].ID
+	})
+
+	for _, b := range sortedBindings {
+		if b == nil || b.ID == "" {
+			continue
+		}
+		scopeKind, scopeID := mostSpecificBindingScope(b)
+		scopeLabel := scopeTokenFor(scopeKind, scopeID)
+		bindingLabel := fmt.Sprintf("binding: %s → %s", sysLabel, scopeLabel)
+		nodes = append(nodes, Node{
+			Kind:  NodeKindAISystemBinding,
+			ID:    b.ID,
+			Label: bindingLabel,
+			AISystemBinding: &AISystemBindingData{
+				ID:                b.ID,
+				AISystemID:        b.AISystemID,
+				AISystemName:      sysLabel,
+				BusinessServiceID: stringPtrOrNil(b.BusinessServiceID),
+				CapabilityID:      stringPtrOrNil(b.CapabilityID),
+				ProcessID:         stringPtrOrNil(b.ProcessID),
+				SurfaceID:         stringPtrOrNil(b.SurfaceID),
+				Role:              b.Role,
+				Description:       b.Description,
+				ScopeKind:         scopeKind,
+				ScopeID:           scopeID,
+				ScopeLabel:        scopeLabel,
+			},
+		})
+		// system_of always emits.
+		edges = append(edges, Edge{
+			Kind: EdgeKindSystemOf,
+			Src:  NodeRef{Kind: NodeKindAISystemBinding, ID: b.ID},
+			Dst:  NodeRef{Kind: NodeKindAISystem, ID: sys.ID},
+		})
+
+		// Resolve scope target + parent context. Missing-resolution
+		// branches keep the binding/system_of edge and skip the rest.
+		switch scopeKind {
+		case NodeKindDecisionSurface:
+			surf := s.lookupSurface(ctx, scopeID)
+			if surf == nil {
+				continue
+			}
+			if mark(NodeKindDecisionSurface, surf.ID) {
+				nodes = append(nodes, s.surfaceNode(surf))
+			}
+			edges = append(edges, Edge{
+				Kind: EdgeKindBoundTo,
+				Src:  NodeRef{Kind: NodeKindAISystemBinding, ID: b.ID},
+				Dst:  NodeRef{Kind: NodeKindDecisionSurface, ID: surf.ID},
+			})
+			// Parent process (when known on the surface).
+			if surf.ProcessID != "" {
+				proc := s.lookupProcess(ctx, surf.ProcessID)
+				if proc != nil {
+					if mark(NodeKindProcess, proc.ID) {
+						nodes = append(nodes, s.processNode(proc))
+					}
+					edges = append(edges, Edge{
+						Kind: EdgeKindHasSurface,
+						Src:  NodeRef{Kind: NodeKindProcess, ID: proc.ID},
+						Dst:  NodeRef{Kind: NodeKindDecisionSurface, ID: surf.ID},
+					})
+					// Parent BS via the process.
+					if proc.BusinessServiceID != "" {
+						bs := s.lookupBusinessService(ctx, proc.BusinessServiceID)
+						if bs != nil {
+							if mark(NodeKindBusinessService, bs.ID) {
+								nodes = append(nodes, s.businessServiceNode(bs))
+							}
+							edges = append(edges, Edge{
+								Kind: EdgeKindHasProcess,
+								Src:  NodeRef{Kind: NodeKindBusinessService, ID: bs.ID},
+								Dst:  NodeRef{Kind: NodeKindProcess, ID: proc.ID},
+							})
+						}
+					}
+				}
+			}
+		case NodeKindProcess:
+			proc := s.lookupProcess(ctx, scopeID)
+			if proc == nil {
+				continue
+			}
+			if mark(NodeKindProcess, proc.ID) {
+				nodes = append(nodes, s.processNode(proc))
+			}
+			edges = append(edges, Edge{
+				Kind: EdgeKindBoundTo,
+				Src:  NodeRef{Kind: NodeKindAISystemBinding, ID: b.ID},
+				Dst:  NodeRef{Kind: NodeKindProcess, ID: proc.ID},
+			})
+			// Parent BS.
+			if proc.BusinessServiceID != "" {
+				bs := s.lookupBusinessService(ctx, proc.BusinessServiceID)
+				if bs != nil {
+					if mark(NodeKindBusinessService, bs.ID) {
+						nodes = append(nodes, s.businessServiceNode(bs))
+					}
+					edges = append(edges, Edge{
+						Kind: EdgeKindHasProcess,
+						Src:  NodeRef{Kind: NodeKindBusinessService, ID: bs.ID},
+						Dst:  NodeRef{Kind: NodeKindProcess, ID: proc.ID},
+					})
+				}
+			}
+		case NodeKindCapability:
+			cap := s.lookupCapability(ctx, scopeID)
+			if cap == nil {
+				continue
+			}
+			if mark(NodeKindCapability, cap.ID) {
+				nodes = append(nodes, s.capabilityNode(cap))
+			}
+			edges = append(edges, Edge{
+				Kind: EdgeKindBoundTo,
+				Src:  NodeRef{Kind: NodeKindAISystemBinding, ID: b.ID},
+				Dst:  NodeRef{Kind: NodeKindCapability, ID: cap.ID},
+			})
+			// Parent BS via b.BusinessServiceID, when set on the
+			// binding row itself. The metamodel's capability does
+			// not own a BS pointer, so the binding row is the only
+			// authoritative source for "which BS this capability is
+			// scoped to" in this view.
+			if b.BusinessServiceID != "" {
+				bs := s.lookupBusinessService(ctx, b.BusinessServiceID)
+				if bs != nil {
+					if mark(NodeKindBusinessService, bs.ID) {
+						nodes = append(nodes, s.businessServiceNode(bs))
+					}
+					edges = append(edges, Edge{
+						Kind: EdgeKindHasCapability,
+						Src:  NodeRef{Kind: NodeKindBusinessService, ID: bs.ID},
+						Dst:  NodeRef{Kind: NodeKindCapability, ID: cap.ID},
+					})
+				}
+			}
+		case NodeKindBusinessService:
+			bs := s.lookupBusinessService(ctx, scopeID)
+			if bs == nil {
+				continue
+			}
+			if mark(NodeKindBusinessService, bs.ID) {
+				nodes = append(nodes, s.businessServiceNode(bs))
+			}
+			edges = append(edges, Edge{
+				Kind: EdgeKindBoundTo,
+				Src:  NodeRef{Kind: NodeKindAISystemBinding, ID: b.ID},
+				Dst:  NodeRef{Kind: NodeKindBusinessService, ID: bs.ID},
+			})
+		default:
+			// scopeKind == "" — no scope on the binding (defensive;
+			// schema chk_ai_bindings_at_least_one_target prevents
+			// this at apply time). Keep the binding and system_of
+			// edge; emit no bound_to.
+			continue
+		}
+	}
+
+	return nodes, edges
+}
+
+// lookupSurface / lookupProcess / lookupCapability / lookupBusinessService
+// are thin wrappers around the injected reader GetByIDs that swallow
+// errors. Missing-resolution semantics: any error or nil result is
+// treated as "target not resolvable here" — the projection continues
+// without the missing context node.
+func (s *Service) lookupSurface(ctx context.Context, id string) *surface.DecisionSurface {
+	v, err := s.readers.Surfaces.FindLatestByID(ctx, id)
+	if err != nil {
+		return nil
+	}
+	return v
+}
+
+func (s *Service) lookupProcess(ctx context.Context, id string) *process.Process {
+	v, err := s.readers.Processes.GetByID(ctx, id)
+	if err != nil {
+		return nil
+	}
+	return v
+}
+
+func (s *Service) lookupCapability(ctx context.Context, id string) *capability.Capability {
+	v, err := s.readers.Capabilities.GetByID(ctx, id)
+	if err != nil {
+		return nil
+	}
+	return v
+}
+
+func (s *Service) lookupBusinessService(ctx context.Context, id string) *businessservice.BusinessService {
+	v, err := s.readers.BusinessServices.GetByID(ctx, id)
+	if err != nil {
+		return nil
+	}
+	return v
+}
+
+// surfaceNode / processNode / capabilityNode / businessServiceNode
+// build the per-kind Node + typed-data tuple. Mirror the service
+// view's typed-data population so consumers see the same fields
+// regardless of which view rooted the projection. ai_binding_ids /
+// inherited_ai_binding_ids and per-surface counts are not populated
+// here — those are aggregated by governancemap.ReadService for the
+// service view; the ai_system view does not run that aggregation.
+func (s *Service) surfaceNode(surf *surface.DecisionSurface) Node {
+	label := surf.Name
+	if label == "" {
+		label = surf.ID
+	}
+	return Node{
+		Kind:  NodeKindDecisionSurface,
+		ID:    surf.ID,
+		Label: label,
+		DecisionSurface: &DecisionSurfaceData{
+			ID:                    surf.ID,
+			Version:               surf.Version,
+			Name:                  surf.Name,
+			Description:           surf.Description,
+			Status:                string(surf.Status),
+			ProcessID:             surf.ProcessID,
+			AIBindingIDs:          []string{},
+			InheritedAIBindingIDs: []string{},
+		},
+	}
+}
+
+func (s *Service) processNode(proc *process.Process) Node {
+	label := proc.Name
+	if label == "" {
+		label = proc.ID
+	}
+	return Node{
+		Kind:  NodeKindProcess,
+		ID:    proc.ID,
+		Label: label,
+		Process: &ProcessData{
+			ID:                proc.ID,
+			Name:              proc.Name,
+			Description:       proc.Description,
+			Status:            proc.Status,
+			Owner:             proc.Owner,
+			BusinessServiceID: proc.BusinessServiceID,
+		},
+	}
+}
+
+func (s *Service) capabilityNode(cap *capability.Capability) Node {
+	label := cap.Name
+	if label == "" {
+		label = cap.ID
+	}
+	return Node{
+		Kind:  NodeKindCapability,
+		ID:    cap.ID,
+		Label: label,
+		Capability: &CapabilityData{
+			ID:                 cap.ID,
+			Name:               cap.Name,
+			Description:        cap.Description,
+			Status:             cap.Status,
+			Owner:              cap.Owner,
+			ParentCapabilityID: cap.ParentCapabilityID,
+			ExternalRef:        toExternalRefData(cap.ExternalRef),
+		},
+	}
+}
+
+func (s *Service) businessServiceNode(bs *businessservice.BusinessService) Node {
+	label := bs.Name
+	if label == "" {
+		label = bs.ID
+	}
+	return Node{
+		Kind:  NodeKindBusinessService,
+		ID:    bs.ID,
+		Label: label,
+		BusinessService: &BusinessServiceData{
+			ID:              bs.ID,
+			Name:            bs.Name,
+			Description:     bs.Description,
+			Status:          bs.Status,
+			Owner:           bs.OwnerID,
+			ServiceType:     string(bs.ServiceType),
+			RegulatoryScope: bs.RegulatoryScope,
+			ExternalRef:     toExternalRefData(bs.ExternalRef),
+		},
+	}
 }
 
 // stringPtrOrNil returns &s when s is non-empty, else nil. Used by the
