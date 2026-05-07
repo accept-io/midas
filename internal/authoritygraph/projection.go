@@ -24,14 +24,17 @@ package authoritygraph
 // View identifies the perspective the projection is computed in.
 //
 // Supported views:
-//   - ViewService:  rooted at a business service; reuses governancemap.ReadService.
-//   - ViewAISystem: rooted at an AI system; walks bindings to scope targets.
+//   - ViewService:         rooted at a business service; reuses governancemap.ReadService.
+//   - ViewAISystem:        rooted at an AI system; walks bindings to scope targets.
+//   - ViewDecisionSurface: rooted at a decision surface; emits parent
+//                          process / business service context and AI
+//                          systems bound directly to the surface.
 //
-// Other views (agent, decision_surface, risk) are reserved for later
-// phases.
+// Other views (agent, risk) are reserved for later phases.
 const (
-	ViewService  = "service"
-	ViewAISystem = "ai_system"
+	ViewService         = "service"
+	ViewAISystem        = "ai_system"
+	ViewDecisionSurface = "decision_surface"
 )
 
 // Phase 1 node kinds — the complete allowed set. Forbidden kinds

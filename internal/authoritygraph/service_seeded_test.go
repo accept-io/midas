@@ -53,6 +53,18 @@ func newSeededService(t *testing.T) *Service {
 			repos.AISystemVersions,
 			repos.AISystemBindings,
 		),
+		// Decision-surface and ai_system views require the per-entity
+		// readers below. Wiring them here means newSeededService
+		// produces a Service with all three views registered against
+		// the seeded fixture — existing service-view assertions
+		// continue to work, and the new view's seeded e2e can use the
+		// same constructor.
+		AISystem:         repos.AISystems,
+		AISystemBindings: repos.AISystemBindings,
+		BusinessServices: repos.BusinessServices,
+		Capabilities:     repos.Capabilities,
+		Processes:        repos.Processes,
+		Surfaces:         repos.Surfaces,
 	})
 }
 
@@ -271,5 +283,81 @@ func TestSeeded_ExclusiveTypedDataPerKind(t *testing.T) {
 		if !matched {
 			t.Errorf("node %s/%s: no typed-data slot matches kind", n.Kind, n.ID)
 		}
+	}
+}
+
+// TestSeeded_DecisionSurfaceView_IDVerify is the seeded full-stack
+// regression for the new decision_surface view: rooting on
+// surf-v2-id-verify must surface the parent process
+// (proc-consumer-onboarding), the parent business service
+// (bs-consumer-lending), AND any AI bindings the seed has attached to
+// the surface. After Phase 9's binding-inheritance work the seed
+// includes a direct binding on this surface, so the view emits at
+// least one ai_system_binding + ai_system pair.
+//
+// The assertion also pins the no-summary / no-coverage contract: the
+// decision_surface view does NOT emit synthetic authority_summary or
+// coverage nodes (those remain service-view constructs).
+func TestSeeded_DecisionSurfaceView_IDVerify(t *testing.T) {
+	const surfID = "surf-v2-id-verify"
+	svc := newSeededService(t)
+
+	p, err := svc.Project(context.Background(), ViewDecisionSurface, surfID, MaxDepth)
+	if err != nil {
+		t.Fatalf("Project(decision_surface, %s): %v", surfID, err)
+	}
+	if p.View != ViewDecisionSurface {
+		t.Errorf("Projection.View: want %q, got %q", ViewDecisionSurface, p.View)
+	}
+	if p.Root.Kind != NodeKindDecisionSurface || p.Root.ID != surfID {
+		t.Errorf("Projection.Root: want decision_surface:%s, got %+v", surfID, p.Root)
+	}
+
+	got := map[string]bool{}
+	for _, n := range p.Nodes {
+		got[n.Kind+":"+n.ID] = true
+		// No synthetic summary / coverage on this view.
+		if n.Kind == NodeKindAuthoritySummary || n.Kind == NodeKindCoverage {
+			t.Errorf("decision_surface view must NOT emit %q nodes; got %+v", n.Kind, n)
+		}
+	}
+
+	// Parent chain pins. The seed wires surf-v2-id-verify under
+	// proc-consumer-onboarding under bs-consumer-lending; that chain
+	// must surface here.
+	for _, want := range []string{
+		"decision_surface:" + surfID,
+		"process:proc-consumer-onboarding",
+		"business_service:bs-consumer-lending",
+	} {
+		if !got[want] {
+			t.Errorf("seeded decision_surface view missing %q (got %v)", want, got)
+		}
+	}
+
+	// Edge directionality pins: process → surface, BS → process.
+	hasSurfaceEdge := false
+	hasProcessEdge := false
+	for _, e := range p.Edges {
+		switch e.Kind {
+		case EdgeKindHasSurface:
+			if e.Src.Kind == NodeKindProcess && e.Src.ID == "proc-consumer-onboarding" &&
+				e.Dst.Kind == NodeKindDecisionSurface && e.Dst.ID == surfID {
+				hasSurfaceEdge = true
+			}
+		case EdgeKindHasProcess:
+			if e.Src.Kind == NodeKindBusinessService && e.Src.ID == "bs-consumer-lending" &&
+				e.Dst.Kind == NodeKindProcess && e.Dst.ID == "proc-consumer-onboarding" {
+				hasProcessEdge = true
+			}
+		case EdgeKindSummarises, EdgeKindReportsCoverage:
+			t.Errorf("decision_surface view must NOT emit %q edges; got %+v", e.Kind, e)
+		}
+	}
+	if !hasSurfaceEdge {
+		t.Error("seeded decision_surface view missing has_surface (process → decision_surface) edge for the seeded chain")
+	}
+	if !hasProcessEdge {
+		t.Error("seeded decision_surface view missing has_process (business_service → process) edge for the seeded chain")
 	}
 }

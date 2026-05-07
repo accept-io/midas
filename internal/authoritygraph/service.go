@@ -54,11 +54,20 @@ type AISystemReader interface {
 	GetByID(ctx context.Context, id string) (*aisystem.AISystem, error)
 }
 
-// AISystemBindingRepository is the narrow read dependency for the
-// ai_system view's binding traversal. The aisystem.BindingRepository
-// implementation satisfies it.
+// AISystemBindingRepository is the narrow read dependency for binding
+// traversal across views.
+//
+//   - ListByAISystem powers the ai_system view (root: AI system →
+//     bindings → scope targets).
+//   - ListBySurface  powers the decision_surface view (root: surface →
+//     bindings attached to that surface → AI systems).
+//
+// The aisystem.BindingRepository implementation already exposes both,
+// so this consumer-side interface widens without any upstream
+// repository change.
 type AISystemBindingRepository interface {
 	ListByAISystem(ctx context.Context, aiSystemID string) ([]*aisystem.AISystemBinding, error)
+	ListBySurface(ctx context.Context, surfaceID string) ([]*aisystem.AISystemBinding, error)
 }
 
 // BusinessServiceReader resolves a business-service node by id when
@@ -131,6 +140,15 @@ func NewServiceWithReaders(r Readers) *Service {
 		r.BusinessServices != nil && r.Capabilities != nil &&
 		r.Processes != nil && r.Surfaces != nil {
 		s.projectors[ViewAISystem] = s.projectAISystemViewEntry
+	}
+	// decision_surface view: root surface + parent process / business
+	// service + AI systems bound directly to the surface. Capabilities
+	// are not traversed here, so r.Capabilities is intentionally absent
+	// from this guard.
+	if r.Surfaces != nil && r.AISystemBindings != nil &&
+		r.AISystem != nil && r.Processes != nil &&
+		r.BusinessServices != nil {
+		s.projectors[ViewDecisionSurface] = s.projectDecisionSurfaceViewEntry
 	}
 	return s
 }
@@ -1253,6 +1271,271 @@ func bfsVisible(root NodeRef, edges []Edge, depth int) map[string]struct{} {
 // guaranteeing no collision between e.g. ("ab", "c") and ("a", "bc").
 func nodeKey(kind, id string) string {
 	return kind + "\x00" + id
+}
+
+// ---------------------------------------------------------------------------
+// Decision Surface view projector
+// ---------------------------------------------------------------------------
+
+// projectDecisionSurfaceViewEntry is the registered projector for
+// ViewDecisionSurface. Roots on a decision surface and emits:
+//
+//	decision_surface    one (the root)
+//	process             zero or one (parent process, when surface.ProcessID set)
+//	business_service    zero or one (parent BS, when process.BusinessServiceID set)
+//	ai_system_binding   one per binding attached to the root surface
+//	ai_system           one per distinct AI system referenced by a binding
+//
+// Edges:
+//
+//	has_surface         process → decision_surface         (when parent process exists)
+//	has_process         business_service → process         (when parent BS exists)
+//	bound_to            ai_system_binding → decision_surface (root)
+//	system_of           ai_system_binding → ai_system      (when AI system resolves)
+//
+// No new node or edge kinds. No forbidden kinds. No synthetic
+// authority_summary / coverage nodes — those remain service-view
+// constructs (the surface view's authority context is already
+// available via the surface node's typed-data counts on the
+// service-view path; this view deliberately stays slim).
+//
+// Missing-lookup contract: any GetByID / FindLatestByID returning a
+// nil pointer or error after the root resolves is treated as "context
+// not resolvable here" — the projection succeeds with reduced detail
+// rather than failing the whole call. The same precedent holds in the
+// ai_system view (lookupSurface / lookupProcess / etc.).
+//
+// Surface root identity uses logical id only (FindLatestByID); the
+// version travels in DecisionSurfaceData.Version typed data, matching
+// the existing service-view convention.
+func (s *Service) projectDecisionSurfaceViewEntry(ctx context.Context, id string, depth int) (*Projection, error) {
+	surf, err := s.readers.Surfaces.FindLatestByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if surf == nil {
+		return nil, fmt.Errorf("%w: decision_surface:%s", ErrNotFound, id)
+	}
+	bindings, err := s.readers.AISystemBindings.ListBySurface(ctx, surf.ID)
+	if err != nil {
+		return nil, err
+	}
+	return s.projectDecisionSurfaceView(ctx, surf, bindings, depth), nil
+}
+
+// projectDecisionSurfaceView is the deterministic build + filter +
+// sort pipeline for the decision_surface view. Side-effect-free
+// except for the parent-context and AI-system reader calls; pure
+// given the same inputs.
+func (s *Service) projectDecisionSurfaceView(ctx context.Context, surf *surface.DecisionSurface, bindings []*aisystem.AISystemBinding, depth int) *Projection {
+	root := NodeRef{Kind: NodeKindDecisionSurface, ID: surf.ID}
+	nodes, edges := s.buildDecisionSurfaceGraph(ctx, surf, bindings)
+
+	visible := bfsVisible(root, edges, depth)
+
+	keptNodes := make([]Node, 0, len(nodes))
+	for _, n := range nodes {
+		if _, ok := visible[nodeKey(n.Kind, n.ID)]; ok {
+			keptNodes = append(keptNodes, n)
+		}
+	}
+	sort.Slice(keptNodes, func(i, j int) bool {
+		if keptNodes[i].Kind != keptNodes[j].Kind {
+			return keptNodes[i].Kind < keptNodes[j].Kind
+		}
+		return keptNodes[i].ID < keptNodes[j].ID
+	})
+
+	keptEdges := make([]Edge, 0, len(edges))
+	for _, e := range edges {
+		if _, ok := visible[nodeKey(e.Src.Kind, e.Src.ID)]; !ok {
+			continue
+		}
+		if _, ok := visible[nodeKey(e.Dst.Kind, e.Dst.ID)]; !ok {
+			continue
+		}
+		keptEdges = append(keptEdges, e)
+	}
+	sort.Slice(keptEdges, func(i, j int) bool {
+		a, b := keptEdges[i], keptEdges[j]
+		if a.Kind != b.Kind {
+			return a.Kind < b.Kind
+		}
+		if a.Src.Kind != b.Src.Kind {
+			return a.Src.Kind < b.Src.Kind
+		}
+		if a.Src.ID != b.Src.ID {
+			return a.Src.ID < b.Src.ID
+		}
+		if a.Dst.Kind != b.Dst.Kind {
+			return a.Dst.Kind < b.Dst.Kind
+		}
+		return a.Dst.ID < b.Dst.ID
+	})
+
+	return &Projection{
+		Root:  root,
+		View:  ViewDecisionSurface,
+		Depth: depth,
+		Nodes: keptNodes,
+		Edges: keptEdges,
+	}
+}
+
+// buildDecisionSurfaceGraph constructs the unfiltered node + edge
+// slices for the decision_surface view. Dedup map is shared across
+// passes so an AI system referenced by multiple bindings collapses to
+// a single node.
+func (s *Service) buildDecisionSurfaceGraph(ctx context.Context, surf *surface.DecisionSurface, bindings []*aisystem.AISystemBinding) ([]Node, []Edge) {
+	var nodes []Node
+	var edges []Edge
+
+	// Root surface node. Mirrors the ai_system view's surfaceNode
+	// helper — the AI binding ID arrays are emitted as empty slices and
+	// per-surface authority counts stay zero, because this view does
+	// not run the governancemap aggregation pass that populates them.
+	// Operators who need the populated counts on a surface should use
+	// view=service rooted at the parent business service.
+	nodes = append(nodes, s.surfaceNode(surf))
+
+	seen := map[string]struct{}{
+		nodeKey(NodeKindDecisionSurface, surf.ID): {},
+	}
+	mark := func(kind, id string) bool {
+		k := nodeKey(kind, id)
+		if _, ok := seen[k]; ok {
+			return false
+		}
+		seen[k] = struct{}{}
+		return true
+	}
+
+	// Parent process + parent business service. has_surface is
+	// process → decision_surface; has_process is business_service →
+	// process (matches the service-view edge directionality).
+	if surf.ProcessID != "" {
+		proc := s.lookupProcess(ctx, surf.ProcessID)
+		if proc != nil {
+			if mark(NodeKindProcess, proc.ID) {
+				nodes = append(nodes, s.processNode(proc))
+			}
+			edges = append(edges, Edge{
+				Kind: EdgeKindHasSurface,
+				Src:  NodeRef{Kind: NodeKindProcess, ID: proc.ID},
+				Dst:  NodeRef{Kind: NodeKindDecisionSurface, ID: surf.ID},
+			})
+			if proc.BusinessServiceID != "" {
+				bs := s.lookupBusinessService(ctx, proc.BusinessServiceID)
+				if bs != nil {
+					if mark(NodeKindBusinessService, bs.ID) {
+						nodes = append(nodes, s.businessServiceNode(bs))
+					}
+					edges = append(edges, Edge{
+						Kind: EdgeKindHasProcess,
+						Src:  NodeRef{Kind: NodeKindBusinessService, ID: bs.ID},
+						Dst:  NodeRef{Kind: NodeKindProcess, ID: proc.ID},
+					})
+				}
+			}
+		}
+	}
+
+	// Surface label for the binding label format — matches
+	// buildAISystemGraph's "binding: <ai-name> → <scope>" convention.
+	surfLabel := surf.Name
+	if surfLabel == "" {
+		surfLabel = surf.ID
+	}
+	scopeLabel := scopeTokenFor(NodeKindDecisionSurface, surf.ID)
+
+	// Stable binding emission order: sort by ID before emission so the
+	// build-side ordering is deterministic. The downstream slice-level
+	// sort over edges still enforces the final wire order.
+	sortedBindings := append([]*aisystem.AISystemBinding(nil), bindings...)
+	sort.Slice(sortedBindings, func(i, j int) bool {
+		if sortedBindings[i] == nil || sortedBindings[j] == nil {
+			return sortedBindings[i] != nil
+		}
+		return sortedBindings[i].ID < sortedBindings[j].ID
+	})
+
+	for _, b := range sortedBindings {
+		if b == nil || b.ID == "" {
+			continue
+		}
+		// Resolve AI system to populate AISystemName on binding typed
+		// data and to drive the system_of edge target. Missing AI
+		// system: keep the binding + bound_to edge, skip system_of and
+		// the ai_system node.
+		var sysName string
+		var sys *aisystem.AISystem
+		if v, err := s.readers.AISystem.GetByID(ctx, b.AISystemID); err == nil && v != nil {
+			sys = v
+			sysName = v.Name
+		}
+		labelName := sysName
+		if labelName == "" {
+			labelName = b.AISystemID
+		}
+		bindingLabel := fmt.Sprintf("binding: %s → %s", labelName, scopeLabel)
+		nodes = append(nodes, Node{
+			Kind:  NodeKindAISystemBinding,
+			ID:    b.ID,
+			Label: bindingLabel,
+			AISystemBinding: &AISystemBindingData{
+				ID:                b.ID,
+				AISystemID:        b.AISystemID,
+				AISystemName:      sysName,
+				BusinessServiceID: stringPtrOrNil(b.BusinessServiceID),
+				CapabilityID:      stringPtrOrNil(b.CapabilityID),
+				ProcessID:         stringPtrOrNil(b.ProcessID),
+				SurfaceID:         stringPtrOrNil(b.SurfaceID),
+				Role:              b.Role,
+				Description:       b.Description,
+				ScopeKind:         NodeKindDecisionSurface,
+				ScopeID:           surf.ID,
+				ScopeLabel:        scopeLabel,
+			},
+		})
+		// bound_to: binding → root surface. ListBySurface guarantees
+		// each returned binding targets this surface, so the
+		// most-specific scope is always the root — emit the edge
+		// directly without re-running mostSpecificBindingScope.
+		edges = append(edges, Edge{
+			Kind: EdgeKindBoundTo,
+			Src:  NodeRef{Kind: NodeKindAISystemBinding, ID: b.ID},
+			Dst:  NodeRef{Kind: NodeKindDecisionSurface, ID: surf.ID},
+		})
+		if sys != nil {
+			if mark(NodeKindAISystem, sys.ID) {
+				aiLabel := sys.Name
+				if aiLabel == "" {
+					aiLabel = sys.ID
+				}
+				nodes = append(nodes, Node{
+					Kind:  NodeKindAISystem,
+					ID:    sys.ID,
+					Label: aiLabel,
+					AISystem: &AISystemData{
+						ID:          sys.ID,
+						Name:        sys.Name,
+						Description: sys.Description,
+						Status:      sys.Status,
+						Vendor:      sys.Vendor,
+						SystemType:  sys.SystemType,
+						ExternalRef: toExternalRefData(sys.ExternalRef),
+					},
+				})
+			}
+			edges = append(edges, Edge{
+				Kind: EdgeKindSystemOf,
+				Src:  NodeRef{Kind: NodeKindAISystemBinding, ID: b.ID},
+				Dst:  NodeRef{Kind: NodeKindAISystem, ID: sys.ID},
+			})
+		}
+	}
+
+	return nodes, edges
 }
 
 // ParseDepth interprets the depth query parameter, applying the

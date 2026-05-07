@@ -42,10 +42,19 @@ func (r *stubAISystemReader) GetByID(_ context.Context, id string) (*aisystem.AI
 
 type stubBindingRepo struct {
 	byAISystem map[string][]*aisystem.AISystemBinding
+	bySurface  map[string][]*aisystem.AISystemBinding
 }
 
 func (r *stubBindingRepo) ListByAISystem(_ context.Context, id string) ([]*aisystem.AISystemBinding, error) {
 	return r.byAISystem[id], nil
+}
+
+// ListBySurface satisfies the widened AISystemBindingRepository surface
+// added for the decision_surface view. Tests that don't populate
+// bySurface get nil/empty (the projection's ListBySurface call returns
+// no bindings — equivalent to a surface with no AI bindings).
+func (r *stubBindingRepo) ListBySurface(_ context.Context, id string) ([]*aisystem.AISystemBinding, error) {
+	return r.bySurface[id], nil
 }
 
 type stubBSReader struct {
@@ -92,12 +101,15 @@ type aiViewStubs struct {
 
 func newAIViewStubs() *aiViewStubs {
 	return &aiViewStubs{
-		systems:  &stubAISystemReader{items: map[string]*aisystem.AISystem{}},
-		bindings: &stubBindingRepo{byAISystem: map[string][]*aisystem.AISystemBinding{}},
-		bss:      &stubBSReader{items: map[string]*businessservice.BusinessService{}},
-		caps:     &stubCapReader{items: map[string]*capability.Capability{}},
-		procs:    &stubProcReader{items: map[string]*process.Process{}},
-		surfs:    &stubSurfReader{items: map[string]*surface.DecisionSurface{}},
+		systems: &stubAISystemReader{items: map[string]*aisystem.AISystem{}},
+		bindings: &stubBindingRepo{
+			byAISystem: map[string][]*aisystem.AISystemBinding{},
+			bySurface:  map[string][]*aisystem.AISystemBinding{},
+		},
+		bss:   &stubBSReader{items: map[string]*businessservice.BusinessService{}},
+		caps:  &stubCapReader{items: map[string]*capability.Capability{}},
+		procs: &stubProcReader{items: map[string]*process.Process{}},
+		surfs: &stubSurfReader{items: map[string]*surface.DecisionSurface{}},
 	}
 }
 
@@ -1639,5 +1651,552 @@ func TestService_AIView_DepthThree_AddsParentProcess(t *testing.T) {
 	}
 	if got["business_service:bs-1"] {
 		t.Errorf("depth=3 must NOT include business_service:bs-1 yet (it's 4 hops away)")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Decision Surface view — dispatch + projection tests.
+// ---------------------------------------------------------------------------
+
+// makeSurfViewStubs assembles the readers the decision_surface view
+// needs (Surfaces, AISystemBindings, AISystem, Processes,
+// BusinessServices). Capabilities and GovernanceMap are left at zero
+// so this fixture isolates the new view's dependencies — tests that
+// also need view=service or view=ai_system can compose those onto
+// the result.
+func makeSurfViewStubs() *aiViewStubs {
+	return newAIViewStubs()
+}
+
+// TestService_SurfView_RegistrationGuards pins:
+//
+//   - decision_surface IS registered when all its required readers are
+//     present (Surfaces, AISystemBindings, AISystem, Processes,
+//     BusinessServices).
+//   - decision_surface is NOT registered when any required reader is
+//     nil → Service.Project returns ErrInvalidView for that view.
+//   - The registration of decision_surface does NOT depend on
+//     Capabilities or GovernanceMap (this view doesn't traverse
+//     capabilities and doesn't need the service-view governance map).
+func TestService_SurfView_RegistrationGuards(t *testing.T) {
+	stubs := makeSurfViewStubs()
+
+	// Full readers: must register.
+	full := stubs.readers()
+	full.Capabilities = nil       // not required by decision_surface view
+	full.GovernanceMap = nil      // not required by decision_surface view
+	svc := NewServiceWithReaders(full)
+	if _, ok := svc.projectors[ViewDecisionSurface]; !ok {
+		t.Error("decision_surface projector must register when its required readers are present")
+	}
+
+	// Each required reader nil-ed in turn: must NOT register.
+	cases := []struct {
+		name  string
+		mutate func(r *Readers)
+	}{
+		{"Surfaces nil", func(r *Readers) { r.Surfaces = nil }},
+		{"AISystemBindings nil", func(r *Readers) { r.AISystemBindings = nil }},
+		{"AISystem nil", func(r *Readers) { r.AISystem = nil }},
+		{"Processes nil", func(r *Readers) { r.Processes = nil }},
+		{"BusinessServices nil", func(r *Readers) { r.BusinessServices = nil }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := stubs.readers()
+			c.mutate(&r)
+			svc := NewServiceWithReaders(r)
+			if _, ok := svc.projectors[ViewDecisionSurface]; ok {
+				t.Errorf("decision_surface projector must NOT register when %s", c.name)
+			}
+			_, err := svc.Project(context.Background(), ViewDecisionSurface, "surf-x", 3)
+			if !errors.Is(err, ErrInvalidView) {
+				t.Errorf("Project(decision_surface) without readers: want ErrInvalidView, got %v", err)
+			}
+		})
+	}
+}
+
+// TestService_SurfView_EmptyID_ReturnsErrInvalidID exercises validation
+// order for the new view: id is checked AFTER view registration but
+// BEFORE depth, matching the existing service / ai_system contract.
+func TestService_SurfView_EmptyID_ReturnsErrInvalidID(t *testing.T) {
+	stubs := makeSurfViewStubs()
+	svc := NewServiceWithReaders(stubs.readers())
+	_, err := svc.Project(context.Background(), ViewDecisionSurface, "", 3)
+	if !errors.Is(err, ErrInvalidID) {
+		t.Errorf("want ErrInvalidID, got %v", err)
+	}
+}
+
+func TestService_SurfView_NegativeDepth_ReturnsErrInvalidDepth(t *testing.T) {
+	stubs := makeSurfViewStubs()
+	svc := NewServiceWithReaders(stubs.readers())
+	_, err := svc.Project(context.Background(), ViewDecisionSurface, "surf-1", -1)
+	if !errors.Is(err, ErrInvalidDepth) {
+		t.Errorf("want ErrInvalidDepth, got %v", err)
+	}
+}
+
+// TestService_SurfView_NotFoundID_ReturnsErrNotFound covers the
+// missing-root case: FindLatestByID returns (nil, nil), the projector
+// must surface ErrNotFound (not silently return an empty projection).
+func TestService_SurfView_NotFoundID_ReturnsErrNotFound(t *testing.T) {
+	stubs := makeSurfViewStubs()
+	svc := NewServiceWithReaders(stubs.readers())
+	_, err := svc.Project(context.Background(), ViewDecisionSurface, "surf-missing", 3)
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("want ErrNotFound, got %v", err)
+	}
+}
+
+// TestService_SurfView_DepthClamp pins the existing depth-clamp
+// invariant for the new view: depth=999 must produce the same shape as
+// depth=MaxDepth.
+func TestService_SurfView_DepthClamp(t *testing.T) {
+	stubs := makeSurfViewWithFullChainAndOneBinding()
+	svc := NewServiceWithReaders(stubs.readers())
+
+	pBig, err := svc.Project(context.Background(), ViewDecisionSurface, "surf-1", 999)
+	if err != nil {
+		t.Fatalf("project depth=999: %v", err)
+	}
+	pMax, err := svc.Project(context.Background(), ViewDecisionSurface, "surf-1", MaxDepth)
+	if err != nil {
+		t.Fatalf("project depth=MaxDepth: %v", err)
+	}
+	if pBig.Depth != MaxDepth {
+		t.Errorf("depth=999 must clamp to MaxDepth (%d); Projection.Depth=%d", MaxDepth, pBig.Depth)
+	}
+	if len(pBig.Nodes) != len(pMax.Nodes) || len(pBig.Edges) != len(pMax.Edges) {
+		t.Errorf("depth=999 and depth=MaxDepth must produce identical shapes; got nodes %d/%d edges %d/%d",
+			len(pBig.Nodes), len(pMax.Nodes), len(pBig.Edges), len(pMax.Edges))
+	}
+}
+
+// makeSurfViewWithFullChainAndOneBinding builds a fixture exercising
+// the full parent chain (BS ← process ← surface) plus exactly one AI
+// binding to one AI system. Used by depth and projection-shape tests.
+func makeSurfViewWithFullChainAndOneBinding() *aiViewStubs {
+	stubs := makeSurfViewStubs()
+	stubs.surfs.items["surf-1"] = &surface.DecisionSurface{
+		ID: "surf-1", Version: 3, Name: "Surface One", ProcessID: "proc-1",
+		Status: surface.SurfaceStatusActive, Description: "the root surface",
+	}
+	stubs.procs.items["proc-1"] = &process.Process{
+		ID: "proc-1", Name: "Process One", BusinessServiceID: "bs-1", Status: "active",
+	}
+	stubs.bss.items["bs-1"] = &businessservice.BusinessService{
+		ID: "bs-1", Name: "BS One", Status: "active",
+	}
+	stubs.systems.items["ai-1"] = &aisystem.AISystem{
+		ID: "ai-1", Name: "AI One", Status: "active", Vendor: "acme",
+	}
+	stubs.bindings.bySurface["surf-1"] = []*aisystem.AISystemBinding{
+		{ID: "bind-1", AISystemID: "ai-1", SurfaceID: "surf-1", Role: "primary"},
+	}
+	return stubs
+}
+
+// TestService_SurfView_DepthZero_RootOnly pins the universal depth=0
+// contract: exactly one node (the root) and no edges, regardless of
+// binding / parent richness.
+func TestService_SurfView_DepthZero_RootOnly(t *testing.T) {
+	stubs := makeSurfViewWithFullChainAndOneBinding()
+	svc := NewServiceWithReaders(stubs.readers())
+	p, err := svc.Project(context.Background(), ViewDecisionSurface, "surf-1", 0)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	if len(p.Nodes) != 1 {
+		t.Errorf("depth=0 must have exactly one node; got %d (%+v)", len(p.Nodes), p.Nodes)
+	}
+	if len(p.Nodes) == 1 && (p.Nodes[0].Kind != NodeKindDecisionSurface || p.Nodes[0].ID != "surf-1") {
+		t.Errorf("depth=0 root node must be decision_surface:surf-1; got %+v", p.Nodes[0])
+	}
+	if len(p.Edges) != 0 {
+		t.Errorf("depth=0 must have zero edges; got %d (%+v)", len(p.Edges), p.Edges)
+	}
+	if p.View != ViewDecisionSurface {
+		t.Errorf("Projection.View: want %q, got %q", ViewDecisionSurface, p.View)
+	}
+	if p.Root.Kind != NodeKindDecisionSurface || p.Root.ID != "surf-1" {
+		t.Errorf("Projection.Root: want decision_surface:surf-1, got %+v", p.Root)
+	}
+}
+
+// TestService_SurfView_DepthOne_ImmediateNeighbours pins the depth=1
+// shape: root + parent process + binding(s) + each binding's AI system
+// (the AI system is one hop from the binding, which is itself one hop
+// from the root — so ai_system is exactly 2 hops, NOT in depth=1).
+// Parent BS is two hops from the root via the parent process and
+// therefore not in depth=1 either.
+func TestService_SurfView_DepthOne_ImmediateNeighbours(t *testing.T) {
+	stubs := makeSurfViewWithFullChainAndOneBinding()
+	svc := NewServiceWithReaders(stubs.readers())
+	p, err := svc.Project(context.Background(), ViewDecisionSurface, "surf-1", 1)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+
+	got := map[string]bool{}
+	for _, n := range p.Nodes {
+		got[n.Kind+":"+n.ID] = true
+	}
+	for _, want := range []string{
+		"decision_surface:surf-1",
+		"process:proc-1",
+		"ai_system_binding:bind-1",
+	} {
+		if !got[want] {
+			t.Errorf("depth=1 missing %q (got %v)", want, got)
+		}
+	}
+	for _, illegal := range []string{
+		"business_service:bs-1", // 2 hops via process
+		"ai_system:ai-1",        // 2 hops via binding
+	} {
+		if got[illegal] {
+			t.Errorf("depth=1 must NOT include %q (got %v)", illegal, got)
+		}
+	}
+}
+
+// TestService_SurfView_DepthTwo_AddsBSAndAISystem pins that the
+// 2-hop neighbours appear at depth=2: parent BS (via process) and the
+// AI system (via binding).
+func TestService_SurfView_DepthTwo_AddsBSAndAISystem(t *testing.T) {
+	stubs := makeSurfViewWithFullChainAndOneBinding()
+	svc := NewServiceWithReaders(stubs.readers())
+	p, err := svc.Project(context.Background(), ViewDecisionSurface, "surf-1", 2)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	got := map[string]bool{}
+	for _, n := range p.Nodes {
+		got[n.Kind+":"+n.ID] = true
+	}
+	for _, want := range []string{
+		"decision_surface:surf-1",
+		"process:proc-1",
+		"ai_system_binding:bind-1",
+		"business_service:bs-1",
+		"ai_system:ai-1",
+	} {
+		if !got[want] {
+			t.Errorf("depth=2 missing %q (got %v)", want, got)
+		}
+	}
+}
+
+// TestService_SurfView_FullProjection_NodeAndEdgeCounts pins the
+// exact node/edge counts at MaxDepth for the canonical fixture:
+//
+//   nodes (5): decision_surface, process, business_service,
+//              ai_system_binding, ai_system
+//   edges (4): has_surface (proc → surf), has_process (bs → proc),
+//              bound_to (binding → surf), system_of (binding → ai)
+//
+// Edge directionality is asserted alongside the count so a regression
+// that flipped a direction surfaces here.
+func TestService_SurfView_FullProjection_NodeAndEdgeCounts(t *testing.T) {
+	stubs := makeSurfViewWithFullChainAndOneBinding()
+	svc := NewServiceWithReaders(stubs.readers())
+	p, err := svc.Project(context.Background(), ViewDecisionSurface, "surf-1", MaxDepth)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	if len(p.Nodes) != 5 {
+		t.Errorf("want 5 nodes, got %d (%+v)", len(p.Nodes), p.Nodes)
+	}
+	if len(p.Edges) != 4 {
+		t.Errorf("want 4 edges, got %d (%+v)", len(p.Edges), p.Edges)
+	}
+
+	type edgeSig struct {
+		Kind, SrcKind, SrcID, DstKind, DstID string
+	}
+	gotEdges := map[edgeSig]bool{}
+	for _, e := range p.Edges {
+		gotEdges[edgeSig{e.Kind, e.Src.Kind, e.Src.ID, e.Dst.Kind, e.Dst.ID}] = true
+	}
+	wantEdges := []edgeSig{
+		{EdgeKindHasSurface, NodeKindProcess, "proc-1", NodeKindDecisionSurface, "surf-1"},
+		{EdgeKindHasProcess, NodeKindBusinessService, "bs-1", NodeKindProcess, "proc-1"},
+		{EdgeKindBoundTo, NodeKindAISystemBinding, "bind-1", NodeKindDecisionSurface, "surf-1"},
+		{EdgeKindSystemOf, NodeKindAISystemBinding, "bind-1", NodeKindAISystem, "ai-1"},
+	}
+	for _, w := range wantEdges {
+		if !gotEdges[w] {
+			t.Errorf("missing edge %+v (got %+v)", w, gotEdges)
+		}
+	}
+}
+
+// TestService_SurfView_NoParentProcess pins the contract that a
+// surface with empty ProcessID emits the surface root and any
+// bindings, but no process / BS context — and no has_surface /
+// has_process edges.
+func TestService_SurfView_NoParentProcess(t *testing.T) {
+	stubs := makeSurfViewStubs()
+	stubs.surfs.items["surf-orphan"] = &surface.DecisionSurface{
+		ID: "surf-orphan", Version: 1, Name: "Orphan Surface",
+		Status: surface.SurfaceStatusActive,
+		// ProcessID intentionally empty.
+	}
+	svc := NewServiceWithReaders(stubs.readers())
+	p, err := svc.Project(context.Background(), ViewDecisionSurface, "surf-orphan", MaxDepth)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	if len(p.Nodes) != 1 {
+		t.Errorf("orphan surface: want 1 node, got %d (%+v)", len(p.Nodes), p.Nodes)
+	}
+	if len(p.Edges) != 0 {
+		t.Errorf("orphan surface: want 0 edges, got %d (%+v)", len(p.Edges), p.Edges)
+	}
+}
+
+// TestService_SurfView_ProcessOnlyNoBS pins the partial-context path:
+// surface has ProcessID, the process resolves, but the process has no
+// BusinessServiceID — must emit process + has_surface and stop there.
+func TestService_SurfView_ProcessOnlyNoBS(t *testing.T) {
+	stubs := makeSurfViewStubs()
+	stubs.surfs.items["surf-1"] = &surface.DecisionSurface{
+		ID: "surf-1", Version: 1, Name: "Surface", ProcessID: "proc-1",
+		Status: surface.SurfaceStatusActive,
+	}
+	stubs.procs.items["proc-1"] = &process.Process{
+		ID: "proc-1", Name: "Proc", Status: "active",
+		// BusinessServiceID intentionally empty.
+	}
+	svc := NewServiceWithReaders(stubs.readers())
+	p, err := svc.Project(context.Background(), ViewDecisionSurface, "surf-1", MaxDepth)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	got := map[string]bool{}
+	for _, n := range p.Nodes {
+		got[n.Kind+":"+n.ID] = true
+	}
+	if !got["decision_surface:surf-1"] || !got["process:proc-1"] {
+		t.Errorf("want surface + process; got %v", got)
+	}
+	if got["business_service:"] {
+		t.Errorf("must NOT emit any business_service node when process has no BS pointer; got %v", got)
+	}
+	for _, e := range p.Edges {
+		if e.Kind == EdgeKindHasProcess {
+			t.Errorf("must NOT emit has_process when no parent BS resolves; got %+v", e)
+		}
+	}
+}
+
+// TestService_SurfView_MissingProcessLookup pins missing-lookup
+// graceful behaviour: ProcessID is set on the surface, but the reader
+// returns nil — projection succeeds, surface emitted alone, no
+// has_surface or has_process edges.
+func TestService_SurfView_MissingProcessLookup(t *testing.T) {
+	stubs := makeSurfViewStubs()
+	stubs.surfs.items["surf-1"] = &surface.DecisionSurface{
+		ID: "surf-1", Version: 1, Name: "Surface", ProcessID: "proc-missing",
+		Status: surface.SurfaceStatusActive,
+	}
+	// procs.items intentionally lacks proc-missing → GetByID returns nil.
+	svc := NewServiceWithReaders(stubs.readers())
+	p, err := svc.Project(context.Background(), ViewDecisionSurface, "surf-1", MaxDepth)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	if len(p.Nodes) != 1 {
+		t.Errorf("missing parent process: want 1 node (root surface only), got %d (%+v)", len(p.Nodes), p.Nodes)
+	}
+	if len(p.Edges) != 0 {
+		t.Errorf("missing parent process: want 0 edges, got %d (%+v)", len(p.Edges), p.Edges)
+	}
+}
+
+// TestService_SurfView_MultipleBindings_DistinctAndShared pins:
+//
+//   - Two bindings to two different AI systems → 2 binding nodes,
+//     2 ai_system nodes, 2 system_of edges, 2 bound_to edges.
+//   - Two bindings to the SAME AI system → 2 binding nodes, exactly
+//     ONE ai_system node (deduped), 2 system_of edges, 2 bound_to.
+func TestService_SurfView_MultipleBindings_DistinctAndShared(t *testing.T) {
+	stubs := makeSurfViewStubs()
+	stubs.surfs.items["surf-1"] = &surface.DecisionSurface{
+		ID: "surf-1", Version: 1, Name: "Surface", ProcessID: "",
+		Status: surface.SurfaceStatusActive,
+	}
+	stubs.systems.items["ai-1"] = &aisystem.AISystem{ID: "ai-1", Name: "AI One"}
+	stubs.systems.items["ai-2"] = &aisystem.AISystem{ID: "ai-2", Name: "AI Two"}
+	stubs.bindings.bySurface["surf-1"] = []*aisystem.AISystemBinding{
+		{ID: "bind-a", AISystemID: "ai-1", SurfaceID: "surf-1", Role: "primary"},
+		{ID: "bind-b", AISystemID: "ai-2", SurfaceID: "surf-1", Role: "fallback"},
+		{ID: "bind-c", AISystemID: "ai-1", SurfaceID: "surf-1", Role: "shadow"},
+	}
+
+	svc := NewServiceWithReaders(stubs.readers())
+	p, err := svc.Project(context.Background(), ViewDecisionSurface, "surf-1", MaxDepth)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+
+	bindingCount := 0
+	aiCount := 0
+	got := map[string]bool{}
+	for _, n := range p.Nodes {
+		got[n.Kind+":"+n.ID] = true
+		switch n.Kind {
+		case NodeKindAISystemBinding:
+			bindingCount++
+		case NodeKindAISystem:
+			aiCount++
+		}
+	}
+	if bindingCount != 3 {
+		t.Errorf("want 3 binding nodes, got %d (%v)", bindingCount, got)
+	}
+	if aiCount != 2 {
+		t.Errorf("want 2 ai_system nodes (ai-1 deduped across bind-a/bind-c, plus ai-2), got %d (%v)", aiCount, got)
+	}
+
+	boundToCount := 0
+	systemOfCount := 0
+	for _, e := range p.Edges {
+		switch e.Kind {
+		case EdgeKindBoundTo:
+			boundToCount++
+		case EdgeKindSystemOf:
+			systemOfCount++
+		}
+	}
+	if boundToCount != 3 {
+		t.Errorf("want 3 bound_to edges (one per binding), got %d", boundToCount)
+	}
+	if systemOfCount != 3 {
+		t.Errorf("want 3 system_of edges (one per binding), got %d", systemOfCount)
+	}
+}
+
+// TestService_SurfView_MissingAISystemLookup pins the
+// "binding present, AI system missing" case: the binding node and the
+// bound_to edge to the surface are still emitted; the system_of edge
+// and the ai_system node are skipped (no failure).
+func TestService_SurfView_MissingAISystemLookup(t *testing.T) {
+	stubs := makeSurfViewStubs()
+	stubs.surfs.items["surf-1"] = &surface.DecisionSurface{
+		ID: "surf-1", Version: 1, Name: "Surface",
+		Status: surface.SurfaceStatusActive,
+	}
+	// systems.items lacks ai-ghost → GetByID returns nil.
+	stubs.bindings.bySurface["surf-1"] = []*aisystem.AISystemBinding{
+		{ID: "bind-x", AISystemID: "ai-ghost", SurfaceID: "surf-1"},
+	}
+	svc := NewServiceWithReaders(stubs.readers())
+	p, err := svc.Project(context.Background(), ViewDecisionSurface, "surf-1", MaxDepth)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+
+	got := map[string]bool{}
+	for _, n := range p.Nodes {
+		got[n.Kind+":"+n.ID] = true
+	}
+	if !got["decision_surface:surf-1"] || !got["ai_system_binding:bind-x"] {
+		t.Errorf("want surface + binding; got %v", got)
+	}
+	if got["ai_system:ai-ghost"] {
+		t.Errorf("must NOT emit ai_system node for unresolved AI system; got %v", got)
+	}
+
+	for _, e := range p.Edges {
+		if e.Kind == EdgeKindSystemOf {
+			t.Errorf("must NOT emit system_of edge for unresolved AI system; got %+v", e)
+		}
+	}
+	// Exactly one bound_to edge, pointing from the binding to the surface.
+	boundCount := 0
+	for _, e := range p.Edges {
+		if e.Kind == EdgeKindBoundTo {
+			boundCount++
+			if e.Src.Kind != NodeKindAISystemBinding || e.Src.ID != "bind-x" ||
+				e.Dst.Kind != NodeKindDecisionSurface || e.Dst.ID != "surf-1" {
+				t.Errorf("bound_to edge has wrong shape: %+v", e)
+			}
+		}
+	}
+	if boundCount != 1 {
+		t.Errorf("want exactly 1 bound_to edge, got %d", boundCount)
+	}
+}
+
+// TestService_SurfView_TypedDataPopulated pins the typed-data slots
+// on the new view's nodes: surface root carries DecisionSurfaceData
+// with non-zero Version + non-empty Status; binding carries
+// AISystemBindingData with ScopeKind/ScopeID matching the root surface;
+// AI system carries AISystemData with the seed name.
+func TestService_SurfView_TypedDataPopulated(t *testing.T) {
+	stubs := makeSurfViewWithFullChainAndOneBinding()
+	svc := NewServiceWithReaders(stubs.readers())
+	p, err := svc.Project(context.Background(), ViewDecisionSurface, "surf-1", MaxDepth)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	for _, n := range p.Nodes {
+		switch n.Kind {
+		case NodeKindDecisionSurface:
+			if n.DecisionSurface == nil {
+				t.Fatalf("decision_surface root must carry DecisionSurfaceData; got %+v", n)
+			}
+			if n.DecisionSurface.ID != "surf-1" || n.DecisionSurface.Version != 3 {
+				t.Errorf("DecisionSurfaceData: want id=surf-1 version=3, got %+v", n.DecisionSurface)
+			}
+			if n.DecisionSurface.Status != string(surface.SurfaceStatusActive) {
+				t.Errorf("DecisionSurfaceData.Status: want active, got %q", n.DecisionSurface.Status)
+			}
+		case NodeKindAISystemBinding:
+			if n.AISystemBinding == nil {
+				t.Fatalf("ai_system_binding must carry AISystemBindingData; got %+v", n)
+			}
+			if n.AISystemBinding.ScopeKind != NodeKindDecisionSurface || n.AISystemBinding.ScopeID != "surf-1" {
+				t.Errorf("AISystemBindingData scope: want decision_surface/surf-1, got %s/%s",
+					n.AISystemBinding.ScopeKind, n.AISystemBinding.ScopeID)
+			}
+			if n.AISystemBinding.AISystemID != "ai-1" || n.AISystemBinding.AISystemName != "AI One" {
+				t.Errorf("AISystemBindingData ai-system: want ai-1/AI One, got %s/%s",
+					n.AISystemBinding.AISystemID, n.AISystemBinding.AISystemName)
+			}
+		case NodeKindAISystem:
+			if n.AISystem == nil {
+				t.Fatalf("ai_system must carry AISystemData; got %+v", n)
+			}
+			if n.AISystem.ID != "ai-1" || n.AISystem.Name != "AI One" {
+				t.Errorf("AISystemData: want ai-1/AI One, got %+v", n.AISystem)
+			}
+		}
+	}
+}
+
+// TestService_SurfView_NoSyntheticSummaryOrCoverage pins the "no
+// authority_summary, no coverage" contract for this view — those nodes
+// are service-view constructs; emitting them on decision_surface would
+// be a contract regression.
+func TestService_SurfView_NoSyntheticSummaryOrCoverage(t *testing.T) {
+	stubs := makeSurfViewWithFullChainAndOneBinding()
+	svc := NewServiceWithReaders(stubs.readers())
+	p, err := svc.Project(context.Background(), ViewDecisionSurface, "surf-1", MaxDepth)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	for _, n := range p.Nodes {
+		if n.Kind == NodeKindAuthoritySummary || n.Kind == NodeKindCoverage {
+			t.Errorf("decision_surface view must NOT emit %q nodes; got %+v", n.Kind, n)
+		}
+	}
+	for _, e := range p.Edges {
+		if e.Kind == EdgeKindSummarises || e.Kind == EdgeKindReportsCoverage {
+			t.Errorf("decision_surface view must NOT emit %q edges; got %+v", e.Kind, e)
+		}
 	}
 }

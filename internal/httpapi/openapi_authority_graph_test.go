@@ -337,7 +337,7 @@ func TestOpenAPIContract_AuthorityGraphProjection_ReferencesNodeAndEdge(t *testi
 		t.Errorf("root.$ref: want AuthorityGraphNodeRef, got %v", got)
 	}
 
-	// view -> enum: [service, ai_system]
+	// view -> enum: [service, ai_system, decision_surface]
 	viewProp, ok := props["view"].(map[string]any)
 	if !ok {
 		t.Fatal("AuthorityGraphProjection.properties.view not a map")
@@ -352,13 +352,13 @@ func TestOpenAPIContract_AuthorityGraphProjection_ReferencesNodeAndEdge(t *testi
 			gotEnum[s] = true
 		}
 	}
-	for _, want := range []string{"service", "ai_system"} {
+	for _, want := range []string{"service", "ai_system", "decision_surface"} {
 		if !gotEnum[want] {
 			t.Errorf("view.enum missing %q (got %v)", want, enum)
 		}
 	}
-	if len(enum) != 2 {
-		t.Errorf("view.enum: want exactly 2 entries (service, ai_system), got %d (%v)", len(enum), enum)
+	if len(enum) != 3 {
+		t.Errorf("view.enum: want exactly 3 entries (service, ai_system, decision_surface), got %d (%v)", len(enum), enum)
 	}
 }
 

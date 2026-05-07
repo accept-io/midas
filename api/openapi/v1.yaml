@@ -1284,13 +1284,16 @@ components:
           $ref: "#/components/schemas/AuthorityGraphNodeRef"
         view:
           type: string
-          enum: [service, ai_system]
+          enum: [service, ai_system, decision_surface]
           description: >
             Perspective the projection was computed in. `service`
             projects from a business-service root via the
             governance-map read service. `ai_system` projects from an
             AI-system root by walking bindings to their scope targets.
-            Future views (decision_surface, agent, risk) are reserved.
+            `decision_surface` projects from a surface root and emits
+            its parent process / business service plus AI systems
+            bound directly to the surface. Future views (agent, risk)
+            are reserved.
         depth:
           type: integer
           minimum: 0
@@ -4541,13 +4544,15 @@ paths:
           required: true
           schema:
             type: string
-            enum: [service, ai_system]
+            enum: [service, ai_system, decision_surface]
           description: >
             Perspective. `service` is rooted at a business service and
             reuses the governance-map read service. `ai_system` is
             rooted at an AI system and walks bindings to their scope
-            targets. Other views (decision_surface, agent, risk) are
-            reserved for later phases.
+            targets. `decision_surface` is rooted at a surface and
+            emits parent process / business service plus AI systems
+            bound directly to the surface. Other views (agent, risk)
+            are reserved for later phases.
         - name: id
           in: query
           required: true
