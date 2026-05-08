@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -184,6 +185,38 @@ func applyEnvOverrides(cfg *Config, sources map[string]Source, getenv func(strin
 		cfg.Store.DSN = v
 		markEnv("store")
 	}
+	if v := getenv("MIDAS_DATABASE_MAX_OPEN_CONNS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("config: MIDAS_DATABASE_MAX_OPEN_CONNS must be an integer: %q", v)
+		}
+		cfg.Store.MaxOpenConns = n
+		markEnv("store")
+	}
+	if v := getenv("MIDAS_DATABASE_MAX_IDLE_CONNS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("config: MIDAS_DATABASE_MAX_IDLE_CONNS must be an integer: %q", v)
+		}
+		cfg.Store.MaxIdleConns = n
+		markEnv("store")
+	}
+	if v := getenv("MIDAS_DATABASE_CONN_MAX_LIFETIME"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return fmt.Errorf("config: MIDAS_DATABASE_CONN_MAX_LIFETIME must be a duration (e.g. 30m): %q", v)
+		}
+		cfg.Store.ConnMaxLifetime = Duration(d)
+		markEnv("store")
+	}
+	if v := getenv("MIDAS_DATABASE_CONN_MAX_IDLE_TIME"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return fmt.Errorf("config: MIDAS_DATABASE_CONN_MAX_IDLE_TIME must be a duration (e.g. 5m): %q", v)
+		}
+		cfg.Store.ConnMaxIdleTime = Duration(d)
+		markEnv("store")
+	}
 
 	// Auth
 	if v := getenv("MIDAS_AUTH_MODE"); v != "" {
@@ -206,6 +239,18 @@ func applyEnvOverrides(cfg *Config, sources map[string]Source, getenv func(strin
 	}
 	if v := getenv("MIDAS_LOG_FORMAT"); v != "" {
 		cfg.Observability.LogFormat = strings.ToLower(strings.TrimSpace(v))
+		markEnv("observability")
+	}
+	if v := getenv("MIDAS_METRICS_ENABLED"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("config: MIDAS_METRICS_ENABLED must be a boolean (true/false): %q", v)
+		}
+		cfg.Observability.MetricsEnabled = b
+		markEnv("observability")
+	}
+	if v := getenv("MIDAS_METRICS_PATH"); v != "" {
+		cfg.Observability.MetricsPath = strings.TrimSpace(v)
 		markEnv("observability")
 	}
 
@@ -232,6 +277,14 @@ func applyEnvOverrides(cfg *Config, sources map[string]Source, getenv func(strin
 			return fmt.Errorf("config: MIDAS_EXPLORER_ENABLED must be a boolean (true/false): %q", v)
 		}
 		cfg.Server.ExplorerEnabled = b
+		markEnv("server")
+	}
+	if v := getenv("MIDAS_HTTP_HANDLER_TIMEOUT"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return fmt.Errorf("config: MIDAS_HTTP_HANDLER_TIMEOUT must be a duration (e.g. 30s): %q", v)
+		}
+		cfg.Server.HandlerTimeout = Duration(d)
 		markEnv("server")
 	}
 

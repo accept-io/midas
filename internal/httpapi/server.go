@@ -234,6 +234,9 @@ type Server struct {
 	coverageRead         coverageReadService         // nil when coverage read service is not wired (Issue #56)
 	governanceMap        governanceMapReadService    // nil when governance map read service is not wired (Epic 1, PR 4)
 	authorityGraph       authorityGraphService       // nil when authority-graph projection service is not wired (Phase 1)
+	metricsHandler       http.Handler                // nil when metrics are disabled; registered at metricsPath when set
+	metricsPath          string                      // configured path for the metrics endpoint (e.g. "/metrics")
+	handlerTimeout       time.Duration               // per-handler wall-clock deadline; 0 disables (D27d)
 }
 
 type approveSurfaceRequest struct {
@@ -1419,6 +1422,45 @@ func (s *Server) WithCoverageReadService(svc coverageReadService) *Server {
 	return s
 }
 
+// WithHandlerTimeout sets the per-handler wall-clock deadline applied by
+// the safety middleware to every route except the metrics path. A zero
+// duration disables the timeout. Configured by main.go from
+// cfg.Server.HandlerTimeout. See safety.go for the middleware semantics.
+func (s *Server) WithHandlerTimeout(d time.Duration) *Server {
+	if d < 0 {
+		d = 0
+	}
+	s.handlerTimeout = d
+	return s
+}
+
+// WithMetrics attaches the Prometheus metrics handler that serves the
+// configured metrics path (typically /metrics). When called, the route is
+// registered immediately and remains in place for the server's lifetime.
+//
+// The endpoint is intentionally placed outside the /v1 authentication chain:
+// Prometheus scrapers conventionally connect without bearer tokens, and the
+// metrics surface emits only low-cardinality counters and histograms (no
+// request bodies, IDs, tokens, or DSNs). Operators are expected to restrict
+// access at the ingress / network layer.
+//
+// Pass handler=nil to make this a no-op (e.g. when metrics are disabled).
+func (s *Server) WithMetrics(handler http.Handler, path string) *Server {
+	if handler == nil || path == "" {
+		return s
+	}
+	s.metricsHandler = handler
+	s.metricsPath = path
+	s.mux.Handle(path, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w, http.MethodGet)
+			return
+		}
+		handler.ServeHTTP(w, r)
+	}))
+	return s
+}
+
 // appendAdminAudit persists an administrative audit record. It is a no-op
 // when the repository is not configured. Append errors are logged but never
 // fail the calling action — the audit trail's value here is investigability,
@@ -1533,7 +1575,7 @@ func (s *Server) routes() {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	s.mux.ServeHTTP(w, r)
+	s.withSafety(s.mux).ServeHTTP(w, r)
 }
 
 func (s *Server) ListenAndServe(addr string) error {
@@ -1630,6 +1672,30 @@ type evaluateResponse struct {
 	PolicySkipped   bool   `json:"policy_skipped,omitempty"`
 }
 
+// evaluateSuccessResponse is the audit-marker-bearing success response written
+// on the two governed evaluate paths (/v1/evaluate and /explorer). It embeds
+// evaluateResponse so existing decoders typed against evaluateResponse keep
+// working; the embedded fields flatten into the same JSON object.
+//
+// The simulate path (/explorer/simulate) deliberately writes evaluateResponse
+// without this wrapper, which makes audit_status absence on simulate a
+// type-system property rather than a runtime omitempty concern. There is no
+// omitempty on AuditStatus — the field is mandatory on its emitting paths and
+// is structurally absent everywhere else.
+type evaluateSuccessResponse struct {
+	evaluateResponse
+	AuditStatus string `json:"audit_status"`
+}
+
+// audit_status marker values per D27i-c (D27i-a-rev1 §5.1). The two governed
+// success paths emit different values so downstream consumers can distinguish
+// production envelope writes from Explorer's isolated in-memory writes
+// without inspecting orchestrator identity.
+const (
+	auditStatusEvaluate = "recorded"
+	auditStatusExplorer = "explorer_recorded"
+)
+
 // validateExplicitStructure checks that the provided processID and surfaceID are
 // structurally consistent:
 //  1. the process exists
@@ -1681,7 +1747,7 @@ func (s *Server) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	s.handleEvaluateWith(w, r, s.orchestrator, true)
+	s.handleEvaluateWith(w, r, s.orchestrator, true, auditStatusEvaluate)
 }
 
 // handleEvaluateWith contains the shared evaluation logic used by both
@@ -1691,7 +1757,13 @@ func (s *Server) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 // requireRequestID controls whether an absent request_id is rejected with
 // HTTP 400. Set true for the governed /v1/evaluate path; false for Explorer
 // and other non-governed callers that tolerate auto-generated identifiers.
-func (s *Server) handleEvaluateWith(w http.ResponseWriter, r *http.Request, orch orchestrator, requireRequestID bool) {
+//
+// auditStatus is the per-route audit_status marker emitted on a successful
+// response (chunk 3 of D27i-c). Callers pass auditStatusEvaluate for
+// /v1/evaluate and auditStatusExplorer for /explorer; the value is route-
+// driven, never derived from the orchestrator type. The cross-path drift
+// pin in evaluate_test.go defends against future consolidation.
+func (s *Server) handleEvaluateWith(w http.ResponseWriter, r *http.Request, orch orchestrator, requireRequestID bool, auditStatus string) {
 	rawBody, err := readRequestBody(w, r, maxRequestBodyBytes)
 	if err != nil {
 		status := http.StatusBadRequest
@@ -1779,19 +1851,22 @@ func (s *Server) handleEvaluateWith(w http.ResponseWriter, r *http.Request, orch
 
 	result, err := orch.Evaluate(r.Context(), toEvalRequest(req), json.RawMessage(rawBody))
 	if err != nil {
-		statusCode, errResp := mapDomainError(err, entityEvaluation)
+		statusCode, errResp := mapDomainError(err, entityEvaluation, true)
 		writeJSON(w, statusCode, errResp)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, evaluateResponse{
-		Outcome:         string(result.Outcome),
-		Reason:          string(result.ReasonCode),
-		EnvelopeID:      result.EnvelopeID,
-		Explanation:     result.Explanation,
-		PolicyMode:      result.PolicyMode,
-		PolicyReference: result.PolicyReference,
-		PolicySkipped:   result.PolicySkipped,
+	writeJSON(w, http.StatusOK, evaluateSuccessResponse{
+		evaluateResponse: evaluateResponse{
+			Outcome:         string(result.Outcome),
+			Reason:          string(result.ReasonCode),
+			EnvelopeID:      result.EnvelopeID,
+			Explanation:     result.Explanation,
+			PolicyMode:      result.PolicyMode,
+			PolicyReference: result.PolicyReference,
+			PolicySkipped:   result.PolicySkipped,
+		},
+		AuditStatus: auditStatus,
 	})
 }
 
@@ -1844,7 +1919,7 @@ func (s *Server) handleSimulateWith(w http.ResponseWriter, r *http.Request, orch
 
 	result, err := orch.Simulate(r.Context(), toEvalRequest(req), json.RawMessage(rawBody))
 	if err != nil {
-		statusCode, errResp := mapDomainError(err, entityEvaluation)
+		statusCode, errResp := mapDomainError(err, entityEvaluation, true)
 		writeJSON(w, statusCode, errResp)
 		return
 	}
@@ -1959,7 +2034,7 @@ func (s *Server) handleCreateReview(w http.ResponseWriter, r *http.Request) {
 		Notes:        req.Notes,
 	})
 	if err != nil {
-		statusCode, errResp := mapDomainError(err, entityReview)
+		statusCode, errResp := mapDomainError(err, entityReview, false)
 		writeJSON(w, statusCode, errResp)
 		return
 	}
@@ -2019,7 +2094,7 @@ func (s *Server) handleGetEnvelope(w http.ResponseWriter, r *http.Request) {
 
 	env, err := s.orchestrator.GetEnvelopeByID(r.Context(), id)
 	if err != nil {
-		statusCode, errResp := mapDomainError(err, entityEnvelope)
+		statusCode, errResp := mapDomainError(err, entityEnvelope, false)
 		writeJSON(w, statusCode, errResp)
 		return
 	}
@@ -2061,7 +2136,7 @@ func (s *Server) handleListEnvelopes(w http.ResponseWriter, r *http.Request) {
 
 	envs, err := s.orchestrator.ListEnvelopesByState(r.Context(), envelope.EnvelopeState(stateParam))
 	if err != nil {
-		statusCode, errResp := mapDomainError(err, entityEnvelope)
+		statusCode, errResp := mapDomainError(err, entityEnvelope, false)
 		writeJSON(w, statusCode, errResp)
 		return
 	}
@@ -2088,7 +2163,7 @@ func (s *Server) handleListEscalations(w http.ResponseWriter, r *http.Request) {
 
 	envs, err := s.orchestrator.ListEnvelopesByState(r.Context(), envelope.EnvelopeStateAwaitingReview)
 	if err != nil {
-		statusCode, errResp := mapDomainError(err, entityEnvelope)
+		statusCode, errResp := mapDomainError(err, entityEnvelope, false)
 		writeJSON(w, statusCode, errResp)
 		return
 	}
@@ -2139,7 +2214,7 @@ func (s *Server) handleGetDecisionByRequestID(w http.ResponseWriter, r *http.Req
 
 	env, err := s.orchestrator.GetEnvelopeByRequestScope(r.Context(), requestSource, requestID)
 	if err != nil {
-		statusCode, errResp := mapDomainError(err, entityDecision)
+		statusCode, errResp := mapDomainError(err, entityDecision, false)
 		writeJSON(w, statusCode, errResp)
 		return
 	}
@@ -3858,7 +3933,24 @@ func toEvalRequest(req evaluateRequest) eval.DecisionRequest {
 }
 
 // mapDomainError translates domain errors to HTTP status codes and response bodies.
-func mapDomainError(err error, entityType string) (int, map[string]string) {
+//
+// classAware enables the D27i-c chunk-2 class-aware mapping. When true, errors
+// that are categorised wrappers (produced by decision.wrapFailure, detected by
+// the presence of a Category() decision.FailureCategory method on any error
+// in the chain) bypass the trailing default-500 arm and receive a status keyed
+// off their FailureClass plus a body of {error, failure_kind, correctness_class}.
+// Resource-class wrappers map to 503; governance_integrity, consistency, and
+// persistence map to 500. Input-class wrappers fall through — their 4xx
+// behaviour is preserved by the typed-sentinel cases above (e.g.
+// ErrScopedRequestConflict → 409).
+//
+// classAware is true only at the two evaluate call sites (handleEvaluateWith
+// and handleSimulateWith). All other callers (read, list, resolve-review) pass
+// false and keep the existing {error}-only body shape on every status. Raw
+// errors that match the string heuristics below — even at evaluate sites — also
+// keep the existing body shape; the class-aware arm fires only for genuine
+// categorised wrappers.
+func mapDomainError(err error, entityType string, classAware bool) (int, map[string]string) {
 	if err == nil {
 		return http.StatusOK, nil
 	}
@@ -3881,6 +3973,26 @@ func mapDomainError(err error, entityType string) (int, map[string]string) {
 
 	case errors.Is(err, decision.ErrScopedRequestConflict):
 		return http.StatusConflict, map[string]string{"error": err.Error()}
+	}
+
+	if classAware {
+		var cp interface {
+			Category() decision.FailureCategory
+		}
+		if errors.As(err, &cp) {
+			cat, cls := decision.ClassifyFailure(err)
+			if cls != decision.FailureClassInput && cls != "" {
+				status := http.StatusInternalServerError
+				if cls == decision.FailureClassResource {
+					status = http.StatusServiceUnavailable
+				}
+				return status, map[string]string{
+					"error":             err.Error(),
+					"failure_kind":      string(cat),
+					"correctness_class": string(cls),
+				}
+			}
+		}
 	}
 
 	errMsg := err.Error()

@@ -22,7 +22,7 @@ import (
 	"github.com/accept-io/midas/internal/value"
 )
 
-func openPostgresTestDB(t *testing.T) *sql.DB {
+func openPostgresTestDB(t testing.TB) *sql.DB {
 	t.Helper()
 
 	dsn := os.Getenv("DATABASE_URL")
@@ -46,7 +46,7 @@ func openPostgresTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
-func cleanupPostgresTestData(t *testing.T, db *sql.DB) {
+func cleanupPostgresTestData(t testing.TB, db *sql.DB) {
 	t.Helper()
 
 	// Child tables first, then parents. decision_surfaces → processes →
@@ -74,7 +74,7 @@ func cleanupPostgresTestData(t *testing.T, db *sql.DB) {
 	}
 }
 
-func mustPostgresStore(t *testing.T, db *sql.DB) *postgres.Store {
+func mustPostgresStore(t testing.TB, db *sql.DB) *postgres.Store {
 	t.Helper()
 
 	s, err := postgres.NewStore(db, nil)
@@ -84,7 +84,7 @@ func mustPostgresStore(t *testing.T, db *sql.DB) *postgres.Store {
 	return s
 }
 
-func mustRepositories(t *testing.T, s decision.RepositoryStore) *store.Repositories {
+func mustRepositories(t testing.TB, s decision.RepositoryStore) *store.Repositories {
 	t.Helper()
 
 	repos, err := s.Repositories()
@@ -94,7 +94,7 @@ func mustRepositories(t *testing.T, s decision.RepositoryStore) *store.Repositor
 	return repos
 }
 
-func seedPostgresHappyPathData(t *testing.T, repos *store.Repositories) {
+func seedPostgresHappyPathData(t testing.TB, repos *store.Repositories) {
 	t.Helper()
 
 	ctx := context.Background()

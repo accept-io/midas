@@ -6,11 +6,18 @@ package decision
 // and the related helpers are unexported.
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"testing"
 
 	"github.com/accept-io/midas/internal/envelope"
+	"github.com/accept-io/midas/internal/eval"
+	"github.com/accept-io/midas/internal/policy"
+	"github.com/accept-io/midas/internal/store/memory"
 )
 
 // ---------------------------------------------------------------------------
@@ -244,5 +251,165 @@ func TestClassifyFailure_TransitionViaWrapFailure_ThroughWithTx(t *testing.T) {
 	got := classifyFailure(outerErr)
 	if got != string(FailureCategoryInvalidTransition) {
 		t.Errorf("classifyFailure = %q, want %q", got, FailureCategoryInvalidTransition)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// FailureClass mapping (D27i-c chunk 1 of F1)
+// ---------------------------------------------------------------------------
+
+// TestClassifyFailure_FailureClassMapping pins the (FailureCategory →
+// FailureClass) mapping table from D27i-a-rev1 §2.2. Each of the eight
+// FailureCategory* constants must map to exactly the class the ADR
+// names. Drift in this table is a governance change, not a code change —
+// hence the exhaustive table-driven assertion.
+func TestClassifyFailure_FailureClassMapping(t *testing.T) {
+	cases := []struct {
+		category FailureCategory
+		want     FailureClass
+	}{
+		{FailureCategoryEnvelopePersistence, FailureClassGovernanceIntegrity},
+		{FailureCategoryAuditAppend, FailureClassGovernanceIntegrity},
+		{FailureCategoryInvalidTransition, FailureClassConsistency},
+		{FailureCategoryAuthorityResolution, FailureClassConsistency},
+		{FailureCategoryIdempotencyConflict, FailureClassInput},
+		{FailureCategoryPolicyEvaluation, FailureClassResource},
+		{FailureCategoryResolveReview, FailureClassConsistency},
+		{FailureCategoryUnknown, FailureClassConsistency},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.category), func(t *testing.T) {
+			err := wrapFailure(tc.category, errors.New("inner"))
+			gotCat, gotCls := ClassifyFailure(err)
+			if gotCat != tc.category {
+				t.Errorf("category: got %q, want %q", gotCat, tc.category)
+			}
+			if gotCls != tc.want {
+				t.Errorf("class: got %q, want %q", gotCls, tc.want)
+			}
+		})
+	}
+}
+
+// TestClassifyFailure_HelperReturnsCategoryAndClass exercises the three
+// classifyFailure code paths (explicit wrapper, sentinel, heuristic
+// fallback) plus the nil case, and asserts ClassifyFailure returns both
+// axes consistently with the existing classifyFailure string output.
+func TestClassifyFailure_HelperReturnsCategoryAndClass(t *testing.T) {
+	t.Run("wrapped_category", func(t *testing.T) {
+		err := wrapFailure(FailureCategoryEnvelopePersistence, errors.New("boom"))
+		cat, cls := ClassifyFailure(err)
+		if cat != FailureCategoryEnvelopePersistence {
+			t.Errorf("category: got %q, want %q", cat, FailureCategoryEnvelopePersistence)
+		}
+		if cls != FailureClassGovernanceIntegrity {
+			t.Errorf("class: got %q, want %q", cls, FailureClassGovernanceIntegrity)
+		}
+	})
+
+	t.Run("sentinel_review", func(t *testing.T) {
+		cat, cls := ClassifyFailure(ErrEnvelopeNotFound)
+		if cat != FailureCategoryResolveReview {
+			t.Errorf("category: got %q, want %q", cat, FailureCategoryResolveReview)
+		}
+		if cls != FailureClassConsistency {
+			t.Errorf("class: got %q, want %q", cls, FailureClassConsistency)
+		}
+	})
+
+	t.Run("heuristic_authority_resolution", func(t *testing.T) {
+		cat, cls := ClassifyFailure(errors.New("authority chain lookup failed"))
+		if cat != FailureCategoryAuthorityResolution {
+			t.Errorf("category: got %q, want %q", cat, FailureCategoryAuthorityResolution)
+		}
+		if cls != FailureClassConsistency {
+			t.Errorf("class: got %q, want %q", cls, FailureClassConsistency)
+		}
+	})
+
+	t.Run("heuristic_unknown", func(t *testing.T) {
+		cat, cls := ClassifyFailure(errors.New("something completely unexpected"))
+		if cat != FailureCategoryUnknown {
+			t.Errorf("category: got %q, want %q", cat, FailureCategoryUnknown)
+		}
+		if cls != FailureClassConsistency {
+			t.Errorf("class: got %q, want %q", cls, FailureClassConsistency)
+		}
+	})
+
+	t.Run("nil_returns_empty_pair", func(t *testing.T) {
+		cat, cls := ClassifyFailure(nil)
+		if cat != "" {
+			t.Errorf("nil category: got %q, want empty", cat)
+		}
+		if cls != "" {
+			t.Errorf("nil class: got %q, want empty", cls)
+		}
+	})
+}
+
+// TestEvaluationFailed_SlogIncludesCorrectnessClass drives the
+// orchestrator's failure path end-to-end and asserts that the resulting
+// `evaluation_failed` slog event carries the new `correctness_class`
+// field. The simplest deterministic trigger is a request with empty
+// RequestSource: o.evaluate() returns errors.New("request_source is
+// required") at the validation guard, which propagates through WithTx
+// into the failure-path slog at orchestrator.go:274. The raw error has
+// no FailureCategory* wrap and no matching heuristic, so classifyFailure
+// produces FailureCategoryUnknown → FailureClassConsistency.
+func TestEvaluationFailed_SlogIncludesCorrectnessClass(t *testing.T) {
+	var buf bytes.Buffer
+	handler := slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})
+	prev := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	defer slog.SetDefault(prev)
+
+	memStore := memory.NewStoreWithRepositories(memory.NewRepositories())
+	orch, err := NewOrchestrator(memStore, policy.NoOpPolicyEvaluator{}, nil)
+	if err != nil {
+		t.Fatalf("NewOrchestrator: %v", err)
+	}
+
+	req := eval.DecisionRequest{
+		// RequestSource intentionally empty — triggers
+		// "request_source is required" inside o.evaluate().
+		RequestID: "req-classify-slog-test",
+		SurfaceID: "surf-x",
+		AgentID:   "agent-x",
+	}
+	if _, evalErr := orch.Evaluate(context.Background(), req, json.RawMessage(`{}`)); evalErr == nil {
+		t.Fatal("expected evaluate to fail with empty request_source")
+	}
+
+	found := false
+	for _, line := range bytes.Split(buf.Bytes(), []byte("\n")) {
+		if len(line) == 0 {
+			continue
+		}
+		var entry map[string]any
+		if err := json.Unmarshal(line, &entry); err != nil {
+			continue
+		}
+		if entry["msg"] != "evaluation_failed" {
+			continue
+		}
+		cls, ok := entry["correctness_class"].(string)
+		if !ok {
+			t.Errorf("evaluation_failed slog line is missing correctness_class field, got: %v", entry)
+			return
+		}
+		if cls != string(FailureClassConsistency) {
+			t.Errorf("correctness_class: got %q, want %q (FailureCategoryUnknown maps to consistency)",
+				cls, FailureClassConsistency)
+		}
+		// Existing failure_kind must remain present and unchanged.
+		if kind, _ := entry["failure_kind"].(string); kind != string(FailureCategoryUnknown) {
+			t.Errorf("failure_kind: got %q, want %q", kind, FailureCategoryUnknown)
+		}
+		found = true
+		break
+	}
+	if !found {
+		t.Errorf("evaluation_failed slog event not captured; buffer:\n%s", buf.String())
 	}
 }

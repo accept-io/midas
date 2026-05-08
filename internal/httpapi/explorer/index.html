@@ -2605,6 +2605,49 @@
     font-weight: 700;
     margin-bottom: 4px;
   }
+  /* D26e — full envelope detail block, lazy-loaded from
+     /explorer/envelopes/{id} on row selection. The Raw JSON viewer
+     scrolls internally so the rail height stays bounded; values use
+     the existing mono-font convention. */
+  .records-envelope-detail {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .records-envelope-detail-section { display: flex; flex-direction: column; gap: 2px; }
+  .records-envelope-detail-row {
+    display: flex;
+    gap: 8px;
+    padding: 2px 0;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    line-height: 1.4;
+  }
+  .records-envelope-detail-key {
+    color: var(--slate-500);
+    min-width: 150px;
+    flex-shrink: 0;
+    text-transform: lowercase;
+  }
+  .records-envelope-detail-val {
+    color: var(--on-surface);
+    word-break: break-all;
+  }
+  .records-envelope-detail-json {
+    background: var(--bg);
+    border: 1px solid rgba(255,255,255,0.05);
+    border-radius: 4px;
+    padding: 8px 10px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    line-height: 1.4;
+    max-height: 280px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    color: var(--on-surface);
+    margin: 0;
+  }
   .records-resource-action {
     display: flex;
     justify-content: space-between;
@@ -3825,22 +3868,31 @@
        is untouched. */
     position: relative;
   }
-  /* Phase 2B Step 27 — floating camera control BAR (D24c).
-     Replaces the horizontal-strip camera puck (D22). 5 icon-only
-     buttons (zoom-in / zoom-out / fit / centre / focus) stacked
-     vertically at the top-left corner of the canvas-scroll area,
-     anchored against .governance-map-body (which is position:
-     relative since D22). z-index 5 sits above #gmap-svg (1) and
-     .gmap-node (2). The .gmap-zoom-controls multi-class is
-     preserved as a backward-compat token; this rule wins via
-     later declaration where it overlaps with .gmap-zoom-controls
-     button styling. */
-  .gmap-camera-bar {
+  /* D26g-impl-2 — Canvas control clusters split by purpose.
+     The original .gmap-camera-bar (D24c, vertical 8-button strip)
+     mixed interaction-mode and camera/viewport controls. D26g-impl-2
+     splits it into two purpose-specific clusters:
+       .gmap-mode-rail       — Pan / Select (interaction-mode rail)
+                               anchored top-left of canvas because
+                               mode is the operator's first-gesture
+                               choice. 2 icon buttons stacked.
+       .gmap-camera-cluster  — Zoom in / Zoom out / Fit / Centre /
+                               Focus (camera + viewport cluster)
+                               anchored bottom-right of canvas where
+                               viewport controls conventionally live
+                               (Google Maps, CAD UIs). 5 icon
+                               buttons in a horizontal row. Bottom-
+                               right is the canvas corner farthest
+                               from the inspector seam, so the cluster
+                               does not compete for canvas-edge real
+                               estate when the inspector toggles.
+     Both clusters are absolute-positioned against .governance-map-
+     body (which is position: relative since D22) at z-index 5,
+     above #gmap-svg (1) and .gmap-node (2). Button visual chrome is
+     shared across both clusters via grouped selectors below. */
+  .gmap-mode-rail {
     position: absolute;
-    /* Phase 2B Step 28 (D24d) — top: 16px → 56px to clear the
-       new .gmap-top-left-overlay (Back + Search) which now
-       occupies the canvas's top-left corner above the camera bar. */
-    top: 56px;
+    top: 8px;
     left: 16px;
     z-index: 5;
     display: flex;
@@ -3852,13 +3904,27 @@
     border-radius: 8px;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.30);
   }
-  /* Icon-only button styling — overrides the .gmap-zoom-controls
-     button rule (which produced text-button styling). 32x32 square,
-     no min-width, no horizontal padding, transparent background
-     so the bar's own background reads through. currentColor on
-     the SVG inherits text colour; hover shifts background +
-     foreground subtly. */
-  .gmap-camera-bar button {
+  .gmap-camera-cluster {
+    position: absolute;
+    bottom: 16px;
+    right: 16px;
+    z-index: 5;
+    display: flex;
+    flex-direction: row;
+    gap: 4px;
+    padding: 4px;
+    background: var(--surface-container-high);
+    border: 1px solid var(--outline-variant);
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.30);
+  }
+  /* Shared icon-only button styling — applies to both clusters. 32x32
+     square, no min-width, no horizontal padding, transparent
+     background so the cluster's own background reads through.
+     currentColor on the SVG inherits text colour; hover shifts
+     background + foreground subtly. */
+  .gmap-mode-rail button,
+  .gmap-camera-cluster button {
     width: 32px;
     height: 32px;
     min-width: 0;
@@ -3873,21 +3939,26 @@
     cursor: pointer;
     line-height: 1;
   }
-  .gmap-camera-bar button:hover:not(:disabled) {
+  .gmap-mode-rail button:hover:not(:disabled),
+  .gmap-camera-cluster button:hover:not(:disabled) {
     background: var(--surface-container);
     color: var(--on-surface);
   }
-  .gmap-camera-bar button:disabled {
+  .gmap-mode-rail button:disabled,
+  .gmap-camera-cluster button:disabled {
     opacity: 0.40;
     cursor: not-allowed;
   }
-  .gmap-camera-bar button:focus-visible {
+  .gmap-mode-rail button:focus-visible,
+  .gmap-camera-cluster button:focus-visible {
     outline: 2px solid var(--primary, #4ea1ff);
     outline-offset: 1px;
   }
-  /* Focus toggle pressed state: filled primary so the operator can
-     see at a glance that focus mode is engaged. */
-  .gmap-camera-bar button[aria-pressed="true"] {
+  /* Focus-toggle pressed state: filled primary so the operator can
+     see at a glance that focus mode is engaged. Lives on the camera
+     cluster only — the mode rail's active state uses the
+     stronger is-active treatment below. */
+  .gmap-camera-cluster button[aria-pressed="true"] {
     background: var(--surface-container);
     color: var(--primary, #4ea1ff);
   }
@@ -3897,10 +3968,9 @@
      toggle's pressed state, because the Pan/Select choice is a
      persistent mode (not a transient gesture) and should be
      unmistakable at a glance. The active button gets a primary
-     border + text colour; the `aria-pressed="true"` rule above adds
-     the surface fill, so layered together they read as "filled
-     pill". */
-  .gmap-camera-bar button.is-active {
+     border + text colour + a surface fill so it reads as a
+     "filled pill". */
+  .gmap-mode-rail button.is-active {
     background: var(--surface-container-high);
     color: var(--primary, #4ea1ff);
     border: 1px solid var(--primary, #4ea1ff);
@@ -3943,65 +4013,75 @@
     flex-shrink: 0;
   }
 
-  /* Phase 2B Step 28 (D24d) — canvas-edge top-row overlays.
-     Both top-left and top-right overlays are absolute-positioned
-     against .governance-map-body (which is position:relative since
-     D22). They sit at z-index 5 — same as the camera bar (D24c)
-     and the legend overlay (D24c) — so they overlay graph content
-     but stay below modal-style affordances if any are introduced
-     later.
-     Phase 2B Step 31 (D24e) — the inspector rail is now a
-     top-level pane (no longer inside .governance-map-body), so
-     the body fills the full width of the canvas-scroll cell.
-     The top-right overlay anchors to the right edge of the body
-     (right: 8px) and the inspector-aware shift override is gone. */
-  .gmap-top-left-overlay {
-    position: absolute;
-    top: 8px;
-    left: 8px;
-    z-index: 5;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .gmap-top-right-overlay {
-    position: absolute;
-    top: 8px;
-    right: 8px;
-    z-index: 5;
+  /* D26g-impl-1 — Workbench toolbar groups. The toolbar is a flex
+     row with three logical groups (left/centre/right). The element
+     also carries the legacy `governance-map-legend` class so the
+     historical strip-row CSS rule applies for chrome (background,
+     border-bottom). The group classes only handle layout: ordering,
+     gaps, and centre-flex behaviour. */
+  .governance-map-toolbar-left,
+  .governance-map-toolbar-centre,
+  .governance-map-toolbar-right {
     display: inline-flex;
     align-items: center;
     gap: 8px;
+    min-width: 0;
   }
-  /* Reserved-width slot for the Back chevron. The chevron button
-     itself uses the `hidden` HTML attribute (display:none) when
-     gmapHistory is empty, but the slot's explicit min-width keeps
-     the layout stable so Search input position does not jitter
-     when history-state changes. */
-  .gmap-back-button-slot {
+  .governance-map-toolbar-centre {
+    flex: 1 1 auto;
+    gap: 12px;
+  }
+  /* Back-button styling inside the toolbar. The button is icon-only
+     (32x22 to match the existing .shell-sidebar-toggle / inspector-
+     toggle visual size), bordered, with a disabled treatment when
+     gmapHistory is empty. */
+  .governance-map-toolbar-left #gmap-back-button {
+    width: 28px;
+    height: 22px;
+    min-width: 0;
+    padding: 0;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 32px;
+    background: var(--surface-container-low);
+    color: var(--slate-300);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 4px;
+    cursor: pointer;
+    line-height: 1;
     flex-shrink: 0;
   }
-  /* Search input restyle for the canvas-overlay context: lighter
-     background, smaller width, semi-transparent dark fill so it
-     reads against graph content. Width below the original toolbar
-     treatment because the canvas-edge home is tighter. */
-  .gmap-top-left-overlay .gmap-search-input {
-    background: rgba(20, 24, 32, 0.65);
+  .governance-map-toolbar-left #gmap-back-button:hover:not(:disabled) {
+    background: var(--surface-container);
+    color: var(--on-surface);
+  }
+  .governance-map-toolbar-left #gmap-back-button:disabled {
+    opacity: 0.40;
+    cursor: not-allowed;
+  }
+  .governance-map-toolbar-left #gmap-back-button:focus-visible {
+    outline: 2px solid var(--primary, #4ea1ff);
+    outline-offset: 1px;
+  }
+  /* Search input — toolbar-context styling. Lighter than the canvas-
+     overlay treatment because the toolbar already has a darker
+     background; sized to a compact min-width so it does not crowd
+     the filter chips on narrow viewports. */
+  .governance-map-toolbar .gmap-search-input {
+    background: var(--surface-container);
     border: 1px solid var(--outline-variant);
     border-radius: 4px;
     padding: 4px 8px;
     font-size: 12px;
     color: var(--on-surface);
     min-width: 180px;
+    max-width: 240px;
+    flex-shrink: 0;
   }
-  .gmap-top-left-overlay .gmap-search-input::placeholder {
+  .governance-map-toolbar .gmap-search-input::placeholder {
     color: var(--slate-500);
   }
-  .gmap-top-left-overlay .gmap-search-input:focus-visible {
+  .governance-map-toolbar .gmap-search-input:focus-visible {
     outline: 2px solid var(--primary, #4ea1ff);
     outline-offset: 1px;
   }
@@ -4034,16 +4114,27 @@
     border-radius: 6px;
     padding: 2px;
   }
+  /* D26g-impl-4 — Segmented toggle is now icon-only. Each segment is
+     a 24x22 icon button with currentColor SVG strokes. Sizing is
+     fixed so the toolbar's right edge does not jitter when the
+     active segment swaps. The active state lifts the segment's
+     background and shifts the icon stroke to the primary colour;
+     the inactive state stays muted so the operator's eye lands on
+     the active segment first. */
   .gmap-view-mode-segment {
-    padding: 3px 10px;
-    font-size: 11px;
-    font-family: var(--font-mono);
+    width: 26px;
+    height: 22px;
+    min-width: 0;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     background: transparent;
     color: var(--slate-400);
     border: none;
     border-radius: 4px;
     cursor: pointer;
-    line-height: 1.2;
+    line-height: 1;
   }
   .gmap-view-mode-segment:hover:not(.is-active) {
     color: var(--on-surface);
@@ -4056,6 +4147,9 @@
   .gmap-view-mode-segment:focus-visible {
     outline: 2px solid var(--primary, #4ea1ff);
     outline-offset: 1px;
+  }
+  .gmap-view-mode-segment svg {
+    display: block;
   }
   /* Coming-soon feedback message — appears next to the toggle
      when the operator clicks the Form segment. Hidden by default
@@ -4421,6 +4515,122 @@
   .connector-evidence    { fill: none; stroke: #4edea3; stroke-width: 2.0; opacity: 0.85; }
   .connector-gap         { fill: none; stroke: #f0b67a; stroke-width: 2.0; stroke-dasharray: 5 5; opacity: 0.95; }
 
+  /* D26h-impl — Connector hover relationship preview.
+     The base .governance-map-svg layer keeps pointer-events: none
+     (set above at line 4218); .gmap-connector overrides per-path so
+     only the stroked path captures pointer events. The cursor
+     becomes a pointer to telegraph that hover discloses meaning;
+     transitions soften the stroke-width / opacity flip so quick
+     traversals don't flash. */
+  .gmap-connector {
+    pointer-events: stroke;
+    cursor: pointer;
+    transition: stroke-width 0.10s ease-out, opacity 0.10s ease-out, filter 0.10s ease-out;
+  }
+  /* Hovered connector — bumped stroke + opacity + soft glow. The
+     filter uses currentColor via drop-shadow so each connector
+     kind keeps its own colour identity. Dasharrays on
+     connector-authority and connector-gap are preserved (the rule
+     does not touch stroke-dasharray). */
+  .gmap-connector.is-hovered {
+    stroke-width: 3.5;
+    opacity: 1;
+    filter: drop-shadow(0 0 4px currentColor);
+  }
+  /* Suppress connector hover during active canvas gestures so the
+     pointer can't get captured mid-pan / mid-lasso. The body classes
+     are toggled by the canvas pointer-down handler's threshold-
+     crossing branches; this rule wins because of selector
+     specificity. */
+  body.gmap-canvas-panning .gmap-connector,
+  body.gmap-canvas-lassoing .gmap-connector,
+  body.gmap-canvas-panning .gmap-connector-hit-target,
+  body.gmap-canvas-lassoing .gmap-connector-hit-target {
+    pointer-events: none;
+    cursor: inherit;
+  }
+  /* D26h-fix — wider invisible hit target. The visible connector
+     stroke is 2.0–2.2px (too thin to hover reliably with a normal
+     cursor velocity); the hit target is a transparent 12px stroke
+     that captures hover on the same `d` curve. SVG paint order
+     places it above the visible path, but `stroke: transparent`
+     means the visible stroke shows through unmodified. The hit
+     target carries no visual classes; class manipulation happens
+     on the visible path via gmapVisibleConnectorForHoverTarget. */
+  .gmap-connector-hit-target {
+    fill: none;
+    stroke: transparent;
+    stroke-width: 12;
+    pointer-events: stroke;
+    cursor: pointer;
+  }
+  /* Hide the hit target alongside its visible connector when the
+     visibility filter (.gmap-connector-hidden) hides the visible
+     path. Filters work by toggling .gmap-connector-hidden on the
+     visible path; the hit target tracks via the same class.
+     Currently the filter only sets the class on the visible path,
+     so we provide a sibling rule that also display:none's the
+     adjacent hit target if the visible path carries the hidden
+     class. (Today the filter manages only the visible path; this
+     rule is defensive for the future case where the hit target
+     might still capture hovers on a hidden visible path.) */
+  path.gmap-connector-hidden + path.gmap-connector-hit-target {
+    display: none;
+  }
+  /* Endpoint halo on the source + target node cards. Outline (not
+     border) composes additively with .gmap-node.selected and
+     .gmap-multi-selected — the selected node keeps its primary
+     border + box-shadow, and the endpoint outline sits outside as
+     an additional ring. Subtle so it doesn't dominate the canvas
+     when the operator hovers many edges in succession. */
+  .gmap-node.is-connector-endpoint {
+    outline: 2px solid rgba(173, 198, 255, 0.45);
+    outline-offset: 2px;
+  }
+  /* Connector tooltip — single shared element appended once inside
+     .governance-map-body. Anchored relative to the body via
+     position: absolute + per-hover left/top updates. pointer-events:
+     none so it never blocks the canvas; z-index 5 keeps it above
+     the SVG layer + node cards but below modal-style affordances if
+     any are introduced later. */
+  .gmap-connector-tooltip {
+    position: absolute;
+    z-index: 6;
+    pointer-events: none;
+    max-width: 280px;
+    padding: 6px 10px;
+    background: rgba(20, 24, 32, 0.95);
+    border: 1px solid var(--outline-variant);
+    border-radius: 4px;
+    font-size: 11px;
+    line-height: 1.35;
+    color: var(--on-surface);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.40);
+  }
+  .gmap-connector-tooltip[hidden] { display: none; }
+  .gmap-connector-tooltip-kind {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--slate-500);
+    margin-bottom: 2px;
+  }
+  .gmap-connector-tooltip-route {
+    color: var(--slate-200);
+    word-break: break-word;
+  }
+
+  /* D26g-impl-1 — `.governance-map-toolbar` is the new primary class
+     for the workbench-frame control strip above the canvas. The
+     legacy `.governance-map-legend` class is preserved as a back-
+     compat token on the same element so historical CSS deep-styling
+     and the existing focus-mode rules continue to resolve. The two
+     selectors share the strip's chrome (padding, background, border-
+     bottom) but the toolbar selector also imposes a flex-row layout
+     with space-between justification so the three groups (left,
+     centre, right) anchor to their respective edges. */
+  .governance-map-toolbar,
   .governance-map-legend {
     display: flex;
     flex-wrap: wrap;
@@ -4431,49 +4641,69 @@
     font-size: 11px;
     color: var(--slate-400);
   }
+  .governance-map-toolbar {
+    flex-wrap: nowrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
   /* Phase 2B Step 26 (D23) — split the passive connection key
      (read-once explanatory swatches) from the operational filter
      chip group. Phase 2B Step 27 (D24c) — the connection key
      itself relocated to a canvas overlay (.gmap-legend-overlay
      below); this rule still applies to the .gmap-connection-key
-     wrapper inside that overlay. */
+     wrapper inside that overlay.
+     D26g-impl-3 — compacted further: the previous 14px gap and
+     nowrap layout produced a wide bottom-centre strip that
+     visually competed with the camera cluster + evidence tray.
+     The new compact-edge layout wraps onto two short lines if the
+     viewport demands it, and uses a tighter row × column gap
+     (6px × 10px) to read as a passive edge key rather than a
+     dominant strip. */
   .gmap-connection-key {
     display: inline-flex;
     flex-wrap: wrap;
-    gap: 14px;
+    gap: 6px 10px;
     align-items: center;
+    line-height: 1.3;
   }
-  /* Phase 2B Step 27 (D24c) — bottom-centre canvas overlay for
-     the connection key. Ambient reference content: low-contrast
-     dark background, smaller typography, low text opacity. Does
-     NOT receive pointer events (pointer-events: none) so it never
-     blocks graph drag/click — operators can read it but it doesn't
-     compete for click priority with graph nodes beneath. Anchored
-     against .governance-map-body (position:relative since D22),
-     centred on the canvas-scroll cell by offsetting half the
-     inspector width from screen centre. */
+  /* D26g-impl-3 — the connection-key overlay was originally placed
+     at the bottom-centre of the canvas (D24c). After D26g-impl-2
+     anchored the camera cluster at bottom-right, the centre overlay
+     began visually competing with the cluster + the Runtime
+     Evidence tray boundary directly below the canvas-body. The
+     overlay now anchors at bottom-left as a compact edge key:
+     lower visual weight (smaller font, tighter padding, narrower
+     max-width), still passive (pointer-events: none), still inside
+     .governance-map-body so it sits above the tray boundary and
+     does not need to know about tray height.
+     Bottom-left placement also avoids the inspector seam on the
+     right (the inspector's left edge moves with --inspector-width;
+     the legend at left: 16px never collides regardless of inspector
+     state). */
   .gmap-legend-overlay {
     position: absolute;
-    bottom: 12px;
-    left: 50%;
-    transform: translateX(-50%);
+    bottom: 16px;
+    left: 16px;
+    transform: none;
     z-index: 5;
-    padding: 6px 12px;
+    max-width: 280px;
+    padding: 4px 8px;
     background: rgba(20, 24, 32, 0.65);
-    border-radius: 6px;
-    font-size: 11px;
-    color: rgba(180, 200, 210, 0.85);
+    border: 1px solid var(--outline-variant);
+    border-radius: 4px;
+    font-size: 10px;
+    color: rgba(180, 200, 210, 0.78);
     pointer-events: none;
-    white-space: nowrap;
   }
   .gmap-legend-item {
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 4px;
   }
   .gmap-legend-swatch {
     display: inline-block;
-    width: 24px;
+    width: 18px;
     height: 2px;
     background: #8b949c;
     border-radius: 2px;
@@ -4743,6 +4973,67 @@
     border: 1px solid var(--outline-variant);
     border-radius: 6px;
   }
+  /* D26c — Activity tab list. Each row is a compact runtime-envelope
+     summary; the list scrolls internally so the tray height stays fixed. */
+  .gmap-evidence-tray-activity-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 220px;
+    overflow-y: auto;
+  }
+  .gmap-evidence-tray-activity-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 10px;
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    border-radius: 4px;
+    font-size: 11px;
+  }
+  .gmap-evidence-tray-activity-row-head {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .gmap-evidence-tray-activity-row-body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    color: var(--slate-300);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    line-height: 1.4;
+  }
+  .gmap-evidence-tray-activity-row-body strong {
+    color: var(--slate-500);
+    font-weight: 500;
+    margin-right: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 9px;
+  }
+  .gmap-evidence-tray-activity-time {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--slate-400);
+  }
+  .gmap-evidence-tray-activity-state {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--slate-500);
+  }
+  .gmap-evidence-tray-activity-id {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--slate-500);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   /* Drift tab — controls + tiles + chart. */
   .gmap-evidence-tray-controls {
     display: flex;
@@ -4841,6 +5132,134 @@
     font-size: 11px;
     fill: var(--slate-500);
     text-anchor: middle;
+  }
+
+  /* D26f — Analytical Drift-tab layout. Replaces the previous vertical
+     stack of (controls + tile grid + chart) with a two-column grid:
+     a compact signal-context column on the left and a dominant
+     chart/explanation panel on the right. The chart is now the
+     dominant analytical visual rather than a thin band beneath the
+     tile grid. Activity tab is unaffected — it keeps its list-based
+     scrollable layout (.gmap-evidence-tray-activity-list). */
+  .gmap-evidence-tray-analytic-layout {
+    display: grid;
+    grid-template-columns: 280px minmax(0, 1fr);
+    gap: 14px;
+    height: 100%;
+    min-height: 0;
+  }
+  .gmap-evidence-tray-signal-column {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+    min-width: 0;
+    overflow: hidden;
+  }
+  .gmap-evidence-tray-chart-panel {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    border-radius: 6px;
+    padding: 6px;
+    overflow: hidden;
+  }
+  /* Override the legacy .gmap-evidence-tray-chart 110px-fixed-height
+     rule when the chart sits inside the analytical chart panel. The
+     panel itself supplies the border/background; the inner chart fills
+     the remaining height for a Palantir-style dominant chart visual. */
+  .gmap-evidence-tray-chart-panel .gmap-evidence-tray-chart {
+    height: 100%;
+    background: transparent;
+    border: none;
+    padding: 0;
+    border-radius: 0;
+    overflow: hidden;
+  }
+  .gmap-evidence-tray-chart-panel .gmap-evidence-tray-exposure-explanation {
+    height: 100%;
+    margin: 0;
+    border: none;
+    background: transparent;
+    padding: 6px 4px;
+    overflow: auto;
+  }
+  .gmap-evidence-tray-signal-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin: 0;
+  }
+  .gmap-evidence-tray-signal-item {
+    display: grid;
+    grid-template-columns: 110px minmax(0, 1fr);
+    gap: 8px;
+    padding: 5px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    font-size: 11px;
+    align-items: baseline;
+  }
+  .gmap-evidence-tray-signal-item:last-child {
+    border-bottom: none;
+  }
+  .gmap-evidence-tray-signal-label {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--slate-500);
+    font-weight: 600;
+  }
+  .gmap-evidence-tray-signal-value {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--on-surface);
+    word-break: break-word;
+  }
+  .gmap-evidence-tray-signal-value.gmap-evidence-tray-tile-status-stable {
+    color: var(--secondary);
+  }
+  .gmap-evidence-tray-signal-value.gmap-evidence-tray-tile-status-drifting {
+    color: #fcd34d;
+  }
+  .gmap-evidence-tray-signal-value.gmap-evidence-tray-tile-status-critical {
+    color: var(--error);
+  }
+  /* Compact provenance line — replaces the full-width disclaimer block.
+     The compact element carries the full D25e disclaimer text in its
+     title attribute so the operator can hover for the long form, and
+     the trust-test pin
+     ("Illustrative demo signal. Not calculated from runtime envelopes.")
+     continues to match against the served HTML. */
+  .gmap-evidence-tray-provenance-compact {
+    margin-top: auto;
+    padding: 6px 8px;
+    font-size: 10px;
+    line-height: 1.4;
+    color: var(--slate-500);
+    font-family: var(--font-mono);
+    background: rgba(173, 198, 255, 0.04);
+    border-left: 2px solid var(--outline-variant);
+    border-radius: 3px;
+    cursor: help;
+  }
+  /* Compact controls — Metric / Range selectors live inside the signal
+     column rather than consuming a full-width row above the chart. */
+  .gmap-evidence-tray-controls-compact {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin: 4px 0 0 0;
+  }
+  .gmap-evidence-tray-controls-compact .gmap-evidence-tray-control {
+    font-size: 10px;
+  }
+  .gmap-evidence-tray-controls-compact .gmap-evidence-tray-control select {
+    padding: 2px 6px;
+    font-size: 10px;
   }
 
   /* Phase 2B Step 16 — selected-node inspector. Now lives in the
@@ -5162,42 +5581,61 @@
         <button type="button" id="services-map-back-btn" class="services-record-back" aria-label="Back to Business Service record">← <span id="services-map-back-label">Record</span></button>
       </header>
       <div class="governance-map-workbench">
-        <!-- Phase 2B Step 28 (D24d) — Workspace toolbar restructured
-             to canvas-edge overlays. The previous .governance-map-
-             toolbar (which carried stats / orientation / Back / Search)
-             is gone entirely. Those elements have moved to two new
-             canvas-edge overlays: .gmap-top-left-overlay (Back +
-             Search, above the camera bar) and .gmap-top-right-overlay
-             (orientation + Form/Graph toggle + inspector toggle). The
-             stats line is removed entirely (it was redundant — the
-             operator can count nodes by looking at the graph).
-             What was the .governance-map-legend chip row is now the
-             top of the workbench, providing the only toolbar chrome
-             above the canvas. -->
-        <div class="governance-map-legend" aria-label="Filter chips">
-          <!-- Phase 2B Step 27 (D24c) — the connection key (5 edge-
-               kind swatches) has been relocated to .gmap-legend-overlay
-               at the bottom-centre of the canvas (see further below).
-               The toolbar legend row now contains ONLY the operational
-               filter chips. Categorical separation: passive reference
-               material (the connection key) lives as a canvas overlay;
-               operational controls (the filter chips) live in toolbar
-               chrome. -->
-          <!-- Phase 2B Step 22 — graph density filters (D19).
-               Multi-select visibility chips. Each chip toggles ONE
-               category independently; the All chip resets every
-               category to true. data-kind values match the keys in
-               the gmapVisibilityFilters state object. -->
-          <span class="gmap-filter-chips" role="group" aria-label="Graph visibility filters">
-            <button type="button" class="gmap-filter-chip" data-kind="all" aria-label="Show all categories">All</button>
-            <button type="button" class="gmap-filter-chip" data-kind="business" aria-pressed="true" aria-label="Toggle business services">Business</button>
-            <button type="button" class="gmap-filter-chip" data-kind="capability" aria-pressed="true" aria-label="Toggle capabilities">Capabilities</button>
-            <button type="button" class="gmap-filter-chip" data-kind="process" aria-pressed="true" aria-label="Toggle processes">Processes</button>
-            <button type="button" class="gmap-filter-chip" data-kind="surface" aria-pressed="true" aria-label="Toggle decision surfaces">Surfaces</button>
-            <button type="button" class="gmap-filter-chip" data-kind="ai" aria-pressed="true" aria-label="Toggle AI systems">AI Systems</button>
-            <button type="button" class="gmap-filter-chip" data-kind="bindings" aria-pressed="true" aria-label="Toggle AI bindings">Bindings</button>
-            <button type="button" class="gmap-filter-chip" data-kind="synthetic" aria-pressed="true" aria-label="Toggle synthetic governance overlay">Synthetic</button>
-          </span>
+        <!-- D26g-impl-1 — Workbench toolbar consolidation. Replaces
+             the previous fragmented control surface (filter strip
+             above canvas + .gmap-top-left-overlay (Search) + .gmap-
+             top-right-overlay (View context, Form/Graph)) with a
+             single horizontal toolbar above the canvas. Reading
+             order, left-to-right:
+                Left:    Back · View context
+                Centre:  Search · Filter chips
+                Right:   Form/Graph toggle (+ feedback line)
+             The Back button is moved here from .gmap-camera-bar so
+             the camera bar carries only camera + interaction-mode
+             controls. The .gmap-top-left-overlay and .gmap-top-right-
+             overlay wrappers are removed entirely.
+             The legacy class `governance-map-legend` is kept as a
+             back-compat token on the toolbar element so historical
+             test pins and any third-party deep-styling continue to
+             resolve; CSS treats the two class names as synonymous. -->
+        <div class="governance-map-toolbar governance-map-legend" aria-label="Workbench toolbar">
+          <div class="governance-map-toolbar-left">
+            <button type="button" id="gmap-back-button" disabled
+                    aria-label="No previous graph view" title="No previous graph view"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="10 4 6 8 10 12"/></svg></button>
+            <span class="gmap-orientation-context gmap-status" id="gmap-current-root" aria-live="polite"></span>
+          </div>
+          <div class="governance-map-toolbar-centre">
+            <input type="text" id="gmap-search-input" class="gmap-search-input"
+                   placeholder="Search graph…"
+                   aria-label="Search graph nodes"
+                   autocomplete="off" spellcheck="false">
+            <span class="gmap-filter-chips" role="group" aria-label="Graph visibility filters">
+              <button type="button" class="gmap-filter-chip" data-kind="all" aria-label="Show all categories">All</button>
+              <button type="button" class="gmap-filter-chip" data-kind="business" aria-pressed="true" aria-label="Toggle business services">Business</button>
+              <button type="button" class="gmap-filter-chip" data-kind="capability" aria-pressed="true" aria-label="Toggle capabilities">Capabilities</button>
+              <button type="button" class="gmap-filter-chip" data-kind="process" aria-pressed="true" aria-label="Toggle processes">Processes</button>
+              <button type="button" class="gmap-filter-chip" data-kind="surface" aria-pressed="true" aria-label="Toggle decision surfaces">Surfaces</button>
+              <button type="button" class="gmap-filter-chip" data-kind="ai" aria-pressed="true" aria-label="Toggle AI systems">AI Systems</button>
+              <button type="button" class="gmap-filter-chip" data-kind="bindings" aria-pressed="true" aria-label="Toggle AI bindings">Bindings</button>
+              <button type="button" class="gmap-filter-chip" data-kind="synthetic" aria-pressed="true" aria-label="Toggle synthetic governance overlay">Synthetic</button>
+            </span>
+          </div>
+          <div class="governance-map-toolbar-right">
+            <!-- D26g-impl-4 — Form / Graph segmented toggle compacted
+                 to icon-only buttons. Visible text labels were dropped
+                 (the words "Form" and "Graph" repeated unnecessary
+                 noise at the right edge of the toolbar). aria-label +
+                 title preserve meaning for assistive tech and on-hover
+                 discovery. data-view-mode + .is-active class drive the
+                 existing JS handler unchanged. -->
+            <div class="gmap-view-mode-toggle" role="group" aria-label="View mode">
+              <button type="button" class="gmap-view-mode-segment" data-view-mode="form"
+                      aria-pressed="false" aria-label="Form view" title="Form view"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="1"/><line x1="5" y1="6" x2="11" y2="6"/><line x1="5" y1="9" x2="11" y2="9"/><line x1="5" y1="12" x2="9" y2="12"/></svg></button>
+              <button type="button" class="gmap-view-mode-segment is-active" data-view-mode="graph"
+                      aria-pressed="true" aria-label="Graph view" title="Graph view"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="4" cy="4" r="1.6" fill="currentColor"/><circle cx="12" cy="4" r="1.6" fill="currentColor"/><circle cx="8" cy="12" r="1.6" fill="currentColor"/><line x1="4" y1="4" x2="12" y2="4"/><line x1="4" y1="4" x2="8" y2="12"/><line x1="12" y1="4" x2="8" y2="12"/></svg></button>
+            </div>
+            <span class="gmap-view-mode-feedback" aria-live="polite"></span>
+          </div>
         </div>
         <!-- Phase 2B Step 16 — workbench shell, side-by-side body.
              The body wrapper splits the workbench's vertical area
@@ -5244,30 +5682,32 @@
                button) would override the icon-only treatment if
                retained. The .gmap-camera-bar selector is fully
                self-contained for the new visual. -->
-          <div class="gmap-camera-bar" role="group" aria-label="Map camera">
-            <!-- Phase 2B Step 34 (D24h-fix) — Back button relocated from the
-                 .gmap-top-left-overlay (next to Search) into the camera bar
-                 as the first button. The id is preserved so existing wiring
-                 (wireGmapBackButton, updateGmapBackButtonState,
-                 goBackInGraphHistory) continues to operate by id. The
-                 bespoke .gmap-back-button overlay styling is dropped — the
-                 camera bar's `.gmap-camera-bar button` rule now styles this
-                 button consistently with the other 5 camera controls. -->
-            <button type="button" id="gmap-back-button" disabled
-                    aria-label="No previous graph view" title="No previous graph view"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="10 4 6 8 10 12"/></svg></button>
-            <!-- Phase 2B Step 39 (D24i-fix3) — Pan / Select interaction
-                 mode toggle. Empty-canvas drag follows the active mode:
-                 Pan mode pans the camera, Select mode draws a lasso
-                 selection rectangle. Shift remains an accelerator that
-                 forces lasso regardless of mode. The two buttons sit
-                 between Back and Zoom-in so the operator's primary
-                 interaction choice is closest to the back-navigation
-                 affordance. is-active class + aria-pressed convey the
-                 current mode visually and to assistive tech. -->
+          <!-- D26g-impl-2 — The previous .gmap-camera-bar (which mixed
+               interaction-mode + camera + focus controls in one
+               vertical stack) is split into two clusters by category:
+                 .gmap-mode-rail      — Pan / Select (interaction mode)
+                 .gmap-camera-cluster — Zoom / Fit / Centre / Focus
+                                        (camera + viewport)
+               The split lets each cluster anchor at the canvas edge
+               most appropriate to its purpose: mode rail at top-left
+               for first-gesture proximity, camera cluster at bottom-
+               right for conventional viewport-control placement. All
+               seven button ids are preserved verbatim so existing JS
+               handlers keep binding by id without change. -->
+          <!-- Phase 2B Step 39 (D24i-fix3) — Pan / Select interaction
+               mode toggle. Empty-canvas drag follows the active mode:
+               Pan mode pans the camera, Select mode draws a lasso
+               selection rectangle. Shift remains an accelerator that
+               forces lasso regardless of mode. is-active class +
+               aria-pressed convey the current mode visually and to
+               assistive tech. -->
+          <div class="gmap-mode-rail" role="group" aria-label="Graph interaction mode">
             <button type="button" id="gmap-pan-mode-button" class="is-active"
                     aria-pressed="true" aria-label="Pan canvas mode" title="Pan canvas"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v6"/><path d="M5 6L8 3l3 3"/><path d="M3 8h10"/><path d="M5 10l-2 -2 2 -2"/><path d="M11 10l2 -2 -2 -2"/><path d="M5 10l3 3 3 -3"/></svg></button>
             <button type="button" id="gmap-select-mode-button"
                     aria-pressed="false" aria-label="Select nodes mode" title="Select nodes"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="2 2"><rect x="3" y="3" width="10" height="10"/></svg></button>
+          </div>
+          <div class="gmap-camera-cluster" role="group" aria-label="Graph camera controls">
             <button type="button" id="gmap-zoom-in" aria-label="Zoom in" title="Zoom in"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg></button>
             <button type="button" id="gmap-zoom-out" aria-label="Zoom out" title="Zoom out"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="3" y1="8" x2="13" y2="8"/></svg></button>
             <button type="button" id="gmap-fit-button" class="gmap-fit-button" aria-label="Fit graph to view" title="Fit graph to view"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 3 3 6 3"/><polyline points="10 3 13 3 13 6"/><polyline points="13 10 13 13 10 13"/><polyline points="6 13 3 13 3 10"/></svg></button>
@@ -5290,43 +5730,32 @@
               <span class="gmap-legend-item"><span class="gmap-legend-swatch gap"></span>Coverage gap</span>
             </span>
           </div>
-          <!-- Phase 2B Step 28 (D24d) — top-left canvas-edge overlay.
-               Hosts the Search input (relocated from the removed
-               toolbar). Sits ABOVE the camera bar, which retains its
-               vertical-stack layout. Phase 2B Step 34 (D24h-fix) — the
-               Back chevron previously rendered here in a reserved-width
-               slot has moved into the camera bar (top-most button); the
-               slot wrapper is no longer needed. -->
-          <div class="gmap-top-left-overlay">
-            <input type="text" id="gmap-search-input" class="gmap-search-input"
-                   placeholder="Search graph…"
-                   aria-label="Search graph nodes"
-                   autocomplete="off" spellcheck="false">
+          <!-- D26h-impl — Connector hover relationship preview tooltip.
+               Single shared tooltip element appended once at startup;
+               the delegated hover handler positions and populates it
+               on pointerover / pointermove and hides it on pointerout
+               / pan-start / lasso-start / node-drag-start / re-render.
+               role="tooltip" + aria-live="polite" so the relationship
+               re-announces when the operator hovers a different
+               connector. -->
+          <div class="gmap-connector-tooltip"
+               id="gmap-connector-tooltip"
+               role="tooltip"
+               aria-live="polite"
+               hidden>
+            <div class="gmap-connector-tooltip-kind"></div>
+            <div class="gmap-connector-tooltip-route"></div>
           </div>
-          <!-- Phase 2B Step 28 (D24d) — top-right canvas-edge overlay.
-               Hosts the orientation context (`View: X · Root: Y`,
-               relocated from the removed toolbar), the Form/Graph
-               view-mode toggle (Form is "coming soon" this phase —
-               clicking it triggers an inline feedback message), and
-               the inspector rail toggle (relocated from inside
-               #gmap-details). Right-offset accounts for the inspector
-               rail width (320px expanded / 40px collapsed). -->
-          <div class="gmap-top-right-overlay">
-            <span class="gmap-orientation-context gmap-status" id="gmap-current-root" aria-live="polite"></span>
-            <div class="gmap-view-mode-toggle" role="group" aria-label="View mode">
-              <button type="button" class="gmap-view-mode-segment" data-view-mode="form"
-                      aria-pressed="false" title="Form view (coming soon)">Form</button>
-              <button type="button" class="gmap-view-mode-segment is-active" data-view-mode="graph"
-                      aria-pressed="true" title="Graph view (current)">Graph</button>
-            </div>
-            <span class="gmap-view-mode-feedback" aria-live="polite"></span>
-            <!-- Phase 2B Step 30 (D24f) — inspector toggle relocated
-                 from this overlay to the bottom of the inspector rail
-                 itself (#gmap-details), harmonising with the left
-                 sidebar's canonical .shell-sidebar-toggle pattern.
-                 The top-right overlay now contains only orientation
-                 context + Form/Graph toggle. -->
-          </div>
+          <!-- D26g-impl-1 — The .gmap-top-left-overlay (Search) and
+               .gmap-top-right-overlay (View context, Form/Graph) have
+               been removed. Their children moved up into the new
+               workbench toolbar above the canvas.
+               D26g-impl-2 — The canvas overlay layer (.gmap-mode-rail
+               + .gmap-camera-cluster + .gmap-legend-overlay) now
+               carries only canvas-actionable controls (split by
+               purpose) and passive connector reference content;
+               informational and global-graph controls live in the
+               toolbar above the canvas. -->
         </div>
         <!-- Phase 2B Step 36 (D25b) — Bottom evidence and governance
              drift tray. Sibling of .governance-map-body inside the
@@ -5658,49 +6087,54 @@
       <div>
         <div class="records-page-title">
           <h2>Decision Records</h2>
-          <span class="records-page-title-badge">Demo sample</span>
+          <span class="records-page-title-badge" id="records-page-badge">Explorer runtime</span>
         </div>
-        <p class="records-page-subtitle">Recent governed decisions recorded by the Explorer sandbox.</p>
+        <p class="records-page-subtitle">Records shown here are generated by this Explorer session.</p>
       </div>
     </header>
 
-    <!-- Metrics row — demo counts; no list endpoint exists yet -->
+    <!-- D26d: Metrics row derived client-side from the loaded Explorer
+         runtime envelope summaries (recordsRuntimeRows). Initial values
+         are em-dashes so the loading state is visually distinct from a
+         genuine zero count; the renderer fills in real numbers as soon
+         as the loader resolves. Each value carries a stable id so the
+         tests can pin which tile counts which outcome. -->
     <div class="records-metrics" aria-label="Decision metrics">
       <div class="records-metric">
-        <div class="records-metric-label">Decision Records</div>
-        <div class="records-metric-value">142</div>
+        <div class="records-metric-label">Runtime records</div>
+        <div class="records-metric-value" id="records-metric-total">—</div>
       </div>
       <div class="records-metric accept">
-        <div class="records-metric-label">Accepted</div>
+        <div class="records-metric-label">Approved</div>
         <div class="records-metric-row">
-          <span class="records-metric-value">96</span>
+          <span class="records-metric-value" id="records-metric-approved">—</span>
           <span class="records-metric-glyph" aria-hidden="true">✓</span>
         </div>
       </div>
       <div class="records-metric escalate">
         <div class="records-metric-label">Escalated</div>
         <div class="records-metric-row">
-          <span class="records-metric-value">28</span>
+          <span class="records-metric-value" id="records-metric-escalated">—</span>
           <span class="records-metric-glyph" aria-hidden="true">!</span>
         </div>
       </div>
       <div class="records-metric reject">
         <div class="records-metric-label">Rejected</div>
         <div class="records-metric-row">
-          <span class="records-metric-value">12</span>
+          <span class="records-metric-value" id="records-metric-rejected">—</span>
           <span class="records-metric-glyph" aria-hidden="true">✕</span>
         </div>
       </div>
       <div class="records-metric clarify">
-        <div class="records-metric-label">Clarifications</div>
+        <div class="records-metric-label">Clarify</div>
         <div class="records-metric-row">
-          <span class="records-metric-value">6</span>
+          <span class="records-metric-value" id="records-metric-clarify">—</span>
           <span class="records-metric-glyph" aria-hidden="true">?</span>
         </div>
       </div>
-      <div class="records-metric gap">
-        <div class="records-metric-label">Coverage Gaps</div>
-        <div class="records-metric-value">3</div>
+      <div class="records-metric stop">
+        <div class="records-metric-label">Stopped</div>
+        <div class="records-metric-value" id="records-metric-stopped">—</div>
       </div>
     </div>
 
@@ -5736,7 +6170,7 @@
       <aside class="records-detail" aria-labelledby="records-detail-id">
         <div class="records-detail-header">
           <div>
-            <div class="records-detail-id" id="records-detail-id">env-demo-merchant-001</div>
+            <div class="records-detail-id" id="records-detail-id">—</div>
             <div class="records-detail-subtitle">Transactional authority trace</div>
           </div>
           <button type="button" class="records-detail-close" id="records-detail-close" aria-label="Close detail" title="Close">×</button>
@@ -6040,6 +6474,12 @@
     // width on every non-services top-level view.
     if (viewName !== 'services') {
       document.body.classList.remove('gmap-mode');
+    }
+    // D26b: refresh the runtime envelope feed every time the operator
+    // navigates to Records so newly-evaluated envelopes appear without
+    // requiring a full page reload. No polling — this is open-driven.
+    if (viewName === 'records' && typeof loadExplorerRuntimeRecords === 'function') {
+      loadExplorerRuntimeRecords();
     }
   }
 
@@ -7902,6 +8342,54 @@
     applyGmapFitMode(true);
   }
 
+  // D26h-fix — scheduleGmapFitToView() defers fitGmapToBounds() into
+  // a settled-layout post-frame so the initial render reliably opens
+  // fitted to the canvas safe area. The graph DOM is created
+  // synchronously by renderGovernanceMap, but the workbench card +
+  // body grid + canvas-scroll wrapper need at least one CSS reflow
+  // before scrollEl.clientWidth/Height reads stable values; on first
+  // load (cold cache, sidebar collapse animation in flight, etc.)
+  // a single rAF can be too early. The two-frame sequence is the
+  // accepted "robust post-layout fit" pattern used elsewhere in the
+  // codebase (see applyGmapFocusMode's fit-on-entry).
+  //
+  // Idempotent: the helper checks for an existing #gmap-canvas with
+  // populated gmapPositions before scheduling; an empty render path
+  // (renderGovernanceMapEmpty) does not schedule a fit.
+  //
+  // The helper is called from:
+  //   - renderGovernanceMap end (initial render + every reframe)
+  // It is NOT called from:
+  //   - manual pan / zoom / drag paths (those exit fit-mode)
+  //   - tray expand / collapse (existing applyGmapEvidenceTrayState
+  //     already triggers its own fit via setTimeout)
+  //   - focus-mode entry (applyGmapFocusMode has its own dedicated
+  //     two-frame fit sequence)
+  function scheduleGmapFitToView() {
+    if (typeof window.requestAnimationFrame !== 'function') {
+      // Test / no-DOM fallback — call synchronously.
+      if (typeof fitGmapToBounds === 'function') fitGmapToBounds();
+      return;
+    }
+    // Two-frame sequence: outer rAF guarantees the body class /
+    // markup mutation has been applied; inner rAF guarantees the
+    // browser has resolved the resulting layout (workbench card
+    // height, canvas-scroll clientWidth/Height, scrollbar
+    // visibility, tray-expanded height if applicable). Only then
+    // does fitGmapToBounds read stable dimensions.
+    window.requestAnimationFrame(function () {
+      window.requestAnimationFrame(function () {
+        // Defensive: if the canvas was torn down between schedule
+        // and fire (e.g. operator switched to a different sub-view
+        // mid-render), fitGmapToBounds is a no-op when scrollEl is
+        // missing — but bailing here saves the helper call.
+        const scrollEl = document.getElementsByClassName('governance-map-canvas-scroll')[0];
+        if (!scrollEl) return;
+        if (typeof fitGmapToBounds === 'function') fitGmapToBounds();
+      });
+    });
+  }
+
   // Wire the Fit button. Same IIFE pattern as wireGmapCentreButton.
   // Click is a thin invocation of fitGmapToBounds; no extra logic.
   (function wireGmapFitButton() {
@@ -8085,10 +8573,24 @@
       // the grid; only then does fitGmapToBounds read the new
       // scrollEl.clientWidth/Height. Idempotent: if the operator
       // exits focus mode before rAF fires, we abort the fit.
+      //
+      // D26i — First-launch robustness. On the very first focus-mode
+      // entry of a session the shell-chrome compression (sidebar
+      // collapse + inspector collapse + workbench card flipping to
+      // 100vh) plus the workbench's flex children all need to
+      // re-resolve their sizes; one frame is sometimes too early to
+      // read final dimensions. Schedule the fit on the FOLLOWING
+      // frame so the browser has settled the layout the body-class
+      // flip triggered. The two-frame sequence is deliberate (the
+      // accepted "robust post-layout fit" pattern) and bounded — we
+      // do not loop or poll.
       if (typeof window.requestAnimationFrame === 'function' &&
           typeof fitGmapToBounds === 'function') {
         window.requestAnimationFrame(() => {
-          if (gmapFocusMode) fitGmapToBounds();
+          if (!gmapFocusMode) return;
+          window.requestAnimationFrame(() => {
+            if (gmapFocusMode) fitGmapToBounds();
+          });
         });
       }
     } else {
@@ -8403,11 +8905,21 @@
   //
   // Pointer events that originate INSIDE a node, button, input, or
   // any interactive child are ignored — the closest('.gmap-node,
-  // button, input, textarea, .gmap-camera-bar, .gmap-top-left-overlay,
-  // .gmap-top-right-overlay, .gmap-legend-overlay, #gmap-details')
-  // check at the top of the handler short-circuits before any state
-  // is mutated. Only the canvas-scroll's own background bubble-up
-  // gestures reach the handler.
+  // button, input, textarea, .gmap-mode-rail, .gmap-camera-cluster,
+  // .gmap-legend-overlay, #gmap-details') check at the top of the
+  // handler short-circuits before any state is mutated. Only the
+  // canvas-scroll's own background bubble-up gestures reach the
+  // handler.
+  // D26g-impl-1 — The .gmap-top-left-overlay and .gmap-top-right-
+  // overlay selectors were removed from the list because their
+  // markup no longer exists; their children moved up into the
+  // workbench toolbar above the canvas (which is outside the
+  // canvas-scroll element entirely, so its events do not reach this
+  // handler in the first place).
+  // D26g-impl-2 — .gmap-camera-bar was split into .gmap-mode-rail
+  // (Pan/Select) and .gmap-camera-cluster (Zoom/Fit/Centre/Focus).
+  // Both selectors are listed so canvas pan/lasso never starts when
+  // the operator clicks either cluster.
   //
   // Manual pan (path 1) and lasso (path 2) BOTH exit transient
   // fit-mode? Per the brief, only manual pan/zoom exits — lasso is
@@ -8427,9 +8939,8 @@
       'button',
       'input',
       'textarea',
-      '.gmap-camera-bar',
-      '.gmap-top-left-overlay',
-      '.gmap-top-right-overlay',
+      '.gmap-mode-rail',
+      '.gmap-camera-cluster',
       '.gmap-legend-overlay',
       '.gmap-lasso-rect',
     ].join(',');
@@ -8627,12 +9138,18 @@
         // Manual pan exits transient fit-mode so the operator's
         // subsequent free navigation can scroll normally.
         applyGmapFitMode(false);
+        // D26h-impl — tear down any active connector tooltip so a
+        // pan gesture never carries a stale hover preview.
+        if (typeof hideGmapConnectorTooltip === 'function') hideGmapConnectorTooltip();
       }
       if (interaction === 'lasso-pending') {
         if (Math.max(Math.abs(dx), Math.abs(dy)) <= GMAP_DRAG_THRESHOLD_PX) return;
         interaction = 'lasso';
         document.body.classList.add('gmap-canvas-lassoing');
         interactionData.lassoEl = ensureLassoEl();
+        // D26h-impl — same cleanup as pan: lasso must not carry a
+        // stale connector tooltip.
+        if (typeof hideGmapConnectorTooltip === 'function') hideGmapConnectorTooltip();
       }
       if (interaction === 'pan') {
         // Phase 2B Step 37 (D24i-fix) — transform-based camera pan.
@@ -8701,6 +9218,15 @@
 
   let gmapEvidenceTrayExpanded = false;
   let gmapEvidenceTrayActiveTab = 'drift';
+
+  // D26c — Activity tab runtime feed state. Holds the raw D26a envelope
+  // summaries (NOT mapped) so the local selection-filter helper can read
+  // surface_id / business_service_id / process_id directly. The render
+  // path maps each item via mapExplorerEnvelopeToRecordRow at display time.
+  let gmapEvidenceActivityItems       = [];
+  let gmapEvidenceActivityLoading     = false;
+  let gmapEvidenceActivityError       = '';
+  let gmapEvidenceActivityLoadedOnce  = false;
 
   // hashGmapDemoSeed turns an arbitrary string into a non-negative
   // 32-bit integer. Cheap deterministic hash (djb2 variant) — same
@@ -8879,7 +9405,12 @@
   // tiles (affected count, primary contributor, etc.). All tile
   // values stay deterministic via the synthetic generator wrapper.
   function renderGmapEvidenceTrayTiles() {
-    const container = document.getElementById('gmap-evidence-tray-tiles');
+    // D26f — write into the analytical signal-list container. The
+    // legacy gmap-evidence-tray-tiles container remains supported as a
+    // fallback for any future call site that mounts it; if neither
+    // container is present, the renderer no-ops cleanly.
+    const container = document.getElementById('gmap-evidence-tray-signal-list')
+      || document.getElementById('gmap-evidence-tray-tiles');
     if (!container) return;
     container.innerHTML = '';
     const nodeId = gmapSelectedId;
@@ -8927,17 +9458,24 @@
         { label: semantics.summaryTileLabels[3], value: signal.window + ' / ' + signal.volume.toLocaleString() + ' decisions' },
       ];
     } else {
-      // Preview kind (unknown) — single placeholder tile.
+      // Preview kind (unknown) — single placeholder item.
       tiles = [{ label: semantics.summaryTileLabels[0] || 'Status', value: 'Preview' }];
     }
+    // Pick the item class set based on which container we are filling
+    // — the analytical signal-list uses compact rows, the legacy tile
+    // grid uses the original card classes.
+    const isSignalList = container.id === 'gmap-evidence-tray-signal-list';
+    const itemCls  = isSignalList ? 'gmap-evidence-tray-signal-item'  : 'gmap-evidence-tray-tile';
+    const labelCls = isSignalList ? 'gmap-evidence-tray-signal-label' : 'gmap-evidence-tray-tile-label';
+    const valueCls = isSignalList ? 'gmap-evidence-tray-signal-value' : 'gmap-evidence-tray-tile-value';
     tiles.forEach(function (tile) {
       const wrap = document.createElement('div');
-      wrap.className = 'gmap-evidence-tray-tile';
+      wrap.className = itemCls;
       const lbl = document.createElement('div');
-      lbl.className = 'gmap-evidence-tray-tile-label';
+      lbl.className = labelCls;
       lbl.textContent = tile.label;
       const val = document.createElement('div');
-      val.className = 'gmap-evidence-tray-tile-value' + (tile.valueClass ? ' ' + tile.valueClass : '');
+      val.className = valueCls + (tile.valueClass ? ' ' + tile.valueClass : '');
       val.textContent = tile.value;
       wrap.appendChild(lbl);
       wrap.appendChild(val);
@@ -9277,24 +9815,35 @@
       return;
     }
     const semantics = getGmapEvidenceSignalSemantics(nodeId);
-    let html = '';
-    // Subtitle / demo provenance disclaimer — sits at the top of every
-    // panel variant so the operator never reads the tile values without
-    // the synthetic-data context.
-    html += '<div class="gmap-evidence-tray-subtitle">' + escHtml(semantics.subtitle) + '</div>';
-    html += '<div class="gmap-evidence-tray-disclaimer">' +
-      'Illustrative demo signal. Not calculated from runtime envelopes.' +
+
+    // Compact subtitle stays at the top above the two-column layout.
+    const subtitleHtml =
+      '<div class="gmap-evidence-tray-subtitle">' + escHtml(semantics.subtitle) + '</div>';
+
+    // D26f — full D25e disclaimer is preserved in the DOM via the
+    // title attribute on the compact provenance line. The visible
+    // copy is short ("Demo signal · …") so the chart can dominate;
+    // hover/title surfaces the long form, and the trust-test pin
+    // (substring on the body) keeps matching.
+    const provenanceFull = 'Illustrative demo signal. Not calculated from runtime envelopes.';
+    const provenanceCompact =
+      '<div class="gmap-evidence-tray-provenance-compact" ' +
+        'title="' + escHtml(provenanceFull) + '">' +
+        escHtml(provenanceFull) +
       '</div>';
+
     if (semantics.signalClass === 'direct_drift' || semantics.signalClass === 'usage_drift') {
-      // Selectors row — kind-aware metric options.
+      // Selectors row — kind-aware metric options. Compact variant
+      // lives inside the left signal column rather than spanning the
+      // tray full-width.
       let metricOptionsHtml = '';
       semantics.metricOptions.forEach(function (opt, i) {
         metricOptionsHtml +=
           '<option value="' + escHtml(opt.value) + '"' + (i === 0 ? ' selected' : '') + '>' +
           escHtml(opt.label) + '</option>';
       });
-      html +=
-        '<div class="gmap-evidence-tray-controls">' +
+      const controls =
+        '<div class="gmap-evidence-tray-controls gmap-evidence-tray-controls-compact">' +
           '<label class="gmap-evidence-tray-control"><span>Metric</span>' +
             '<select id="gmap-evidence-tray-metric">' + metricOptionsHtml + '</select></label>' +
           '<label class="gmap-evidence-tray-control"><span>Range</span>' +
@@ -9304,32 +9853,50 @@
               '<option value="30d">30d</option>' +
             '</select></label>' +
         '</div>';
-      html += '<div class="gmap-evidence-tray-tiles" id="gmap-evidence-tray-tiles"></div>';
-      html +=
-        '<div class="gmap-evidence-tray-chart" id="gmap-evidence-tray-chart">' +
-          '<svg class="gmap-evidence-tray-chart-svg" id="gmap-evidence-tray-chart-svg" ' +
-            'viewBox="0 0 600 100" preserveAspectRatio="none" aria-hidden="true"></svg>' +
+      panel.innerHTML =
+        subtitleHtml +
+        '<div class="gmap-evidence-tray-analytic-layout">' +
+          '<div class="gmap-evidence-tray-signal-column">' +
+            '<div class="gmap-evidence-tray-signal-list" id="gmap-evidence-tray-signal-list"></div>' +
+            controls +
+            provenanceCompact +
+          '</div>' +
+          '<div class="gmap-evidence-tray-chart-panel">' +
+            '<div class="gmap-evidence-tray-chart" id="gmap-evidence-tray-chart">' +
+              '<svg class="gmap-evidence-tray-chart-svg" id="gmap-evidence-tray-chart-svg" ' +
+                'viewBox="0 0 600 100" preserveAspectRatio="none" aria-hidden="true"></svg>' +
+            '</div>' +
+          '</div>' +
         '</div>';
     } else if (semantics.signalClass === 'exposure') {
-      // Exposure layout — tiles + explanation; no metric selector,
-      // no time-series chart.
-      html += '<div class="gmap-evidence-tray-tiles" id="gmap-evidence-tray-tiles"></div>';
-      html +=
-        '<div class="gmap-evidence-tray-exposure-explanation">' +
-          'Structural nodes do not directly drift. The values above are an ' +
-          'illustrative roll-up across associated runtime-bearing children ' +
-          '(decision surfaces, AI bindings, authority profiles). Open a child ' +
-          'surface to see direct drift signals.' +
+      // Exposure layout — same two-column shell, but the right panel
+      // hosts the exposure-explanation copy block instead of a fake
+      // direct-drift chart. D25e rule: structural nodes never directly
+      // drift.
+      panel.innerHTML =
+        subtitleHtml +
+        '<div class="gmap-evidence-tray-analytic-layout">' +
+          '<div class="gmap-evidence-tray-signal-column">' +
+            '<div class="gmap-evidence-tray-signal-list" id="gmap-evidence-tray-signal-list"></div>' +
+            provenanceCompact +
+          '</div>' +
+          '<div class="gmap-evidence-tray-chart-panel">' +
+            '<div class="gmap-evidence-tray-exposure-explanation">' +
+              'Exposure is derived from associated runtime decision surfaces. ' +
+              'Real contributing-surface analytics will be wired when runtime ' +
+              'signals are available. Open a child surface to see direct drift signals.' +
+            '</div>' +
+          '</div>' +
         '</div>';
     } else {
-      // Preview placeholder.
-      html +=
-        '<div class="gmap-evidence-tray-tiles" id="gmap-evidence-tray-tiles"></div>' +
+      // Preview placeholder for unknown / unsupported kinds.
+      panel.innerHTML =
+        subtitleHtml +
+        provenanceCompact +
         '<div class="gmap-evidence-tray-exposure-explanation">' +
           escHtml(semantics.emptyText) +
         '</div>';
     }
-    panel.innerHTML = html;
     wireGmapEvidenceTraySelectors();
     renderGmapEvidenceTrayTiles();
     renderGmapEvidenceTrayChart();
@@ -9338,17 +9905,209 @@
   // notifyGmapEvidenceTraySelectionChanged is called from
   // selectGovernanceMapNode whenever the primary selection changes.
   // It refreshes the tray header always, and the panel content only
-  // when the tray is expanded AND the Drift tab is active (the panel
+  // when the tray is expanded AND a kind-aware tab is active (the panel
   // is hidden when collapsed, so re-rendering it then is wasted DOM
-  // work). D25e — the panel rebuilds its shape because different node
-  // kinds produce different layouts; tiles + chart alone are not
-  // sufficient.
+  // work). D25e — the Drift panel rebuilds its shape because different
+  // node kinds produce different layouts. D26c — the Activity panel
+  // also re-renders so its local selection filter (surface/business/
+  // process) reflects the new node, but it does NOT re-fetch since the
+  // session-level item set is unchanged.
   function notifyGmapEvidenceTraySelectionChanged() {
     updateGmapEvidenceTrayHeader();
     if (!gmapEvidenceTrayExpanded) return;
     if (gmapEvidenceTrayActiveTab === 'drift') {
       renderGmapEvidenceTrayDriftPanel();
+    } else if (gmapEvidenceTrayActiveTab === 'activity') {
+      renderGmapEvidenceTrayActivityPanel();
     }
+  }
+
+  // ── D26c: Activity tab — Explorer runtime envelope feed ────────────────
+  // The Activity tab consumes the same isolated runtime feed introduced
+  // by D26a (GET /explorer/envelopes) and reuses the D26b row mapper
+  // (mapExplorerEnvelopeToRecordRow) so Records and Activity present a
+  // consistent view of the same data. Unlike the Drift tab, Activity is
+  // real runtime data — provenance copy makes that distinction explicit.
+  //
+  // Selection context: the backend has no node-scoped envelope filter
+  // yet, so the renderer applies a local match against the raw D26a
+  // fields surface_id / business_service_id / process_id when the
+  // selected node's kind allows it. For other kinds (AI System,
+  // Capability, Authority, Coverage, More) the panel shows the
+  // unfiltered session list with an honest copy line.
+
+  async function loadGmapEvidenceActivity() {
+    gmapEvidenceActivityLoading = true;
+    gmapEvidenceActivityError   = '';
+    if (gmapEvidenceTrayActiveTab === 'activity' && gmapEvidenceTrayExpanded) {
+      renderGmapEvidenceTrayActivityPanel();
+    }
+    try {
+      const headers = { 'Accept': 'application/json' };
+      const tok = (typeof getToken === 'function') ? getToken() : null;
+      if (tok) headers['Authorization'] = 'Bearer ' + tok;
+      const res = await fetch('/explorer/envelopes?limit=50', { headers, credentials: 'same-origin' });
+      if (!res.ok) {
+        gmapEvidenceActivityError = 'Could not load runtime activity';
+        gmapEvidenceActivityItems = [];
+        return;
+      }
+      const payload = await res.json();
+      const items = (payload && Array.isArray(payload.items)) ? payload.items : [];
+      // Keep raw D26a items so the filter helper can read snake_case
+      // fields directly. Mapping happens lazily in the renderer.
+      gmapEvidenceActivityItems = items.filter(it => it && typeof it === 'object' && it.id);
+    } catch (e) {
+      gmapEvidenceActivityError = 'Could not load runtime activity';
+      gmapEvidenceActivityItems = [];
+    } finally {
+      gmapEvidenceActivityLoading    = false;
+      gmapEvidenceActivityLoadedOnce = true;
+      if (gmapEvidenceTrayActiveTab === 'activity' && gmapEvidenceTrayExpanded) {
+        renderGmapEvidenceTrayActivityPanel();
+      }
+    }
+  }
+
+  // filterGmapEvidenceActivityForSelection narrows the session-level
+  // item list to entries that match the currently-selected graph node
+  // when the node's kind has a stable mapping to an envelope summary
+  // field. surface → surface_id, business/related → business_service_id,
+  // proc → process_id. AI System / Capability / Authority / Coverage /
+  // More return the unfiltered list with kind='unsupported' so the
+  // renderer can show an honest copy line.
+  //
+  // Returns: { rows, filtered, kind, emptyForSelection }
+  //   - rows                — the items the renderer should display
+  //   - filtered            — true if a local match narrowed the list
+  //   - kind                — 'session' | 'surface' | 'business' |
+  //                            'process' | 'unsupported'
+  //   - emptyForSelection   — true when the kind supports filtering but
+  //                            no items matched (renderer falls back to
+  //                            the full session list with a "no match"
+  //                            note)
+  function filterGmapEvidenceActivityForSelection(items, nodeId) {
+    const safe = Array.isArray(items) ? items : [];
+    if (!nodeId || !gmapPositions[nodeId]) {
+      return { rows: safe, filtered: false, kind: 'session', emptyForSelection: false };
+    }
+    const pos = gmapPositions[nodeId];
+    const colon = nodeId.indexOf(':');
+    const rawId = colon >= 0 ? nodeId.slice(colon + 1) : nodeId;
+    if (pos.kind === 'surface') {
+      const sub = safe.filter(it => it && it.surface_id === rawId);
+      return {
+        rows: sub.length ? sub : safe,
+        filtered: sub.length > 0,
+        kind: 'surface',
+        emptyForSelection: sub.length === 0,
+      };
+    }
+    if (pos.kind === 'business' || pos.kind === 'related') {
+      const sub = safe.filter(it => it && it.business_service_id === rawId);
+      return {
+        rows: sub.length ? sub : safe,
+        filtered: sub.length > 0,
+        kind: 'business',
+        emptyForSelection: sub.length === 0,
+      };
+    }
+    if (pos.kind === 'proc') {
+      const sub = safe.filter(it => it && it.process_id === rawId);
+      return {
+        rows: sub.length ? sub : safe,
+        filtered: sub.length > 0,
+        kind: 'process',
+        emptyForSelection: sub.length === 0,
+      };
+    }
+    return { rows: safe, filtered: false, kind: 'unsupported', emptyForSelection: false };
+  }
+
+  function renderGmapEvidenceTrayActivityPanel() {
+    const panel = document.getElementById('gmap-evidence-tray-panel');
+    if (!panel) return;
+
+    // Loading / error / empty branches first — they short-circuit the
+    // selection-filter logic below.
+    if (gmapEvidenceActivityLoading && !gmapEvidenceActivityLoadedOnce) {
+      panel.innerHTML =
+        '<div class="gmap-evidence-tray-empty">Loading runtime activity…</div>';
+      return;
+    }
+    if (gmapEvidenceActivityError) {
+      panel.innerHTML =
+        '<div class="gmap-evidence-tray-empty">' + escHtml(gmapEvidenceActivityError) + '</div>';
+      return;
+    }
+    if (gmapEvidenceActivityLoadedOnce && gmapEvidenceActivityItems.length === 0) {
+      panel.innerHTML =
+        '<div class="gmap-evidence-tray-subtitle">' +
+          'Activity uses real Explorer runtime envelopes. Drift signals remain illustrative until analytics is wired.' +
+        '</div>' +
+        '<div class="gmap-evidence-tray-empty">' +
+          'No runtime activity yet.<br>' +
+          'Run an Explorer evaluation to create an envelope.' +
+        '</div>';
+      return;
+    }
+
+    const filter = filterGmapEvidenceActivityForSelection(gmapEvidenceActivityItems, gmapSelectedId);
+    let provenance;
+    if (filter.kind === 'surface') {
+      provenance = filter.filtered
+        ? 'Locally filtered from recent Explorer runtime envelopes by surface_id match.'
+        : 'No matching runtime activity for this selected node in the recent Explorer envelope list. Showing the latest session activity instead.';
+    } else if (filter.kind === 'business') {
+      provenance = filter.filtered
+        ? 'Locally filtered from recent Explorer runtime envelopes by business_service_id match.'
+        : 'No matching runtime activity for this selected node in the recent Explorer envelope list. Showing the latest session activity instead.';
+    } else if (filter.kind === 'process') {
+      provenance = filter.filtered
+        ? 'Locally filtered from recent Explorer runtime envelopes by process_id match.'
+        : 'No matching runtime activity for this selected node in the recent Explorer envelope list. Showing the latest session activity instead.';
+    } else if (filter.kind === 'unsupported') {
+      provenance = 'Showing recent Explorer runtime envelopes for this session. Node-scoped filtering for this kind requires a future analytics endpoint.';
+    } else {
+      provenance = 'Showing recent Explorer runtime envelopes for this session.';
+    }
+
+    const subtitle =
+      '<div class="gmap-evidence-tray-subtitle">' +
+        'Activity uses real Explorer runtime envelopes. Drift signals remain illustrative until analytics is wired.' +
+      '</div>';
+    const note =
+      '<div class="gmap-evidence-tray-disclaimer">' + escHtml(provenance) + '</div>';
+
+    const list = filter.rows.map(it => {
+      const r = mapExplorerEnvelopeToRecordRow(it) || { id: String(it.id || '') };
+      const outcomeCls = r.outcomeClass ? ' ' + r.outcomeClass : '';
+      const outcomeText = r.outcome && r.outcome !== '—' ? r.outcome : (r.state || '—');
+      const authority = 'profile ' + escHtml(r.profileId || '—') +
+        ' / grant ' + escHtml(r.grantId || '—') +
+        ' / agent ' + escHtml(r.agent || '—');
+      return (
+        '<div class="gmap-evidence-tray-activity-row" data-envelope-id="' + escHtml(r.id) + '">' +
+          '<div class="gmap-evidence-tray-activity-row-head">' +
+            '<span class="gmap-evidence-tray-activity-time">' + escHtml(r.time || '—') + '</span>' +
+            '<span class="records-outcome-badge' + outcomeCls + '">' + escHtml(outcomeText) + '</span>' +
+            '<span class="gmap-evidence-tray-activity-state">' + escHtml(r.state || '—') + '</span>' +
+          '</div>' +
+          '<div class="gmap-evidence-tray-activity-row-body">' +
+            '<span><strong>Reason</strong> ' + escHtml(r.reason || '—') + '</span>' +
+            '<span><strong>Surface</strong> ' + escHtml(r.surface || '—') + '</span>' +
+            '<span><strong>Business service</strong> ' + escHtml(r.bs || '—') + '</span>' +
+            '<span><strong>Process</strong> ' + escHtml(r.processId || '—') + '</span>' +
+            '<span><strong>Request</strong> ' + escHtml(r.requestSource || '—') + '</span>' +
+            '<span><strong>Authority</strong> ' + authority + '</span>' +
+            '<span class="gmap-evidence-tray-activity-id">id ' + escHtml(r.id) + '</span>' +
+          '</div>' +
+        '</div>'
+      );
+    }).join('');
+
+    panel.innerHTML = subtitle + note +
+      '<div class="gmap-evidence-tray-activity-list">' + list + '</div>';
   }
 
   // applyGmapEvidenceTrayState toggles the expanded class, syncs
@@ -9372,6 +10131,13 @@
       // "Coming soon" placeholders managed by the tab switcher.
       if (gmapEvidenceTrayActiveTab === 'drift') {
         renderGmapEvidenceTrayDriftPanel();
+      } else if (gmapEvidenceTrayActiveTab === 'activity') {
+        // D26c — Activity is real Explorer runtime data. Trigger a load
+        // on every expand so newly-evaluated envelopes appear without
+        // a full reload, and render the panel immediately so the
+        // loading state is visible while the fetch resolves.
+        renderGmapEvidenceTrayActivityPanel();
+        loadGmapEvidenceActivity();
       }
     }
     // Re-fit so the graph repositions to the new canvas-scroll height.
@@ -9408,19 +10174,22 @@
             t.classList.toggle('is-active', active);
             t.setAttribute('aria-selected', String(active));
           });
-          // Drift tab is the only one with real content for MVP;
-          // other tabs swap the panel to a "Coming soon" placeholder.
-          // Phase 2B Step 40 (D25e) — the Drift tab's content shape
-          // depends on the selected node's kind (direct drift / usage
-          // drift / exposure / preview). renderGmapEvidenceTrayDriftPanel
-          // dispatches on getGmapEvidenceSignalSemantics(nodeId).
+          // D25e — the Drift tab's content shape depends on the
+          // selected node's kind (direct drift / usage drift / exposure
+          // / preview). renderGmapEvidenceTrayDriftPanel dispatches on
+          // getGmapEvidenceSignalSemantics(nodeId).
+          // D26c — the Activity tab consumes real Explorer runtime
+          // envelopes from the D26a feed.
           if (which === 'drift') {
             renderGmapEvidenceTrayDriftPanel();
+          } else if (which === 'activity') {
+            renderGmapEvidenceTrayActivityPanel();
+            loadGmapEvidenceActivity();
           } else {
-            const labelMap = { overview: 'Overview', evidence: 'Evidence', activity: 'Activity' };
+            const labelMap = { overview: 'Overview', evidence: 'Evidence' };
             panel.innerHTML = '<div class="gmap-evidence-tray-coming-soon">' +
               escHtml(labelMap[which] || which) + ' — coming soon. Drift signals ship first; ' +
-              'overview / evidence / activity panels arrive with the runtime analytics endpoint.' +
+              'overview / evidence panels arrive with the runtime analytics endpoint.' +
               '</div>';
           }
         });
@@ -10041,17 +10810,33 @@
   }
 
   // setGovernanceMapCurrentRoot updates the toolbar's
-  // `#gmap-current-root` label with a compact "View: X · Root: Y"
-  // string. Called from renderGovernanceMap on every successful
-  // render (including post-reframe) so the label tracks
-  // currentGraphView / currentGraphRootId without separate state.
-  // Pass empty/null arguments to clear the label (e.g., on empty
-  // and error renders).
+  // `#gmap-current-root` label. Called from renderGovernanceMap on
+  // every successful render (including post-reframe) so the label
+  // tracks currentGraphView / currentGraphRootId without separate
+  // state. Pass empty/null arguments to clear the label (e.g., on
+  // empty and error renders).
+  //
+  // D26i — Compact wording. The previous "View: X · Root: Y" string
+  // was verbose given the rest of the toolbar already communicates
+  // graph mode (Form/Graph icons) and the kind label sufficiently
+  // implies "Root". The new visible string is "<Kind> · <Name>"
+  // (e.g. "Service · Fraud & Financial Crime"). The full
+  // explanatory string is preserved verbatim in the element's
+  // title attribute so an operator hover still surfaces the
+  // long form, and any assistive-tech that reads title attributes
+  // gets the unabbreviated meaning. The aria-live attribute on
+  // the markup remains polite so the label re-announces on root
+  // changes.
+  //
+  // At narrow viewports (<1280px) the visible label drops the Name
+  // and shows just the Kind. The title remains the full string at
+  // every width.
   function setGovernanceMapCurrentRoot(view, rootId, rootName) {
     const el = document.getElementById('gmap-current-root');
     if (!el) return;
     if (!view || !rootId) {
       el.textContent = '';
+      el.removeAttribute('title');
       return;
     }
     const viewLabel = view === 'ai_system'        ? 'AI System' :
@@ -10059,17 +10844,16 @@
                       view === 'service'          ? 'Service' :
                       String(view);
     const display = rootName && String(rootName).length > 0 ? String(rootName) : String(rootId);
-    // Phase 2B Step 28 (D24d) — at narrow viewports (<1280px) the
-    // orientation context lives in the top-right canvas overlay
-    // alongside the Form/Graph toggle and inspector toggle. To keep
-    // the row from overflowing into the top-left overlay, abbreviate
-    // by dropping the Root segment when the viewport is narrow. The
-    // full string is restored at wider viewports. One-time check
-    // per write — no resize listener.
+    // D26i — Full explanatory form lives in the title attribute so
+    // hover / assistive-tech retain the unabbreviated semantics.
+    el.setAttribute('title', 'View: ' + viewLabel + ' · Root: ' + display);
+    // D24d-style narrow-viewport abbreviation preserved: drop the
+    // Name on narrow viewports so the toolbar's right group has
+    // room. One-time check per write — no resize listener.
     const isNarrow = (typeof window !== 'undefined') && window.innerWidth && window.innerWidth < 1280;
     el.textContent = isNarrow
-      ? 'View: ' + viewLabel
-      : 'View: ' + viewLabel + ' · Root: ' + display;
+      ? viewLabel
+      : viewLabel + ' · ' + display;
   }
 
   // Phase 2B Step 15 — graph navigation history helpers.
@@ -10204,6 +10988,12 @@
   })();
 
   function clearGovernanceMapCanvas() {
+    // D26h-impl — tear down any active connector tooltip BEFORE the
+    // SVG paths it references are removed below. Without this, a
+    // pointer-out that fires after the path is detached would not
+    // clean up the tooltip (the delegated handler can't find the
+    // path), leaving stale hover state across renders.
+    if (typeof hideGmapConnectorTooltip === 'function') hideGmapConnectorTooltip();
     const canvas = document.getElementById('gmap-canvas');
     const scene = document.getElementById('gmap-scene');
     const svg = document.getElementById('gmap-svg');
@@ -10356,6 +11146,18 @@
   // drawn path is registered in gmapConnectors so it can be repainted
   // when one of its endpoints moves under drag. Returns the rendered
   // SVG path element (or null when either endpoint cannot be resolved).
+  //
+  // D26h-impl — also stamps relationship metadata on the path so a
+  // delegated hover handler can show a "<kind> · <source> → <target>"
+  // tooltip. Pinned attributes:
+  //   data-connector-kind   — stable enum (service / ai_binding /
+  //                           authority / evidence / coverage_gap)
+  //   data-source-node-id   — srcId verbatim
+  //   data-target-node-id   — dstId verbatim
+  //   role="img" + aria-label — accessibility surface; aria-label is a
+  //                           short "<kind label> from <source> to
+  //                           <target>" string built at add-time from
+  //                           the rendered card labels.
   function addLiveConnector(srcId, srcAnchor, dstId, dstAnchor, cls) {
     const sp = effectiveGmapPosition(srcId);
     const dp = effectiveGmapPosition(dstId);
@@ -10365,8 +11167,133 @@
     if (!sFn || !dFn) return null;
     const pathEl = addConnector(sFn(sp), dFn(dp), cls);
     if (!pathEl) return null;
-    gmapConnectors.push({ srcId: srcId, srcAnchor: srcAnchor, dstId: dstId, dstAnchor: dstAnchor, pathEl: pathEl });
+    // Promote to a hoverable connector. The base class .gmap-connector
+    // exists alongside the kind class; the hover handler delegates
+    // against .gmap-connector so adding/removing kinds does not need
+    // to touch the handler.
+    pathEl.classList.add('gmap-connector');
+    const kindInfo = gmapConnectorKindFromCls(cls);
+    pathEl.setAttribute('data-connector-kind', kindInfo.kind);
+    pathEl.setAttribute('data-source-node-id', srcId);
+    pathEl.setAttribute('data-target-node-id', dstId);
+    pathEl.setAttribute('role', 'img');
+    const srcLabel = gmapConnectorEndpointLabel(srcId);
+    const dstLabel = gmapConnectorEndpointLabel(dstId);
+    pathEl.setAttribute(
+      'aria-label',
+      kindInfo.label + ' from ' + srcLabel + ' to ' + dstLabel
+    );
+    // D26h-fix — Add a wider invisible twin path that captures hover
+    // events the thin visible stroke is too narrow to register.
+    // Issued AFTER the visible path so it sits above in stacking order
+    // (SVG paint order = source order). Both paths share the same `d`
+    // and the same metadata; the hit target's data-visible-connector-
+    // id pointer lets the delegated handler resolve to the visible
+    // path for class manipulation. The hit target carries no visual
+    // styling beyond a transparent stroke; pointer-events: stroke
+    // means only the wider stroke region (not the bounding box)
+    // captures pointer events.
+    const hitEl = addConnectorHitTarget(sFn(sp), dFn(dp), kindInfo, srcId, dstId, srcLabel, dstLabel);
+    if (hitEl) {
+      // Cross-link the visible path and the hit target so the hover
+      // handler can resolve one from the other and so repaint can
+      // update both `d` attributes in lockstep.
+      hitEl.gmapVisibleConnector = pathEl;
+      pathEl.gmapHitTarget = hitEl;
+    }
+    gmapConnectors.push({
+      srcId: srcId, srcAnchor: srcAnchor,
+      dstId: dstId, dstAnchor: dstAnchor,
+      pathEl: pathEl, hitEl: hitEl,
+    });
     return pathEl;
+  }
+
+  // addConnectorHitTarget creates the wider invisible twin path. Same
+  // SVG layer (#gmap-svg), same `d`, but stroke: transparent and
+  // stroke-width: 12 (set in CSS) so the operator's pointer captures
+  // hover within ~12px of the visible stroke. Stamped with the same
+  // metadata + an aria-hidden="true" attribute so screen readers do
+  // not re-announce the relationship (the visible path already
+  // carries an aria-label).
+  function addConnectorHitTarget(p1, p2, kindInfo, srcId, dstId, srcLabel, dstLabel) {
+    const svg = document.getElementById('gmap-svg');
+    if (!svg) return null;
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('class', 'gmap-connector-hit-target');
+    path.setAttribute('d', curvePath(p1[0], p1[1], p2[0], p2[1]));
+    path.setAttribute('data-connector-kind', kindInfo.kind);
+    path.setAttribute('data-source-node-id', srcId);
+    path.setAttribute('data-target-node-id', dstId);
+    path.setAttribute('aria-hidden', 'true');
+    // Aria-label is stored only on the visible path (which has
+    // role="img"); the hit target is decorative chrome.
+    svg.appendChild(path);
+    return path;
+  }
+
+  // gmapVisibleConnectorForHoverTarget resolves a pointer target to
+  // the visible connector path. Accepts either a visible path
+  // (.gmap-connector) or a hit target (.gmap-connector-hit-target).
+  // Returns null if the target is neither — the hover handler then
+  // ignores the event.
+  function gmapVisibleConnectorForHoverTarget(el) {
+    if (!el) return null;
+    if (el.classList && el.classList.contains('gmap-connector')) return el;
+    if (el.classList && el.classList.contains('gmap-connector-hit-target')) {
+      return el.gmapVisibleConnector || null;
+    }
+    return null;
+  }
+
+  // gmapConnectorKindFromCls maps a connector class string (e.g.
+  // 'connector-ai-binding') to a stable kind enum + a human-readable
+  // label. The label is the same wording the compact edge legend
+  // uses, so the tooltip stays consistent with the legend. Unknown
+  // class strings fall back to ('unknown', 'Connector') — defensive,
+  // never throws.
+  function gmapConnectorKindFromCls(cls) {
+    const s = String(cls || '');
+    if (s.indexOf('connector-ai-binding') >= 0) return { kind: 'ai_binding',   label: 'AI binding' };
+    if (s.indexOf('connector-authority')  >= 0) return { kind: 'authority',    label: 'Authority' };
+    if (s.indexOf('connector-evidence')   >= 0) return { kind: 'evidence',     label: 'Evidence' };
+    if (s.indexOf('connector-gap')        >= 0) return { kind: 'coverage_gap', label: 'Coverage gap' };
+    if (s.indexOf('connector-service')    >= 0) return { kind: 'service',      label: 'Service relationship' };
+    return { kind: 'unknown', label: 'Connector' };
+  }
+
+  // gmapConnectorEndpointLabel resolves a node id to a human-readable
+  // label. Lookup order:
+  //   1. The rendered .gmap-node card's data-node-name dataset.
+  //   2. The card's visible .gmap-node-name text.
+  //   3. Synthetic-id fallback: 'authority' → 'Authority',
+  //      'coverage' → 'Coverage' (these synthetic cards' data-node-
+  //      name values are multi-line stat strings, not suitable as a
+  //      relationship endpoint label).
+  //   4. The id itself.
+  // Defensive throughout — returns the id rather than throwing if the
+  // DOM is in any unexpected state.
+  function gmapConnectorEndpointLabel(nodeId) {
+    if (!nodeId) return '';
+    const id = String(nodeId);
+    if (id === 'authority') return 'Authority';
+    if (id === 'coverage')  return 'Coverage';
+    try {
+      const canvas = document.getElementById('gmap-canvas');
+      if (canvas) {
+        const nodes = canvas.querySelectorAll('.gmap-node');
+        for (let i = 0; i < nodes.length; i++) {
+          if (nodes[i].dataset && nodes[i].dataset.nodeId === id) {
+            const ds = nodes[i].dataset.nodeName;
+            if (ds && String(ds).length > 0) return String(ds);
+            const nameEl = nodes[i].querySelector('.gmap-node-name');
+            if (nameEl && nameEl.textContent) return nameEl.textContent;
+            break;
+          }
+        }
+      }
+    } catch (_) { /* defensive */ }
+    return id;
   }
 
   // repaintGmapConnectors recomputes every connector's `d` attribute
@@ -10387,9 +11314,180 @@
       if (!sFn || !dFn) continue;
       const a = sFn(sp);
       const b = dFn(dp);
-      c.pathEl.setAttribute('d', curvePath(a[0], a[1], b[0], b[1]));
+      const d = curvePath(a[0], a[1], b[0], b[1]);
+      c.pathEl.setAttribute('d', d);
+      // D26h-fix — keep the hit target's `d` in lockstep so the hover
+      // hit-region tracks the visible stroke as endpoints drag.
+      if (c.hitEl) c.hitEl.setAttribute('d', d);
     }
   }
+
+  // ── D26h-impl: connector hover relationship preview ───────────────────────
+  // Delegated hover on #gmap-svg → highlights the hovered connector,
+  // adds a subtle outline halo to source + target node cards, and
+  // shows a compact "<kind> · <source> → <target>" tooltip near the
+  // cursor. The tooltip is a single shared DOM element added once
+  // alongside the connector legend overlay; the handler reuses it on
+  // every hover so we never accumulate stale tooltips.
+  //
+  // Cleanup: hideGmapConnectorTooltip() is called from the canvas
+  // pointer-down handlers (pan-start, lasso-start), the node-drag
+  // threshold-crossing branch, and clearGovernanceMapCanvas — so any
+  // active gesture or graph re-render tears the tooltip down before
+  // it can become stale. Body-class gates in CSS additionally suppress
+  // pointer-events on .gmap-connector during pan / lasso so a
+  // connector cannot capture the cursor mid-gesture.
+
+  function hideGmapConnectorTooltip() {
+    const tip = document.getElementById('gmap-connector-tooltip');
+    if (tip) {
+      tip.setAttribute('hidden', '');
+      const k = tip.querySelector('.gmap-connector-tooltip-kind');
+      const r = tip.querySelector('.gmap-connector-tooltip-route');
+      if (k) k.textContent = '';
+      if (r) r.textContent = '';
+    }
+    // Strip is-hovered from any path that still carries it.
+    const svg = document.getElementById('gmap-svg');
+    if (svg) {
+      const hovered = svg.querySelectorAll('.gmap-connector.is-hovered');
+      hovered.forEach(p => p.classList.remove('is-hovered'));
+    }
+    // Strip endpoint halos from any node that still carries them.
+    const canvas = document.getElementById('gmap-canvas');
+    if (canvas) {
+      const endpoints = canvas.querySelectorAll('.gmap-node.is-connector-endpoint');
+      endpoints.forEach(n => n.classList.remove('is-connector-endpoint'));
+    }
+  }
+
+  function showGmapConnectorTooltip(pathEl, clientX, clientY) {
+    if (!pathEl) return;
+    const tip = document.getElementById('gmap-connector-tooltip');
+    if (!tip) return;
+    const kindAttr = pathEl.getAttribute('data-connector-kind') || '';
+    const srcId    = pathEl.getAttribute('data-source-node-id') || '';
+    const dstId    = pathEl.getAttribute('data-target-node-id') || '';
+    // Resolve labels at hover time so a renamed node card is reflected
+    // immediately (the path's aria-label was stamped at addConnector
+    // time and may be stale; the visible tooltip should always read
+    // current truth).
+    const kindLabel = (function () {
+      switch (kindAttr) {
+        case 'service':      return 'Service relationship';
+        case 'ai_binding':   return 'AI binding';
+        case 'authority':    return 'Authority';
+        case 'evidence':     return 'Evidence';
+        case 'coverage_gap': return 'Coverage gap';
+        default:             return 'Connector';
+      }
+    })();
+    const srcLabel = gmapConnectorEndpointLabel(srcId);
+    const dstLabel = gmapConnectorEndpointLabel(dstId);
+    const k = tip.querySelector('.gmap-connector-tooltip-kind');
+    const r = tip.querySelector('.gmap-connector-tooltip-route');
+    if (k) k.textContent = kindLabel;
+    if (r) r.textContent = srcLabel + ' → ' + dstLabel;
+    // Position relative to .governance-map-body (the tooltip's
+    // ancestor) so the cursor coordinates need to be converted from
+    // viewport to body-relative space.
+    const body = document.getElementsByClassName('governance-map-body')[0];
+    if (body) {
+      const rect = body.getBoundingClientRect();
+      // 12 px nudge below + right of the cursor so the tooltip never
+      // sits on top of the path the operator is hovering.
+      const left = clientX - rect.left + 12;
+      const top  = clientY - rect.top  + 12;
+      tip.style.left = left + 'px';
+      tip.style.top  = top + 'px';
+    }
+    tip.removeAttribute('hidden');
+  }
+
+  // wireGmapConnectorHover binds delegated pointer handlers on the
+  // SVG layer. Runs once at startup; the handler is delegated against
+  // .gmap-connector so successive renders never need to re-wire.
+  // Re-entrant safety: the handler reads the path via
+  // event.target.closest('.gmap-connector') so it ignores hovers on
+  // empty SVG regions (which today carry no children, but guards
+  // against future SVG additions).
+  (function wireGmapConnectorHover() {
+    const svg = document.getElementById('gmap-svg');
+    if (!svg) return;
+    // D26h-fix — accept both the visible connector and the wider
+    // invisible hit target. closest('.gmap-connector,
+    // .gmap-connector-hit-target') finds either; the helper then
+    // resolves to the visible connector path so all class /
+    // metadata reads happen on the canonical element.
+    function findConnector(target) {
+      if (!target || !target.closest) return null;
+      const hit = target.closest('.gmap-connector, .gmap-connector-hit-target');
+      if (!hit) return null;
+      return gmapVisibleConnectorForHoverTarget(hit);
+    }
+    function addEndpointHalos(pathEl) {
+      const canvas = document.getElementById('gmap-canvas');
+      if (!canvas) return;
+      const srcId = pathEl.getAttribute('data-source-node-id');
+      const dstId = pathEl.getAttribute('data-target-node-id');
+      const nodes = canvas.querySelectorAll('.gmap-node');
+      nodes.forEach(n => {
+        if (!n.dataset) return;
+        if (n.dataset.nodeId === srcId || n.dataset.nodeId === dstId) {
+          n.classList.add('is-connector-endpoint');
+        }
+      });
+    }
+    svg.addEventListener('pointerover', function (e) {
+      const path = findConnector(e.target);
+      if (!path) return;
+      // Strip is-hovered from any other path before applying to this
+      // one — prevents stuck-hover state if pointerout was missed
+      // because of a fast cursor crossing two connectors that share a
+      // pixel.
+      const others = svg.querySelectorAll('.gmap-connector.is-hovered');
+      others.forEach(o => { if (o !== path) o.classList.remove('is-hovered'); });
+      path.classList.add('is-hovered');
+      // Endpoint halos — refreshed on every pointerover so a
+      // cursor that jumps directly from one connector to another
+      // updates the halos without going through pointerout first.
+      const canvas = document.getElementById('gmap-canvas');
+      if (canvas) {
+        const stale = canvas.querySelectorAll('.gmap-node.is-connector-endpoint');
+        stale.forEach(n => n.classList.remove('is-connector-endpoint'));
+      }
+      addEndpointHalos(path);
+      showGmapConnectorTooltip(path, e.clientX, e.clientY);
+    });
+    svg.addEventListener('pointermove', function (e) {
+      const path = findConnector(e.target);
+      if (!path) return;
+      // Re-read clientX/Y on every move so the tooltip follows the
+      // cursor. The path lookup is cheap (closest()) so we do not
+      // cache the path reference across moves.
+      showGmapConnectorTooltip(path, e.clientX, e.clientY);
+    });
+    svg.addEventListener('pointerout', function (e) {
+      const path = findConnector(e.target);
+      if (!path) return;
+      // If pointerout fires because the cursor moved between the
+      // visible path and its own hit target (or the hit target's
+      // own descendants if any are added later), ignore — both
+      // paths resolve to the same visible connector via
+      // gmapVisibleConnectorForHoverTarget. Without this guard,
+      // moving from the visible stroke into its 12px halo would
+      // fire pointerout → pointerover ping-pong and flicker the
+      // tooltip.
+      const related = e.relatedTarget;
+      if (related && related.closest) {
+        const relatedHit = related.closest('.gmap-connector, .gmap-connector-hit-target');
+        if (relatedHit && gmapVisibleConnectorForHoverTarget(relatedHit) === path) {
+          return;
+        }
+      }
+      hideGmapConnectorTooltip();
+    });
+  })();
 
   // ── Drag interaction state ────────────────────────────────────────────────
   // gmapDragState is the per-gesture bookkeeping object. Set on
@@ -10713,11 +11811,34 @@
     relSlice.forEach((rel, i) => {
       const id = 'rel:' + rel.id;
       positions[id] = { x: relX[i], y: GMAP.LAYERS.RELATED.y, kind: 'related' };
-      // Drill-down: the action only attaches when the related-service
-      // node carries a real target BS id. Without it, the action area
-      // stays empty (no disabled placeholder button).
+      // Drill-down: actions only attach when the related-service node
+      // carries a real target BS id. Without it the action area stays
+      // empty (no disabled placeholder button).
+      //
+      // D26j — Related Service nodes now expose TWO actions when the
+      // target id is known:
+      //   1. `reframe-around-this` (target_view: 'service') — opens
+      //      the related Business Service's graph in-place. This is
+      //      the primary navigation affordance: graph-to-graph,
+      //      preserves Back via the existing pushGmapHistory path
+      //      (handleGovernanceMapAction), and reuses the existing
+      //      /v1/authority-graph?view=service&id=… endpoint via
+      //      refreshGovernanceMap. Inline-rendered as a graph-primary
+      //      action (.gmap-action-reframe-inline) on the selected
+      //      card by setGovernanceMapInlineActions.
+      //   2. `view-business-service-record` — opens the related BS's
+      //      record page. Preserves the existing drill-down
+      //      capability for operators who want metadata rather than
+      //      another graph view. Bottom-panel only (record-navigation
+      //      kind).
+      // Action ORDER matters for the inline render: the primary
+      // graph-navigation action is listed first so the renderer
+      // picks it as the inline button.
       const relActions = rel.target_business_service_id
-        ? [{ kind: 'view-business-service-record', target_id: rel.target_business_service_id, label: 'View record' }]
+        ? [
+            { kind: 'reframe-around-this', target_view: 'service', target_id: rel.target_business_service_id, label: 'Open service graph' },
+            { kind: 'view-business-service-record', target_id: rel.target_business_service_id, label: 'View record' },
+          ]
         : [];
       addNode({
         id, kind: 'related', cls: 'related-service-node',
@@ -11284,7 +12405,36 @@
     // applyGmapZoom() must run first because it writes the scaled
     // canvas dimensions the scroll-wrapper uses to compute scrollWidth
     // / scrollHeight; focusGmapOnRoot reads those bounds when clamping.
+    // D26h-fix — call focusGmapOnRoot synchronously for an immediate
+    // approximate framing (so the operator never sees an unframed
+    // first paint), then schedule a real Fit-to-View on the next
+    // settled frame. fitGmapToBounds re-runs the camera math against
+    // the final canvas-scroll clientWidth/Height the browser commits
+    // after CSS reflow, producing a clean "the whole graph is
+    // visible" first impression on initial render and on every
+    // reframe. Manual pan / zoom paths exit fit-mode and are not
+    // affected.
     focusGmapOnRoot(rootCardId);
+    // D26h-fix2 — enter fit-mode SYNCHRONOUSLY at render-end so the
+    // body.gmap-fit-mode CSS rule (overflow-x: hidden; overflow-y:
+    // hidden on .governance-map-canvas-scroll) suppresses scrollbars
+    // from the very first paint after render. Without this, the two-
+    // frame deferred fit leaves a ~32ms window where:
+    //   - canvas.style.width = extent.width × gmapZoom is wider than
+    //     scrollEl.clientWidth (because extent includes EDGE_PAD-wide
+    //     empty space to the left of the leftmost node — minX × zoom
+    //     of empty canvas before content starts);
+    //   - fit-mode is not yet active, so the canvas-scroll wrapper
+    //     paints scrollbars over that empty padding.
+    // Result: a horizontal scrollbar flashes on every initial render
+    // / reframe, even when the scheduled fit will subsequently snap
+    // the graph to its safe-area frame and hide the scrollbar.
+    // Setting fit-mode synchronously closes the window. The deferred
+    // fit's own applyGmapFitMode(true) is idempotent — it stays on,
+    // and the canvas-scroll's overflow stays hidden until the
+    // operator's first manual pan / zoom / drag.
+    applyGmapFitMode(true);
+    scheduleGmapFitToView();
 
     // Phase 2B Step 35 (D24i) — re-apply multi-selection visuals to
     // the freshly-rendered nodes. Stale ids that no longer exist in
@@ -11448,6 +12598,9 @@
         // is a manual interaction; exit transient fit-mode so the
         // operator's subsequent free-pan/zoom can scroll normally.
         applyGmapFitMode(false);
+        // D26h-impl — tear down any active connector tooltip the
+        // operator may have triggered before grabbing the node.
+        if (typeof hideGmapConnectorTooltip === 'function') hideGmapConnectorTooltip();
       }
       // Pointer-space delta → scene-space delta. Dividing by the
       // current zoom factor keeps the node under the cursor at any
@@ -11729,61 +12882,411 @@
   }
 
   // ── Records view ───────────────────────────────────────────────────────────
-  // Demo-sample-only records table — there is no historical-records endpoint
-  // yet, so rows are static and clearly badged. Selecting a row updates the
-  // detail rail; only the ACCEPT merchant record carries full authority +
-  // evidence detail. All technical resource actions either work locally
-  // (Copy envelope ID) or are disabled with a "not wired yet" tooltip
-  // (View envelope JSON, View audit events).
+  // D26b: Records is now a runtime feed. Rows are fetched from the D26a
+  // endpoint GET /explorer/envelopes against the isolated Explorer
+  // runtime — never from production /v1/envelopes. The hardcoded
+  // RECORDS_DEMO_ROWS / RECORDS_FULL_DETAIL constants were removed: the
+  // table reflects actual envelopes produced by Explorer evaluations
+  // performed in this session.
+  //
+  // States: loading / empty / error / populated. The detail rail mirrors
+  // the selected row using the compact summary fields returned by D26a.
+  // Authority Path + Evidence Summary panels remain as future tranches —
+  // the full envelope payload is reachable via GET /explorer/envelopes/{id}
+  // (handleExplorerGetEnvelope) and is intentionally not consumed here.
+  //
+  // TODO (later tranche): wire records-view filters (state, since, until,
+  // surface, business service) and per-row counts in the metric strip.
+  // TODO (later tranche): consume /explorer/envelopes/{id} for the
+  // Authority Path + Evidence Summary panels in the detail rail.
 
-  const RECORDS_DEMO_ROWS = [
-    { id: 'env-demo-merchant-001', outcome: 'ACCEPT',   bs: 'Merchant Services', surface: 'surf-v2-merchant-payment', agent: 'agent-v2-evaluator', reason: 'WITHIN_AUTHORITY',         time: '2 mins ago',  outcomeClass: 'accept'   },
-    { id: 'env-demo-merchant-002', outcome: 'ESCALATE', bs: 'Merchant Services', surface: 'surf-v2-merchant-payment', agent: 'agent-v2-evaluator', reason: 'CONSEQUENCE_EXCEEDS_LIMIT', time: '5 mins ago',  outcomeClass: 'escalate' },
-    { id: 'env-demo-lending-001',  outcome: 'CLARIFY',  bs: 'Consumer Lending',  surface: 'surf-v2-id-verify',        agent: 'agent-v2-evaluator', reason: 'INSUFFICIENT_CONTEXT',     time: '9 mins ago',  outcomeClass: 'clarify'  },
-    { id: 'env-demo-reject-001',   outcome: 'REJECT',   bs: 'Unknown',           surface: 'surf-unknown-xyz',         agent: 'agent-v2-evaluator', reason: 'SURFACE_NOT_FOUND',         time: '12 mins ago', outcomeClass: 'reject'   },
-  ];
+  let recordsRuntimeRows = [];
+  let recordsLoading     = false;
+  let recordsError       = '';
+  let recordsLoadedOnce  = false;
+  let recordsSelectedId  = '';
+  let recordsSearchQuery = '';
 
-  // Full detail seeded only for the ACCEPT merchant record per the brief.
-  const RECORDS_FULL_DETAIL = {
-    'env-demo-merchant-001': {
-      authority: [
-        { label: 'Agent',            id: 'agent-v2-evaluator',             cls: 'agent',      glyph: 'A' },
-        { label: 'Grant',            id: 'grant-v2-standard',              cls: 'grant',      glyph: 'G' },
-        { label: 'Profile',          id: 'profile-v2-standard',            cls: 'profile',    glyph: 'P' },
-        { label: 'Surface',          id: 'surf-v2-merchant-payment',       cls: 'surface',    glyph: 'S' },
-        { label: 'Process',          id: 'Merchant Payment Authorization', cls: 'process',    glyph: '·' },
-        { label: 'Capability',       id: 'Payment Authorization',          cls: 'capability', glyph: '·' },
-        { label: 'Business Service', id: 'Merchant Services',              cls: 'bs',         glyph: 'B' },
-      ],
-      evidence: [
-        { key: 'Confidence',  val: '0.95 ≥ 0.85',  pass: 'PASSED'    },
-        { key: 'Consequence', val: '£100 ≤ £5,000', pass: 'PASSED' },
-        { key: 'Context',                               pass: 'SATISFIED' },
-        { key: 'Policy',      val: 'noop'                                 },
-      ],
-    },
-  };
+  // Map a D26a envelopeSummary { id, state, outcome, reason_code,
+  // request_source, surface_id, business_service_id, agent_id,
+  // created_at, evaluated_at, ... } into the existing row shape
+  // consumed by renderRecordsTable / renderRecordsDetail. Optional
+  // fields fall back to the empty string ('') so the renderer always
+  // has a string to display — never undefined.
+  function mapExplorerEnvelopeToRecordRow(item) {
+    if (!item || typeof item !== 'object') return null;
+    const outcomeRaw  = String(item.outcome || '').toUpperCase();
+    const outcomeText = outcomeRaw || '—';
+    const outcomeCls  = recordsOutcomeClass(outcomeRaw);
+    const tsIso       = item.evaluated_at || item.created_at || '';
+    return {
+      id:            String(item.id || ''),
+      state:         String(item.state || ''),
+      outcome:       outcomeText,
+      outcomeClass:  outcomeCls,
+      reason:        String(item.reason_code || ''),
+      requestSource: String(item.request_source || ''),
+      surface:       String(item.surface_id || ''),
+      agent:         String(item.agent_id || ''),
+      bs:            String(item.business_service_id || ''),
+      processId:     String(item.process_id || ''),
+      profileId:     String(item.profile_id || ''),
+      grantId:       String(item.grant_id || ''),
+      createdAt:     String(item.created_at || ''),
+      evaluatedAt:   String(item.evaluated_at || ''),
+      timeIso:       String(tsIso),
+      time:          formatRecordTimestamp(tsIso),
+    };
+  }
 
-  let recordsSelectedId = 'env-demo-merchant-001';
+  function recordsOutcomeClass(o) {
+    switch (o) {
+      case 'ACCEPT':
+      case 'ALLOW':
+      case 'APPROVE':
+        return 'accept';
+      case 'ESCALATE':
+        return 'escalate';
+      case 'REJECT':
+      case 'DENY':
+        return 'reject';
+      case 'CLARIFY':
+        return 'clarify';
+      default:
+        return '';
+    }
+  }
+
+  function formatRecordTimestamp(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    try {
+      return d.toLocaleString();
+    } catch {
+      return iso;
+    }
+  }
+
+  // ── D26e: full envelope detail (lazy fetch) ────────────────────────────
+  // The Records detail rail and the Activity tab both consume compact
+  // envelope summaries from the D26a list endpoint. To inspect the full
+  // envelope payload — Identity / Resolved / Evaluation / Integrity +
+  // raw JSON — we lazily fetch /explorer/envelopes/{id} on row
+  // selection and cache the result by id for the session. Errors are
+  // surfaced inline; raw JSON is rendered via textContent only so the
+  // payload cannot inject HTML even if a future field carries unsafe
+  // characters.
+
+  let explorerEnvelopeDetailsById     = {};
+  let explorerEnvelopeDetailLoadingId = '';
+  let explorerEnvelopeDetailError     = '';
+
+  // loadExplorerEnvelopeDetail fetches the full envelope payload for
+  // the given id from the Explorer-isolated detail endpoint and stores
+  // it in the session cache. The optional onResolved callback fires
+  // both before the network call (so the caller can transition into a
+  // loading-rail state) and after it resolves (so the caller can
+  // re-render with real data). Cache hits short-circuit the network
+  // and fire onResolved exactly once.
+  async function loadExplorerEnvelopeDetail(envelopeId, onResolved) {
+    if (!envelopeId) return;
+    if (Object.prototype.hasOwnProperty.call(explorerEnvelopeDetailsById, envelopeId)) {
+      explorerEnvelopeDetailLoadingId = '';
+      explorerEnvelopeDetailError     = '';
+      if (typeof onResolved === 'function') onResolved();
+      return;
+    }
+    explorerEnvelopeDetailLoadingId = envelopeId;
+    explorerEnvelopeDetailError     = '';
+    if (typeof onResolved === 'function') onResolved();
+    try {
+      const headers = { 'Accept': 'application/json' };
+      const tok = (typeof getToken === 'function') ? getToken() : null;
+      if (tok) headers['Authorization'] = 'Bearer ' + tok;
+      const url = '/explorer/envelopes/' + encodeURIComponent(envelopeId);
+      const res = await fetch(url, { headers, credentials: 'same-origin' });
+      if (res.status === 404) {
+        explorerEnvelopeDetailError = 'Envelope detail not found.';
+        return;
+      }
+      if (!res.ok) {
+        explorerEnvelopeDetailError = 'Could not load envelope detail.';
+        return;
+      }
+      const env = await res.json();
+      explorerEnvelopeDetailsById[envelopeId] = env;
+    } catch (e) {
+      explorerEnvelopeDetailError = 'Could not load envelope detail.';
+    } finally {
+      explorerEnvelopeDetailLoadingId = '';
+      if (typeof onResolved === 'function') onResolved();
+    }
+  }
+
+  function explorerEnvelopeDetailFor(id) {
+    if (!id) return null;
+    return Object.prototype.hasOwnProperty.call(explorerEnvelopeDetailsById, id)
+      ? explorerEnvelopeDetailsById[id]
+      : null;
+  }
+
+  // renderExplorerEnvelopeDetailSections returns an HTML string for the
+  // four structured sections. Each row reads the envelope JSON
+  // defensively — partial envelopes (e.g. ones still in 'evaluating'
+  // state) render with em-dashes for missing fields rather than
+  // throwing. The Raw JSON block is appended separately by the caller
+  // via textContent.
+  function renderExplorerEnvelopeDetailSections(env) {
+    if (!env) return '';
+    const identity    = (env.identity    || {});
+    const submitted   = (env.submitted   || {});
+    const resolved    = (env.resolved    || {});
+    const auth        = (resolved.authority || {});
+    const struct      = (resolved.structure || {});
+    const bs          = (struct.business_service || {});
+    const proc        = (struct.process || {});
+    const subject     = (resolved.subject || {});
+    const evaluation  = (env.evaluation  || {});
+    const explanation = (evaluation.explanation || {});
+    const integrity   = (env.integrity   || {});
+
+    const row = function (label, value) {
+      const v = (value === undefined || value === null || value === '') ? '—' : String(value);
+      return '<div class="records-envelope-detail-row">' +
+        '<span class="records-envelope-detail-key">' + escHtml(label) + '</span>' +
+        '<span class="records-envelope-detail-val">' + escHtml(v) + '</span>' +
+        '</div>';
+    };
+    const verLabel = function (n) {
+      return (typeof n === 'number' && !isNaN(n)) ? String(n) : '';
+    };
+    const policyEvaluated = explanation.policy_evaluated === true ? 'true'
+      : explanation.policy_evaluated === false ? 'false' : '';
+    const auditCount = (Array.isArray(integrity.audit_event_ids) ? integrity.audit_event_ids.length : 0);
+
+    const identitySection =
+      '<div class="records-envelope-detail-section">' +
+        '<p class="records-detail-section-label">Identity</p>' +
+        row('id',             identity.id            || env.id            || '') +
+        row('state',          env.state              || '') +
+        row('request_id',     identity.request_id    || env.request_id    || '') +
+        row('request_source', identity.request_source|| env.request_source|| '') +
+        row('created_at',     env.created_at         || '') +
+        row('updated_at',     env.updated_at         || '') +
+        row('received_at',    submitted.received_at  || '') +
+        row('evaluated_at',   evaluation.evaluated_at|| env.evaluated_at  || '') +
+      '</div>';
+
+    const governanceSection =
+      '<div class="records-envelope-detail-section">' +
+        '<p class="records-detail-section-label">Governance context</p>' +
+        row('business_service_id', bs.id              || env.business_service_id || '') +
+        row('process_id',          proc.id            || env.process_id          || '') +
+        row('surface_id',          auth.surface_id    || env.surface_id          || '') +
+        row('surface_version',     verLabel(auth.surface_version)) +
+        row('profile_id',          auth.profile_id    || env.profile_id          || '') +
+        row('profile_version',     verLabel(auth.profile_version)) +
+        row('grant_id',            auth.grant_id      || env.grant_id            || '') +
+        row('agent_id',            auth.agent_id      || env.agent_id            || '') +
+        row('subject_id',          subject.id         || env.subject_id          || '') +
+      '</div>';
+
+    const evaluationSection =
+      '<div class="records-envelope-detail-section">' +
+        '<p class="records-detail-section-label">Evaluation</p>' +
+        row('outcome',          evaluation.outcome           || '') +
+        row('reason_code',      evaluation.reason_code       || '') +
+        row('outcome_driver',   explanation.outcome_driver   || '') +
+        row('result',           explanation.result           || '') +
+        row('policy_evaluated', policyEvaluated) +
+        row('policy_reference', explanation.policy_reference || '') +
+      '</div>';
+
+    const integritySection =
+      '<div class="records-envelope-detail-section">' +
+        '<p class="records-detail-section-label">Integrity</p>' +
+        row('submitted_hash',     integrity.submitted_hash   || '') +
+        row('first_event_hash',   integrity.first_event_hash || '') +
+        row('final_event_hash',   integrity.final_event_hash || '') +
+        row('audit_event_count',  String(auditCount)) +
+      '</div>';
+
+    return identitySection + governanceSection + evaluationSection + integritySection;
+  }
+
+  // D26d — Records metrics strip is now client-side aggregation over the
+  // runtime envelope feed (recordsRuntimeRows). No backend metrics
+  // endpoint is consulted; this is a pure projection of what the loader
+  // already returned. The metrics scope is the FULL session feed, not
+  // the search-filtered subset, so the strip stays a stable summary of
+  // what the operator has actually run in this Explorer session even
+  // when they narrow the table with the search box.
+  //
+  // Outcome literal mapping: MIDAS evaluator emits 'accept' / 'escalate'
+  // / 'reject' / 'request_clarification' (see internal/eval/outcome.go).
+  // The brief uses the labels approve / clarify / stop, so the helper
+  // accepts both spellings — defensive against future evaluator
+  // additions and consistent with the disclaimer in the brief about
+  // handling casing defensively. 'stop' is a forward-looking outcome
+  // reserved for governance kill-switches; it counts to zero today.
+  function computeRecordsRuntimeMetrics(rows) {
+    const m = { total: 0, approved: 0, escalated: 0, rejected: 0, clarify: 0, stopped: 0 };
+    if (!Array.isArray(rows)) return m;
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      if (!r) continue;
+      m.total += 1;
+      // The mapper uppercases r.outcome, but the raw envelope outcome is
+      // lowercase. Normalise defensively so this helper is stable
+      // whether it is called with mapped rows or raw D26a items.
+      const o = String(r.outcome || '').toLowerCase();
+      if (o === 'approve' || o === 'accept') {
+        m.approved += 1;
+      } else if (o === 'escalate') {
+        m.escalated += 1;
+      } else if (o === 'reject') {
+        m.rejected += 1;
+      } else if (o === 'clarify' || o === 'request_clarification') {
+        m.clarify += 1;
+      } else if (o === 'stop') {
+        m.stopped += 1;
+      }
+      // Unknown / empty outcomes only count toward the total — this
+      // avoids misclassifying envelopes that have not yet completed
+      // evaluation (state=evaluating with a missing outcome).
+    }
+    return m;
+  }
+
+  // renderRecordsRuntimeMetrics writes the computed counts into the
+  // metric-strip DOM ids. When the loader is in flight (and no
+  // previous successful load exists) or when the previous load
+  // errored, the strip falls back to em-dashes so the operator never
+  // reads a stale or zero-by-accident number. After a successful load
+  // — including a successful load that returned zero items — the
+  // strip shows real integers, including '0'.
+  function renderRecordsRuntimeMetrics() {
+    const targets = [
+      ['records-metric-total',     'total'],
+      ['records-metric-approved',  'approved'],
+      ['records-metric-escalated', 'escalated'],
+      ['records-metric-rejected',  'rejected'],
+      ['records-metric-clarify',   'clarify'],
+      ['records-metric-stopped',   'stopped'],
+    ];
+    // Loading-without-prior-success and error states both surface as
+    // dashes — never the old hardcoded demo values, never stale numbers.
+    if ((recordsLoading && !recordsLoadedOnce) || recordsError) {
+      for (let i = 0; i < targets.length; i++) {
+        const el = document.getElementById(targets[i][0]);
+        if (el) el.textContent = '—';
+      }
+      return;
+    }
+    const m = computeRecordsRuntimeMetrics(recordsRuntimeRows);
+    for (let i = 0; i < targets.length; i++) {
+      const el = document.getElementById(targets[i][0]);
+      if (el) el.textContent = String(m[targets[i][1]]);
+    }
+  }
+
+  // loadExplorerRuntimeRecords fetches the runtime envelope feed from the
+  // Explorer-isolated endpoint added in D26a. It NEVER reads /v1/envelopes
+  // — the Records view is scoped to the in-memory Explorer runtime so the
+  // disjointness property pinned by the backend isolation tests is honoured
+  // end-to-end. Loading / error / empty states are surfaced through the
+  // module-level recordsLoading / recordsError flags consumed by
+  // renderRecordsTable.
+  async function loadExplorerRuntimeRecords() {
+    recordsLoading = true;
+    recordsError   = '';
+    renderRecordsTable();
+    renderRecordsRuntimeMetrics();
+    try {
+      const headers = { 'Accept': 'application/json' };
+      const tok = (typeof getToken === 'function') ? getToken() : null;
+      if (tok) headers['Authorization'] = 'Bearer ' + tok;
+      const res = await fetch('/explorer/envelopes?limit=50', { headers, credentials: 'same-origin' });
+      if (!res.ok) {
+        recordsError = 'Could not load runtime records';
+        recordsRuntimeRows = [];
+        return;
+      }
+      const payload = await res.json();
+      const items = (payload && Array.isArray(payload.items)) ? payload.items : [];
+      recordsRuntimeRows = items
+        .map(mapExplorerEnvelopeToRecordRow)
+        .filter(r => r && r.id);
+      // Preserve selection if the previously selected envelope is still
+      // present; otherwise default to the first (newest) row.
+      if (!recordsRuntimeRows.some(r => r.id === recordsSelectedId)) {
+        recordsSelectedId = recordsRuntimeRows.length > 0 ? recordsRuntimeRows[0].id : '';
+      }
+    } catch (e) {
+      recordsError = 'Could not load runtime records';
+      recordsRuntimeRows = [];
+    } finally {
+      recordsLoading = false;
+      recordsLoadedOnce = true;
+      renderRecordsTable();
+      renderRecordsDetail();
+      // D26d: refresh the metrics strip from the new (or empty) row set.
+      // Always called in finally so the strip recovers on both success
+      // and error paths.
+      renderRecordsRuntimeMetrics();
+      // D26e: eagerly fetch the envelope detail for the auto-selected
+      // row so the rail shows real Identity / Governance / Evaluation /
+      // Integrity / JSON sections without waiting for an explicit row
+      // click. Cache hits are no-ops; new ids fire a single fetch.
+      if (recordsSelectedId) {
+        loadExplorerEnvelopeDetail(recordsSelectedId, function () {
+          renderRecordsDetail();
+        });
+      }
+    }
+  }
 
   function renderRecordsView() {
     renderRecordsTable();
     renderRecordsDetail();
+    renderRecordsRuntimeMetrics();
   }
 
   function renderRecordsTable(filter) {
     const tbody = document.getElementById('records-table-body');
     if (!tbody) return;
-    const q = (filter || '').toLowerCase().trim();
 
-    const rows = RECORDS_DEMO_ROWS.filter(r =>
+    if (typeof filter === 'string') recordsSearchQuery = filter;
+    const q = (recordsSearchQuery || '').toLowerCase().trim();
+
+    if (recordsLoading) {
+      tbody.innerHTML = '<tr><td colspan="8" style="padding:20px;text-align:center;color:var(--slate-500)">Loading runtime records…</td></tr>';
+      return;
+    }
+    if (recordsError) {
+      tbody.innerHTML = '<tr><td colspan="8" style="padding:20px;text-align:center;color:var(--slate-500)">' + escHtml(recordsError) + '</td></tr>';
+      return;
+    }
+    if (recordsLoadedOnce && recordsRuntimeRows.length === 0) {
+      tbody.innerHTML =
+        '<tr><td colspan="8" style="padding:20px;text-align:center;color:var(--slate-500)">' +
+          'No runtime records yet.<br>' +
+          'Run an Explorer evaluation to create an envelope.' +
+        '</td></tr>';
+      return;
+    }
+
+    const rows = recordsRuntimeRows.filter(r =>
       !q ||
-      r.id.toLowerCase().includes(q) ||
-      r.bs.toLowerCase().includes(q) ||
-      r.surface.toLowerCase().includes(q) ||
-      r.agent.toLowerCase().includes(q) ||
-      r.reason.toLowerCase().includes(q) ||
-      r.outcome.toLowerCase().includes(q)
+      (r.id            && r.id.toLowerCase().includes(q)) ||
+      (r.bs            && r.bs.toLowerCase().includes(q)) ||
+      (r.surface       && r.surface.toLowerCase().includes(q)) ||
+      (r.agent         && r.agent.toLowerCase().includes(q)) ||
+      (r.reason        && r.reason.toLowerCase().includes(q)) ||
+      (r.outcome       && r.outcome.toLowerCase().includes(q)) ||
+      (r.requestSource && r.requestSource.toLowerCase().includes(q)) ||
+      (r.state         && r.state.toLowerCase().includes(q))
     );
 
     if (rows.length === 0) {
@@ -11793,15 +13296,18 @@
 
     tbody.innerHTML = rows.map(r => {
       const sel = r.id === recordsSelectedId ? ' selected' : '';
+      const outcomeBadge = r.outcomeClass
+        ? '<span class="records-outcome-badge ' + r.outcomeClass + '">' + escHtml(r.outcome) + '</span>'
+        : '<span class="records-outcome-badge">' + escHtml(r.outcome) + '</span>';
       return (
         '<tr data-record-id="' + escHtml(r.id) + '" class="' + sel + '">' +
-          '<td><span class="records-outcome-badge ' + r.outcomeClass + '">' + escHtml(r.outcome) + '</span></td>' +
+          '<td>' + outcomeBadge + '</td>' +
           '<td class="col-mono">' + escHtml(r.id) + '</td>' +
-          '<td class="col-meta">' + escHtml(r.bs) + '</td>' +
-          '<td class="col-mono-primary">' + escHtml(r.surface) + '</td>' +
-          '<td class="col-mono-primary">' + escHtml(r.agent) + '</td>' +
-          '<td class="col-reason">' + escHtml(r.reason) + '</td>' +
-          '<td class="col-time">' + escHtml(r.time) + '</td>' +
+          '<td class="col-meta">' + escHtml(r.bs || '—') + '</td>' +
+          '<td class="col-mono-primary">' + escHtml(r.surface || '—') + '</td>' +
+          '<td class="col-mono-primary">' + escHtml(r.agent || '—') + '</td>' +
+          '<td class="col-reason">' + escHtml(r.reason || '—') + '</td>' +
+          '<td class="col-time">' + escHtml(r.time || '—') + '</td>' +
           '<td class="col-integrity" title="verified" aria-label="verified">✓</td>' +
         '</tr>'
       );
@@ -11811,6 +13317,14 @@
       tr.addEventListener('click', () => {
         if (!tr.dataset.recordId) return;
         recordsSelectedId = tr.dataset.recordId;
+        // D26e — lazy-fetch the full envelope detail and re-render the
+        // detail rail when the loading state changes (loading → loaded
+        // / error). The first synchronous renderRecordsView() below
+        // takes care of the row-selection ring + the loading-state
+        // copy in the rail.
+        loadExplorerEnvelopeDetail(recordsSelectedId, function () {
+          renderRecordsDetail();
+        });
         renderRecordsView();
       });
     });
@@ -11821,29 +13335,49 @@
     const bodyEl = document.getElementById('records-detail-body');
     if (!idEl || !bodyEl) return;
 
-    const row = RECORDS_DEMO_ROWS.find(r => r.id === recordsSelectedId) || RECORDS_DEMO_ROWS[0];
+    const row = recordsRuntimeRows.find(r => r.id === recordsSelectedId)
+      || recordsRuntimeRows[0]
+      || null;
+
+    if (!row) {
+      idEl.textContent = '—';
+      bodyEl.innerHTML =
+        '<div class="placeholder-text" style="text-align:left;font-size:12px">' +
+          'Select a runtime record to inspect its envelope.' +
+        '</div>';
+      return;
+    }
+
     idEl.textContent = row.id;
 
-    const detail = RECORDS_FULL_DETAIL[row.id] || null;
-
-    // Detail grid — always rendered from the row metadata
+    // Detail grid — derived from the runtime summary
     const grid =
       '<div class="records-detail-grid">' +
         '<div>' +
           '<div class="records-detail-cell-key">Outcome</div>' +
-          '<span class="records-outcome-badge ' + row.outcomeClass + '">' + escHtml(row.outcome) + '</span>' +
+          (row.outcomeClass
+            ? '<span class="records-outcome-badge ' + row.outcomeClass + '">' + escHtml(row.outcome) + '</span>'
+            : '<span class="records-outcome-badge">' + escHtml(row.outcome) + '</span>') +
+        '</div>' +
+        '<div>' +
+          '<div class="records-detail-cell-key">State</div>' +
+          '<div class="records-detail-cell-text">' + escHtml(row.state || '—') + '</div>' +
         '</div>' +
         '<div>' +
           '<div class="records-detail-cell-key">Reason</div>' +
-          '<div class="records-detail-cell-val">' + escHtml(row.reason) + '</div>' +
+          '<div class="records-detail-cell-val">' + escHtml(row.reason || '—') + '</div>' +
         '</div>' +
         '<div>' +
           '<div class="records-detail-cell-key">Business Service</div>' +
-          '<div class="records-detail-cell-text">' + escHtml(row.bs) + '</div>' +
+          '<div class="records-detail-cell-text">' + escHtml(row.bs || '—') + '</div>' +
+        '</div>' +
+        '<div>' +
+          '<div class="records-detail-cell-key">Request Source</div>' +
+          '<div class="records-detail-cell-text">' + escHtml(row.requestSource || '—') + '</div>' +
         '</div>' +
         '<div>' +
           '<div class="records-detail-cell-key">Evaluated</div>' +
-          '<div class="records-detail-cell-text">' + escHtml(row.time) + '</div>' +
+          '<div class="records-detail-cell-text">' + escHtml(row.time || '—') + '</div>' +
         '</div>' +
         '<div>' +
           '<div class="records-detail-cell-key">Integrity</div>' +
@@ -11851,65 +13385,22 @@
         '</div>' +
       '</div>';
 
-    // Authority Path — only seeded for the ACCEPT merchant record
-    let authority = '';
-    if (detail) {
-      const nodes = detail.authority.map(n =>
-        '<div class="records-authority-node ' + n.cls + '">' +
-          '<span class="records-authority-node-dot" aria-hidden="true">' + escHtml(n.glyph || '') + '</span>' +
-          '<span class="records-authority-node-text">' +
-            '<span class="records-authority-node-label">' + escHtml(n.label) + '</span>' +
-            '<span class="records-authority-node-id">' + escHtml(n.id) + '</span>' +
-          '</span>' +
-        '</div>'
-      ).join('');
-      authority =
-        '<div>' +
-          '<p class="records-detail-section-label">Authority Path</p>' +
-          '<div class="records-authority-path">' + nodes + '</div>' +
-        '</div>';
-    } else {
-      authority =
-        '<div>' +
-          '<p class="records-detail-section-label">Authority Path</p>' +
-          '<div class="placeholder-text" style="text-align:left;font-size:11px">Authority chain detail not seeded for this demo record.</div>' +
-        '</div>';
-    }
-
-    // Evidence Summary — only seeded for the ACCEPT merchant record
-    let evidence = '';
-    if (detail) {
-      const erows = detail.evidence.map(e =>
-        '<div class="records-evidence-row">' +
-          '<span class="records-evidence-key">' + escHtml(e.key) + '</span>' +
-          '<span>' +
-            (e.val  ? '<span class="records-evidence-val">' + escHtml(e.val) + '</span>'   : '') +
-            (e.pass ? '<span class="records-evidence-pass">' + escHtml(e.pass) + '</span>' : '') +
-          '</span>' +
-        '</div>'
-      ).join('');
-      evidence =
-        '<div class="records-evidence">' +
-          '<p class="records-detail-section-label">Evidence Summary</p>' +
-          erows +
-          '<div class="records-evidence-note"><span aria-hidden="true">ⓘ</span> Decision recorded in Explorer sandbox</div>' +
-        '</div>';
-    }
-
-    // Coverage limitation — verbatim per brief
+    // Coverage limitation — preserved verbatim from prior tranche
     const coverageLimit =
       '<div class="records-coverage-limit">' +
         '<div class="records-coverage-limit-label">Coverage Limitation</div>' +
         '<div class="records-coverage-limit-text">"Read-model scope. Process-scoped, same-evaluation correlation only."</div>' +
       '</div>';
 
-    // Resources — Copy envelope ID works locally; the other two are disabled
-    // with explanatory tooltips. No fake destructive behaviour.
+    // Resources — Copy envelope ID works locally. The View envelope JSON
+    // button is now enabled and scrolls to the raw JSON block in the
+    // envelope detail section below. The audit-events button stays
+    // disabled until the list endpoint exists.
     const resources =
       '<div>' +
         '<p class="records-resources-title">Resources</p>' +
-        '<button type="button" class="records-resource-action" id="records-view-envelope-btn" disabled' +
-          ' title="Demo records — submit a real evaluation in Evaluate to inspect a live envelope">' +
+        '<button type="button" class="records-resource-action" id="records-view-envelope-btn"' +
+          ' title="Scroll to the raw envelope JSON below">' +
           '<span>View envelope JSON</span>' +
           '<span class="records-resource-action-glyph" aria-hidden="true">¤</span>' +
         '</button>' +
@@ -11924,12 +13415,84 @@
         '</button>' +
       '</div>';
 
-    bodyEl.innerHTML = grid + authority + evidence + coverageLimit + resources;
+    // D26e — lazy-loaded full envelope detail. Loading / error / loaded
+    // branches are mutually exclusive and never reuse stale detail from
+    // the previously-selected envelope.
+    let envelopeBlock;
+    if (explorerEnvelopeDetailLoadingId === row.id && !explorerEnvelopeDetailFor(row.id)) {
+      envelopeBlock =
+        '<div class="records-envelope-detail" id="records-envelope-detail">' +
+          '<p class="records-detail-section-label">Envelope detail</p>' +
+          '<div class="placeholder-text" style="text-align:left;font-size:12px">Loading envelope detail…</div>' +
+        '</div>';
+    } else if (explorerEnvelopeDetailError && !explorerEnvelopeDetailFor(row.id)) {
+      envelopeBlock =
+        '<div class="records-envelope-detail" id="records-envelope-detail">' +
+          '<p class="records-detail-section-label">Envelope detail</p>' +
+          '<div class="placeholder-text" style="text-align:left;font-size:12px">' +
+            escHtml(explorerEnvelopeDetailError) +
+          '</div>' +
+        '</div>';
+    } else {
+      const env = explorerEnvelopeDetailFor(row.id);
+      if (!env) {
+        envelopeBlock =
+          '<div class="records-envelope-detail" id="records-envelope-detail">' +
+            '<p class="records-detail-section-label">Envelope detail</p>' +
+            '<div class="placeholder-text" style="text-align:left;font-size:12px">' +
+              'Envelope detail not yet loaded for this record.' +
+            '</div>' +
+          '</div>';
+      } else {
+        envelopeBlock =
+          '<div class="records-envelope-detail" id="records-envelope-detail">' +
+            renderExplorerEnvelopeDetailSections(env) +
+            '<div class="records-envelope-detail-section">' +
+              '<p class="records-detail-section-label">Raw envelope JSON</p>' +
+              '<pre class="records-envelope-detail-json" id="records-envelope-detail-json"></pre>' +
+            '</div>' +
+          '</div>';
+      }
+    }
 
-    // Wire the only enabled action — Copy envelope ID
+    bodyEl.innerHTML = grid + coverageLimit + resources + envelopeBlock;
+
+    // D26e — raw JSON is injected via textContent only. Never innerHTML;
+    // even if a future envelope field carries a string with HTML metas
+    // it cannot escape the <pre> block.
+    const env = explorerEnvelopeDetailFor(row.id);
+    if (env) {
+      const pre = document.getElementById('records-envelope-detail-json');
+      if (pre) {
+        try {
+          pre.textContent = JSON.stringify(env, null, 2);
+        } catch {
+          pre.textContent = '';
+        }
+      }
+    }
+
+    // Wire enabled actions — Copy envelope ID + View envelope JSON.
     const copyBtn = document.getElementById('records-copy-id-btn');
     if (copyBtn) {
       copyBtn.addEventListener('click', () => copyToClipboard(row.id, copyBtn));
+    }
+    const viewBtn = document.getElementById('records-view-envelope-btn');
+    if (viewBtn) {
+      viewBtn.addEventListener('click', () => {
+        // Direct scrollTop assignment inside the records-detail rail.
+        // The governance-map view forbids scrollIntoView in the graph
+        // render path; we follow the same convention site-wide so the
+        // deterministic-camera-math regression pin keeps catching real
+        // regressions rather than this isolated affordance.
+        const target = document.getElementById('records-envelope-detail-json')
+          || document.getElementById('records-envelope-detail');
+        const rail = document.getElementById('records-detail-body');
+        if (target && rail) {
+          const top = (typeof target.offsetTop === 'number') ? target.offsetTop : 0;
+          rail.scrollTop = Math.max(0, top - 8);
+        }
+      });
     }
   }
 
@@ -12937,6 +14500,19 @@
         // Refresh the governance coverage panel — a new evaluation may have
         // emitted detected/gap audit events that change what we display.
         refreshCoverage();
+        // D26b: refresh the Records runtime feed so the newly-created
+        // envelope appears immediately when the operator next opens
+        // the Records view (or right now if it is already active).
+        if (typeof loadExplorerRuntimeRecords === 'function') {
+          loadExplorerRuntimeRecords();
+        }
+        // D26c: refresh the Evidence Tray Activity feed for the same
+        // reason — the new envelope should appear in the tray's
+        // Activity list when the operator returns to the Governance
+        // Map view (or immediately if Activity is already active).
+        if (typeof loadGmapEvidenceActivity === 'function') {
+          loadGmapEvidenceActivity();
+        }
         // Cluster 5: update Settings "last recorded decision" indicator.
         if (typeof markSettingsLastDecision === 'function') {
           markSettingsLastDecision();
@@ -13560,9 +15136,13 @@
   // point when the operator clicks the Capabilities sidebar item.
   setTimeout(loadCapabilitiesList, 0);
 
-  // Initialise the Records view content (Cluster 4) — demo rows + selected
-  // record detail rail. No backend calls; all data is local.
+  // Initialise the Records view content. D26b: the view consumes the
+  // D26a runtime feed (GET /explorer/envelopes). Initial render shows a
+  // loading state, then transitions to populated/empty/error based on
+  // the fetch result. The view-open hook in showView re-fetches every
+  // time the operator navigates back to Records.
   setTimeout(renderRecordsView, 0);
+  setTimeout(loadExplorerRuntimeRecords, 0);
 
   // Initialise the Settings view content (Cluster 5) — demo-data counts.
   // Auth/env/coverage values arrive asynchronously via setSettingsAuthFromConfig

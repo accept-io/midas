@@ -34,7 +34,7 @@ import (
 func TestProductionWiring_ApproveSurface_EndpointIsWired(t *testing.T) {
 	ctx := context.Background()
 
-	repos, repoStore, outboxRepo, cleanup, _, err := buildRepositories(ctx, config.StoreConfig{Backend: "memory"})
+	repos, repoStore, outboxRepo, cleanup, _, err := buildRepositories(ctx, config.StoreConfig{Backend: "memory"}, nil)
 	if err != nil {
 		t.Fatalf("buildRepositories: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestProductionWiring_ApproveSurface_EndpointIsWired(t *testing.T) {
 func TestProductionWiring_StructuralApply_ReposAreWired(t *testing.T) {
 	ctx := context.Background()
 
-	repos, _, _, cleanup, _, err := buildRepositories(ctx, config.StoreConfig{Backend: "memory"})
+	repos, _, _, cleanup, _, err := buildRepositories(ctx, config.StoreConfig{Backend: "memory"}, nil)
 	if err != nil {
 		t.Fatalf("buildRepositories: %v", err)
 	}

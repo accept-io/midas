@@ -270,17 +270,20 @@ func (o *Orchestrator) Evaluate(ctx context.Context, req eval.DecisionRequest, r
 	}
 
 	if err != nil {
-		failureKind := classifyFailure(err)
+		cat, cls := ClassifyFailure(err)
+		failureKind := string(cat)
 		slog.Error("evaluation_failed",
 			"request_source", req.RequestSource,
 			"request_id", req.RequestID,
 			"surface_id", req.SurfaceID,
 			"agent_id", req.AgentID,
 			"failure_kind", failureKind,
+			"correctness_class", string(cls),
 			"error", err,
 			"duration_ms", duration.Milliseconds(),
 		)
-		o.metrics.IncrementEvaluationFailure(failureKind)
+		o.metrics.IncrementEvaluationFailure(failureKind, string(cls))
+		o.metrics.RecordEvaluationDuration("none", failureKind, duration)
 		return result, err
 	}
 
@@ -293,7 +296,7 @@ func (o *Orchestrator) Evaluate(ctx context.Context, req eval.DecisionRequest, r
 		"explanation", result.Explanation,
 		"duration_ms", duration.Milliseconds(),
 	)
-	o.metrics.RecordEvaluationDuration(string(result.Outcome), duration)
+	o.metrics.RecordEvaluationDuration(string(result.Outcome), "none", duration)
 	o.metrics.IncrementEvaluationOutcome(string(result.Outcome), string(result.ReasonCode))
 
 	return result, nil

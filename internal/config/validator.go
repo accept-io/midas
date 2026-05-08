@@ -81,6 +81,41 @@ func ValidateStructural(cfg Config) error {
 		})
 	}
 
+	// Postgres pool sizing. Validated regardless of backend so a memory-mode
+	// config that later flips to postgres does not surprise the operator.
+	// Zero durations mean "no limit" (database/sql semantics); negative values
+	// are rejected.
+	if cfg.Store.MaxOpenConns <= 0 {
+		errs = append(errs, ValidationError{
+			"store.max_open_conns",
+			fmt.Sprintf("must be > 0, got %d", cfg.Store.MaxOpenConns),
+		})
+	}
+	if cfg.Store.MaxIdleConns < 0 {
+		errs = append(errs, ValidationError{
+			"store.max_idle_conns",
+			fmt.Sprintf("must be >= 0, got %d", cfg.Store.MaxIdleConns),
+		})
+	}
+	if cfg.Store.MaxOpenConns > 0 && cfg.Store.MaxIdleConns > cfg.Store.MaxOpenConns {
+		errs = append(errs, ValidationError{
+			"store.max_idle_conns",
+			fmt.Sprintf("must be <= store.max_open_conns (%d), got %d", cfg.Store.MaxOpenConns, cfg.Store.MaxIdleConns),
+		})
+	}
+	if cfg.Store.ConnMaxLifetime.D() < 0 {
+		errs = append(errs, ValidationError{
+			"store.conn_max_lifetime",
+			fmt.Sprintf("must be >= 0, got %s", cfg.Store.ConnMaxLifetime.D()),
+		})
+	}
+	if cfg.Store.ConnMaxIdleTime.D() < 0 {
+		errs = append(errs, ValidationError{
+			"store.conn_max_idle_time",
+			fmt.Sprintf("must be >= 0, got %s", cfg.Store.ConnMaxIdleTime.D()),
+		})
+	}
+
 	switch strings.ToLower(cfg.Observability.LogLevel) {
 	case "debug", "info", "warn", "error":
 	default:
@@ -99,10 +134,39 @@ func ValidateStructural(cfg Config) error {
 		})
 	}
 
+	// Metrics path is only meaningful when metrics are enabled. When
+	// disabled, an empty or malformed path is ignored — no route will be
+	// registered.
+	if cfg.Observability.MetricsEnabled {
+		path := cfg.Observability.MetricsPath
+		if path == "" {
+			errs = append(errs, ValidationError{
+				"observability.metrics_path",
+				`must not be empty when observability.metrics_enabled is true`,
+			})
+		} else if !strings.HasPrefix(path, "/") {
+			errs = append(errs, ValidationError{
+				"observability.metrics_path",
+				fmt.Sprintf(`must start with "/", got %q`, path),
+			})
+		}
+	}
+
 	if cfg.Server.Port <= 0 || cfg.Server.Port > 65535 {
 		errs = append(errs, ValidationError{
 			"server.port",
 			fmt.Sprintf("must be 1–65535, got %d", cfg.Server.Port),
+		})
+	}
+
+	// Per-handler timeout must be strictly positive. Unlike the database/sql
+	// pool durations (where zero means "no limit"), the safety middleware
+	// treats zero as a misconfiguration: the bound exists specifically to
+	// stop runaway handlers, so disabling it would defeat the feature.
+	if cfg.Server.HandlerTimeout.D() <= 0 {
+		errs = append(errs, ValidationError{
+			"server.handler_timeout",
+			fmt.Sprintf("must be > 0, got %s", cfg.Server.HandlerTimeout.D()),
 		})
 	}
 

@@ -61,6 +61,50 @@ func TestDefaultConfig_Values(t *testing.T) {
 	}
 }
 
+// TestDefaultConfig_HandlerTimeoutDefault verifies the per-handler safety
+// timeout default (D27d). The default is shorter than WriteTimeout so the
+// safety bound fires before the coarse server-level deadline.
+func TestDefaultConfig_HandlerTimeoutDefault(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.Server.HandlerTimeout.D() != 30*time.Second {
+		t.Errorf("server.handler_timeout: want 30s, got %v", cfg.Server.HandlerTimeout.D())
+	}
+}
+
+// TestDefaultConfig_MetricsDefaults verifies that runtime metrics are
+// enabled by default and exposed at /metrics. These defaults match the
+// production-ready posture from D27c — operators who want metrics off must
+// opt out explicitly.
+func TestDefaultConfig_MetricsDefaults(t *testing.T) {
+	cfg := DefaultConfig()
+	if !cfg.Observability.MetricsEnabled {
+		t.Error("metrics_enabled: want true (default), got false")
+	}
+	if cfg.Observability.MetricsPath != "/metrics" {
+		t.Errorf("metrics_path: want \"/metrics\", got %q", cfg.Observability.MetricsPath)
+	}
+}
+
+// TestDefaultConfig_StorePoolDefaults verifies the Postgres connection pool
+// defaults. These values are conservative improvements on database/sql defaults
+// (which are: unlimited open conns, 2 idle, no lifetime cap).
+func TestDefaultConfig_StorePoolDefaults(t *testing.T) {
+	cfg := DefaultConfig()
+
+	if cfg.Store.MaxOpenConns != 25 {
+		t.Errorf("store.max_open_conns: want 25, got %d", cfg.Store.MaxOpenConns)
+	}
+	if cfg.Store.MaxIdleConns != 5 {
+		t.Errorf("store.max_idle_conns: want 5, got %d", cfg.Store.MaxIdleConns)
+	}
+	if cfg.Store.ConnMaxLifetime.D() != 30*time.Minute {
+		t.Errorf("store.conn_max_lifetime: want 30m, got %v", cfg.Store.ConnMaxLifetime.D())
+	}
+	if cfg.Store.ConnMaxIdleTime.D() != 5*time.Minute {
+		t.Errorf("store.conn_max_idle_time: want 5m, got %v", cfg.Store.ConnMaxIdleTime.D())
+	}
+}
+
 // TestDefaultConfig_StructuralModeIsPermissive verifies that the default
 // structural mode is permissive, preserving out-of-box usability.
 func TestDefaultConfig_StructuralModeIsPermissive(t *testing.T) {

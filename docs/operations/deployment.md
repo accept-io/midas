@@ -513,3 +513,123 @@ When a surface is deprecated with a successor:
 - Profiles reference surfaces by `surface_id`. Grants reference both agents and profiles. If a referenced resource does not exist in the bundle or in the store, the entry is marked `invalid`.
 - Version resolution at evaluation time selects the version with `status = active` and `effective_from <= evaluation_timestamp`. If no such version exists, the evaluation returns `SURFACE_INACTIVE` or `PROFILE_NOT_FOUND`.
 - `GET /v1/surfaces/{id}` returns the *latest* version (highest version number). The runtime uses the *active* version. These differ during a governance review cycle.
+
+---
+
+## Postgres connection pool
+
+The Postgres backend uses an explicitly bounded `database/sql` pool. Operators should size `max_open_conns` across all MIDAS replicas so the total does not exceed the Postgres connection budget.
+
+| Config field | Default | Env var |
+|---|---|---|
+| `store.max_open_conns` | `25` | `MIDAS_DATABASE_MAX_OPEN_CONNS` |
+| `store.max_idle_conns` | `5` | `MIDAS_DATABASE_MAX_IDLE_CONNS` |
+| `store.conn_max_lifetime` | `30m` | `MIDAS_DATABASE_CONN_MAX_LIFETIME` |
+| `store.conn_max_idle_time` | `5m` | `MIDAS_DATABASE_CONN_MAX_IDLE_TIME` |
+
+Validation rules:
+
+- `max_open_conns` must be `> 0`.
+- `max_idle_conns` must be in `[0, max_open_conns]`.
+- `conn_max_lifetime` and `conn_max_idle_time` must be `>= 0`. A zero duration means "no limit", matching `database/sql` semantics.
+
+Tuning notes:
+
+- The bound applies per replica. Total Postgres connections roughly equal `replicas × max_open_conns`. Keep this within the Postgres `max_connections` budget after subtracting other clients.
+- `conn_max_lifetime` helps with load-balancer / Postgres failover hygiene by retiring long-lived connections so the pool re-resolves the LB target.
+- `conn_max_idle_time` prevents stale-idle buildup when traffic drops.
+- Settings are ignored when `store.backend` is `memory`.
+
+Effective values are emitted at startup as the structured log event `midas_database_pool_configured`.
+
+---
+
+## Runtime metrics (`/metrics`)
+
+MIDAS exposes Prometheus-format runtime metrics. Scrape them with a stock Prometheus job:
+
+```yaml
+scrape_configs:
+  - job_name: midas
+    static_configs:
+      - targets: ['midas:8080']
+    metrics_path: /metrics
+```
+
+| Config field | Default | Env var |
+|---|---|---|
+| `observability.metrics_enabled` | `true` | `MIDAS_METRICS_ENABLED` |
+| `observability.metrics_path` | `/metrics` | `MIDAS_METRICS_PATH` |
+
+Validation: when `metrics_enabled=true`, `metrics_path` must be non-empty and start with `/`. When disabled, no route is registered and the path field is ignored.
+
+### Metric inventory
+
+| Metric | Type | Labels |
+|---|---|---|
+| `midas_evaluation_duration_seconds` | histogram | `outcome`, `failure_kind` |
+| `midas_evaluation_outcomes_total` | counter | `outcome` |
+| `midas_evaluation_failures_total` | counter | `failure_kind`, `correctness_class` |
+| `midas_store_transaction_duration_seconds` | histogram | `operation`, `result` |
+| `midas_store_transaction_commits_total` | counter | `operation` |
+| `midas_store_transaction_rollbacks_total` | counter | `operation` |
+| `midas_store_transaction_errors_total` | counter | `operation`, `stage` |
+
+On `midas_evaluation_duration_seconds`: successful evaluations carry the real `outcome` and `failure_kind="none"`; failed evaluations carry `outcome="none"` and the typed `failure_kind`.
+
+### Cardinality policy
+
+Labels are restricted to bounded, code-controlled enumerations: evaluation outcomes (`accept`/`escalate`/`reject`/`request_clarification`), typed failure categories, the F1 correctness class, transaction operation names, transaction result/stage strings.
+
+The `correctness_class` label on `midas_evaluation_failures_total` is bounded to exactly five values: `governance_integrity`, `persistence`, `input`, `resource`, `consistency`. The `(failure_kind, correctness_class)` pairing is deterministic per the F1 chunk-1 mapping, so the realised cardinality is bounded by the number of `failure_kind` values (currently 8). Adding `correctness_class` is a backward-incompatible series change for dashboards that aggregated `midas_evaluation_failures_total` without grouping; consumers must update their queries before promoting past F1.
+
+Request IDs, surface IDs, agent IDs, tenants, payloads, DSNs, and tokens are **never** used as labels.
+
+### Authentication
+
+`/metrics` is registered **outside** the `/v1` authentication chain. Prometheus scrapers conventionally connect without bearer tokens, and the metrics surface emits no high-cardinality identifiers, secrets, or request bodies.
+
+> **Operators must restrict `/metrics` at the ingress or network layer.** Disable the endpoint entirely with `MIDAS_METRICS_ENABLED=false` if no scraper is in use.
+
+The endpoint accepts `GET` only; all other methods return `405`.
+
+Effective settings are emitted at startup as the structured log event `midas_metrics_configured` with fields `enabled` and `path`.
+
+---
+
+## Runtime safety: panic recovery and per-handler timeout
+
+MIDAS wraps every HTTP route in a small safety layer:
+
+| Behaviour | Effect | Logged as |
+|---|---|---|
+| Panic recovery | Translate any panic in a handler into HTTP 500 with `{"error":"internal server error"}`. The connection stays open; subsequent requests continue to be served. | `midas_http_panic_recovered` (ERROR) — fields: `method`, `path`, `panic`, `stack`, `remote_addr`, `request_id` |
+| Per-handler timeout | After the configured duration, the request returns HTTP 503 with `{"error":"request timed out"}`. The handler's `r.Context()` is cancelled so downstream database, orchestrator, and audit calls can abort early. | `midas_http_timeout` (WARN) — fields: `method`, `path`, `timeout_ms`, `remote_addr`, `request_id` |
+
+Configuration:
+
+| Config field | Default | Env var |
+|---|---|---|
+| `server.handler_timeout` | `30s` | `MIDAS_HTTP_HANDLER_TIMEOUT` |
+
+Validation: `handler_timeout` must be `> 0`. Disabling it would defeat the safety bound, so a zero or negative value is rejected at startup.
+
+### Relationship to other timeouts
+
+| Setting | Default | Scope |
+|---|---|---|
+| `server.read_header_timeout` | 10s | Per-request, applied by the Go `net/http` server before headers complete |
+| `server.read_timeout` | 30s | Per-request, applied by the Go `net/http` server until the entire request body has been read |
+| `server.handler_timeout` | 30s | Per-request, applied by MIDAS after headers parse, until the handler produces a response |
+| `server.write_timeout` | 60s | Coarse outer bound; the Go `net/http` server closes the connection if the response is not fully written by then |
+
+`handler_timeout` is intentionally shorter than `write_timeout`: its job is to fail fast with a structured JSON 503, before `write_timeout` would close the connection without a response body.
+
+### Carve-outs
+
+- The `/metrics` endpoint is **exempt** from the per-handler timeout. Prometheus scrapers manage their own scrape-timeout, and `promhttp` may stream / flush data in ways that the timeout's response buffering would interfere with. Panic recovery still applies to `/metrics`.
+- Health and readiness routes (`/healthz`, `/readyz`) are subject to the per-handler timeout but their internal logic completes well within the bound under normal conditions; `/readyz` already uses an internal 2-second deadline for the database ping.
+
+### Operational note
+
+A `midas_http_panic_recovered` event always indicates a bug in MIDAS — production deployments should page operators on it. A small but non-zero rate of `midas_http_timeout` events is operationally useful as a leading indicator of database saturation or external-dependency latency; investigate before the rate climbs.

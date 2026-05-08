@@ -78,7 +78,7 @@ const (
 // rather than the shared cleanupOutboxTestData — those tests
 // deliberately preserve sibling rows so parallel runs don't collide,
 // and therefore leave these shared parents in place.
-func seedSurfaceParents(t *testing.T, repos *store.Repositories) {
+func seedSurfaceParents(t testing.TB, repos *store.Repositories) {
 	t.Helper()
 	ctx := context.Background()
 	now := time.Now().UTC().Add(-time.Hour)

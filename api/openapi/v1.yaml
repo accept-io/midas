@@ -87,7 +87,7 @@ components:
 
     EvaluateResponse:
       type: object
-      required: [outcome, reason]
+      required: [outcome, reason, audit_status]
       properties:
         outcome:
           type: string
@@ -113,6 +113,16 @@ components:
         simulated:
           type: boolean
           description: True when the result was produced by the non-persistent simulate path.
+        audit_status:
+          type: string
+          enum: [recorded]
+          description: >
+            Mandatory audit-record marker on successful /v1/evaluate responses
+            (D27i-c chunk 3). Constrained to the single value "recorded" in F1 —
+            the governed evaluate path always persists a tamper-evident audit
+            envelope. Failure responses do not carry this field. The Explorer
+            success path emits "explorer_recorded" but is not part of the v1
+            public contract; OpenAPI coverage of /explorer is a future tranche.
 
     ReviewRequest:
       type: object

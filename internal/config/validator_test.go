@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // ---------------------------------------------------------------------------
@@ -455,6 +456,152 @@ func TestValidationErrors_Error(t *testing.T) {
 	msg := ve.Error()
 	if msg == "" {
 		t.Error("want non-empty error message")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Handler timeout validation (D27d)
+// ---------------------------------------------------------------------------
+
+func TestValidateStructural_HandlerTimeout_DefaultPasses(t *testing.T) {
+	if err := ValidateStructural(DefaultConfig()); err != nil {
+		t.Errorf("default handler_timeout failed structural validation: %v", err)
+	}
+}
+
+func TestValidateStructural_HandlerTimeout_ZeroFails(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Server.HandlerTimeout = Duration(0)
+	err := ValidateStructural(cfg)
+	if err == nil || !strings.Contains(err.Error(), "server.handler_timeout") {
+		t.Errorf("want error mentioning server.handler_timeout, got %v", err)
+	}
+}
+
+func TestValidateStructural_HandlerTimeout_NegativeFails(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Server.HandlerTimeout = Duration(-1 * time.Second)
+	err := ValidateStructural(cfg)
+	if err == nil || !strings.Contains(err.Error(), "server.handler_timeout") {
+		t.Errorf("want error mentioning server.handler_timeout, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Metrics path validation
+// ---------------------------------------------------------------------------
+
+func TestValidateStructural_Metrics_DefaultsPass(t *testing.T) {
+	if err := ValidateStructural(DefaultConfig()); err != nil {
+		t.Errorf("default metrics config failed structural validation: %v", err)
+	}
+}
+
+func TestValidateStructural_Metrics_EmptyPathFailsWhenEnabled(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Observability.MetricsPath = ""
+	err := ValidateStructural(cfg)
+	if err == nil || !strings.Contains(err.Error(), "observability.metrics_path") {
+		t.Errorf("want error mentioning observability.metrics_path, got %v", err)
+	}
+}
+
+func TestValidateStructural_Metrics_PathWithoutLeadingSlashFails(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Observability.MetricsPath = "metrics"
+	err := ValidateStructural(cfg)
+	if err == nil || !strings.Contains(err.Error(), "observability.metrics_path") {
+		t.Errorf("want error mentioning observability.metrics_path, got %v", err)
+	}
+}
+
+func TestValidateStructural_Metrics_DisabledIgnoresPath(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Observability.MetricsEnabled = false
+	cfg.Observability.MetricsPath = "" // garbage path is irrelevant when disabled
+	if err := ValidateStructural(cfg); err != nil {
+		t.Errorf("metrics disabled: empty path should be tolerated, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Postgres pool fields
+// ---------------------------------------------------------------------------
+
+func TestValidateStructural_StorePool_DefaultsPass(t *testing.T) {
+	if err := ValidateStructural(DefaultConfig()); err != nil {
+		t.Errorf("default pool config failed structural validation: %v", err)
+	}
+}
+
+func TestValidateStructural_StorePool_MaxOpenConnsZeroFails(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Store.MaxOpenConns = 0
+	err := ValidateStructural(cfg)
+	if err == nil || !strings.Contains(err.Error(), "store.max_open_conns") {
+		t.Errorf("want error mentioning store.max_open_conns, got %v", err)
+	}
+}
+
+func TestValidateStructural_StorePool_MaxOpenConnsNegativeFails(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Store.MaxOpenConns = -1
+	if err := ValidateStructural(cfg); err == nil {
+		t.Error("want error for negative max_open_conns, got nil")
+	}
+}
+
+func TestValidateStructural_StorePool_MaxIdleConnsNegativeFails(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Store.MaxIdleConns = -1
+	err := ValidateStructural(cfg)
+	if err == nil || !strings.Contains(err.Error(), "store.max_idle_conns") {
+		t.Errorf("want error mentioning store.max_idle_conns, got %v", err)
+	}
+}
+
+func TestValidateStructural_StorePool_MaxIdleGreaterThanMaxOpenFails(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Store.MaxOpenConns = 10
+	cfg.Store.MaxIdleConns = 20
+	err := ValidateStructural(cfg)
+	if err == nil || !strings.Contains(err.Error(), "store.max_idle_conns") {
+		t.Errorf("want error mentioning store.max_idle_conns, got %v", err)
+	}
+}
+
+func TestValidateStructural_StorePool_MaxIdleZeroAllowed(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Store.MaxIdleConns = 0
+	if err := ValidateStructural(cfg); err != nil {
+		t.Errorf("max_idle_conns=0 should be allowed, got %v", err)
+	}
+}
+
+func TestValidateStructural_StorePool_NegativeLifetimeFails(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Store.ConnMaxLifetime = Duration(-1 * time.Second)
+	err := ValidateStructural(cfg)
+	if err == nil || !strings.Contains(err.Error(), "store.conn_max_lifetime") {
+		t.Errorf("want error mentioning store.conn_max_lifetime, got %v", err)
+	}
+}
+
+func TestValidateStructural_StorePool_NegativeIdleTimeFails(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Store.ConnMaxIdleTime = Duration(-1 * time.Second)
+	err := ValidateStructural(cfg)
+	if err == nil || !strings.Contains(err.Error(), "store.conn_max_idle_time") {
+		t.Errorf("want error mentioning store.conn_max_idle_time, got %v", err)
+	}
+}
+
+func TestValidateStructural_StorePool_ZeroDurationsAllowed(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Store.ConnMaxLifetime = Duration(0)
+	cfg.Store.ConnMaxIdleTime = Duration(0)
+	if err := ValidateStructural(cfg); err != nil {
+		t.Errorf("zero durations (no-limit) should be allowed, got %v", err)
 	}
 }
 

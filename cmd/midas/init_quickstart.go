@@ -160,7 +160,7 @@ func runQuickstartWithConfig(ctx context.Context, cfg config.Config, actor strin
 		return errors.New(memoryRejectionMessage)
 	}
 
-	repos, repoStore, _, cleanup, _, err := buildRepositories(ctx, cfg.Store)
+	repos, repoStore, _, cleanup, _, err := buildRepositories(ctx, cfg.Store, nil)
 	if err != nil {
 		return fmt.Errorf("midas init quickstart: build repositories: %w", err)
 	}

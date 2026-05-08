@@ -1,14 +1,17 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/accept-io/midas/internal/config"
+	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/eval"
 )
 
@@ -434,6 +437,3110 @@ func TestExplorerGetEnvelope_Disabled_Returns404(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("want 404 when explorer disabled, got %d", rec.Code)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// GET /explorer/envelopes — list endpoint (D26a)
+// ---------------------------------------------------------------------------
+
+// TestExplorerListEnvelopes_Disabled_Returns404 confirms that when Explorer is
+// not enabled, the /explorer/envelopes route is not registered.
+func TestExplorerListEnvelopes_Disabled_Returns404(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil)
+
+	rec := performRequest(t, srv, http.MethodGet, "/explorer/envelopes", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("want 404 when explorer disabled, got %d", rec.Code)
+	}
+}
+
+// TestExplorerListEnvelopes_EmptyRuntime_Returns200WithEmptyItems verifies
+// that with a fresh Explorer runtime that has had no evaluations performed,
+// the endpoint returns 200 with items: [], count: 0, and the default limit.
+//
+// Demo seeding is a side-effect of WithExplorerEnabled; the seed populates
+// the structural domain but does not write envelopes, so the envelope list
+// is genuinely empty until POST /explorer is invoked.
+func TestExplorerListEnvelopes_EmptyRuntime_Returns200WithEmptyItems(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithAuthMode(config.AuthModeOpen).
+		WithExplorerEnabled(true)
+
+	rec := performRequest(t, srv, http.MethodGet, "/explorer/envelopes", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	resp := decodeJSON[explorerEnvelopeListResponse](t, rec)
+	if resp.Items == nil {
+		t.Errorf("items must be a non-nil empty array, got nil")
+	}
+	if len(resp.Items) != 0 {
+		t.Errorf("want 0 items on fresh Explorer runtime, got %d: %+v", len(resp.Items), resp.Items)
+	}
+	if resp.Count != 0 {
+		t.Errorf("count: want 0, got %d", resp.Count)
+	}
+	if resp.Limit != explorerEnvelopeListDefaultLimit {
+		t.Errorf("limit: want default %d, got %d", explorerEnvelopeListDefaultLimit, resp.Limit)
+	}
+}
+
+// TestExplorerListEnvelopes_AfterEvaluation_ReturnsItem performs a real
+// Explorer evaluation via POST /explorer (which writes an envelope to the
+// isolated in-memory runtime) and verifies that GET /explorer/envelopes
+// returns at least one item with the expected summary fields populated.
+//
+// This is the load-bearing test that the endpoint reads from the same
+// isolated runtime that evaluation writes to — the same path used by
+// handleExplorerGetEnvelope and handleExplorerEvaluate.
+func TestExplorerListEnvelopes_AfterEvaluation_ReturnsItem(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithAuthMode(config.AuthModeOpen).
+		WithExplorerEnabled(true)
+
+	evalBody := []byte(`{
+		"surface_id": "surf-v2-merchant-payment",
+		"agent_id":   "agent-v2-evaluator",
+		"confidence": 0.95,
+		"consequence": {"type": "monetary", "amount": 100, "currency": "GBP"}
+	}`)
+	evalRec := performRequest(t, srv, http.MethodPost, "/explorer", evalBody)
+	if evalRec.Code != http.StatusOK {
+		t.Fatalf("evaluate: want 200, got %d: %s", evalRec.Code, evalRec.Body.String())
+	}
+	var evalResp map[string]interface{}
+	if err := json.NewDecoder(evalRec.Body).Decode(&evalResp); err != nil {
+		t.Fatalf("evaluate response not valid JSON: %v", err)
+	}
+	envelopeID, _ := evalResp["envelope_id"].(string)
+	if envelopeID == "" {
+		t.Fatalf("evaluate response missing envelope_id: %v", evalResp)
+	}
+
+	listRec := performRequest(t, srv, http.MethodGet, "/explorer/envelopes", nil)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list: want 200, got %d: %s", listRec.Code, listRec.Body.String())
+	}
+	resp := decodeJSON[explorerEnvelopeListResponse](t, listRec)
+	if len(resp.Items) < 1 {
+		t.Fatalf("want >=1 item after evaluation, got %d", len(resp.Items))
+	}
+	if resp.Count != len(resp.Items) {
+		t.Errorf("count must equal len(items): count=%d, len=%d", resp.Count, len(resp.Items))
+	}
+	if resp.Limit != explorerEnvelopeListDefaultLimit {
+		t.Errorf("limit: want default %d, got %d", explorerEnvelopeListDefaultLimit, resp.Limit)
+	}
+
+	var found *explorerEnvelopeSummary
+	for i := range resp.Items {
+		if resp.Items[i].ID == envelopeID {
+			found = &resp.Items[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("envelope_id %q from evaluate not present in list response: %+v", envelopeID, resp.Items)
+	}
+
+	if found.State == "" {
+		t.Error("summary.state must be populated")
+	}
+	if found.CreatedAt.IsZero() {
+		t.Error("summary.created_at must be populated")
+	}
+	if found.UpdatedAt.IsZero() {
+		t.Error("summary.updated_at must be populated")
+	}
+	if found.RequestSource == "" {
+		t.Error("summary.request_source must be populated for a real evaluation")
+	}
+	// Outcome is populated for a successful evaluation flow; the V2
+	// merchant-payment seeded scenario produces an Approve/Allow/Escalate
+	// outcome (never empty when the chain resolves).
+	if found.Outcome == "" {
+		t.Error("summary.outcome must be populated when evaluation completes")
+	}
+}
+
+// TestExplorerListEnvelopes_LimitClamps verifies that limit=1 returns at most
+// one item, regardless of how many envelopes are in the runtime.
+func TestExplorerListEnvelopes_LimitClamps(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithAuthMode(config.AuthModeOpen).
+		WithExplorerEnabled(true)
+
+	// Seed two envelopes via two distinct evaluations so limit=1 is
+	// observably clamping rather than coincidentally matching.
+	for _, conf := range []string{"0.95", "0.85"} {
+		body := []byte(`{
+			"surface_id": "surf-v2-merchant-payment",
+			"agent_id":   "agent-v2-evaluator",
+			"confidence": ` + conf + `,
+			"consequence": {"type": "monetary", "amount": 100, "currency": "GBP"}
+		}`)
+		rec := performRequest(t, srv, http.MethodPost, "/explorer", body)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("evaluate(conf=%s): want 200, got %d: %s", conf, rec.Code, rec.Body.String())
+		}
+	}
+
+	listRec := performRequest(t, srv, http.MethodGet, "/explorer/envelopes?limit=1", nil)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list: want 200, got %d: %s", listRec.Code, listRec.Body.String())
+	}
+	resp := decodeJSON[explorerEnvelopeListResponse](t, listRec)
+	if resp.Limit != 1 {
+		t.Errorf("limit echo: want 1, got %d", resp.Limit)
+	}
+	if len(resp.Items) > 1 {
+		t.Errorf("limit=1 must return at most 1 item, got %d", len(resp.Items))
+	}
+}
+
+// TestExplorerListEnvelopes_BadInputs_Return400 verifies that malformed
+// limit, since, until, and unknown state values produce 400 with a JSON
+// error body — matching the convention used by /v1/coverage and
+// /v1/envelopes.
+func TestExplorerListEnvelopes_BadInputs_Return400(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithAuthMode(config.AuthModeOpen).
+		WithExplorerEnabled(true)
+
+	cases := []struct {
+		name string
+		path string
+	}{
+		{"malformed limit", "/explorer/envelopes?limit=abc"},
+		{"zero limit", "/explorer/envelopes?limit=0"},
+		{"limit above max", "/explorer/envelopes?limit=501"},
+		{"invalid since", "/explorer/envelopes?since=not-a-timestamp"},
+		{"invalid until", "/explorer/envelopes?until=2025-13-99"},
+		{"unknown state", "/explorer/envelopes?state=not-a-state"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := performRequest(t, srv, http.MethodGet, tc.path, nil)
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("%s: want 400, got %d: %s", tc.name, rec.Code, rec.Body.String())
+			}
+			var body map[string]string
+			if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+				t.Errorf("%s: response not valid JSON: %v", tc.name, err)
+			}
+			if body["error"] == "" {
+				t.Errorf("%s: response missing error field: %+v", tc.name, body)
+			}
+		})
+	}
+}
+
+// TestExplorerListEnvelopes_LimitAtMax_Accepted verifies the boundary: a
+// limit equal to the maximum (500) is accepted and echoed back, while
+// limit=501 was already rejected by the bad-inputs test.
+func TestExplorerListEnvelopes_LimitAtMax_Accepted(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithAuthMode(config.AuthModeOpen).
+		WithExplorerEnabled(true)
+
+	rec := performRequest(t, srv, http.MethodGet, "/explorer/envelopes?limit=500", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200 for limit=max (%d), got %d: %s",
+			explorerEnvelopeListMaxLimit, rec.Code, rec.Body.String())
+	}
+	resp := decodeJSON[explorerEnvelopeListResponse](t, rec)
+	if resp.Limit != explorerEnvelopeListMaxLimit {
+		t.Errorf("limit echo: want %d, got %d", explorerEnvelopeListMaxLimit, resp.Limit)
+	}
+}
+
+// TestExplorerListEnvelopes_StateFilter_AcceptedAndApplied verifies that
+// every valid envelope lifecycle state is accepted, and that filtering
+// returns only envelopes in the requested state.
+//
+// The Explorer runtime emits envelopes in the OutcomeRecorded or Escalated
+// terminal states depending on the seeded scenario. We pick a state we
+// expect to be empty (Received) and a state we may expect to populate
+// (OutcomeRecorded) and assert filter-by-state returns a consistent slice.
+func TestExplorerListEnvelopes_StateFilter_AcceptedAndApplied(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithAuthMode(config.AuthModeOpen).
+		WithExplorerEnabled(true)
+
+	body := []byte(`{
+		"surface_id": "surf-v2-merchant-payment",
+		"agent_id":   "agent-v2-evaluator",
+		"confidence": 0.95,
+		"consequence": {"type": "monetary", "amount": 100, "currency": "GBP"}
+	}`)
+	if rec := performRequest(t, srv, http.MethodPost, "/explorer", body); rec.Code != http.StatusOK {
+		t.Fatalf("evaluate: want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	for _, state := range []string{
+		"received",
+		"evaluating",
+		"outcome_recorded",
+		"escalated",
+		"awaiting_review",
+		"closed",
+	} {
+		rec := performRequest(t, srv, http.MethodGet, "/explorer/envelopes?state="+state, nil)
+		if rec.Code != http.StatusOK {
+			t.Errorf("state=%s: want 200, got %d: %s", state, rec.Code, rec.Body.String())
+			continue
+		}
+		resp := decodeJSON[explorerEnvelopeListResponse](t, rec)
+		for _, item := range resp.Items {
+			if item.State != state {
+				t.Errorf("state=%s filter leaked envelope in state %q: %+v", state, item.State, item)
+			}
+		}
+	}
+}
+
+// TestExplorerListEnvelopes_Isolation_DoesNotReadProductionEnvelopes is the
+// load-bearing isolation pin: the Explorer list endpoint must not surface
+// envelopes from the production orchestrator. We wire mockOrchestrator (the
+// production path) to return a synthetic envelope; the Explorer endpoint
+// must not return it.
+func TestExplorerListEnvelopes_Isolation_DoesNotReadProductionEnvelopes(t *testing.T) {
+	prodEnvelopeID := "env-production-only"
+	prodMock := &mockOrchestrator{
+		listEnvelopesByStateFn: func(ctx context.Context, state envelope.EnvelopeState) ([]*envelope.Envelope, error) {
+			env := &envelope.Envelope{
+				Identity: envelope.Identity{
+					ID:            prodEnvelopeID,
+					RequestSource: "api",
+					RequestID:     "req-production-only",
+					SchemaVersion: envelope.SchemaVersion,
+				},
+				State:     envelope.EnvelopeStateOutcomeRecorded,
+				CreatedAt: time.Now(),
+				UpdatedAt: time.Now(),
+			}
+			return []*envelope.Envelope{env}, nil
+		},
+	}
+
+	srv := NewServerFull(prodMock, nil, nil, nil, nil, nil).
+		WithAuthMode(config.AuthModeOpen).
+		WithExplorerEnabled(true)
+
+	// Sanity: the production list does include the production envelope.
+	prodRec := performRequest(t, srv, http.MethodGet, "/v1/envelopes", nil)
+	if prodRec.Code != http.StatusOK {
+		t.Fatalf("/v1/envelopes: want 200, got %d: %s", prodRec.Code, prodRec.Body.String())
+	}
+	if !strings.Contains(prodRec.Body.String(), prodEnvelopeID) {
+		t.Fatalf("/v1/envelopes did not return seeded production envelope %q: %s",
+			prodEnvelopeID, prodRec.Body.String())
+	}
+
+	// Explorer list must not contain the production envelope.
+	expRec := performRequest(t, srv, http.MethodGet, "/explorer/envelopes", nil)
+	if expRec.Code != http.StatusOK {
+		t.Fatalf("/explorer/envelopes: want 200, got %d: %s", expRec.Code, expRec.Body.String())
+	}
+	resp := decodeJSON[explorerEnvelopeListResponse](t, expRec)
+	for _, item := range resp.Items {
+		if item.ID == prodEnvelopeID {
+			t.Errorf("/explorer/envelopes leaked production envelope: %+v", item)
+		}
+	}
+}
+
+// TestExplorerListEnvelopes_SortedNewestFirst verifies that items are sorted
+// by created_at descending, regardless of map-iteration order in the
+// underlying memory repository.
+func TestExplorerListEnvelopes_SortedNewestFirst(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithAuthMode(config.AuthModeOpen).
+		WithExplorerEnabled(true)
+
+	for i := 0; i < 3; i++ {
+		body := []byte(`{
+			"surface_id": "surf-v2-merchant-payment",
+			"agent_id":   "agent-v2-evaluator",
+			"confidence": 0.95,
+			"consequence": {"type": "monetary", "amount": 100, "currency": "GBP"}
+		}`)
+		if rec := performRequest(t, srv, http.MethodPost, "/explorer", body); rec.Code != http.StatusOK {
+			t.Fatalf("evaluate %d: want 200, got %d: %s", i, rec.Code, rec.Body.String())
+		}
+	}
+
+	rec := performRequest(t, srv, http.MethodGet, "/explorer/envelopes", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list: want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	resp := decodeJSON[explorerEnvelopeListResponse](t, rec)
+	if len(resp.Items) < 2 {
+		t.Fatalf("want >=2 items to assert ordering, got %d", len(resp.Items))
+	}
+	for i := 1; i < len(resp.Items); i++ {
+		prev := resp.Items[i-1].CreatedAt
+		cur := resp.Items[i].CreatedAt
+		if cur.After(prev) {
+			t.Errorf("items[%d].created_at (%s) is after items[%d].created_at (%s) — must be DESC",
+				i, cur, i-1, prev)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// D26b: Explorer Records view consumes runtime envelope feed (frontend pins)
+// ---------------------------------------------------------------------------
+
+// TestExplorer_HTML_RecordsView_UsesRuntimeEnvelopes pins the D26b contract
+// in the embedded Explorer SPA: the Records view fetches its rows from the
+// D26a /explorer/envelopes endpoint, has loading / empty / error states,
+// includes the new mapper + loader functions, and no longer carries any of
+// the old hardcoded RECORDS_DEMO_ROWS / "Demo sample" copy on the main
+// render path. Negative pins are scoped to the Records view block extracted
+// from the rendered HTML so the explanatory header comment that mentions
+// the historic constant by name does not spuriously match.
+func TestExplorer_HTML_RecordsView_UsesRuntimeEnvelopes(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+
+	// ── 1. Endpoint usage ───────────────────────────────────────────────────
+	// The Records loader fetches the D26a list endpoint with limit=50.
+	if !strings.Contains(body, "/explorer/envelopes?limit=50") {
+		t.Error("Records view must fetch /explorer/envelopes?limit=50")
+	}
+	// Detail rail must not call /v1/envelopes — that is the production
+	// path; Records is scoped to the isolated Explorer runtime only.
+	if strings.Contains(body, "fetch('/v1/envelopes") || strings.Contains(body, `fetch("/v1/envelopes`) {
+		t.Error("Records view must not fetch /v1/envelopes — Explorer is scoped to /explorer/envelopes")
+	}
+
+	// ── 2. Loader + mapper exist ────────────────────────────────────────────
+	if !strings.Contains(body, "function loadExplorerRuntimeRecords()") {
+		t.Error("Records view must declare async loader loadExplorerRuntimeRecords()")
+	}
+	if !strings.Contains(body, "function mapExplorerEnvelopeToRecordRow(item)") {
+		t.Error("Records view must declare mapper mapExplorerEnvelopeToRecordRow(item)")
+	}
+	// Module-level state pins
+	for _, decl := range []string{
+		"let recordsRuntimeRows",
+		"let recordsLoading",
+		"let recordsError",
+	} {
+		if !strings.Contains(body, decl) {
+			t.Errorf("Records view must declare runtime-feed state: %q", decl)
+		}
+	}
+
+	// ── 3. Mapper consumes D26a fields ──────────────────────────────────────
+	// Each summary field returned by GET /explorer/envelopes is read by the
+	// mapper. The pins here are on the right-hand side of property reads in
+	// the mapper body, so re-naming a field becomes a test failure rather
+	// than a silent regression to "—" in the UI.
+	for _, expr := range []string{
+		"item.id",
+		"item.state",
+		"item.outcome",
+		"item.reason_code",
+		"item.request_source",
+		"item.surface_id",
+		"item.business_service_id",
+		"item.agent_id",
+		"item.created_at",
+		"item.evaluated_at",
+		"item.profile_id",
+		"item.grant_id",
+	} {
+		if !strings.Contains(body, expr) {
+			t.Errorf("mapper must read D26a field %s", expr)
+		}
+	}
+
+	// ── 4. Loading / empty / error state copy ───────────────────────────────
+	if !strings.Contains(body, "Loading runtime records") {
+		t.Error(`Records view must show a loading state ("Loading runtime records…")`)
+	}
+	if !strings.Contains(body, "No runtime records yet") {
+		t.Error(`Records view must show empty state copy "No runtime records yet"`)
+	}
+	if !strings.Contains(body, "Run an Explorer evaluation to create an envelope") {
+		t.Error(`Records view must show empty state guidance "Run an Explorer evaluation to create an envelope"`)
+	}
+	if !strings.Contains(body, "Could not load runtime records") {
+		t.Error(`Records view must show error state copy "Could not load runtime records"`)
+	}
+
+	// ── 5. Provenance copy ──────────────────────────────────────────────────
+	// "Demo sample" badge replaced with "Explorer runtime"; subtitle clearly
+	// scopes records to this Explorer session.
+	if !strings.Contains(body, `>Explorer runtime<`) {
+		t.Error(`Records page badge must read "Explorer runtime"`)
+	}
+	if !strings.Contains(body, "Records shown here are generated by this Explorer session.") {
+		t.Error("Records view must include the Explorer-session subtitle")
+	}
+
+	// ── 6. Records render path no longer references hardcoded demo rows ─────
+	// Negative pins are scoped to the Records-view JS block (between the
+	// "── Records view" heading and the "── Settings view" heading) so the
+	// historical-context note at the top of the block — which mentions
+	// RECORDS_DEMO_ROWS / RECORDS_FULL_DETAIL by name — does not match.
+	recordsBlock := extractBetween(t, body, "// ── Records view", "// ── Settings view")
+	for _, banned := range []string{
+		"const RECORDS_DEMO_ROWS = [",
+		"const RECORDS_FULL_DETAIL = {",
+		"'env-demo-merchant-001'",
+		"'env-demo-merchant-002'",
+		"'env-demo-lending-001'",
+		"'env-demo-reject-001'",
+	} {
+		if strings.Contains(recordsBlock, banned) {
+			t.Errorf("Records view must no longer declare hardcoded demo data: %q", banned)
+		}
+	}
+	// The "Demo sample" badge text must not survive anywhere in the doc —
+	// scope the negative pin to the whole HTML.
+	if strings.Contains(body, "Demo sample") {
+		t.Error(`"Demo sample" badge copy must be removed`)
+	}
+
+	// ── 7. Render dispatches on runtime state ───────────────────────────────
+	// renderRecordsTable consumes recordsRuntimeRows + the loading/error
+	// flags rather than the removed RECORDS_DEMO_ROWS constant.
+	if !strings.Contains(recordsBlock, "recordsRuntimeRows.filter") &&
+		!strings.Contains(recordsBlock, "recordsRuntimeRows.find") {
+		t.Error("renderRecordsTable / renderRecordsDetail must consume recordsRuntimeRows")
+	}
+	if !strings.Contains(recordsBlock, "if (recordsLoading)") {
+		t.Error("renderRecordsTable must branch on recordsLoading")
+	}
+	if !strings.Contains(recordsBlock, "if (recordsError)") {
+		t.Error("renderRecordsTable must branch on recordsError")
+	}
+
+	// ── 8. View-open hook + post-evaluation refresh ─────────────────────────
+	// showView calls loadExplorerRuntimeRecords when entering Records.
+	if !strings.Contains(body, "viewName === 'records'") ||
+		!strings.Contains(body, "loadExplorerRuntimeRecords()") {
+		t.Error("showView must call loadExplorerRuntimeRecords() when viewName === 'records'")
+	}
+	// submitRequest triggers a refresh after a successful evaluation so the
+	// new envelope appears in Records without a manual reload.
+	submitBlock := extractBetween(t, body, "async function submitRequest()", "  // ── Copy as curl")
+	if !strings.Contains(submitBlock, "loadExplorerRuntimeRecords") {
+		t.Error("submitRequest success path must trigger loadExplorerRuntimeRecords()")
+	}
+
+	// ── 9. Detail click + envelope-detail integration ───────────────────────
+	// Selection-driven detail rail still works — row clicks set
+	// recordsSelectedId and re-render. The full envelope-detail rail
+	// is intentionally not yet wired (out of scope for D26b), but the
+	// envelope detail endpoint /explorer/envelopes/{id} must remain
+	// available for the next tranche.
+	if !strings.Contains(recordsBlock, "recordsSelectedId = tr.dataset.recordId") {
+		t.Error("Row-click handler must update recordsSelectedId")
+	}
+	// The handler at handleExplorerGetEnvelope is a backend concern, but
+	// pin its embedded URL form so the path remains consistent for the
+	// later tranche that wires a per-row detail fetch.
+	if !strings.Contains(body, "/explorer/envelopes/") {
+		t.Error("Explorer detail-by-id path /explorer/envelopes/ must remain referenced in the shell")
+	}
+
+	// ── 10. Regression pins ─────────────────────────────────────────────────
+	// Records view ID + nav entry preserved.
+	if !strings.Contains(body, `id="view-records"`) {
+		t.Error("view-records section must remain present")
+	}
+	if !strings.Contains(body, `data-nav-view="records"`) {
+		t.Error("Records sidebar nav entry must remain present")
+	}
+	// Records search + close-button affordances preserved.
+	if !strings.Contains(body, `id="records-search"`) {
+		t.Error("Records search input must remain present")
+	}
+	if !strings.Contains(body, `id="records-detail-close"`) {
+		t.Error("Records detail close button must remain present")
+	}
+}
+
+// TestExplorer_HTML_RecordsView_RuntimeMetrics pins the D26d contract:
+// the Records metrics strip is now derived from the runtime envelope
+// feed (recordsRuntimeRows) rather than the previous hardcoded
+// 142/96/28/12/6/3. Each tile carries a stable id, the helper function
+// computeRecordsRuntimeMetrics counts the relevant outcomes case-
+// insensitively, and the renderer falls back to em-dashes during the
+// initial load and on error so the strip never displays stale or
+// hardcoded values. Metrics scope is the FULL session feed (not the
+// search-filtered subset) per the brief's preferred default.
+func TestExplorer_HTML_RecordsView_RuntimeMetrics(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+
+	// === 1. Helper exists with expected signature + reads runtime rows ===
+	if !strings.Contains(body, "function computeRecordsRuntimeMetrics(rows)") {
+		t.Fatal("D26d: computeRecordsRuntimeMetrics(rows) helper must exist")
+	}
+	if !strings.Contains(body, "function renderRecordsRuntimeMetrics()") {
+		t.Fatal("D26d: renderRecordsRuntimeMetrics() helper must exist")
+	}
+	helperBody := extractBetween(t, body,
+		"function computeRecordsRuntimeMetrics(rows)",
+		"function renderRecordsRuntimeMetrics()")
+	// Defensive normalisation pin — case is normalised before comparison.
+	if !strings.Contains(helperBody, ".toLowerCase()") {
+		t.Error("D26d: computeRecordsRuntimeMetrics must normalise outcome casing via .toLowerCase()")
+	}
+	// Outcome literals — both the brief vocabulary (approve/clarify/stop)
+	// and the actual MIDAS evaluator vocabulary (accept /
+	// request_clarification) must be counted, since real envelopes use
+	// the latter. This dual coverage is intentional.
+	for _, want := range []string{
+		"'approve'",
+		"'accept'",
+		"'escalate'",
+		"'reject'",
+		"'clarify'",
+		"'request_clarification'",
+		"'stop'",
+	} {
+		if !strings.Contains(helperBody, want) {
+			t.Errorf("D26d: helper must count outcome literal %s", want)
+		}
+	}
+
+	// === 2. Renderer reads recordsRuntimeRows and writes the stable ids ===
+	rendererBody := extractBetween(t, body,
+		"function renderRecordsRuntimeMetrics()",
+		"  // ── ") // Records-view section comment immediately below
+	if !strings.Contains(rendererBody, "recordsRuntimeRows") {
+		t.Error("D26d: renderRecordsRuntimeMetrics must derive metrics from recordsRuntimeRows")
+	}
+	for _, id := range []string{
+		"records-metric-total",
+		"records-metric-approved",
+		"records-metric-escalated",
+		"records-metric-rejected",
+		"records-metric-clarify",
+		"records-metric-stopped",
+	} {
+		// Renderer touches the stable id (writes its textContent) AND
+		// the markup declares the id. Pin both.
+		if !strings.Contains(rendererBody, id) {
+			t.Errorf("D26d: renderer must update DOM id %q", id)
+		}
+		if !strings.Contains(body, `id="`+id+`"`) {
+			t.Errorf("D26d: metrics-strip markup must declare id=%q", id)
+		}
+	}
+
+	// === 3. Loading + error states surface as em-dashes ===
+	// The renderer dashes-out under (loading without prior success) OR
+	// (error). Pin both predicates.
+	if !strings.Contains(rendererBody, "recordsLoading") ||
+		!strings.Contains(rendererBody, "recordsLoadedOnce") ||
+		!strings.Contains(rendererBody, "recordsError") {
+		t.Error("D26d: renderer must branch on recordsLoading / recordsLoadedOnce / recordsError")
+	}
+	// The fallback character is the em-dash literal '—'.
+	if !strings.Contains(rendererBody, "'—'") {
+		t.Error("D26d: renderer must dash-out metrics ('—') during loading / error")
+	}
+
+	// === 4. Markup placeholders are em-dashes, not hardcoded numbers ===
+	// Scope these checks to the records view section only — '142' / '96'
+	// / etc could legitimately appear elsewhere in the SPA (e.g. in
+	// scenario payloads, demo seeds the brief explicitly leaves alone).
+	recordsViewBlock := extractBetween(t, body,
+		`id="view-records"`, `id="view-settings"`)
+	for _, banned := range []string{
+		">142<", ">96<", ">28<", ">12<", ">6<", ">3<",
+	} {
+		if strings.Contains(recordsViewBlock, banned) {
+			t.Errorf("D26d: hardcoded demo metric %q must be removed from the Records view markup", banned)
+		}
+	}
+
+	// === 5. Loader wires the renderer in finally + on entry ===
+	loaderBody := extractBetween(t, body,
+		"async function loadExplorerRuntimeRecords()",
+		"function renderRecordsView()")
+	// Called at least twice — once before fetch (loading dashes), once
+	// in finally (recovers to real numbers or empty zeroes).
+	if strings.Count(loaderBody, "renderRecordsRuntimeMetrics()") < 2 {
+		t.Error("D26d: loadExplorerRuntimeRecords must call renderRecordsRuntimeMetrics() before fetch and in finally")
+	}
+	// Loader must still target the D26a Explorer feed and not /v1/envelopes.
+	if !strings.Contains(loaderBody, "/explorer/envelopes?limit=50") {
+		t.Error("D26d: D26a fetch URL must remain /explorer/envelopes?limit=50")
+	}
+	if strings.Contains(loaderBody, "/v1/envelopes") {
+		t.Error("D26d: Records loader must not fetch /v1/envelopes")
+	}
+
+	// === 6. Provenance — Explorer runtime badge retained, no Demo sample ===
+	if !strings.Contains(body, `>Explorer runtime<`) {
+		t.Error("D26d: Explorer runtime badge must remain")
+	}
+	if strings.Contains(body, "Demo sample") {
+		t.Error("D26d: Demo sample wording must not return")
+	}
+
+	// === 7. renderRecordsView refreshes metrics on initial render ===
+	// renderRecordsView is the entry point invoked by the bootstrap
+	// setTimeout + the showView records branch; it must trigger a metrics
+	// render so the strip is dashed-out before the first loader resolves.
+	rvBody := extractBetween(t, body,
+		"function renderRecordsView()",
+		"function renderRecordsTable(filter)")
+	if !strings.Contains(rvBody, "renderRecordsRuntimeMetrics()") {
+		t.Error("D26d: renderRecordsView must invoke renderRecordsRuntimeMetrics() on entry")
+	}
+
+	// === 8. Regression — records markup ids + label still present ===
+	// Updated labels: Runtime records / Approved / Escalated / Rejected
+	// / Clarify / Stopped. The previous Coverage Gaps tile was repurposed
+	// into Stopped; pin both the new label and the absence of the old.
+	for _, want := range []string{
+		">Runtime records<",
+		">Approved<",
+		">Escalated<",
+		">Rejected<",
+		">Clarify<",
+		">Stopped<",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26d: metrics-strip label %q must be present", want)
+		}
+	}
+	if strings.Contains(recordsViewBlock, ">Coverage Gaps<") {
+		t.Error("D26d: stale Coverage Gaps tile must not remain in the Records view")
+	}
+}
+
+// TestExplorer_HTML_RecordsView_EnvelopeDetailRail pins the D26e contract:
+// a Records row click triggers a fetch against /explorer/envelopes/{id}
+// (the D26a detail endpoint), the result is rendered in the existing
+// detail rail with structured Identity / Governance / Evaluation /
+// Integrity sections plus a raw-JSON viewer, and the raw JSON is
+// injected via textContent only — never innerHTML — so envelope values
+// cannot escape the <pre> block. Loading and error states surface as
+// inline copy without ever leaking stale or hardcoded content.
+//
+// This tranche is Records-detail only. Activity rows continue to carry
+// data-envelope-id (from D26c) and remain summary-only; the negative
+// pin below documents that decision so a future tranche wiring Activity
+// detail must explicitly remove the pin.
+func TestExplorer_HTML_RecordsView_EnvelopeDetailRail(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+
+	// === 1. Detail loader exists with expected signature ===
+	if !strings.Contains(body, "async function loadExplorerEnvelopeDetail(envelopeId, onResolved)") {
+		t.Fatal("D26e: loadExplorerEnvelopeDetail(envelopeId, onResolved) helper must exist")
+	}
+	if !strings.Contains(body, "function renderExplorerEnvelopeDetailSections(env)") {
+		t.Fatal("D26e: renderExplorerEnvelopeDetailSections(env) helper must exist")
+	}
+	for _, decl := range []string{
+		"let explorerEnvelopeDetailsById",
+		"let explorerEnvelopeDetailLoadingId",
+		"let explorerEnvelopeDetailError",
+	} {
+		if !strings.Contains(body, decl) {
+			t.Errorf("D26e: missing module-level state %q", decl)
+		}
+	}
+
+	// === 2. Endpoint usage — D26a detail endpoint, encoded id, no /v1/ ===
+	loaderBody := extractBetween(t, body,
+		"async function loadExplorerEnvelopeDetail(envelopeId, onResolved)",
+		"function explorerEnvelopeDetailFor(id)")
+	if !strings.Contains(loaderBody, "/explorer/envelopes/") {
+		t.Error("D26e: detail loader must fetch /explorer/envelopes/")
+	}
+	if !strings.Contains(loaderBody, "encodeURIComponent(envelopeId)") {
+		t.Error("D26e: detail loader must encode the envelope id with encodeURIComponent")
+	}
+	if strings.Contains(loaderBody, "/v1/envelopes") {
+		t.Error("D26e: detail loader must not fetch /v1/envelopes")
+	}
+	// 404 → "not found" copy; non-OK → generic copy.
+	if !strings.Contains(loaderBody, "Envelope detail not found.") {
+		t.Error(`D26e: detail loader must surface "Envelope detail not found." on 404`)
+	}
+	if !strings.Contains(loaderBody, "Could not load envelope detail.") {
+		t.Error(`D26e: detail loader must surface "Could not load envelope detail." on non-OK / network error`)
+	}
+
+	// === 3. Detail-rail state copy ===
+	for _, want := range []string{
+		"Loading envelope detail",
+		"Could not load envelope detail",
+		"Select a runtime record to inspect its envelope.",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26e: missing detail-rail state copy %q", want)
+		}
+	}
+
+	// === 4. Records row click triggers detail fetch ===
+	tableBody := extractBetween(t, body,
+		"function renderRecordsTable(filter)",
+		"function renderRecordsDetail()")
+	if !strings.Contains(tableBody, "loadExplorerEnvelopeDetail(recordsSelectedId") {
+		t.Error("D26e: row-click handler must call loadExplorerEnvelopeDetail(recordsSelectedId, …)")
+	}
+	if !strings.Contains(tableBody, "recordsSelectedId = tr.dataset.recordId") {
+		t.Error("D26e: row-click handler must update recordsSelectedId before fetching detail")
+	}
+	if !strings.Contains(tableBody, "renderRecordsDetail()") {
+		t.Error("D26e: row-click handler must re-render the detail rail when the fetch resolves")
+	}
+
+	// === 5. Detail rail renders the four canonical sections + Raw JSON ===
+	detailBody := extractBetween(t, body,
+		"function renderExplorerEnvelopeDetailSections(env)",
+		"  // D26d — Records metrics strip is now client-side aggregation")
+	for _, want := range []string{
+		">Identity<",
+		">Governance context<",
+		">Evaluation<",
+		">Integrity<",
+	} {
+		if !strings.Contains(detailBody, want) {
+			t.Errorf("D26e: detail renderer must include section label %q", want)
+		}
+	}
+	// Raw JSON section label is rendered by the rail caller, not the
+	// section helper. Pin it on the full document so the markup +
+	// renderer caller both surface it.
+	if !strings.Contains(body, "Raw envelope JSON") {
+		t.Error(`D26e: detail rail must render a "Raw envelope JSON" section`)
+	}
+	// Stable id for the raw-JSON <pre>.
+	if !strings.Contains(body, `id="records-envelope-detail-json"`) {
+		t.Error(`D26e: raw-JSON viewer must carry id="records-envelope-detail-json"`)
+	}
+
+	// === 6. Detail renderer reads the canonical envelope fields ===
+	for _, want := range []string{
+		"identity.id",
+		"identity.request_id",
+		"identity.request_source",
+		"env.state",
+		"env.created_at",
+		"env.updated_at",
+		"submitted.received_at",
+		"evaluation.evaluated_at",
+		"evaluation.outcome",
+		"evaluation.reason_code",
+		"explanation.outcome_driver",
+		"auth.surface_id",
+		"auth.surface_version",
+		"auth.profile_id",
+		"auth.profile_version",
+		"auth.grant_id",
+		"auth.agent_id",
+		"bs.id",
+		"proc.id",
+		"subject.id",
+		"integrity.submitted_hash",
+		"integrity.first_event_hash",
+		"integrity.final_event_hash",
+		"integrity.audit_event_ids",
+	} {
+		if !strings.Contains(detailBody, want) {
+			t.Errorf("D26e: detail renderer must read envelope field %s", want)
+		}
+	}
+
+	// === 7. Raw JSON safety — textContent path, JSON.stringify(envelope, null, 2) ===
+	rrdBody := extractBetween(t, body,
+		"function renderRecordsDetail()",
+		"  // ── Settings view")
+	if !strings.Contains(rrdBody, "JSON.stringify(env, null, 2)") {
+		t.Error("D26e: raw JSON must be serialised via JSON.stringify(env, null, 2)")
+	}
+	// The pre.textContent assignment is the only safe injection path.
+	if !strings.Contains(rrdBody, "pre.textContent = JSON.stringify(env, null, 2)") {
+		t.Error("D26e: raw JSON must be injected via pre.textContent — never innerHTML")
+	}
+	// Negative pin: the renderer must not assign JSON.stringify output
+	// to an innerHTML target. Scope to the records-detail render block.
+	if strings.Contains(rrdBody, ".innerHTML = JSON.stringify") {
+		t.Error("D26e: raw JSON must not be injected via innerHTML")
+	}
+
+	// === 8. Demo-detail removal — no RECORDS_FULL_DETAIL, no env-demo defaults ===
+	recordsViewBlock := extractBetween(t, body,
+		`id="view-records"`, `id="view-settings"`)
+	for _, banned := range []string{
+		"const RECORDS_FULL_DETAIL = {",
+		"'env-demo-merchant-001'",
+		"'env-demo-merchant-002'",
+		"'env-demo-lending-001'",
+		"'env-demo-reject-001'",
+		// The previous "Authority chain detail not seeded for this demo
+		// record." placeholder must be gone — D26e replaces it with the
+		// real Governance context section.
+		"Authority chain detail not seeded for this demo record.",
+	} {
+		if strings.Contains(recordsViewBlock, banned) {
+			t.Errorf("D26e: stale demo-detail content must not remain in the Records view: %q", banned)
+		}
+	}
+
+	// === 9. View envelope JSON button is now enabled (no longer disabled) ===
+	// The button id is preserved from D26b so the test pin stays stable;
+	// the disabled attribute / placeholder tooltip from D26b has been
+	// removed because the JSON block is now reachable.
+	if !strings.Contains(body, `id="records-view-envelope-btn"`) {
+		t.Error(`D26e: Records "View envelope JSON" button id must be preserved`)
+	}
+	resourcesBlock := extractBetween(t, body,
+		`id="records-view-envelope-btn"`,
+		`id="records-view-audit-btn"`)
+	if strings.Contains(resourcesBlock, "disabled") {
+		t.Error(`D26e: Records "View envelope JSON" button must no longer be disabled`)
+	}
+
+	// === 10. Activity rows still summary-only (Records-detail tranche) ===
+	// Activity rows carry data-envelope-id from D26c; that prerequisite
+	// must remain so a future tranche can wire detail-fetch from the
+	// Activity tab without re-litigating the row markup.
+	if !strings.Contains(body, `data-envelope-id="`) {
+		t.Error("D26e: Activity rows must continue to carry data-envelope-id for future detail wiring")
+	}
+	// The current tranche does NOT call loadExplorerEnvelopeDetail from
+	// the Activity tab. Pin that so when a future tranche wires it, the
+	// pin is removed deliberately rather than by accident.
+	activityRender := extractBetween(t, body,
+		"function renderGmapEvidenceTrayActivityPanel()",
+		"// Wire the tray's expand/collapse toggle")
+	if strings.Contains(activityRender, "loadExplorerEnvelopeDetail(") {
+		t.Error("D26e: Activity tab is intentionally summary-only in this tranche; remove this pin when wiring detail")
+	}
+
+	// === 11. Loader auto-fetches detail for the auto-selected row ===
+	// loadExplorerRuntimeRecords (D26b) selects the newest row by
+	// default. D26e eagerly fetches its envelope detail in finally so
+	// the rail shows real Identity / Governance / Evaluation /
+	// Integrity / JSON sections without waiting for an explicit click.
+	loadRecordsBody := extractBetween(t, body,
+		"async function loadExplorerRuntimeRecords()",
+		"function renderRecordsView()")
+	if !strings.Contains(loadRecordsBody, "loadExplorerEnvelopeDetail(recordsSelectedId") {
+		t.Error("D26e: loadExplorerRuntimeRecords must eagerly fetch detail for the auto-selected row")
+	}
+
+	// === 12. Regression — D26b/D26c/D26d/D25e prerequisites preserved ===
+	for _, want := range []string{
+		// D26b runtime feed
+		"function loadExplorerRuntimeRecords()",
+		"function mapExplorerEnvelopeToRecordRow(item)",
+		"/explorer/envelopes?limit=50",
+		// D26c Activity provenance
+		"Activity uses real Explorer runtime envelopes",
+		// D26d metrics
+		"function computeRecordsRuntimeMetrics(rows)",
+		`id="records-metric-total"`,
+		// D25e drift semantics
+		"function getGmapEvidenceSignalSemantics(nodeId)",
+		"Illustrative demo signal. Not calculated from runtime envelopes.",
+		// D26b badge
+		`>Explorer runtime<`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26e: regression — missing prerequisite %q", want)
+		}
+	}
+}
+
+// TestExplorer_HTML_GovernanceMap_WorkbenchToolbar pins the D26g-impl-1
+// contract: the workbench-frame controls (Back, view context, Search,
+// filter chips, Form/Graph toggle) all live inside one horizontal
+// .governance-map-toolbar above the canvas. The previous .gmap-top-
+// left-overlay and .gmap-top-right-overlay markup is removed entirely.
+// Camera-bar contents (Pan/Select/Zoom in/Zoom out/Fit/Centre/Focus)
+// stay where they are; only the Back button has moved out. D26g-impl-2
+// will further split the camera bar; D26g-impl-3 will relocate the
+// connector legend.
+func TestExplorer_HTML_GovernanceMap_WorkbenchToolbar(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// === 1. Toolbar element + three groups exist ===
+	if !strings.Contains(body, `class="governance-map-toolbar`) {
+		t.Fatal("D26g-impl-1: .governance-map-toolbar element must exist as the workbench-frame strip above the canvas")
+	}
+	for _, want := range []string{
+		`class="governance-map-toolbar-left"`,
+		`class="governance-map-toolbar-centre"`,
+		`class="governance-map-toolbar-right"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26g-impl-1: toolbar group %q must exist", want)
+		}
+	}
+
+	// === 2. Top canvas overlays removed ===
+	// .gmap-top-left-overlay (Search) and .gmap-top-right-overlay
+	// (View context, Form/Graph) markup is gone — their children all
+	// moved up into the toolbar. CSS rules for these classes were
+	// also removed so the rendered HTML carries no trace of either.
+	if strings.Contains(body, `class="gmap-top-left-overlay"`) {
+		t.Error("D26g-impl-1: .gmap-top-left-overlay markup must be removed")
+	}
+	if strings.Contains(body, `class="gmap-top-right-overlay"`) {
+		t.Error("D26g-impl-1: .gmap-top-right-overlay markup must be removed")
+	}
+	// CSS rule selectors for the overlays should also be gone.
+	for _, gone := range []string{
+		"  .gmap-top-left-overlay {",
+		"  .gmap-top-right-overlay {",
+	} {
+		if strings.Contains(body, gone) {
+			t.Errorf("D26g-impl-1: stale overlay CSS rule must be removed: %q", gone)
+		}
+	}
+
+	// === 3. Toolbar contents — bound the toolbar block and pin contents ===
+	toolbarIdx := strings.Index(body, `class="governance-map-toolbar`)
+	toolbarEnd := strings.Index(body[toolbarIdx:], `class="governance-map-body"`)
+	if toolbarEnd < 0 {
+		t.Fatal("D26g-impl-1: could not bound governance-map-toolbar block")
+	}
+	toolbarBody := body[toolbarIdx : toolbarIdx+toolbarEnd]
+	for _, want := range []string{
+		// Left group.
+		`id="gmap-back-button"`,
+		`id="gmap-current-root"`,
+		// Centre group — search + filter chips.
+		`id="gmap-search-input"`,
+		`class="gmap-filter-chips"`,
+		`data-kind="all"`,
+		`data-kind="business"`,
+		`data-kind="capability"`,
+		`data-kind="process"`,
+		`data-kind="surface"`,
+		`data-kind="ai"`,
+		`data-kind="bindings"`,
+		`data-kind="synthetic"`,
+		// Right group — Form/Graph toggle.
+		`class="gmap-view-mode-toggle"`,
+		`data-view-mode="form"`,
+		`data-view-mode="graph"`,
+		`class="gmap-view-mode-feedback"`,
+	} {
+		if !strings.Contains(toolbarBody, want) {
+			t.Errorf("D26g-impl-1: %q must live inside .governance-map-toolbar", want)
+		}
+	}
+
+	// === 4. Reading order — left-to-right ===
+	// Back · view context · search · filter chips · view-mode toggle.
+	type idxPin struct {
+		label string
+		idx   int
+	}
+	pins := []idxPin{
+		{"gmap-back-button", strings.Index(toolbarBody, `id="gmap-back-button"`)},
+		{"gmap-current-root", strings.Index(toolbarBody, `id="gmap-current-root"`)},
+		{"gmap-search-input", strings.Index(toolbarBody, `id="gmap-search-input"`)},
+		{"gmap-filter-chip", strings.Index(toolbarBody, `class="gmap-filter-chips"`)},
+		{"gmap-view-mode-segment", strings.Index(toolbarBody, `class="gmap-view-mode-toggle"`)},
+	}
+	for i, p := range pins {
+		if p.idx < 0 {
+			t.Errorf("D26g-impl-1: %s missing from toolbar body", p.label)
+		}
+		if i > 0 && pins[i-1].idx >= 0 && p.idx >= 0 && pins[i-1].idx > p.idx {
+			t.Errorf("D26g-impl-1: %s must appear after %s in toolbar reading order (%s=%d, %s=%d)",
+				p.label, pins[i-1].label, pins[i-1].label, pins[i-1].idx, p.label, p.idx)
+		}
+	}
+
+	// === 5. Canvas controls regression — split into mode rail + camera cluster (D26g-impl-2) ===
+	// D26g-impl-2 split the old .gmap-camera-bar into .gmap-mode-rail
+	// (Pan/Select) and .gmap-camera-cluster (Zoom/Fit/Centre/Focus).
+	// Both must exist; together they carry the same seven button ids
+	// the old bar carried minus Back (which is now in the toolbar).
+	if !strings.Contains(body, `class="gmap-mode-rail"`) {
+		t.Error("D26g-impl-1: .gmap-mode-rail must exist (Pan/Select cluster)")
+	}
+	if !strings.Contains(body, `class="gmap-camera-cluster"`) {
+		t.Error("D26g-impl-1: .gmap-camera-cluster must exist (Zoom/Fit/Centre/Focus cluster)")
+	}
+	for _, want := range []string{
+		`id="gmap-pan-mode-button"`,
+		`id="gmap-select-mode-button"`,
+		`id="gmap-zoom-in"`,
+		`id="gmap-zoom-out"`,
+		`id="gmap-fit-button"`,
+		`id="gmap-centre-button"`,
+		`id="gmap-focus-toggle"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26g-impl-1: %q must remain in the canvas-control layer", want)
+		}
+	}
+	// Back must not appear in either cluster — it moved to the toolbar.
+	modeIdx := strings.Index(body, `class="gmap-mode-rail"`)
+	camIdx := strings.Index(body, `class="gmap-camera-cluster"`)
+	if modeIdx >= 0 {
+		modeEnd := strings.Index(body[modeIdx:], `</div>`)
+		if modeEnd > 0 && strings.Contains(body[modeIdx:modeIdx+modeEnd], `id="gmap-back-button"`) {
+			t.Error("D26g-impl-1: gmap-back-button must NOT live inside .gmap-mode-rail")
+		}
+	}
+	if camIdx >= 0 {
+		camEnd := strings.Index(body[camIdx:], `</div>`)
+		if camEnd > 0 && strings.Contains(body[camIdx:camIdx+camEnd], `id="gmap-back-button"`) {
+			t.Error("D26g-impl-1: gmap-back-button must NOT live inside .gmap-camera-cluster")
+		}
+	}
+
+	// === 6. Toolbar CSS exists ===
+	for _, want := range []string{
+		"  .governance-map-toolbar,\n  .governance-map-legend {",
+		"  .governance-map-toolbar {",
+		"  .governance-map-toolbar-left,",
+		"  .governance-map-toolbar-centre,",
+		"  .governance-map-toolbar-right {",
+		"  .governance-map-toolbar .gmap-search-input {",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26g-impl-1: toolbar CSS rule missing: %q", want)
+		}
+	}
+
+	// === 7. Focus mode still applies via the legend selector ===
+	// The toolbar element carries both `governance-map-toolbar` and
+	// `governance-map-legend` class tokens, so existing focus-mode
+	// rules that target .governance-map-legend keep working without
+	// migration.
+	for _, want := range []string{
+		"body.gmap-focus-mode .governance-map-legend",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26g-impl-1: focus-mode legend rule must remain (alias-class continuity): %q", want)
+		}
+	}
+	// And the element actually carries both classes.
+	if !strings.Contains(body, `class="governance-map-toolbar governance-map-legend"`) {
+		t.Error("D26g-impl-1: toolbar element must carry both `governance-map-toolbar` and `governance-map-legend` classes (back-compat alias)")
+	}
+
+	// === 8. JS interactive-origin selector list no longer references the
+	//        removed overlays ===
+	// Pointer-down handler skips events that originate inside chrome
+	// elements. The two overlay selectors must be gone from that
+	// list since the overlays themselves are gone.
+	jsListIdx := strings.Index(body, "INTERACTIVE_ORIGIN_SELECTOR")
+	if jsListIdx < 0 {
+		t.Fatal("D26g-impl-1: INTERACTIVE_ORIGIN_SELECTOR not found")
+	}
+	jsListEnd := strings.Index(body[jsListIdx:], "].join(',')")
+	if jsListEnd < 0 {
+		t.Fatal("D26g-impl-1: INTERACTIVE_ORIGIN_SELECTOR end marker not found")
+	}
+	jsListBody := body[jsListIdx : jsListIdx+jsListEnd]
+	for _, gone := range []string{
+		`'.gmap-top-left-overlay'`,
+		`'.gmap-top-right-overlay'`,
+	} {
+		if strings.Contains(jsListBody, gone) {
+			t.Errorf("D26g-impl-1: INTERACTIVE_ORIGIN_SELECTOR must no longer reference %q", gone)
+		}
+	}
+
+	// === 9. Wired handlers still target the moved elements by id ===
+	// JS code unchanged — the handlers find their targets via id, which
+	// the markup move preserves. Pin the bindings.
+	for _, want := range []string{
+		"document.getElementById('gmap-back-button')",
+		"document.getElementById('gmap-search-input')",
+		"document.getElementById('gmap-current-root')",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26g-impl-1: wired handler must still target %q", want)
+		}
+	}
+
+	// === 10. Tray + interaction regressions preserved ===
+	for _, want := range []string{
+		// D26f analytical tray layout.
+		"gmap-evidence-tray-analytic-layout",
+		"gmap-evidence-tray-signal-column",
+		"gmap-evidence-tray-chart-panel",
+		// D25e disclaimer.
+		"Illustrative demo signal. Not calculated from runtime envelopes.",
+		// D26b/D26c/D26d/D26e prerequisites.
+		"function loadExplorerRuntimeRecords()",
+		"function loadGmapEvidenceActivity()",
+		"function computeRecordsRuntimeMetrics(rows)",
+		"async function loadExplorerEnvelopeDetail(envelopeId, onResolved)",
+		// D24i interaction state preserved.
+		"const gmapSelectedNodeIds = new Set()",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26g-impl-1 must NOT remove existing affordance %q", want)
+		}
+	}
+}
+
+// TestExplorer_HTML_GovernanceMap_ModeRailAndCameraCluster pins the
+// D26g-impl-2 contract: the unified .gmap-camera-bar (which D24c
+// introduced and which mixed interaction-mode + camera/viewport
+// controls) is split into two purpose-specific clusters:
+//
+//	.gmap-mode-rail       — Pan / Select (interaction mode), top-left
+//	                        of canvas, vertical layout
+//	.gmap-camera-cluster  — Zoom in / Zoom out / Fit / Centre / Focus
+//	                        (camera + viewport), bottom-right of
+//	                        canvas, horizontal layout
+//
+// All seven button ids are preserved; JS handlers continue to bind by
+// id without change. The INTERACTIVE_ORIGIN_SELECTOR list adopts both
+// new selectors so canvas pan/lasso never starts on either cluster.
+// Back is in neither cluster — it lives in the workbench toolbar
+// (D26g-impl-1).
+func TestExplorer_HTML_GovernanceMap_ModeRailAndCameraCluster(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// === 1. Both clusters exist; old camera bar is gone ===
+	if !strings.Contains(body, `class="gmap-mode-rail"`) {
+		t.Fatal("D26g-impl-2: .gmap-mode-rail must exist")
+	}
+	if !strings.Contains(body, `class="gmap-camera-cluster"`) {
+		t.Fatal("D26g-impl-2: .gmap-camera-cluster must exist")
+	}
+	if strings.Contains(body, `class="gmap-camera-bar"`) {
+		t.Error("D26g-impl-2: unified .gmap-camera-bar must be replaced by the mode rail + camera cluster")
+	}
+	// CSS rule for the unified camera bar must be gone (the rule
+	// selector itself, not just the class on markup).
+	if strings.Contains(body, "  .gmap-camera-bar {") {
+		t.Error("D26g-impl-2: stale .gmap-camera-bar CSS rule must be removed")
+	}
+
+	// === 2. ARIA labels distinguish the two clusters ===
+	if !strings.Contains(body, `aria-label="Graph interaction mode"`) {
+		t.Error(`D26g-impl-2: mode rail must carry aria-label="Graph interaction mode"`)
+	}
+	if !strings.Contains(body, `aria-label="Graph camera controls"`) {
+		t.Error(`D26g-impl-2: camera cluster must carry aria-label="Graph camera controls"`)
+	}
+
+	// === 3. Mode rail contents — Pan + Select only ===
+	modeIdx := strings.Index(body, `class="gmap-mode-rail"`)
+	modeEnd := strings.Index(body[modeIdx:], `</div>`)
+	if modeEnd < 0 {
+		t.Fatal("D26g-impl-2: .gmap-mode-rail closing tag not found")
+	}
+	modeBody := body[modeIdx : modeIdx+modeEnd]
+	for _, want := range []string{
+		`id="gmap-pan-mode-button"`,
+		`id="gmap-select-mode-button"`,
+	} {
+		if !strings.Contains(modeBody, want) {
+			t.Errorf("D26g-impl-2: %q must live inside .gmap-mode-rail", want)
+		}
+	}
+	for _, gone := range []string{
+		`id="gmap-zoom-in"`,
+		`id="gmap-zoom-out"`,
+		`id="gmap-fit-button"`,
+		`id="gmap-centre-button"`,
+		`id="gmap-focus-toggle"`,
+		`id="gmap-back-button"`,
+	} {
+		if strings.Contains(modeBody, gone) {
+			t.Errorf("D26g-impl-2: %q must NOT live inside .gmap-mode-rail", gone)
+		}
+	}
+
+	// === 4. Camera cluster contents — viewport controls only ===
+	camIdx := strings.Index(body, `class="gmap-camera-cluster"`)
+	camEnd := strings.Index(body[camIdx:], `</div>`)
+	if camEnd < 0 {
+		t.Fatal("D26g-impl-2: .gmap-camera-cluster closing tag not found")
+	}
+	camBody := body[camIdx : camIdx+camEnd]
+	for _, want := range []string{
+		`id="gmap-zoom-in"`,
+		`id="gmap-zoom-out"`,
+		`id="gmap-fit-button"`,
+		`id="gmap-centre-button"`,
+		`id="gmap-focus-toggle"`,
+	} {
+		if !strings.Contains(camBody, want) {
+			t.Errorf("D26g-impl-2: %q must live inside .gmap-camera-cluster", want)
+		}
+	}
+	for _, gone := range []string{
+		`id="gmap-pan-mode-button"`,
+		`id="gmap-select-mode-button"`,
+		`id="gmap-back-button"`,
+	} {
+		if strings.Contains(camBody, gone) {
+			t.Errorf("D26g-impl-2: %q must NOT live inside .gmap-camera-cluster", gone)
+		}
+	}
+
+	// === 5. All seven button ids preserved document-wide ===
+	for _, id := range []string{
+		`id="gmap-pan-mode-button"`,
+		`id="gmap-select-mode-button"`,
+		`id="gmap-zoom-in"`,
+		`id="gmap-zoom-out"`,
+		`id="gmap-fit-button"`,
+		`id="gmap-centre-button"`,
+		`id="gmap-focus-toggle"`,
+	} {
+		if !strings.Contains(body, id) {
+			t.Errorf("D26g-impl-2: button %q must remain in the markup", id)
+		}
+	}
+
+	// === 6. INTERACTIVE_ORIGIN_SELECTOR adopts both new selectors ===
+	jsListIdx := strings.Index(body, "INTERACTIVE_ORIGIN_SELECTOR")
+	if jsListIdx < 0 {
+		t.Fatal("D26g-impl-2: INTERACTIVE_ORIGIN_SELECTOR not found")
+	}
+	jsListEnd := strings.Index(body[jsListIdx:], "].join(',')")
+	if jsListEnd < 0 {
+		t.Fatal("D26g-impl-2: INTERACTIVE_ORIGIN_SELECTOR end marker not found")
+	}
+	jsListBody := body[jsListIdx : jsListIdx+jsListEnd]
+	for _, want := range []string{
+		`'.gmap-mode-rail'`,
+		`'.gmap-camera-cluster'`,
+	} {
+		if !strings.Contains(jsListBody, want) {
+			t.Errorf("D26g-impl-2: INTERACTIVE_ORIGIN_SELECTOR must include %q", want)
+		}
+	}
+	if strings.Contains(jsListBody, `'.gmap-camera-bar'`) {
+		t.Error("D26g-impl-2: INTERACTIVE_ORIGIN_SELECTOR must no longer reference the retired .gmap-camera-bar")
+	}
+
+	// === 7. CSS — both clusters declare absolute positioning + flex layout ===
+	for _, want := range []string{
+		"  .gmap-mode-rail {",
+		"  .gmap-camera-cluster {",
+		"position: absolute;",
+		"flex-direction: column;",
+		"flex-direction: row;",
+		"top: 8px;",
+		"bottom: 16px;",
+		"right: 16px;",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26g-impl-2: cluster CSS literal missing: %q", want)
+		}
+	}
+	// Old .gmap-camera-bar 56px clearance must be gone (overlay it
+	// cleared was removed in D26g-impl-1; the bar itself in this
+	// tranche).
+	if strings.Contains(body, "top: 56px;") {
+		t.Error("D26g-impl-2: stale top: 56px clearance must be removed (no longer needed)")
+	}
+
+	// === 8. Active mode-state styling lives on the mode rail ===
+	if !strings.Contains(body, ".gmap-mode-rail button.is-active") {
+		t.Error("D26g-impl-2: active Pan/Select styling must apply to .gmap-mode-rail button.is-active")
+	}
+	// Pan ships active by default; the markup-default reflects the
+	// 'pan' module-state default.
+	if !strings.Contains(body, `id="gmap-pan-mode-button" class="is-active"`) {
+		t.Error("D26g-impl-2: Pan button must ship with class=\"is-active\" so first-paint matches gmapInteractionMode='pan'")
+	}
+
+	// === 9. Both clusters anchor inside .governance-map-body ===
+	bodyIdx := strings.Index(body, `class="governance-map-body"`)
+	if bodyIdx < 0 {
+		t.Fatal("governance-map-body not found")
+	}
+	bodySlice := body[bodyIdx:]
+	bodyEnd := strings.Index(bodySlice, "</section>")
+	if bodyEnd < 0 {
+		t.Fatal("governance-map-body closing context not found")
+	}
+	for _, want := range []string{
+		`class="gmap-mode-rail"`,
+		`class="gmap-camera-cluster"`,
+	} {
+		if !strings.Contains(bodySlice[:bodyEnd], want) {
+			t.Errorf("D26g-impl-2: %q must live inside .governance-map-body (overlay anchor)", want)
+		}
+	}
+
+	// === 10. Focus mode does not hide either cluster ===
+	for _, hideRule := range []string{
+		"body.gmap-focus-mode .gmap-mode-rail { display: none",
+		"body.gmap-focus-mode .gmap-camera-cluster { display: none",
+		"body.gmap-focus-mode .gmap-mode-rail{display:none",
+		"body.gmap-focus-mode .gmap-camera-cluster{display:none",
+	} {
+		if strings.Contains(body, hideRule) {
+			t.Errorf("D26g-impl-2: focus mode must NOT hide canvas-control clusters: %q", hideRule)
+		}
+	}
+
+	// === 11. D26g-impl-1 toolbar regression preserved ===
+	if !strings.Contains(body, `class="governance-map-toolbar`) {
+		t.Error("D26g-impl-2 must NOT remove the workbench toolbar")
+	}
+	toolbarIdx := strings.Index(body, `class="governance-map-toolbar`)
+	toolbarEnd := strings.Index(body[toolbarIdx:], `class="governance-map-body"`)
+	if toolbarEnd < 0 {
+		t.Fatal("could not bound .governance-map-toolbar block")
+	}
+	toolbarBody := body[toolbarIdx : toolbarIdx+toolbarEnd]
+	if !strings.Contains(toolbarBody, `id="gmap-back-button"`) {
+		t.Error("D26g-impl-1: gmap-back-button must remain inside .governance-map-toolbar")
+	}
+
+	// === 12. Other affordances regression preserved ===
+	for _, want := range []string{
+		// Pan/Select interaction-mode helper.
+		`function setGmapInteractionMode(mode)`,
+		`let gmapInteractionMode = 'pan';`,
+		// Camera helpers.
+		"function fitGmapToBounds()",
+		"function focusGmapOnRoot(rootCardId)",
+		"focusGmapOnNode",
+		// D26f tray + D26b/D26c/D26d/D26e records flow.
+		"gmap-evidence-tray-analytic-layout",
+		"function loadExplorerRuntimeRecords()",
+		"function loadGmapEvidenceActivity()",
+		"function computeRecordsRuntimeMetrics(rows)",
+		"async function loadExplorerEnvelopeDetail(envelopeId, onResolved)",
+		// D24i multi-selection state.
+		"const gmapSelectedNodeIds = new Set()",
+		// Connector legend — D26g-impl-3 relocated it to bottom-left
+		// but the class is preserved.
+		`class="gmap-legend-overlay"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26g-impl-2 must NOT remove existing affordance %q", want)
+		}
+	}
+}
+
+// TestExplorer_HTML_GovernanceMap_CompactEdgeLegend pins the D26g-
+// impl-3 contract: the connector legend overlay has been relocated
+// from bottom-centre to bottom-left of the canvas and visually
+// compacted to act as a passive edge key rather than a dominant
+// strip. All five relationship labels and all five swatch classes
+// are preserved; pointer-events: none remains so the legend never
+// blocks graph interaction; the legend stays inside .governance-
+// map-body so it sits above the Runtime Evidence tray boundary.
+//
+// D26g-impl-1 (workbench toolbar) and D26g-impl-2 (mode rail +
+// camera cluster) regressions are pinned at the bottom so a
+// future change to the legend cannot accidentally undo earlier
+// rationalisation work.
+func TestExplorer_HTML_GovernanceMap_CompactEdgeLegend(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// === 1. Overlay markup + ARIA preserved ===
+	if !strings.Contains(body, `class="gmap-legend-overlay"`) {
+		t.Fatal("D26g-impl-3: .gmap-legend-overlay must remain in markup")
+	}
+	if !strings.Contains(body, `aria-label="Connector legend"`) {
+		t.Error(`D26g-impl-3: legend overlay must keep aria-label="Connector legend"`)
+	}
+
+	// === 2. CSS rule placement — bottom-left ===
+	// Extract the .gmap-legend-overlay rule body so positive AND
+	// negative pins are scoped to that rule and don't catch
+	// unrelated declarations elsewhere on the page (e.g. the
+	// pre-D24e legacy left: 50% string in test-comment prose
+	// inside the rendered JS bundle is not present, but scoping
+	// keeps that future-proof).
+	overlayRuleIdx := strings.Index(body, "  .gmap-legend-overlay {")
+	if overlayRuleIdx < 0 {
+		t.Fatal("D26g-impl-3: .gmap-legend-overlay CSS rule not found")
+	}
+	overlayRuleBody := body[overlayRuleIdx:]
+	overlayRuleEnd := strings.Index(overlayRuleBody, "}")
+	if overlayRuleEnd < 0 {
+		t.Fatal("D26g-impl-3: .gmap-legend-overlay rule end not found")
+	}
+	overlayRuleBody = overlayRuleBody[:overlayRuleEnd]
+	for _, want := range []string{
+		"position: absolute;",
+		"bottom: 16px;",
+		"left: 16px;",
+		"transform: none;",
+		"pointer-events: none;",
+	} {
+		if !strings.Contains(overlayRuleBody, want) {
+			t.Errorf("D26g-impl-3: .gmap-legend-overlay rule must declare %q", want)
+		}
+	}
+	// Negative pins — old bottom-centre placement is gone from THIS
+	// rule. Scoped to the rule body so unrelated `left: 50%` /
+	// `translateX(-50%)` declarations elsewhere in the file do not
+	// false-positive (none exist today, but the scoping keeps the
+	// pin precise).
+	for _, gone := range []string{
+		"left: 50%;",
+		"translateX(-50%)",
+		"bottom: 12px;",
+	} {
+		if strings.Contains(overlayRuleBody, gone) {
+			t.Errorf("D26g-impl-3: .gmap-legend-overlay rule must NOT carry old placement %q", gone)
+		}
+	}
+
+	// === 3. Compactness — max-width + small font + tight padding ===
+	if !strings.Contains(overlayRuleBody, "max-width: 280px;") {
+		t.Error("D26g-impl-3: .gmap-legend-overlay must declare max-width: 280px (compact edge key)")
+	}
+	if !strings.Contains(overlayRuleBody, "font-size: 10px;") {
+		t.Error("D26g-impl-3: .gmap-legend-overlay must use compact font-size: 10px")
+	}
+	if !strings.Contains(overlayRuleBody, "padding: 4px 8px;") {
+		t.Error("D26g-impl-3: .gmap-legend-overlay must use tight padding: 4px 8px")
+	}
+
+	// === 4. Connection-key wrapper compactness ===
+	keyRuleIdx := strings.Index(body, "  .gmap-connection-key {")
+	if keyRuleIdx < 0 {
+		t.Fatal("D26g-impl-3: .gmap-connection-key CSS rule not found")
+	}
+	keyRuleBody := body[keyRuleIdx:]
+	keyRuleEnd := strings.Index(keyRuleBody, "}")
+	if keyRuleEnd < 0 {
+		t.Fatal("D26g-impl-3: .gmap-connection-key rule end not found")
+	}
+	keyRuleBody = keyRuleBody[:keyRuleEnd]
+	for _, want := range []string{
+		"display: inline-flex;",
+		"flex-wrap: wrap;",
+		"gap: 6px 10px;",
+	} {
+		if !strings.Contains(keyRuleBody, want) {
+			t.Errorf("D26g-impl-3: .gmap-connection-key rule must declare %q", want)
+		}
+	}
+	// Old wider gap is gone from the rule.
+	if strings.Contains(keyRuleBody, "gap: 14px;") {
+		t.Error("D26g-impl-3: .gmap-connection-key must use compact gap (was 14px, now 6px 10px)")
+	}
+
+	// === 5. All five relationship labels preserved ===
+	for _, label := range []string{
+		"Service relationship",
+		"AI binding",
+		"Authority",
+		"Evidence",
+		"Coverage gap",
+	} {
+		if !strings.Contains(body, label) {
+			t.Errorf("D26g-impl-3: relationship label %q must remain", label)
+		}
+	}
+	// Scoped: every label appears INSIDE the legend overlay markup.
+	overlayMarkupIdx := strings.Index(body, `class="gmap-legend-overlay"`)
+	overlayMarkupEnd := strings.Index(body[overlayMarkupIdx:], `</div>`)
+	if overlayMarkupEnd < 0 {
+		t.Fatal("D26g-impl-3: legend overlay closing tag not found")
+	}
+	overlayMarkup := body[overlayMarkupIdx : overlayMarkupIdx+overlayMarkupEnd]
+	for _, label := range []string{
+		">Service relationship<",
+		">AI binding<",
+		">Authority<",
+		">Evidence<",
+		">Coverage gap<",
+	} {
+		if !strings.Contains(overlayMarkup, label) {
+			t.Errorf("D26g-impl-3: %q must live inside .gmap-legend-overlay", label)
+		}
+	}
+
+	// === 6. All five swatch classes preserved ===
+	for _, want := range []string{
+		`class="gmap-legend-swatch"`,           // Service relationship (default)
+		`class="gmap-legend-swatch ai-binding"`, // AI binding
+		`class="gmap-legend-swatch authority"`,  // Authority
+		`class="gmap-legend-swatch evidence"`,   // Evidence
+		`class="gmap-legend-swatch gap"`,        // Coverage gap
+	} {
+		if !strings.Contains(overlayMarkup, want) {
+			t.Errorf("D26g-impl-3: swatch markup %q must remain inside .gmap-legend-overlay", want)
+		}
+	}
+	// And the swatch CSS variants (colour assignments) are unchanged.
+	for _, want := range []string{
+		".gmap-legend-swatch {",
+		".gmap-legend-swatch.ai-binding",
+		".gmap-legend-swatch.authority",
+		".gmap-legend-swatch.evidence",
+		".gmap-legend-swatch.gap",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26g-impl-3: swatch CSS rule %q must remain", want)
+		}
+	}
+
+	// === 7. Legend lives inside .governance-map-body (overlay anchor) ===
+	bodyIdx := strings.Index(body, `class="governance-map-body"`)
+	if bodyIdx < 0 {
+		t.Fatal("governance-map-body not found")
+	}
+	bodySlice := body[bodyIdx:]
+	bodyEnd := strings.Index(bodySlice, "</section>")
+	if bodyEnd < 0 {
+		t.Fatal("governance-map-body closing context not found")
+	}
+	if !strings.Contains(bodySlice[:bodyEnd], `class="gmap-legend-overlay"`) {
+		t.Error("D26g-impl-3: legend overlay must live inside .governance-map-body (overlay anchor)")
+	}
+
+	// === 8. Focus mode does NOT hide the legend ===
+	for _, hideRule := range []string{
+		"body.gmap-focus-mode .gmap-legend-overlay { display: none",
+		"body.gmap-focus-mode .gmap-legend-overlay{display:none",
+	} {
+		if strings.Contains(body, hideRule) {
+			t.Errorf("D26g-impl-3: focus mode must NOT hide the legend overlay: %q", hideRule)
+		}
+	}
+	// The pre-existing focus-mode key compression rule is preserved.
+	if !strings.Contains(body, "body.gmap-focus-mode .gmap-connection-key") {
+		t.Error("D26g-impl-3: focus-mode .gmap-connection-key rule must remain (compresses gap in focus mode)")
+	}
+
+	// === 9. INTERACTIVE_ORIGIN_SELECTOR still includes the legend ===
+	jsListIdx := strings.Index(body, "INTERACTIVE_ORIGIN_SELECTOR")
+	if jsListIdx < 0 {
+		t.Fatal("INTERACTIVE_ORIGIN_SELECTOR not found")
+	}
+	jsListEnd := strings.Index(body[jsListIdx:], "].join(',')")
+	if jsListEnd < 0 {
+		t.Fatal("INTERACTIVE_ORIGIN_SELECTOR end marker not found")
+	}
+	jsListBody := body[jsListIdx : jsListIdx+jsListEnd]
+	if !strings.Contains(jsListBody, `'.gmap-legend-overlay'`) {
+		t.Error("D26g-impl-3: INTERACTIVE_ORIGIN_SELECTOR must still include .gmap-legend-overlay")
+	}
+
+	// === 10. D26g-impl-1 + D26g-impl-2 regressions ===
+	for _, want := range []string{
+		// D26g-impl-1 toolbar.
+		`class="governance-map-toolbar`,
+		`id="gmap-back-button"`,
+		`id="gmap-search-input"`,
+		`id="gmap-current-root"`,
+		`class="gmap-filter-chips"`,
+		`class="gmap-view-mode-toggle"`,
+		// D26g-impl-2 clusters.
+		`class="gmap-mode-rail"`,
+		`class="gmap-camera-cluster"`,
+		`id="gmap-pan-mode-button"`,
+		`id="gmap-select-mode-button"`,
+		`id="gmap-zoom-in"`,
+		`id="gmap-zoom-out"`,
+		`id="gmap-fit-button"`,
+		`id="gmap-centre-button"`,
+		`id="gmap-focus-toggle"`,
+		// INTERACTIVE_ORIGIN_SELECTOR includes both clusters (D26g-impl-2).
+		`'.gmap-mode-rail'`,
+		`'.gmap-camera-cluster'`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26g-impl-3 must NOT remove D26g-impl-1/2 affordance %q", want)
+		}
+	}
+	// Back is in the toolbar (positive) and not in either canvas
+	// cluster (negative).
+	toolbarIdx := strings.Index(body, `class="governance-map-toolbar`)
+	toolbarEnd := strings.Index(body[toolbarIdx:], `class="governance-map-body"`)
+	toolbarBody := body[toolbarIdx : toolbarIdx+toolbarEnd]
+	if !strings.Contains(toolbarBody, `id="gmap-back-button"`) {
+		t.Error("D26g-impl-1: gmap-back-button must remain inside .governance-map-toolbar")
+	}
+
+	// === 11. D26f tray regression ===
+	for _, want := range []string{
+		"gmap-evidence-tray-analytic-layout",
+		"gmap-evidence-tray-signal-column",
+		"gmap-evidence-tray-chart-panel",
+		// D25e disclaimer still in the DOM (Drift tab provenance).
+		"Illustrative demo signal. Not calculated from runtime envelopes.",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26g-impl-3 must NOT remove D25e/D26f tray affordance %q", want)
+		}
+	}
+
+	// === 12. Records / activity / detail flow regression ===
+	for _, want := range []string{
+		"function loadExplorerRuntimeRecords()",
+		"function loadGmapEvidenceActivity()",
+		"function computeRecordsRuntimeMetrics(rows)",
+		"async function loadExplorerEnvelopeDetail(envelopeId, onResolved)",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26g-impl-3 must NOT remove D26b–D26e affordance %q", want)
+		}
+	}
+}
+
+// TestExplorer_HTML_GovernanceMap_ViewModeIconToggle pins the
+// D26g-impl-4 contract: the Form / Graph segmented toggle at the
+// right edge of the workbench toolbar is now icon-only. Visible
+// text labels ("Form" / "Graph") were dropped; inline SVGs convey
+// meaning, and aria-label + title preserve it for assistive tech
+// and on-hover discovery. The container, both segments, both
+// data-view-mode attributes, the .is-active default state on the
+// Graph segment, the .gmap-view-mode-feedback channel, and the
+// existing JS wiring (which binds via .gmap-view-mode-segment +
+// data-view-mode, not text content) all continue to work.
+func TestExplorer_HTML_GovernanceMap_ViewModeIconToggle(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// === 1. Toggle container + segment hooks preserved ===
+	for _, want := range []string{
+		`class="gmap-view-mode-toggle"`,
+		`role="group"`,
+		`aria-label="View mode"`,
+		`class="gmap-view-mode-segment"`,
+		`class="gmap-view-mode-segment is-active"`,
+		`data-view-mode="form"`,
+		`data-view-mode="graph"`,
+		`class="gmap-view-mode-feedback"`,
+		`aria-live="polite"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26g-impl-4: toggle structural hook %q must remain", want)
+		}
+	}
+
+	// === 2. Scoped extraction of the toggle markup ===
+	toggleIdx := strings.Index(body, `class="gmap-view-mode-toggle"`)
+	if toggleIdx < 0 {
+		t.Fatal("D26g-impl-4: .gmap-view-mode-toggle not found")
+	}
+	toggleEnd := strings.Index(body[toggleIdx:], `</div>`)
+	if toggleEnd < 0 {
+		t.Fatal("D26g-impl-4: .gmap-view-mode-toggle closing tag not found")
+	}
+	toggleBody := body[toggleIdx : toggleIdx+toggleEnd]
+
+	// === 3. Each segment carries an inline SVG icon ===
+	svgCount := strings.Count(toggleBody, "<svg")
+	if svgCount != 2 {
+		t.Errorf("D26g-impl-4: toggle must contain exactly 2 inline SVG icons (one per segment), got %d", svgCount)
+	}
+	// Icon stroke uses currentColor so the active-state colour shift
+	// recolours the icon without per-icon CSS.
+	if !strings.Contains(toggleBody, `stroke="currentColor"`) {
+		t.Error("D26g-impl-4: SVG icons must use stroke=\"currentColor\" so the active-state colour shift propagates")
+	}
+	// SVGs are decorative (the button itself carries the aria-label).
+	if !strings.Contains(toggleBody, `aria-hidden="true"`) {
+		t.Error("D26g-impl-4: inline SVG icons must carry aria-hidden=\"true\" (button aria-label provides the accessible name)")
+	}
+
+	// === 4. ARIA + title preserve meaning per segment ===
+	for _, want := range []string{
+		`aria-label="Form view"`,
+		`aria-label="Graph view"`,
+		`title="Form view"`,
+		`title="Graph view"`,
+	} {
+		if !strings.Contains(toggleBody, want) {
+			t.Errorf("D26g-impl-4: segment must declare %q for accessibility / discoverability", want)
+		}
+	}
+
+	// === 5. Visible text labels removed from segment content ===
+	// Negative pins scoped to the toggle markup so the words "Form"
+	// and "Graph" can still appear elsewhere on the page (e.g. in JS
+	// strings, comments, the "Form view coming soon" feedback).
+	for _, gone := range []string{
+		`>Form<`,
+		`>Graph<`,
+	} {
+		if strings.Contains(toggleBody, gone) {
+			t.Errorf("D26g-impl-4: visible text %q must be removed from segment content (icons replace it)", gone)
+		}
+	}
+
+	// === 6. Active-state default — Graph is active, Form is inactive ===
+	graphIdx := strings.Index(toggleBody, `data-view-mode="graph"`)
+	if graphIdx < 0 {
+		t.Fatal("D26g-impl-4: graph segment not found")
+	}
+	// Look at the opening tag of the graph segment; it must carry
+	// is-active + aria-pressed=true.
+	graphTag := toggleBody[graphIdx-100 : graphIdx+100]
+	if graphIdx < 100 {
+		graphTag = toggleBody[:graphIdx+100]
+	}
+	if !strings.Contains(graphTag, "is-active") {
+		t.Error("D26g-impl-4: graph segment must ship with class=\"… is-active\" (default mode)")
+	}
+	if !strings.Contains(graphTag, `aria-pressed="true"`) {
+		t.Error("D26g-impl-4: graph segment must ship with aria-pressed=\"true\"")
+	}
+	// Form segment is inactive by default.
+	formIdx := strings.Index(toggleBody, `data-view-mode="form"`)
+	if formIdx < 0 {
+		t.Fatal("D26g-impl-4: form segment not found")
+	}
+	formTag := toggleBody[formIdx-100 : formIdx+100]
+	if formIdx < 100 {
+		formTag = toggleBody[:formIdx+100]
+	}
+	if strings.Contains(formTag, "is-active") {
+		t.Error("D26g-impl-4: form segment must NOT ship with .is-active (Graph is the default)")
+	}
+	if !strings.Contains(formTag, `aria-pressed="false"`) {
+		t.Error("D26g-impl-4: form segment must ship with aria-pressed=\"false\"")
+	}
+
+	// === 7. Existing JS wiring still binds by selector + data-* ===
+	// The handler queries .gmap-view-mode-segment + the feedback
+	// element; nothing depends on text content. Pin both.
+	for _, want := range []string{
+		`document.querySelectorAll('.gmap-view-mode-segment')`,
+		`document.querySelector('.gmap-view-mode-feedback')`,
+		"wireGmapViewModeToggle",
+		"Form view coming soon",
+		"3000",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26g-impl-4: view-mode wiring literal %q must remain", want)
+		}
+	}
+
+	// === 8. Toggle CSS supports icon-only sizing ===
+	// The previous text-button padding (3px 10px) is replaced with
+	// fixed width/height so the toolbar's right edge does not jitter
+	// when the active segment swaps.
+	segRuleIdx := strings.Index(body, "  .gmap-view-mode-segment {")
+	if segRuleIdx < 0 {
+		t.Fatal("D26g-impl-4: .gmap-view-mode-segment CSS rule not found")
+	}
+	segRuleEnd := strings.Index(body[segRuleIdx:], "}")
+	segRuleBody := body[segRuleIdx : segRuleIdx+segRuleEnd]
+	for _, want := range []string{
+		"width: 26px;",
+		"height: 22px;",
+		"padding: 0;",
+		"display: inline-flex;",
+		"align-items: center;",
+		"justify-content: center;",
+	} {
+		if !strings.Contains(segRuleBody, want) {
+			t.Errorf("D26g-impl-4: .gmap-view-mode-segment rule must declare %q (icon-only sizing)", want)
+		}
+	}
+	// Old text-button padding is gone from the rule.
+	if strings.Contains(segRuleBody, "padding: 3px 10px;") {
+		t.Error("D26g-impl-4: .gmap-view-mode-segment rule must drop the old text-button padding (3px 10px)")
+	}
+
+	// === 9. Active state still visually distinct ===
+	if !strings.Contains(body, ".gmap-view-mode-segment.is-active") {
+		t.Error("D26g-impl-4: .gmap-view-mode-segment.is-active rule must remain so the active mode is visually obvious")
+	}
+
+	// === 10. D26g-impl-1 toolbar regression ===
+	if !strings.Contains(body, `class="governance-map-toolbar`) {
+		t.Error("D26g-impl-4 must NOT remove the workbench toolbar (D26g-impl-1)")
+	}
+	toolbarIdx := strings.Index(body, `class="governance-map-toolbar`)
+	toolbarEnd := strings.Index(body[toolbarIdx:], `class="governance-map-body"`)
+	toolbarBody := body[toolbarIdx : toolbarIdx+toolbarEnd]
+	for _, want := range []string{
+		`id="gmap-back-button"`,
+		`id="gmap-current-root"`,
+		`id="gmap-search-input"`,
+		`class="gmap-filter-chips"`,
+		`class="gmap-view-mode-toggle"`,
+	} {
+		if !strings.Contains(toolbarBody, want) {
+			t.Errorf("D26g-impl-4: toolbar must still contain %q", want)
+		}
+	}
+	// Filter chips must NOT have been touched (brief explicitly
+	// excluded any chip redesign).
+	for _, want := range []string{
+		`data-kind="all"`,
+		`data-kind="business"`,
+		`data-kind="capability"`,
+		`data-kind="process"`,
+		`data-kind="surface"`,
+		`data-kind="ai"`,
+		`data-kind="bindings"`,
+		`data-kind="synthetic"`,
+		`>All<`,
+		`>Business<`,
+		`>Capabilities<`,
+		`>Processes<`,
+		`>Surfaces<`,
+		`>AI Systems<`,
+		`>Bindings<`,
+		`>Synthetic<`,
+	} {
+		if !strings.Contains(toolbarBody, want) {
+			t.Errorf("D26g-impl-4: filter chip %q must remain unchanged (chip redesign explicitly out of scope)", want)
+		}
+	}
+
+	// === 11. D26g-impl-2 + D26g-impl-3 regressions ===
+	for _, want := range []string{
+		// D26g-impl-2 clusters.
+		`class="gmap-mode-rail"`,
+		`class="gmap-camera-cluster"`,
+		`id="gmap-pan-mode-button"`,
+		`id="gmap-select-mode-button"`,
+		`id="gmap-zoom-in"`,
+		`id="gmap-zoom-out"`,
+		`id="gmap-fit-button"`,
+		`id="gmap-centre-button"`,
+		`id="gmap-focus-toggle"`,
+		// D26g-impl-3 compact legend.
+		`class="gmap-legend-overlay"`,
+		"Service relationship",
+		"AI binding",
+		"Authority",
+		"Evidence",
+		"Coverage gap",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26g-impl-4 must NOT remove prior D26g-impl-2/3 affordance %q", want)
+		}
+	}
+
+	// === 12. D26f tray + D26b–D26e records flow regression ===
+	for _, want := range []string{
+		"gmap-evidence-tray-analytic-layout",
+		"gmap-evidence-tray-signal-column",
+		"gmap-evidence-tray-chart-panel",
+		"function loadExplorerRuntimeRecords()",
+		"function loadGmapEvidenceActivity()",
+		"function computeRecordsRuntimeMetrics(rows)",
+		"async function loadExplorerEnvelopeDetail(envelopeId, onResolved)",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26g-impl-4 must NOT remove prior D25e/D26b-f affordance %q", want)
+		}
+	}
+}
+
+// TestExplorer_HTML_GovernanceMap_ToolbarContextWording pins the
+// D26i Part 1 contract: setGovernanceMapCurrentRoot now writes a
+// compact "<Kind> · <Name>" string into #gmap-current-root and
+// preserves the full "View: <Kind> · Root: <Name>" form in the
+// element's title attribute. Visible noise is reduced; the long
+// explanatory form is still reachable via hover and assistive tech.
+//
+// At narrow viewports (<1280px) the visible label drops the Name
+// and shows just the Kind; the title remains the full form at every
+// width. Three supported view kinds are mapped to compact labels
+// (service / ai_system / decision_surface).
+func TestExplorer_HTML_GovernanceMap_ToolbarContextWording(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// === 1. Element + helper preserved ===
+	if !strings.Contains(body, `id="gmap-current-root"`) {
+		t.Fatal("D26i: #gmap-current-root must remain in the markup")
+	}
+	if !strings.Contains(body, `aria-live="polite"`) {
+		t.Error("D26i: #gmap-current-root must keep aria-live=\"polite\" so root changes re-announce")
+	}
+	if !strings.Contains(body, "function setGovernanceMapCurrentRoot(view, rootId, rootName)") {
+		t.Fatal("D26i: setGovernanceMapCurrentRoot helper must remain")
+	}
+
+	// === 2. Helper body — compact textContent + full-form title ===
+	helperIdx := strings.Index(body, "function setGovernanceMapCurrentRoot(view, rootId, rootName)")
+	helperEnd := strings.Index(body[helperIdx:], "\n  }\n")
+	if helperEnd < 0 {
+		t.Fatal("D26i: setGovernanceMapCurrentRoot end marker not found")
+	}
+	helperBody := body[helperIdx : helperIdx+helperEnd]
+
+	// Visible compact wording — no "View: " or "Root: " prefix in
+	// el.textContent; the kind + name are concatenated with a middle
+	// dot. Pin both the compact wide form and the narrow-viewport
+	// kind-only form.
+	if !strings.Contains(helperBody, "el.textContent = isNarrow") {
+		t.Error("D26i: helper must branch on narrow viewport for textContent")
+	}
+	if !strings.Contains(helperBody, "viewLabel + ' · ' + display") {
+		t.Error("D26i: wide-viewport visible wording must be `<Kind> · <Name>` (concat with middle dot)")
+	}
+	// Negative pin scoped to the helper body: the visible textContent
+	// must NOT carry the old "View: " / "Root: " prefixes. The full
+	// form lives in the title attribute (see Section 3 below).
+	if strings.Contains(helperBody, `el.textContent = 'View: '`) ||
+		strings.Contains(helperBody, `el.textContent = 'View: ' +`) {
+		t.Error("D26i: visible textContent must no longer start with `View: `")
+	}
+	// Confirm the visible-textContent assignments do not contain
+	// `Root: ` either. The helper has two textContent assignments
+	// (narrow + wide); both must be Kind-only or `Kind · Name`.
+	textContentAssigns := strings.Count(helperBody, "el.textContent = ")
+	for i := 0; i < textContentAssigns; i++ {
+		// Walk each assignment and confirm `Root: ` is absent.
+	}
+	if strings.Count(helperBody, "Root: ") != 1 {
+		// `Root: ` should appear exactly once — inside the title-attribute concat.
+		t.Errorf("D26i: `Root: ` should appear exactly once in the helper (inside the title attribute), got %d", strings.Count(helperBody, "Root: "))
+	}
+
+	// === 3. Full explanatory form preserved in title attribute ===
+	if !strings.Contains(helperBody, "el.setAttribute('title', 'View: ' + viewLabel + ' · Root: ' + display)") {
+		t.Error("D26i: helper must set title attribute to full `View: <Kind> · Root: <Name>` form for hover + assistive-tech")
+	}
+	// Cleared label paths also clear the title to avoid stale hover.
+	if !strings.Contains(helperBody, "el.removeAttribute('title')") {
+		t.Error("D26i: helper must remove title attribute when label is cleared (empty/null path)")
+	}
+
+	// === 4. Three supported view kinds mapped to compact labels ===
+	for _, want := range []string{
+		"'AI System'",
+		"'Service'",
+		"'Decision Surface'",
+	} {
+		if !strings.Contains(helperBody, want) {
+			t.Errorf("D26i: helper must map a view kind to compact label %q", want)
+		}
+	}
+
+	// === 5. Narrow-viewport abbreviation preserved ===
+	if !strings.Contains(helperBody, "window.innerWidth && window.innerWidth < 1280") {
+		t.Error("D26i: D24d narrow-viewport abbreviation must remain")
+	}
+
+	// === 6. Renderer call sites unchanged ===
+	// renderGovernanceMap still passes (currentGraphView, currentGraphRootId, rootDisplayName).
+	if !strings.Contains(body, "setGovernanceMapCurrentRoot(currentGraphView, currentGraphRootId, rootDisplayName)") {
+		t.Error("D26i: renderGovernanceMap must still call setGovernanceMapCurrentRoot(currentGraphView, currentGraphRootId, rootDisplayName)")
+	}
+	// Empty / error paths still clear via (null, null, null).
+	if !strings.Contains(body, "setGovernanceMapCurrentRoot(null, null, null)") {
+		t.Error("D26i: empty/error paths must clear the toolbar root label")
+	}
+}
+
+// TestExplorer_HTML_GovernanceMap_FocusMode_FitsOnEntry pins the
+// D26i Part 2 contract: entering Focus mode automatically fits the
+// graph to view via fitGmapToBounds, sequenced through a two-frame
+// requestAnimationFrame so the body-class flip + shell-chrome
+// compression have settled before fit reads the new viewport
+// dimensions. The fit fires only on transition into Focus mode (gated
+// by a gmapFocusMode check); it does not loop or repeat while Focus
+// mode is held. Manual pan / zoom / Fit-button paths remain
+// untouched.
+func TestExplorer_HTML_GovernanceMap_FocusMode_FitsOnEntry(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// === 1. Focus-mode markup + state preserved ===
+	for _, want := range []string{
+		`id="gmap-focus-toggle"`,
+		`aria-pressed="false"`,
+		"let gmapFocusMode = false;",
+		"function applyGmapFocusMode()",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26i Focus-mode regression: %q must remain", want)
+		}
+	}
+
+	// === 2. Helper body — fit fires on entry through double rAF ===
+	applyIdx := strings.Index(body, "function applyGmapFocusMode()")
+	applyEnd := strings.Index(body[applyIdx:], "\n  }\n")
+	if applyEnd < 0 {
+		t.Fatal("D26i: applyGmapFocusMode end marker not found")
+	}
+	applyBody := body[applyIdx : applyIdx+applyEnd]
+
+	// Single rAF was the D23 baseline. D26i upgrades to a two-frame
+	// sequence so the first focus-mode launch of a session fits
+	// reliably even when shell-chrome compression takes an extra
+	// frame to settle. Pin the nested rAF call shape; the structure
+	// is bounded (no loop / no polling).
+	rAFCount := strings.Count(applyBody, "window.requestAnimationFrame")
+	if rAFCount < 2 {
+		t.Errorf("D26i: applyGmapFocusMode must use two requestAnimationFrame calls (got %d) — outer schedules the inner so layout is fully settled before fitGmapToBounds reads viewport dimensions", rAFCount)
+	}
+	if !strings.Contains(applyBody, "fitGmapToBounds()") {
+		t.Error("D26i: applyGmapFocusMode must call fitGmapToBounds() inside the rAF chain")
+	}
+	// Negative pins — the brief explicitly forbids using
+	// focusGmapOnRoot in place of fit on entry, and forbids polling.
+	if strings.Contains(applyBody, "focusGmapOnRoot(") {
+		t.Error("D26i: applyGmapFocusMode must NOT call focusGmapOnRoot on entry (Fit Graph to View is the desired behaviour)")
+	}
+	if strings.Contains(applyBody, "setInterval(") {
+		t.Error("D26i: applyGmapFocusMode must NOT use setInterval (no polling)")
+	}
+
+	// === 3. Fit fires on entry only — gated by gmapFocusMode ===
+	// The inner rAF callback re-checks gmapFocusMode so a quick
+	// exit before the second frame fires aborts the fit. The two
+	// gating checks (one per rAF level) ensure both abort paths
+	// exist.
+	gateCount := strings.Count(applyBody, "if (gmapFocusMode)") +
+		strings.Count(applyBody, "if (!gmapFocusMode)")
+	if gateCount < 2 {
+		t.Errorf("D26i: applyGmapFocusMode must gate fit on gmapFocusMode at each rAF level (got %d gating checks; expected >=2 for idempotency)", gateCount)
+	}
+
+	// === 4. wireGmapFocusToggle still attached + manual paths preserved ===
+	for _, want := range []string{
+		"wireGmapFocusToggle",
+		// Manual fit + zoom paths unchanged.
+		"function fitGmapToBounds()",
+		"function applyGmapZoom()",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26i: manual fit/zoom path %q must remain", want)
+		}
+	}
+
+	// === 5. Existing focus-mode CSS rules unchanged (regression) ===
+	for _, want := range []string{
+		"body.gmap-focus-mode .shell-header",
+		"body.gmap-focus-mode .governance-map-workbench",
+		// D26g-impl-1 toolbar compression in focus mode preserved.
+		"body.gmap-focus-mode .governance-map-toolbar",
+		// Pre-D26g-impl-1 legacy alias still applied.
+		"body.gmap-focus-mode .governance-map-legend",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26i: focus-mode CSS rule %q must remain", want)
+		}
+	}
+
+	// === 6. D26g toolbar / mode-rail / camera-cluster / legend regression ===
+	for _, want := range []string{
+		`class="governance-map-toolbar`,
+		`class="gmap-mode-rail"`,
+		`class="gmap-camera-cluster"`,
+		`class="gmap-legend-overlay"`,
+		`id="gmap-back-button"`,
+		`id="gmap-pan-mode-button"`,
+		`id="gmap-select-mode-button"`,
+		`id="gmap-zoom-in"`,
+		`id="gmap-fit-button"`,
+		`id="gmap-centre-button"`,
+		`id="gmap-focus-toggle"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26i must NOT remove D26g affordance %q", want)
+		}
+	}
+}
+
+// TestExplorer_HTML_GovernanceMap_ConnectorHoverPreview pins the
+// D26h-impl contract: every connector path is hover-aware, with
+// metadata attributes on the path, a delegated hover handler on
+// #gmap-svg, a single shared tooltip element, endpoint-halo class
+// management on the source/target node cards, and gesture-cleanup
+// hooks so pan / lasso / node-drag / re-render never leave a stale
+// preview. The compact edge legend (D26g-impl-3) and all five
+// existing connector kind classes are preserved.
+func TestExplorer_HTML_GovernanceMap_ConnectorHoverPreview(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// === 1. Helper functions exist with the canonical signatures ===
+	for _, want := range []string{
+		"function gmapConnectorKindFromCls(cls)",
+		"function gmapConnectorEndpointLabel(nodeId)",
+		"function hideGmapConnectorTooltip()",
+		"function showGmapConnectorTooltip(pathEl, clientX, clientY)",
+		"function wireGmapConnectorHover()",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26h-impl: missing helper declaration %q", want)
+		}
+	}
+
+	// === 2. Kind-mapping helper covers every existing connector kind ===
+	kindBody := extractBetween(t, body,
+		"function gmapConnectorKindFromCls(cls)",
+		"function gmapConnectorEndpointLabel(nodeId)")
+	for _, want := range []string{
+		"connector-service",
+		"connector-ai-binding",
+		"connector-authority",
+		"connector-evidence",
+		"connector-gap",
+		"'service'",
+		"'ai_binding'",
+		"'authority'",
+		"'evidence'",
+		"'coverage_gap'",
+		"'Service relationship'",
+		"'AI binding'",
+		"'Authority'",
+		"'Evidence'",
+		"'Coverage gap'",
+	} {
+		if !strings.Contains(kindBody, want) {
+			t.Errorf("D26h-impl: kind-mapping helper must include %q", want)
+		}
+	}
+
+	// === 3. Endpoint-label helper handles synthetic ids + dataset.nodeName ===
+	labelBody := extractBetween(t, body,
+		"function gmapConnectorEndpointLabel(nodeId)",
+		"function hideGmapConnectorTooltip()")
+	for _, want := range []string{
+		`id === 'authority'`,
+		`'Authority'`,
+		`id === 'coverage'`,
+		`'Coverage'`,
+		"dataset.nodeName",
+		// Defensive: the helper looks up the rendered card by its
+		// dataset.nodeId match.
+		"dataset.nodeId === id",
+		// Final fallback returns the raw id rather than throwing.
+		"return id;",
+	} {
+		if !strings.Contains(labelBody, want) {
+			t.Errorf("D26h-impl: endpoint-label helper must include %q", want)
+		}
+	}
+
+	// === 4. addLiveConnector stamps metadata on the rendered path ===
+	addLiveIdx := strings.Index(body, "function addLiveConnector(srcId, srcAnchor, dstId, dstAnchor, cls)")
+	if addLiveIdx < 0 {
+		t.Fatal("D26h-impl: addLiveConnector declaration not found")
+	}
+	addLiveTail := body[addLiveIdx:]
+	addLiveEnd := strings.Index(addLiveTail, "\n  }\n")
+	if addLiveEnd < 0 {
+		t.Fatal("D26h-impl: addLiveConnector end marker not found")
+	}
+	addLiveBody := addLiveTail[:addLiveEnd]
+	for _, want := range []string{
+		`pathEl.classList.add('gmap-connector')`,
+		`pathEl.setAttribute('data-connector-kind'`,
+		`pathEl.setAttribute('data-source-node-id', srcId)`,
+		`pathEl.setAttribute('data-target-node-id', dstId)`,
+		`pathEl.setAttribute('role', 'img')`,
+		`pathEl.setAttribute(`,
+		`'aria-label'`,
+		"gmapConnectorKindFromCls(cls)",
+		"gmapConnectorEndpointLabel(srcId)",
+		"gmapConnectorEndpointLabel(dstId)",
+	} {
+		if !strings.Contains(addLiveBody, want) {
+			t.Errorf("D26h-impl: addLiveConnector must include %q", want)
+		}
+	}
+
+	// === 5. Tooltip element exists with role + aria-live ===
+	for _, want := range []string{
+		`class="gmap-connector-tooltip"`,
+		`id="gmap-connector-tooltip"`,
+		`role="tooltip"`,
+		`aria-live="polite"`,
+		// Two interior spans for kind label + source → target line.
+		`class="gmap-connector-tooltip-kind"`,
+		`class="gmap-connector-tooltip-route"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26h-impl: tooltip markup literal missing %q", want)
+		}
+	}
+	// Tooltip lives inside .governance-map-body so the absolute-
+	// positioned tooltip anchors to the canvas-body box rather than
+	// the viewport.
+	bodyIdx := strings.Index(body, `class="governance-map-body"`)
+	bodySlice := body[bodyIdx:]
+	bodyEnd := strings.Index(bodySlice, "</section>")
+	if bodyEnd < 0 {
+		t.Fatal("governance-map-body closing context not found")
+	}
+	if !strings.Contains(bodySlice[:bodyEnd], `id="gmap-connector-tooltip"`) {
+		t.Error("D26h-impl: tooltip must live inside .governance-map-body so absolute positioning anchors correctly")
+	}
+
+	// === 6. Delegated hover handler on the SVG layer ===
+	wireBody := extractBetween(t, body,
+		"function wireGmapConnectorHover()",
+		"\n  })();")
+	for _, want := range []string{
+		"document.getElementById('gmap-svg')",
+		"svg.addEventListener('pointerover'",
+		"svg.addEventListener('pointermove'",
+		"svg.addEventListener('pointerout'",
+		// D26h-fix — delegation now accepts BOTH the visible
+		// connector path AND the wider invisible hit target. The
+		// helper resolves either to the canonical visible path.
+		`closest('.gmap-connector, .gmap-connector-hit-target')`,
+		// Hover state class.
+		`classList.add('is-hovered')`,
+		// Tooltip + endpoint halo applied on hover.
+		"showGmapConnectorTooltip(path, e.clientX, e.clientY)",
+		`classList.add('is-connector-endpoint')`,
+		// Pointerout cleanup path goes through hideGmapConnectorTooltip.
+		"hideGmapConnectorTooltip()",
+	} {
+		if !strings.Contains(wireBody, want) {
+			t.Errorf("D26h-impl: hover handler must include %q", want)
+		}
+	}
+
+	// === 7. hideGmapConnectorTooltip cleans tooltip + classes ===
+	hideBody := extractBetween(t, body,
+		"function hideGmapConnectorTooltip()",
+		"function showGmapConnectorTooltip(pathEl, clientX, clientY)")
+	for _, want := range []string{
+		"document.getElementById('gmap-connector-tooltip')",
+		`tip.setAttribute('hidden', '')`,
+		`'.gmap-connector.is-hovered'`,
+		`classList.remove('is-hovered')`,
+		`'.gmap-node.is-connector-endpoint'`,
+		`classList.remove('is-connector-endpoint')`,
+	} {
+		if !strings.Contains(hideBody, want) {
+			t.Errorf("D26h-impl: hideGmapConnectorTooltip must include %q", want)
+		}
+	}
+
+	// === 8. Cleanup hooked into pan-start, lasso-start, node-drag,
+	//        and clearGovernanceMapCanvas ===
+	// Pan + lasso branches in wireGmapCanvasInteraction.
+	canvasIxIdx := strings.Index(body, "(function wireGmapCanvasInteraction()")
+	if canvasIxIdx < 0 {
+		t.Fatal("wireGmapCanvasInteraction IIFE not found")
+	}
+	canvasIxTail := body[canvasIxIdx:]
+	canvasIxEnd := strings.Index(canvasIxTail, "\n  })();")
+	if canvasIxEnd < 0 {
+		t.Fatal("wireGmapCanvasInteraction end marker not found")
+	}
+	canvasIxBody := canvasIxTail[:canvasIxEnd]
+	if strings.Count(canvasIxBody, "hideGmapConnectorTooltip()") < 2 {
+		t.Errorf("D26h-impl: pan-start AND lasso-start must each call hideGmapConnectorTooltip() (got %d calls)",
+			strings.Count(canvasIxBody, "hideGmapConnectorTooltip()"))
+	}
+
+	// Node-drag threshold-crossing branch in attachGmapDragHandlers.
+	dragIdx := strings.Index(body, "function attachGmapDragHandlers(node, nodeId)")
+	if dragIdx < 0 {
+		t.Fatal("attachGmapDragHandlers not found")
+	}
+	dragTail := body[dragIdx:]
+	dragEnd := strings.Index(dragTail, "\n  }\n")
+	if dragEnd < 0 {
+		t.Fatal("attachGmapDragHandlers end marker not found")
+	}
+	dragBody := dragTail[:dragEnd]
+	if !strings.Contains(dragBody, "hideGmapConnectorTooltip()") {
+		t.Error("D26h-impl: node-drag threshold-crossing branch must call hideGmapConnectorTooltip()")
+	}
+
+	// clearGovernanceMapCanvas calls cleanup before tearing down paths.
+	clearIdx := strings.Index(body, "function clearGovernanceMapCanvas()")
+	if clearIdx < 0 {
+		t.Fatal("clearGovernanceMapCanvas not found")
+	}
+	clearTail := body[clearIdx:]
+	clearEnd := strings.Index(clearTail, "\n  }\n")
+	if clearEnd < 0 {
+		t.Fatal("clearGovernanceMapCanvas end marker not found")
+	}
+	clearBody := clearTail[:clearEnd]
+	if !strings.Contains(clearBody, "hideGmapConnectorTooltip()") {
+		t.Error("D26h-impl: clearGovernanceMapCanvas must call hideGmapConnectorTooltip() so re-render does not leave stale state")
+	}
+
+	// === 9. CSS rules — connector hoverability + halo + tooltip ===
+	for _, want := range []string{
+		"  .gmap-connector {",
+		"pointer-events: stroke;",
+		"  .gmap-connector.is-hovered {",
+		"stroke-width: 3.5;",
+		"filter: drop-shadow(0 0 4px currentColor);",
+		"  .gmap-node.is-connector-endpoint {",
+		"outline: 2px solid rgba(173, 198, 255, 0.45);",
+		"outline-offset: 2px;",
+		"  .gmap-connector-tooltip {",
+		"position: absolute;",
+		"  .gmap-connector-tooltip-kind {",
+		"  .gmap-connector-tooltip-route {",
+		// Body-class gates suppress hover during gestures.
+		"  body.gmap-canvas-panning .gmap-connector,",
+		"body.gmap-canvas-lassoing .gmap-connector",
+		"pointer-events: none;",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26h-impl: CSS literal missing %q", want)
+		}
+	}
+
+	// === 10. Connector kind classes preserved (regression on D24c) ===
+	for _, want := range []string{
+		".connector-service",
+		".connector-ai-binding",
+		".connector-authority",
+		".connector-evidence",
+		".connector-gap",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26h-impl must NOT remove existing connector kind class %q", want)
+		}
+	}
+
+	// === 11. D26g-impl-3 compact legend regression ===
+	for _, want := range []string{
+		`class="gmap-legend-overlay"`,
+		"Service relationship",
+		"AI binding",
+		"Authority",
+		"Evidence",
+		"Coverage gap",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26h-impl must NOT remove D26g-impl-3 legend element %q", want)
+		}
+	}
+
+	// === 12. Inspector / evidence tray / records flow regressions ===
+	for _, want := range []string{
+		// Inspector rail still present.
+		`id="gmap-details"`,
+		`id="gmap-inspector-toggle"`,
+		// D26f tray.
+		"gmap-evidence-tray-analytic-layout",
+		// D26b–D26e records flow.
+		"function loadExplorerRuntimeRecords()",
+		"function loadGmapEvidenceActivity()",
+		"async function loadExplorerEnvelopeDetail(envelopeId, onResolved)",
+		// D26g toolbar + clusters.
+		`class="governance-map-toolbar`,
+		`class="gmap-mode-rail"`,
+		`class="gmap-camera-cluster"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26h-impl must NOT remove prior affordance %q", want)
+		}
+	}
+
+	// === 13. No persistent edge selection — MVP is hover-only ===
+	// Negative pin: we did not introduce click-to-select state.
+	if strings.Contains(body, "gmapSelectedConnectorId") {
+		t.Error("D26h-impl is hover-only — must NOT introduce persistent edge-selection state")
+	}
+	if strings.Contains(body, "gmap-connector.is-selected") {
+		t.Error("D26h-impl is hover-only — must NOT introduce a selected-edge class")
+	}
+
+	// === 14. D26h-fix — wider invisible hit target ===
+	// The visible connector stroke is 2.0–2.2 px which is too thin
+	// for reliable hover targeting. D26h-fix adds a transparent twin
+	// path at 12 px stroke-width that captures pointer events on the
+	// same `d` curve. Pin: helper, factory, CSS rule, and pointer-
+	// events behaviour.
+	for _, want := range []string{
+		"function gmapVisibleConnectorForHoverTarget(el)",
+		"function addConnectorHitTarget(p1, p2, kindInfo, srcId, dstId, srcLabel, dstLabel)",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26h-fix: missing helper %q", want)
+		}
+	}
+	// addLiveConnector now creates a hit target via addConnectorHitTarget
+	// and cross-links visible↔hit via gmapVisibleConnector / gmapHitTarget.
+	hitWireIdx := strings.Index(body, "function addLiveConnector(srcId, srcAnchor, dstId, dstAnchor, cls)")
+	hitWireBody := body[hitWireIdx:]
+	hitWireEnd := strings.Index(hitWireBody, "\n  }\n")
+	hitWireBody = hitWireBody[:hitWireEnd]
+	for _, want := range []string{
+		"addConnectorHitTarget(",
+		"hitEl.gmapVisibleConnector = pathEl",
+		"pathEl.gmapHitTarget = hitEl",
+	} {
+		if !strings.Contains(hitWireBody, want) {
+			t.Errorf("D26h-fix: addLiveConnector must wire hit target — missing %q", want)
+		}
+	}
+	// addConnectorHitTarget body must stamp the same metadata as the
+	// visible path AND aria-hidden so screen readers don't double-
+	// announce the relationship.
+	hitFnIdx := strings.Index(body, "function addConnectorHitTarget(p1, p2, kindInfo, srcId, dstId, srcLabel, dstLabel)")
+	hitFnBody := body[hitFnIdx:]
+	hitFnEnd := strings.Index(hitFnBody, "\n  }\n")
+	hitFnBody = hitFnBody[:hitFnEnd]
+	for _, want := range []string{
+		`'gmap-connector-hit-target'`,
+		`setAttribute('data-connector-kind', kindInfo.kind)`,
+		`setAttribute('data-source-node-id', srcId)`,
+		`setAttribute('data-target-node-id', dstId)`,
+		`setAttribute('aria-hidden', 'true')`,
+		`createElementNS('http://www.w3.org/2000/svg', 'path')`,
+	} {
+		if !strings.Contains(hitFnBody, want) {
+			t.Errorf("D26h-fix: addConnectorHitTarget must include %q", want)
+		}
+	}
+	// CSS rule for the hit target — fill: none, stroke: transparent,
+	// stroke-width: 12, pointer-events: stroke, cursor: pointer.
+	hitCssIdx := strings.Index(body, "  .gmap-connector-hit-target {")
+	if hitCssIdx < 0 {
+		t.Fatal("D26h-fix: .gmap-connector-hit-target CSS rule not found")
+	}
+	hitCssEnd := strings.Index(body[hitCssIdx:], "}")
+	hitCss := body[hitCssIdx : hitCssIdx+hitCssEnd]
+	for _, want := range []string{
+		"fill: none;",
+		"stroke: transparent;",
+		"stroke-width: 12;",
+		"pointer-events: stroke;",
+		"cursor: pointer;",
+	} {
+		if !strings.Contains(hitCss, want) {
+			t.Errorf("D26h-fix: .gmap-connector-hit-target rule must declare %q", want)
+		}
+	}
+	// Body-class gates extend to the hit target so pan/lasso also
+	// suppress hover on the wider hit region.
+	for _, want := range []string{
+		"body.gmap-canvas-panning .gmap-connector-hit-target",
+		"body.gmap-canvas-lassoing .gmap-connector-hit-target",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26h-fix: gesture gate must extend to %q", want)
+		}
+	}
+	// Repaint helper updates BOTH the visible path and the hit target's
+	// `d` so the hit region tracks endpoint drag.
+	repaintIdx := strings.Index(body, "function repaintGmapConnectors()")
+	repaintBody := body[repaintIdx:]
+	repaintEnd := strings.Index(repaintBody, "\n  }\n")
+	repaintBody = repaintBody[:repaintEnd]
+	if !strings.Contains(repaintBody, "c.hitEl.setAttribute('d', d)") {
+		t.Error("D26h-fix: repaintGmapConnectors must keep the hit target's `d` in lockstep with the visible path during drag")
+	}
+}
+
+// TestExplorer_HTML_GovernanceMap_InitialRenderFitsToView pins the
+// D26h-fix Part 2 contract: renderGovernanceMap schedules a Fit
+// Graph to View on every initial render + reframe, sequenced through
+// a two-frame requestAnimationFrame so the canvas-scroll wrapper's
+// clientWidth / clientHeight have settled before fitGmapToBounds
+// reads them. focusGmapOnRoot is preserved as the synchronous
+// approximate framing (so the operator never sees an unframed first
+// paint), then scheduleGmapFitToView re-runs the camera math against
+// the final committed layout. Manual pan / zoom paths exit fit-mode
+// and are not affected.
+func TestExplorer_HTML_GovernanceMap_InitialRenderFitsToView(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// === 1. scheduleGmapFitToView helper exists with the canonical signature ===
+	if !strings.Contains(body, "function scheduleGmapFitToView()") {
+		t.Fatal("D26h-fix: scheduleGmapFitToView() helper must exist")
+	}
+
+	// === 2. Helper body — two-frame rAF + fitGmapToBounds invocation ===
+	helperIdx := strings.Index(body, "function scheduleGmapFitToView()")
+	helperEnd := strings.Index(body[helperIdx:], "\n  }\n")
+	if helperEnd < 0 {
+		t.Fatal("D26h-fix: scheduleGmapFitToView end marker not found")
+	}
+	helperBody := body[helperIdx : helperIdx+helperEnd]
+	rAFCount := strings.Count(helperBody, "window.requestAnimationFrame")
+	if rAFCount < 2 {
+		t.Errorf("D26h-fix: scheduleGmapFitToView must use two requestAnimationFrame calls (got %d) so the inner frame reads settled layout", rAFCount)
+	}
+	if !strings.Contains(helperBody, "fitGmapToBounds()") {
+		t.Error("D26h-fix: scheduleGmapFitToView must call fitGmapToBounds()")
+	}
+	// Defensive guard: bail if the canvas-scroll wrapper is gone (e.g.
+	// operator switched sub-views mid-render).
+	if !strings.Contains(helperBody, "governance-map-canvas-scroll") {
+		t.Error("D26h-fix: scheduleGmapFitToView must check for the canvas-scroll wrapper before calling fit")
+	}
+	// Negative pin — no setInterval / polling.
+	if strings.Contains(helperBody, "setInterval(") {
+		t.Error("D26h-fix: scheduleGmapFitToView must NOT use setInterval (no polling)")
+	}
+
+	// === 3. renderGovernanceMap calls scheduleGmapFitToView at render end ===
+	renderIdx := strings.Index(body, "function renderGovernanceMap(data)")
+	if renderIdx < 0 {
+		t.Fatal("D26h-fix: renderGovernanceMap not found")
+	}
+	// Bound the function body to its final apply* call so we see the
+	// render-tail sequence.
+	renderBody := body[renderIdx:]
+	// renderGovernanceMap ends after `applyGmapMultiSelection();` and
+	// the closing brace at the same indent.
+	renderEnd := strings.Index(renderBody, "applyGmapMultiSelection();")
+	if renderEnd < 0 {
+		t.Fatal("D26h-fix: renderGovernanceMap end marker (applyGmapMultiSelection) not found")
+	}
+	renderBody = renderBody[:renderEnd+len("applyGmapMultiSelection();")]
+	if !strings.Contains(renderBody, "scheduleGmapFitToView()") {
+		t.Error("D26h-fix: renderGovernanceMap must call scheduleGmapFitToView() at render end so the graph opens fitted to view")
+	}
+	// focusGmapOnRoot remains for the synchronous approximate first
+	// paint — both calls must appear, with focusGmapOnRoot before the
+	// scheduled fit so an unframed first paint is impossible.
+	if !strings.Contains(renderBody, "focusGmapOnRoot(rootCardId)") {
+		t.Error("D26h-fix: renderGovernanceMap must keep focusGmapOnRoot(rootCardId) as the synchronous approximate first-paint framing")
+	}
+	focusIdx := strings.Index(renderBody, "focusGmapOnRoot(rootCardId)")
+	scheduleIdx := strings.Index(renderBody, "scheduleGmapFitToView()")
+	if focusIdx < 0 || scheduleIdx < 0 || focusIdx > scheduleIdx {
+		t.Errorf("D26h-fix: focusGmapOnRoot must precede scheduleGmapFitToView in renderGovernanceMap (focus=%d, schedule=%d)", focusIdx, scheduleIdx)
+	}
+
+	// === 4. fitGmapToBounds applies fit-mode (scrollbar suppression) ===
+	// The Fit-button click path already calls fitGmapToBounds, which
+	// internally calls applyGmapFitMode(true). The scheduled fit
+	// reuses that helper, so no duplicate fit-mode logic is needed
+	// here. Pin both pieces.
+	fitIdx := strings.Index(body, "function fitGmapToBounds()")
+	fitBody := body[fitIdx:]
+	fitEnd := strings.Index(fitBody, "\n  }\n")
+	fitBody = fitBody[:fitEnd]
+	if !strings.Contains(fitBody, "applyGmapFitMode(true)") {
+		t.Error("D26h-fix: fitGmapToBounds must keep applyGmapFitMode(true) so the scheduled fit suppresses scrollbars on entry")
+	}
+
+	// === 5. Manual pan / zoom paths still EXIT fit-mode ===
+	// Pin two known-active call sites: pan threshold-crossing and
+	// zoom-button click handlers. Both call applyGmapFitMode(false)
+	// to clear the fit-mode scrollbar suppression once the operator
+	// has moved beyond the auto-fit framing.
+	if strings.Count(body, "applyGmapFitMode(false)") < 2 {
+		t.Errorf("D26h-fix: manual pan/zoom must continue to call applyGmapFitMode(false); expected ≥2 occurrences, got %d",
+			strings.Count(body, "applyGmapFitMode(false)"))
+	}
+	// Negative pin: the schedule helper itself must NOT call
+	// applyGmapFitMode(false) (that would defeat the auto-fit).
+	if strings.Contains(helperBody, "applyGmapFitMode(false)") {
+		t.Error("D26h-fix: scheduleGmapFitToView must NOT clear fit-mode (only manual interactions clear it)")
+	}
+
+	// === 6. D26i Focus-mode fit-on-entry remains intact ===
+	// applyGmapFocusMode keeps its own two-frame rAF that calls
+	// fitGmapToBounds when entering Focus mode. The new
+	// scheduleGmapFitToView helper does not replace that path.
+	applyFocusIdx := strings.Index(body, "function applyGmapFocusMode()")
+	applyFocusBody := body[applyFocusIdx:]
+	applyFocusEnd := strings.Index(applyFocusBody, "\n  }\n")
+	applyFocusBody = applyFocusBody[:applyFocusEnd]
+	focusRAFCount := strings.Count(applyFocusBody, "window.requestAnimationFrame")
+	if focusRAFCount < 2 {
+		t.Errorf("D26h-fix: applyGmapFocusMode must keep its two-frame rAF for Focus-mode fit-on-entry (D26i); got %d", focusRAFCount)
+	}
+	if !strings.Contains(applyFocusBody, "fitGmapToBounds()") {
+		t.Error("D26h-fix: applyGmapFocusMode must keep its fitGmapToBounds() call (D26i Focus-mode fit-on-entry)")
+	}
+
+	// === 7. Regression — D26h-impl, D26g, D26f, D26b–D26e all preserved ===
+	for _, want := range []string{
+		// D26h-impl connector hover.
+		"function gmapConnectorEndpointLabel(nodeId)",
+		"function hideGmapConnectorTooltip()",
+		`class="gmap-connector-tooltip"`,
+		// D26h-fix hit target.
+		"function gmapVisibleConnectorForHoverTarget(el)",
+		"function addConnectorHitTarget(p1, p2, kindInfo, srcId, dstId, srcLabel, dstLabel)",
+		"  .gmap-connector-hit-target {",
+		// D26g toolbar / clusters / legend.
+		`class="governance-map-toolbar`,
+		`class="gmap-mode-rail"`,
+		`class="gmap-camera-cluster"`,
+		`class="gmap-legend-overlay"`,
+		// D26f tray + D26b–D26e records flow.
+		"gmap-evidence-tray-analytic-layout",
+		"function loadExplorerRuntimeRecords()",
+		"function loadGmapEvidenceActivity()",
+		"async function loadExplorerEnvelopeDetail(envelopeId, onResolved)",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26h-fix must NOT remove prior affordance %q", want)
+		}
+	}
+}
+
+// TestExplorer_HTML_GovernanceMap_FitModeSuppressesResidualScrollbar
+// pins the D26h-fix2 contract: renderGovernanceMap enters fit-mode
+// SYNCHRONOUSLY at render-end, before the deferred scheduleGmapFitToView
+// fires. Without this, the two-frame rAF lag leaves a window where
+// the canvas is wider than the scroll container (the canvas always
+// carries minX × zoom of empty padding to the left of the leftmost
+// node) and fit-mode is not yet active — producing a flash of
+// horizontal scrollbar on every initial render and reframe. Manual
+// pan / zoom paths still exit fit-mode so the operator can navigate
+// freely; the Fit button and the deferred scheduled fit both re-
+// assert fit-mode via fitGmapToBounds.
+func TestExplorer_HTML_GovernanceMap_FitModeSuppressesResidualScrollbar(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// === 1. CSS rule that suppresses scrollbars in fit-mode ===
+	// The load-bearing rule already exists from D24i; pin it so a
+	// future change can't accidentally drop the scrollbar suppression.
+	if !strings.Contains(body, "body.gmap-fit-mode .governance-map-canvas-scroll {") {
+		t.Error("D26h-fix2: body.gmap-fit-mode .governance-map-canvas-scroll rule must exist (suppresses scrollbars during fit)")
+	}
+	fitModeRuleIdx := strings.Index(body, "body.gmap-fit-mode .governance-map-canvas-scroll {")
+	fitModeRuleBody := body[fitModeRuleIdx:]
+	fitModeRuleEnd := strings.Index(fitModeRuleBody, "}")
+	fitModeRuleBody = fitModeRuleBody[:fitModeRuleEnd]
+	for _, want := range []string{
+		"overflow-x: hidden;",
+		"overflow-y: hidden;",
+	} {
+		if !strings.Contains(fitModeRuleBody, want) {
+			t.Errorf("D26h-fix2: fit-mode rule must declare %q to suppress residual scrollbars", want)
+		}
+	}
+
+	// === 2. renderGovernanceMap enters fit-mode synchronously ===
+	// Render-end ordering: focusGmapOnRoot → applyGmapFitMode(true) →
+	// scheduleGmapFitToView → applyGmapMultiSelection. The synchronous
+	// applyGmapFitMode(true) closes the rAF×2 window during which the
+	// canvas-scroll wrapper would otherwise paint a scrollbar over
+	// the canvas's empty left padding.
+	renderIdx := strings.Index(body, "function renderGovernanceMap(data)")
+	if renderIdx < 0 {
+		t.Fatal("D26h-fix2: renderGovernanceMap not found")
+	}
+	renderTail := body[renderIdx:]
+	renderEnd := strings.Index(renderTail, "applyGmapMultiSelection();")
+	if renderEnd < 0 {
+		t.Fatal("D26h-fix2: renderGovernanceMap end marker not found")
+	}
+	renderBody := renderTail[:renderEnd+len("applyGmapMultiSelection();")]
+
+	focusIdx := strings.Index(renderBody, "focusGmapOnRoot(rootCardId);")
+	fitModeIdx := strings.Index(renderBody, "applyGmapFitMode(true);")
+	scheduleIdx := strings.Index(renderBody, "scheduleGmapFitToView();")
+	multiIdx := strings.Index(renderBody, "applyGmapMultiSelection();")
+	if focusIdx < 0 || fitModeIdx < 0 || scheduleIdx < 0 || multiIdx < 0 {
+		t.Fatalf("D26h-fix2: missing render-tail call(s) — focus=%d fitMode=%d schedule=%d multi=%d",
+			focusIdx, fitModeIdx, scheduleIdx, multiIdx)
+	}
+	// Strict ordering: focusGmapOnRoot < applyGmapFitMode(true) <
+	// scheduleGmapFitToView < applyGmapMultiSelection.
+	if !(focusIdx < fitModeIdx && fitModeIdx < scheduleIdx && scheduleIdx < multiIdx) {
+		t.Errorf("D26h-fix2: render-tail order must be focusGmapOnRoot → applyGmapFitMode(true) → scheduleGmapFitToView → applyGmapMultiSelection; got focus=%d, fitMode=%d, schedule=%d, multi=%d",
+			focusIdx, fitModeIdx, scheduleIdx, multiIdx)
+	}
+
+	// === 3. The deferred fit also calls applyGmapFitMode(true) ===
+	// fitGmapToBounds is the canonical fit helper; the scheduled fit
+	// reuses it, and so does the Fit button. Both paths re-assert
+	// fit-mode after running; if a regression drops applyGmapFitMode
+	// from fitGmapToBounds, the synchronous render-end entry is the
+	// only thing keeping scrollbars hidden — and any manual zoom
+	// would clear fit-mode permanently. Pin it.
+	fitIdx := strings.Index(body, "function fitGmapToBounds()")
+	fitTail := body[fitIdx:]
+	fitEnd := strings.Index(fitTail, "\n  }\n")
+	fitFnBody := fitTail[:fitEnd]
+	if !strings.Contains(fitFnBody, "applyGmapFitMode(true)") {
+		t.Error("D26h-fix2: fitGmapToBounds must keep applyGmapFitMode(true) so explicit fit + scheduled fit re-assert scrollbar suppression")
+	}
+
+	// === 4. Manual interactions still exit fit-mode ===
+	// applyGmapFitMode(false) must appear at ≥2 manual interaction
+	// sites (canvas pan threshold-crossing + node drag threshold-
+	// crossing + zoom buttons). The synchronous render-end entry
+	// must NOT be paired with a synchronous render-end exit; that
+	// would defeat the whole fix.
+	if strings.Count(body, "applyGmapFitMode(false)") < 2 {
+		t.Errorf("D26h-fix2: manual pan/zoom/drag paths must continue to call applyGmapFitMode(false); expected ≥2 occurrences, got %d",
+			strings.Count(body, "applyGmapFitMode(false)"))
+	}
+	// Negative pin scoped to renderGovernanceMap's tail: no
+	// applyGmapFitMode(false) anywhere between focusGmapOnRoot and
+	// applyGmapMultiSelection.
+	if strings.Contains(renderBody[focusIdx:multiIdx], "applyGmapFitMode(false)") {
+		t.Error("D26h-fix2: render-tail must NOT call applyGmapFitMode(false) (would defeat the synchronous fit-mode entry)")
+	}
+
+	// === 5. scheduleGmapFitToView itself does not clear fit-mode ===
+	// The helper defers to fitGmapToBounds (which sets fit-mode on);
+	// the helper body itself must not call applyGmapFitMode at all.
+	scheduleHelperIdx := strings.Index(body, "function scheduleGmapFitToView()")
+	if scheduleHelperIdx < 0 {
+		t.Fatal("D26h-fix2: scheduleGmapFitToView not found")
+	}
+	scheduleHelperTail := body[scheduleHelperIdx:]
+	scheduleHelperEnd := strings.Index(scheduleHelperTail, "\n  }\n")
+	scheduleHelperBody := scheduleHelperTail[:scheduleHelperEnd]
+	if strings.Contains(scheduleHelperBody, "applyGmapFitMode(false)") {
+		t.Error("D26h-fix2: scheduleGmapFitToView must NOT clear fit-mode")
+	}
+
+	// === 6. Canvas-scroll base CSS still has overflow: auto ===
+	// Without it, manual zoom-in past the safe-area would lose the
+	// ability to scroll. The fit-mode rule overrides only while
+	// fit-mode is active; the base rule survives. Identify the base
+	// rule by its overflow-declaring opener (the file has multiple
+	// .governance-map-canvas-scroll rules — cursor, fit-mode, pan,
+	// lasso — but only one declares overflow on its own).
+	if !strings.Contains(body, ".governance-map-canvas-scroll {\n    overflow-x: auto;") {
+		t.Error("D26h-fix2: .governance-map-canvas-scroll base rule must keep overflow-x: auto (manual zoom-in past safe area must still scroll)")
+	}
+	if !strings.Contains(body, "overflow-x: auto;\n    overflow-y: auto;") {
+		t.Error("D26h-fix2: .governance-map-canvas-scroll base rule must keep overflow-y: auto immediately after overflow-x: auto")
+	}
+
+	// === 7. Regression — D26h-impl/fix + D26i + D26g + D26f preserved ===
+	for _, want := range []string{
+		"function fitGmapToBounds()",
+		"function applyGmapFitMode(active)",
+		"function applyGmapZoom()",
+		"function scheduleGmapFitToView()",
+		"function focusGmapOnRoot(rootCardId)",
+		// D26i Focus-mode fit-on-entry intact.
+		"function applyGmapFocusMode()",
+		// D26h-impl/fix connector hover preserved.
+		`class="gmap-connector-tooltip"`,
+		"function gmapVisibleConnectorForHoverTarget(el)",
+		"  .gmap-connector-hit-target {",
+		// D26g toolbar / clusters / legend.
+		`class="governance-map-toolbar`,
+		`class="gmap-mode-rail"`,
+		`class="gmap-camera-cluster"`,
+		`class="gmap-legend-overlay"`,
+		// D26f tray.
+		"gmap-evidence-tray-analytic-layout",
+		// D26b–D26e records flow.
+		"function loadExplorerRuntimeRecords()",
+		"async function loadExplorerEnvelopeDetail(envelopeId, onResolved)",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26h-fix2 must NOT remove prior affordance %q", want)
+		}
+	}
+}
+
+// TestExplorer_HTML_GovernanceMap_RelatedServiceReframe pins the
+// D26j contract: Related Service nodes now expose two actions when
+// the related Business Service id is known —
+//   1. reframe-around-this (target_view: 'service', target_id:
+//      rel.target_business_service_id, label: 'Open service graph')
+//      — primary graph-to-graph navigation. Routes through the
+//      existing handleGovernanceMapAction reframe path which pushes
+//      gmapHistory before mutating root state, so Back continues
+//      to work.
+//   2. view-business-service-record — preserved drill-down to the
+//      related BS's record page (existing D24 behaviour).
+// When rel.target_business_service_id is missing (an unresolvable
+// related service edge), neither action attaches — the action area
+// is empty rather than rendering a button that would deadlink.
+//
+// AI-system + decision-surface reframes are unaffected; the
+// dispatcher's existing target_view branching covers all three
+// kinds without per-kind handling.
+func TestExplorer_HTML_GovernanceMap_RelatedServiceReframe(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// === 1. Related Service nodes exist with the canonical kind + id format ===
+	// Layer-1 renderer creates one .gmap-node per related-service edge.
+	// id format: 'rel:' + rel.id (the EDGE id, not the target service id).
+	// kind: 'related'. cls: 'related-service-node'.
+	for _, want := range []string{
+		"const id = 'rel:' + rel.id;",
+		`kind: 'related', cls: 'related-service-node'`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26j: related-service node creation literal missing: %q", want)
+		}
+	}
+
+	// === 2. Related-service action gating — both actions attach only
+	//        when target_business_service_id is truthy ===
+	relSliceIdx := strings.Index(body, "relSlice.forEach((rel, i) => {")
+	if relSliceIdx < 0 {
+		t.Fatal("D26j: relSlice.forEach iteration not found")
+	}
+	relSliceTail := body[relSliceIdx:]
+	// Bound by the next forEach (relOmitted handling) so we read just
+	// the related-service node creation block.
+	relSliceEnd := strings.Index(relSliceTail, "if (relOmitted")
+	if relSliceEnd < 0 {
+		t.Fatal("D26j: relSlice block end marker not found")
+	}
+	relSliceBody := relSliceTail[:relSliceEnd]
+	if !strings.Contains(relSliceBody, "rel.target_business_service_id\n        ?") {
+		t.Error("D26j: related-service actions must be gated on rel.target_business_service_id (no actions when target id is missing)")
+	}
+
+	// === 3. Reframe action — target_view: 'service', label: 'Open service graph' ===
+	// The action carries the related BS's id stripped of any graph
+	// prefix. The existing dispatcher will route this through the
+	// reframe-around-this case which pushes gmapHistory and updates
+	// currentGraphView/currentGraphRootId.
+	for _, want := range []string{
+		`{ kind: 'reframe-around-this', target_view: 'service', target_id: rel.target_business_service_id, label: 'Open service graph' }`,
+	} {
+		if !strings.Contains(relSliceBody, want) {
+			t.Errorf("D26j: related-service reframe action literal missing: %q", want)
+		}
+	}
+
+	// === 4. View-record action preserved (existing D24 affordance) ===
+	if !strings.Contains(relSliceBody, "kind: 'view-business-service-record', target_id: rel.target_business_service_id") {
+		t.Error("D26j: existing view-business-service-record drill-down must remain on related-service nodes")
+	}
+
+	// === 5. Action ordering — reframe FIRST so the inline renderer
+	//        picks it as the graph-primary action ===
+	reframeIdx := strings.Index(relSliceBody, `kind: 'reframe-around-this', target_view: 'service'`)
+	viewRecIdx := strings.Index(relSliceBody, "kind: 'view-business-service-record', target_id: rel.target_business_service_id")
+	if reframeIdx < 0 || viewRecIdx < 0 || reframeIdx > viewRecIdx {
+		t.Errorf("D26j: reframe action must precede view-record action in the actions array (reframe=%d, viewRec=%d)", reframeIdx, viewRecIdx)
+	}
+
+	// === 6. Dispatcher routes target_view='service' through the
+	//        existing reframe path (no per-kind branching needed) ===
+	// handleGovernanceMapAction's reframe-around-this case sets
+	// currentGraphView = action.target_view and currentGraphRootId =
+	// action.target_id. For target_view='service', this restores
+	// service-graph state.
+	dispatchIdx := strings.Index(body, "case 'reframe-around-this':")
+	if dispatchIdx < 0 {
+		t.Fatal("D26j: handleGovernanceMapAction reframe-around-this case not found")
+	}
+	dispatchTail := body[dispatchIdx:]
+	dispatchEnd := strings.Index(dispatchTail, "default:")
+	if dispatchEnd < 0 {
+		t.Fatal("D26j: handleGovernanceMapAction default case not found")
+	}
+	dispatchBody := dispatchTail[:dispatchEnd]
+	for _, want := range []string{
+		// History push — preserves Back behaviour.
+		"pushGmapHistory(action.target_view, action.target_id)",
+		// Graph state mutation.
+		"currentGraphView = action.target_view",
+		"currentGraphRootId = action.target_id",
+		// Refresh fetches the new graph via the existing endpoint.
+		"refreshGovernanceMap",
+	} {
+		if !strings.Contains(dispatchBody, want) {
+			t.Errorf("D26j: reframe dispatcher must keep %q so service-target reframes work via the existing path", want)
+		}
+	}
+
+	// === 7. Inline render whitelists reframe-around-this regardless
+	//        of target_view ===
+	// setGovernanceMapInlineActions filters to graph-primary action
+	// kinds; the only one is reframe-around-this. Pin that the
+	// renderer does NOT branch on target_view (so service / ai_system
+	// / decision_surface targets all get an inline button).
+	inlineIdx := strings.Index(body, "function setGovernanceMapInlineActions(node, actions)")
+	if inlineIdx < 0 {
+		t.Fatal("D26j: setGovernanceMapInlineActions not found")
+	}
+	inlineTail := body[inlineIdx:]
+	inlineEnd := strings.Index(inlineTail, "\n  }\n")
+	inlineBody := inlineTail[:inlineEnd]
+	if !strings.Contains(inlineBody, "action.kind !== 'reframe-around-this'") {
+		t.Error("D26j: inline-action whitelist must keep `action.kind !== 'reframe-around-this'` so the related-service reframe button renders inline")
+	}
+	// Negative pin: no branching on action.target_view.
+	if strings.Contains(inlineBody, "action.target_view ===") {
+		t.Error("D26j: inline-action whitelist must NOT branch on target_view (target_view is opaque to the inline renderer)")
+	}
+
+	// === 8. Back / history regression — pushGmapHistory + back-handler
+	//        still wired ===
+	for _, want := range []string{
+		"function pushGmapHistory(targetView, targetRootId)",
+		"function goBackInGraphHistory()",
+		`id="gmap-back-button"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26j: history affordance %q must remain so Back works after related-service reframe", want)
+		}
+	}
+
+	// === 9. AI-system + decision-surface reframe sites untouched ===
+	for _, want := range []string{
+		`kind: 'reframe-around-this', target_view: 'ai_system', target_id: ai.id`,
+		`kind: 'reframe-around-this', target_view: 'decision_surface', target_id: s.id`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26j: existing reframe site %q must remain unchanged", want)
+		}
+	}
+
+	// === 10. No new endpoint introduced — service-graph fetch goes
+	//         through the existing /v1/authority-graph endpoint ===
+	if !strings.Contains(body, "'/v1/authority-graph?view=' + encodeURIComponent(currentGraphView)") {
+		t.Error("D26j: existing authority-graph fetch URL must remain — related-service reframe reuses it")
+	}
+
+	// === 11. Synthetic Authority / Coverage nodes do NOT receive
+	//         reframe actions (negative pin against unrelated-kind
+	//         drift) ===
+	// Walk every reframe-around-this site in the body and confirm
+	// each one's target_view is one of the three known navigable
+	// kinds. Authority/coverage are synthetic and have no graph
+	// destination — they must not appear here.
+	allowedTargetViews := map[string]struct{}{
+		`'service'`:          {},
+		`'ai_system'`:        {},
+		`'decision_surface'`: {},
+	}
+	idx := 0
+	prefix := `kind: 'reframe-around-this', target_view: `
+	for {
+		hit := strings.Index(body[idx:], prefix)
+		if hit < 0 {
+			break
+		}
+		start := idx + hit + len(prefix)
+		end := start
+		for end < len(body) && body[end] != ',' && body[end] != '}' && body[end] != '\n' {
+			end++
+		}
+		expr := strings.TrimSpace(body[start:end])
+		if _, ok := allowedTargetViews[expr]; !ok {
+			t.Errorf("D26j: reframe-around-this with target_view %q is not in the navigable-kind whitelist (service/ai_system/decision_surface)", expr)
+		}
+		idx = end
+	}
+
+	// === 12. Regression — D26h-fix2, D26h-fix, D26h-impl, D26i, D26g,
+	//         D26f, D26b–D26e all preserved ===
+	for _, want := range []string{
+		// D26h-fix2 fit-mode synchronous entry.
+		"applyGmapFitMode(true);",
+		"function scheduleGmapFitToView()",
+		// D26h-fix hit-target.
+		`class="gmap-connector-tooltip"`,
+		"function gmapVisibleConnectorForHoverTarget(el)",
+		"  .gmap-connector-hit-target {",
+		// D26i toolbar context + Focus-mode.
+		"function applyGmapFocusMode()",
+		"el.setAttribute('title', 'View: ' + viewLabel + ' · Root: ' + display)",
+		// D26g toolbar / clusters / legend.
+		`class="governance-map-toolbar`,
+		`class="gmap-mode-rail"`,
+		`class="gmap-camera-cluster"`,
+		`class="gmap-legend-overlay"`,
+		// D26f tray.
+		"gmap-evidence-tray-analytic-layout",
+		// D26b–D26e records flow.
+		"function loadExplorerRuntimeRecords()",
+		"async function loadExplorerEnvelopeDetail(envelopeId, onResolved)",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26j must NOT remove prior affordance %q", want)
+		}
+	}
+}
+
+// extractBetween returns the substring of body that lies between the first
+// occurrence of start and the first occurrence of end after start. Used to
+// scope negative substring pins to a specific JS block in the rendered HTML
+// so explanatory header comments at the top of the block (which legitimately
+// mention removed identifiers by name) do not spuriously match.
+func extractBetween(t *testing.T, body, start, end string) string {
+	t.Helper()
+	si := strings.Index(body, start)
+	if si < 0 {
+		t.Fatalf("extractBetween: start marker %q not found", start)
+	}
+	rest := body[si:]
+	ei := strings.Index(rest, end)
+	if ei < 0 {
+		t.Fatalf("extractBetween: end marker %q not found after start %q", end, start)
+	}
+	return rest[:ei]
 }
 
 // ---------------------------------------------------------------------------
@@ -1279,22 +4386,29 @@ func TestExplorer_HTML_GovernanceMap_CameraPuck(t *testing.T) {
 	}
 	body := rec.Body.String()
 
-	// === Camera bar markup ===
-	// D24c — the camera puck (D22 horizontal strip at bottom-right)
-	// has been replaced by a vertical icon-bar at top-left, renamed
-	// .gmap-camera-bar. The intent of every check below is the
-	// same as the pre-D24c CameraPuck assertions: there is exactly
-	// one camera control container, it lives in .governance-map-body
-	// (not in the toolbar), and the camera handlers are co-located
-	// inside it. The renames + relocation values are intent-preserving.
-	if !strings.Contains(body, `class="gmap-camera-bar"`) {
-		t.Error(`Camera bar must carry class "gmap-camera-bar" (D24c rename of the old .gmap-camera-puck container)`)
+	// === Canvas control clusters markup ===
+	// D24c introduced .gmap-camera-bar (single vertical strip).
+	// D26g-impl-2 split it into two purpose-specific clusters:
+	//   .gmap-mode-rail      — Pan / Select (interaction-mode rail)
+	//   .gmap-camera-cluster — Zoom / Fit / Centre / Focus (camera +
+	//                           viewport cluster)
+	// The original CameraPuck intent — "there are camera controls
+	// inside .governance-map-body, separate from toolbar chrome" — is
+	// preserved across both clusters.
+	if !strings.Contains(body, `class="gmap-mode-rail"`) {
+		t.Error(`D26g-impl-2: mode rail must carry class "gmap-mode-rail"`)
 	}
-	if !strings.Contains(body, `aria-label="Map camera"`) {
-		t.Error("Camera bar must carry aria-label=\"Map camera\"")
+	if !strings.Contains(body, `class="gmap-camera-cluster"`) {
+		t.Error(`D26g-impl-2: camera cluster must carry class "gmap-camera-cluster"`)
+	}
+	if !strings.Contains(body, `aria-label="Graph interaction mode"`) {
+		t.Error(`D26g-impl-2: mode rail must carry aria-label="Graph interaction mode"`)
+	}
+	if !strings.Contains(body, `aria-label="Graph camera controls"`) {
+		t.Error(`D26g-impl-2: camera cluster must carry aria-label="Graph camera controls"`)
 	}
 
-	// === Camera bar lives inside .governance-map-body, NOT toolbar ===
+	// === Both clusters live inside .governance-map-body, NOT toolbar ===
 	bodyIdx := strings.Index(body, `class="governance-map-body"`)
 	if bodyIdx < 0 {
 		t.Fatal("governance-map-body not found")
@@ -1304,52 +4418,59 @@ func TestExplorer_HTML_GovernanceMap_CameraPuck(t *testing.T) {
 	if bodyEnd < 0 {
 		t.Fatal("governance-map-body closing context not found")
 	}
-	if !strings.Contains(bodySlice[:bodyEnd], `class="gmap-camera-bar"`) {
-		t.Error("gmap-camera-bar must live inside .governance-map-body (overlay anchor)")
+	if !strings.Contains(bodySlice[:bodyEnd], `class="gmap-mode-rail"`) {
+		t.Error("D26g-impl-2: gmap-mode-rail must live inside .governance-map-body (overlay anchor)")
+	}
+	if !strings.Contains(bodySlice[:bodyEnd], `class="gmap-camera-cluster"`) {
+		t.Error("D26g-impl-2: gmap-camera-cluster must live inside .governance-map-body (overlay anchor)")
 	}
 
-	// D24d — the .governance-map-toolbar element was removed entirely
-	// (its previous children — stats, orientation, Back, Search —
-	// have all moved to canvas-edge overlays; the chip row in
-	// .governance-map-legend is now the top of the workbench).
-	// The original D24c assertion "camera bar is NOT inside the
-	// toolbar" is preserved as "camera bar is NOT inside the chip
-	// row" — same intent (camera surface is canvas-edge overlay,
-	// not toolbar chrome).
-	chipRowIdx := strings.Index(body, `class="governance-map-legend"`)
+	// D26g-impl-1 — the workbench-frame strip above the canvas was
+	// renamed from `.governance-map-legend` to `.governance-map-toolbar`.
+	chipRowIdx := strings.Index(body, `class="governance-map-toolbar`)
 	if chipRowIdx < 0 {
-		t.Fatal("governance-map-legend (chip row) not found")
+		t.Fatal("governance-map-toolbar (chip row) not found")
 	}
 	chipRowEnd := strings.Index(body[chipRowIdx:], `class="governance-map-body"`)
 	if chipRowEnd < 0 {
 		t.Fatal("could not bound chip-row block")
 	}
 	chipRowBody := body[chipRowIdx : chipRowIdx+chipRowEnd]
-	if strings.Contains(chipRowBody, `class="gmap-camera-bar`) {
-		t.Error("Chip row must NOT contain the .gmap-camera-bar — it is a canvas overlay")
+	if strings.Contains(chipRowBody, `class="gmap-mode-rail"`) ||
+		strings.Contains(chipRowBody, `class="gmap-camera-cluster"`) {
+		t.Error("Toolbar row must NOT contain the canvas-control clusters — they are canvas overlays")
 	}
-	// Negative pin: the OLD container class .gmap-camera-puck is
-	// removed entirely, not retained alongside the new .gmap-camera-bar.
+	// Negative pin: the OLD container class .gmap-camera-puck is gone.
 	if strings.Contains(body, `class="gmap-camera-puck`) {
-		t.Error("Old .gmap-camera-puck container must be removed entirely (D24c — replaced by .gmap-camera-bar)")
+		t.Error("Old .gmap-camera-puck container must be removed entirely (D24c)")
 	}
-	// D24c → D24d — the focus toggle remains in the camera bar.
-	// Pin against the chip row only (the old toolbar element no
-	// longer exists, so a body-wide check would not be meaningful).
+	// Negative pin: the unified .gmap-camera-bar is gone — D26g-impl-2
+	// split it into mode rail + camera cluster.
+	if strings.Contains(body, `class="gmap-camera-bar"`) {
+		t.Error("D26g-impl-2: unified .gmap-camera-bar must be replaced by .gmap-mode-rail + .gmap-camera-cluster")
+	}
+	// Focus toggle lives in the camera cluster; the chip row + the
+	// mode rail must both be free of it.
 	if strings.Contains(chipRowBody, `id="gmap-focus-toggle"`) {
-		t.Error("Chip row must NOT contain the focus toggle — it lives in the camera bar")
+		t.Error("Chip row must NOT contain the focus toggle — it lives in the camera cluster")
 	}
-	// Provide toolbarBody alias for downstream reuse — the chip
-	// row is now the toolbar-chrome equivalent.
-	toolbarBody := chipRowBody
-	_ = toolbarBody
-	barIdx := strings.Index(body, `class="gmap-camera-bar"`)
-	if barIdx < 0 {
-		t.Fatal("camera bar not found")
+	modeIdx := strings.Index(body, `class="gmap-mode-rail"`)
+	if modeIdx < 0 {
+		t.Fatal("gmap-mode-rail not found")
 	}
-	barEnd := strings.Index(body[barIdx:], "</div>")
-	if barEnd < 0 || !strings.Contains(body[barIdx:barIdx+barEnd], `id="gmap-focus-toggle"`) {
-		t.Error("Camera bar must contain the focus toggle (Focus is a graph workspace mode control)")
+	modeEnd := strings.Index(body[modeIdx:], `</div>`)
+	modeBody := body[modeIdx : modeIdx+modeEnd]
+	if strings.Contains(modeBody, `id="gmap-focus-toggle"`) {
+		t.Error("Mode rail must NOT contain the focus toggle — it lives in the camera cluster")
+	}
+	camIdx := strings.Index(body, `class="gmap-camera-cluster"`)
+	if camIdx < 0 {
+		t.Fatal("gmap-camera-cluster not found")
+	}
+	camEnd := strings.Index(body[camIdx:], `</div>`)
+	camBody := body[camIdx : camIdx+camEnd]
+	if !strings.Contains(camBody, `id="gmap-focus-toggle"`) {
+		t.Error("Camera cluster must contain the focus toggle (Focus is a viewport-mode control)")
 	}
 
 	// === Surviving control IDs preserved ===
@@ -1379,31 +4500,31 @@ func TestExplorer_HTML_GovernanceMap_CameraPuck(t *testing.T) {
 		}
 	}
 
-	// === CSS pins for the new camera bar ===
+	// === CSS pins for the new clusters ===
+	// D26g-impl-2 — both clusters are absolute-positioned with
+	// surface-container-high background and shadow chrome. Mode rail
+	// is vertical at top-left; camera cluster is horizontal at
+	// bottom-right.
 	for _, want := range []string{
-		".gmap-camera-bar",
+		".gmap-mode-rail {",
+		".gmap-camera-cluster {",
 		"position: absolute;",
-		"top: 16px;",
-		"left: 16px;",
 		"z-index: 5;",
-		// Vertical stacking: flex column.
 		"flex-direction: column;",
+		"flex-direction: row;",
 	} {
 		if !strings.Contains(body, want) {
-			t.Errorf("D24c camera-bar CSS literal missing: %q", want)
+			t.Errorf("D26g-impl-2 cluster CSS literal missing: %q", want)
 		}
 	}
-	// Old positioning values must be gone (the puck's bottom-right
-	// horizontal strip is fully replaced by the top-left vertical
-	// bar; no inspector-collapsed offset shift is needed since the
-	// bar is anchored at top-left, independent of inspector width).
+	// Old positioning values must be gone.
 	for _, illegal := range []string{
 		".gmap-camera-puck",
 		`right: 336px`,
 		`right: 56px`,
 	} {
 		if strings.Contains(body, illegal) {
-			t.Errorf("D24c removed %q (the puck's bottom-right positioning is replaced by the bar's top-left positioning)", illegal)
+			t.Errorf("D24c removed %q (no longer needed under the split-cluster architecture)", illegal)
 		}
 	}
 
@@ -1415,12 +4536,21 @@ func TestExplorer_HTML_GovernanceMap_CameraPuck(t *testing.T) {
 	gmbTail := body[gmbIdx:]
 	gmbEnd := strings.Index(gmbTail, "}")
 	if gmbEnd < 0 || !strings.Contains(gmbTail[:gmbEnd], "position: relative;") {
-		t.Error(".governance-map-body must declare position:relative so the absolute-positioned camera bar anchors to it")
+		t.Error(".governance-map-body must declare position:relative so the absolute-positioned clusters anchor to it")
 	}
 
-	// === Focus mode does NOT hide the camera bar ===
-	if strings.Contains(body, "body.gmap-focus-mode .gmap-camera-bar") {
-		t.Error("Focus mode must NOT hide the camera bar (it is the dominant camera surface in focus mode)")
+	// === Focus mode does NOT hide the canvas-control clusters ===
+	for _, gone := range []string{
+		"body.gmap-focus-mode .gmap-camera-bar",
+		"body.gmap-focus-mode .gmap-mode-rail",
+		"body.gmap-focus-mode .gmap-camera-cluster",
+	} {
+		// "display: none" rules for these selectors would be hide
+		// rules. The current implementation does not introduce any.
+		if strings.Contains(body, gone+" { display: none") ||
+			strings.Contains(body, gone+" {display: none") {
+			t.Errorf("Focus mode must NOT hide canvas-control clusters: %q", gone)
+		}
 	}
 
 	// === Chip row cleanup — visible labels ===
@@ -1513,30 +4643,29 @@ func TestExplorer_HTML_GovernanceMap_InspectorToggleHarmonisation(t *testing.T) 
 		}
 	}
 
-	// === 2. Toggle lives inside #gmap-details, not in top-right overlay ===
+	// === 2. Toggle lives inside #gmap-details ===
+	// D26g-impl-1 — the historic .gmap-top-right-overlay (which D24f
+	// relocated the inspector toggle OUT of) has now been removed
+	// entirely; its remaining children moved up into the workbench
+	// toolbar. The original D24f intent — "toggle lives inside
+	// #gmap-details, not in any canvas-edge chrome" — is now
+	// trivially honoured because no top-right overlay exists. We
+	// preserve the positive pin that the toggle is in the rail.
 	detailsIdx := strings.Index(body, `id="gmap-details"`)
 	if detailsIdx < 0 {
 		t.Fatal("#gmap-details not found")
 	}
-	detailsEnd := strings.Index(body[detailsIdx:], `</div>`)
-	// Walk past the inner sections — bound by a generous window
-	// covering the rail's entire body.
 	if !strings.Contains(body[detailsIdx:detailsIdx+8192], `id="gmap-inspector-toggle"`) {
-		t.Error("D24f: gmap-inspector-toggle must live inside #gmap-details (relocated from .gmap-top-right-overlay)")
+		t.Error("D24f: gmap-inspector-toggle must live inside #gmap-details")
 	}
-	_ = detailsEnd
-	// Negative pin — the inspector toggle is no longer in the top-
-	// right overlay.
-	overlayIdx := strings.Index(body, `class="gmap-top-right-overlay"`)
-	if overlayIdx < 0 {
-		t.Fatal(".gmap-top-right-overlay not found")
-	}
-	overlayEnd := overlayIdx + 4096
-	if overlayEnd > len(body) {
-		overlayEnd = len(body)
-	}
-	if strings.Contains(body[overlayIdx:overlayEnd], `id="gmap-inspector-toggle"`) {
-		t.Error("D24f: top-right overlay must NOT contain gmap-inspector-toggle")
+	// Negative pin: the inspector toggle is not inside the workbench
+	// toolbar either — it belongs in the inspector rail only.
+	toolbarIdx := strings.Index(body, `class="governance-map-toolbar`)
+	if toolbarIdx >= 0 {
+		toolbarEnd := strings.Index(body[toolbarIdx:], `class="governance-map-body"`)
+		if toolbarEnd > 0 && strings.Contains(body[toolbarIdx:toolbarIdx+toolbarEnd], `id="gmap-inspector-toggle"`) {
+			t.Error("D24f: workbench toolbar must NOT contain gmap-inspector-toggle (it belongs in the inspector rail)")
+		}
 	}
 
 	// === 3. Bottom-anchor positioning via margin-top: auto ===
@@ -1594,13 +4723,17 @@ func TestExplorer_HTML_GovernanceMap_InspectorToggleHarmonisation(t *testing.T) 
 		"gmap-root-node",
 		"governance-map-body",
 		"reframe-around-this",
-		"gmap-camera-bar",
+		// D26g-impl-2 — camera bar split into two clusters.
+		"gmap-mode-rail",
+		"gmap-camera-cluster",
 		"gmap-legend-overlay",
 		"gmap-focus-mode",
-		"gmap-top-left-overlay",
-		"gmap-top-right-overlay",
+		// D26g-impl-1 — top-overlay names removed (.gmap-top-left-
+		// overlay / .gmap-top-right-overlay no longer exist; their
+		// children moved into .governance-map-toolbar).
+		"governance-map-toolbar",
 		"gmap-view-mode-toggle",
-		// Top-right overlay's remaining contents.
+		// View context still present (now in toolbar's left group).
 		`id="gmap-current-root"`,
 		// Left sidebar canonical pattern still present.
 		"shell-sidebar-toggle",
@@ -1642,101 +4775,77 @@ func TestExplorer_HTML_GovernanceMap_ToolbarRestructure(t *testing.T) {
 	}
 	body := rec.Body.String()
 
-	// === Move 1: Toolbar element gone; chip row remains as workbench top ===
-	// The old .governance-map-toolbar element is removed entirely.
-	if strings.Contains(body, `class="governance-map-toolbar"`) {
-		t.Error("D24d: .governance-map-toolbar element must be removed entirely (its children moved to canvas-edge overlays)")
-	}
-	// The chip row's container is preserved (now the top of workbench).
-	if !strings.Contains(body, `class="governance-map-legend"`) {
-		t.Error("D24d: .governance-map-legend (chip row) must remain as workbench top")
+	// === Move 1: Workbench-frame controls live in one toolbar above the canvas ===
+	// D26g-impl-1 superseded D24d's two-overlay scheme: search, view
+	// context, and Form/Graph toggle now share a single .governance-
+	// map-toolbar above the canvas. The legend chip row is preserved
+	// as the same element (the legend class remains as a back-compat
+	// token).
+	if !strings.Contains(body, `class="governance-map-toolbar`) {
+		t.Error("D26g-impl-1: .governance-map-toolbar must exist as the workbench-frame strip above the canvas")
 	}
 	if !strings.Contains(body, `class="gmap-filter-chips"`) {
 		t.Error("D24d: chip row's .gmap-filter-chips group must remain")
 	}
 
-	// === Move 2: Top-left overlay with Search input ===
-	// D24h-fix — Back chevron relocated from the top-left overlay
-	// into the camera bar (covered by the BackStackHistory test).
-	// The .gmap-back-button-slot reserved-width wrapper is removed.
-	// The top-left overlay now contains only the Search input.
-	for _, want := range []string{
-		`class="gmap-top-left-overlay"`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D24d top-left overlay literal missing: %q", want)
-		}
-	}
+	// === Move 2: Search lives in the workbench toolbar ===
+	// D24h-fix removed .gmap-back-button-slot. D26g-impl-1 removed
+	// .gmap-top-left-overlay (Search relocated up into the toolbar).
 	if strings.Contains(body, `class="gmap-back-button-slot"`) {
-		t.Error("D24h-fix: .gmap-back-button-slot wrapper must be removed (back button moved to camera bar)")
+		t.Error("D24h-fix: .gmap-back-button-slot wrapper must be removed (back button moved to camera bar then to toolbar)")
 	}
-	tloIdx := strings.Index(body, `class="gmap-top-left-overlay"`)
-	if tloIdx < 0 {
-		t.Fatal(".gmap-top-left-overlay not found")
+	if strings.Contains(body, `class="gmap-top-left-overlay"`) {
+		t.Error("D26g-impl-1: .gmap-top-left-overlay markup must be removed (Search relocated into .governance-map-toolbar)")
 	}
-	tloEnd := strings.Index(body[tloIdx:], "</div>")
-	if tloEnd < 0 {
-		t.Fatal(".gmap-top-left-overlay closing not found")
+	toolbarIdx := strings.Index(body, `class="governance-map-toolbar`)
+	if toolbarIdx < 0 {
+		t.Fatal("governance-map-toolbar not found")
 	}
-	tloBody := body[tloIdx : tloIdx+tloEnd]
-	if strings.Contains(tloBody, `id="gmap-back-button"`) {
-		t.Error("D24h-fix: Back chevron must NOT live inside .gmap-top-left-overlay (relocated to camera bar)")
+	toolbarEnd := strings.Index(body[toolbarIdx:], `class="governance-map-body"`)
+	if toolbarEnd < 0 {
+		t.Fatal("could not bound .governance-map-toolbar block")
 	}
-	if !strings.Contains(tloBody, `id="gmap-search-input"`) {
-		t.Error("D24d: Search input must live inside .gmap-top-left-overlay")
+	toolbarBody := body[toolbarIdx : toolbarIdx+toolbarEnd]
+	if !strings.Contains(toolbarBody, `id="gmap-search-input"`) {
+		t.Error("D26g-impl-1: Search input must live inside .governance-map-toolbar")
+	}
+	if !strings.Contains(toolbarBody, `id="gmap-back-button"`) {
+		t.Error("D26g-impl-1: Back button must live inside .governance-map-toolbar (promoted from camera bar)")
+	}
+	if !strings.Contains(toolbarBody, `id="gmap-current-root"`) {
+		t.Error("D26g-impl-1: View context (#gmap-current-root) must live inside .governance-map-toolbar")
 	}
 
-	// === Move 3: Top-right overlay with orientation + toggle + inspector toggle ===
+	// === Move 3: View-mode toggle lives in the toolbar's right group ===
+	// D26g-impl-1 removed .gmap-top-right-overlay; the Form/Graph
+	// toggle and feedback line moved into the toolbar's right group.
+	if strings.Contains(body, `class="gmap-top-right-overlay"`) {
+		t.Error("D26g-impl-1: .gmap-top-right-overlay markup must be removed (children relocated into .governance-map-toolbar)")
+	}
 	for _, want := range []string{
-		`class="gmap-top-right-overlay"`,
 		`class="gmap-view-mode-toggle"`,
 		`class="gmap-view-mode-feedback"`,
 		`aria-label="View mode"`,
-		// Form/Graph segments + active state.
 		`data-view-mode="form"`,
 		`data-view-mode="graph"`,
-		`>Form<`,
-		`>Graph<`,
-		// Active state and aria-pressed values per the brief.
+		// D26g-impl-4 — visible "Form" / "Graph" text replaced with
+		// inline SVG icons; aria-label/title preserve meaning.
+		`aria-label="Form view"`,
+		`aria-label="Graph view"`,
 		`is-active`,
 		`aria-pressed="true"`,
 		`aria-pressed="false"`,
 	} {
 		if !strings.Contains(body, want) {
-			t.Errorf("D24d top-right overlay literal missing: %q", want)
+			t.Errorf("D26g-impl-1 toolbar literal missing: %q", want)
 		}
 	}
-	// All three components live inside the top-right overlay.
-	troIdx := strings.Index(body, `class="gmap-top-right-overlay"`)
-	if troIdx < 0 {
-		t.Fatal(".gmap-top-right-overlay not found")
+	if !strings.Contains(toolbarBody, `class="gmap-view-mode-toggle"`) {
+		t.Error("D26g-impl-1: Form/Graph toggle must live inside .governance-map-toolbar (right group)")
 	}
-	troEnd := troIdx + 4096 // bounded window covers the overlay block
-	if troEnd > len(body) {
-		troEnd = len(body)
-	}
-	troBody := body[troIdx:troEnd]
-	// D24d → D24f — the inspector toggle was originally placed in
-	// the top-right overlay (D24d) but D24f relocated it to the
-	// bottom of the inspector rail itself, harmonising the toggle
-	// with the left sidebar's canonical pattern. The top-right
-	// overlay now contains only orientation context + Form/Graph
-	// toggle. Same intent for THIS test (top-right overlay carries
-	// the orientation + view-mode controls); the inspector-toggle
-	// pin moves to D24f's CollapsibleInspector / ToggleHarmonisation
-	// tests.
-	for _, want := range []string{
-		`id="gmap-current-root"`,
-		`class="gmap-view-mode-toggle"`,
-	} {
-		if !strings.Contains(troBody, want) {
-			t.Errorf("D24d: top-right overlay must contain %q", want)
-		}
-	}
-	// D24f negative pin: the inspector toggle is no longer in the
-	// top-right overlay.
-	if strings.Contains(troBody, `id="gmap-inspector-toggle"`) {
-		t.Error("D24f: top-right overlay must NOT contain gmap-inspector-toggle (it has moved to the bottom of the inspector rail)")
+	// Inspector toggle is in the rail, not the toolbar (D24f).
+	if strings.Contains(toolbarBody, `id="gmap-inspector-toggle"`) {
+		t.Error("D24f: workbench toolbar must NOT contain gmap-inspector-toggle (it lives at the bottom of the inspector rail)")
 	}
 
 	// === Move 4: Stats line removed entirely ===
@@ -1756,12 +4865,19 @@ func TestExplorer_HTML_GovernanceMap_ToolbarRestructure(t *testing.T) {
 		}
 	}
 
-	// === Move 5: Camera bar shifted down ===
-	// The bar's top value is now 56px (was 16px in D24c). Pin the
-	// new value via the comment + value pair so a regression that
-	// reverts the shift surfaces here.
-	if !strings.Contains(body, "top: 56px;") {
-		t.Error("D24d: camera bar must shift its `top` from 16px to 56px to clear the top-left overlay")
+	// === Move 5: D26g-impl-2 split the camera bar into two clusters ===
+	// The original D24d-era top: 56px clearance is gone — the camera
+	// bar itself is gone. The replacement clusters anchor at:
+	//   .gmap-mode-rail      → top: 8px; left: 16px (mode controls)
+	//   .gmap-camera-cluster → bottom: 16px; right: 16px (viewport)
+	if strings.Contains(body, "top: 56px;") {
+		t.Error("D26g-impl-2: top: 56px clearance is no longer needed (camera bar split + relocated)")
+	}
+	if !strings.Contains(body, "top: 8px;") {
+		t.Error("D26g-impl-2: mode rail must use top: 8px positioning")
+	}
+	if !strings.Contains(body, "bottom: 16px;") {
+		t.Error("D26g-impl-2: camera cluster must use bottom: 16px positioning")
 	}
 
 	// === Form/Graph toggle handler ===
@@ -1822,7 +4938,9 @@ func TestExplorer_HTML_GovernanceMap_ToolbarRestructure(t *testing.T) {
 		"governance-map-body",
 		"reframe-around-this",
 		"gmap-inspector-toggle",
-		"gmap-camera-bar",
+		// D26g-impl-2 — camera bar split into two clusters.
+		"gmap-mode-rail",
+		"gmap-camera-cluster",
 		"gmap-legend-overlay",
 		"gmap-focus-mode",
 		"handleGovernanceMapAction",
@@ -1896,15 +5014,21 @@ func TestExplorer_HTML_GovernanceMap_ChromeReorganisation(t *testing.T) {
 		t.Error("D24c: Back button must NOT contain visible text label (icon replaces it)")
 	}
 
-	// === Move 2: Camera bar (top-left vertical) ===
+	// === Move 2: Canvas-control clusters (D26g-impl-2) ===
+	// D24c shipped a single .gmap-camera-bar; D26g-impl-2 split it
+	// into .gmap-mode-rail (Pan/Select) and .gmap-camera-cluster
+	// (Zoom/Fit/Centre/Focus). All five viewport-control button ids
+	// from D24c remain — only the container has changed.
 	for _, want := range []string{
-		// Container.
-		`class="gmap-camera-bar"`,
-		`aria-label="Map camera"`,
-		// CSS positioning.
-		"top: 16px;",
+		// Containers.
+		`class="gmap-mode-rail"`,
+		`class="gmap-camera-cluster"`,
+		`aria-label="Graph interaction mode"`,
+		`aria-label="Graph camera controls"`,
+		// CSS positioning literals.
 		"left: 16px;",
 		"flex-direction: column;",
+		"flex-direction: row;",
 		// 5 button IDs.
 		`id="gmap-zoom-in"`,
 		`id="gmap-zoom-out"`,
@@ -1925,24 +5049,27 @@ func TestExplorer_HTML_GovernanceMap_ChromeReorganisation(t *testing.T) {
 		`<polyline points="6 3 3 3 3 6"/>`,        // Focus (corners OUTWARD)
 	} {
 		if !strings.Contains(body, want) {
-			t.Errorf("D24c camera-bar literal missing: %q", want)
+			t.Errorf("D26g-impl-2 cluster literal missing: %q", want)
 		}
 	}
 
-	// === Move 3: Legend canvas overlay (bottom-centre) ===
+	// === Move 3: Legend canvas overlay (bottom-left after D26g-impl-3) ===
+	// D24c originally placed this overlay at bottom-centre via
+	// `left: 50%; transform: translateX(-50%);`. D26g-impl-3
+	// relocated it to the bottom-left as a compact edge key after
+	// the bottom-centre placement began competing visually with the
+	// new bottom-right camera cluster (D26g-impl-2) and the Runtime
+	// Evidence tray boundary. The overlay class, ARIA label, passive
+	// pointer-events behaviour, and the five swatch labels are
+	// preserved; only the placement and visual density changed.
 	for _, want := range []string{
 		`class="gmap-legend-overlay"`,
 		`aria-label="Connector legend"`,
-		// CSS positioning.
+		// CSS positioning — D26g-impl-3 bottom-left placement.
 		".gmap-legend-overlay {",
-		"bottom: 12px;",
-		// Centred via translateX. D24e — the inspector rail is now a
-		// top-level pane (no longer covering the right side of the
-		// canvas-scroll), so the overlay anchors against the true
-		// centre of .governance-map-body without an inspector-aware
-		// left offset (was `calc(50% - 160px)` before D24e).
-		"left: 50%;",
-		"transform: translateX(-50%);",
+		"bottom: 16px;",
+		"left: 16px;",
+		"transform: none;",
 		// Ambient styling — pointer-events: none so it never blocks
 		// graph interaction.
 		"pointer-events: none;",
@@ -1954,7 +5081,7 @@ func TestExplorer_HTML_GovernanceMap_ChromeReorganisation(t *testing.T) {
 		"Coverage gap",
 	} {
 		if !strings.Contains(body, want) {
-			t.Errorf("D24c legend-overlay literal missing: %q", want)
+			t.Errorf("D26g-impl-3 compact legend literal missing: %q", want)
 		}
 	}
 	// The connection-key wrapper now lives INSIDE the legend overlay,
@@ -1968,23 +5095,25 @@ func TestExplorer_HTML_GovernanceMap_ChromeReorganisation(t *testing.T) {
 		t.Error("D24c: gmap-connection-key must live INSIDE gmap-legend-overlay (not in the toolbar legend row)")
 	}
 
-	// === Move 4: Filter chips alone in toolbar legend row ===
-	// The toolbar legend row (.governance-map-legend) must NOT contain
-	// the connection key swatches anymore. It must contain ONLY the
-	// filter chips group.
-	legendRowIdx := strings.Index(body, `class="governance-map-legend"`)
+	// === Move 4: Filter chips inside the workbench toolbar ===
+	// D26g-impl-1 renamed the strip above the canvas from
+	// `.governance-map-legend` to `.governance-map-toolbar` (the legend
+	// class is preserved as a back-compat token on the same element).
+	// The toolbar row must NOT contain the connection key swatches —
+	// those live in the bottom-centre canvas overlay since D24c.
+	legendRowIdx := strings.Index(body, `class="governance-map-toolbar`)
 	if legendRowIdx < 0 {
-		t.Fatal(".governance-map-legend toolbar row not found")
+		t.Fatal(".governance-map-toolbar row not found")
 	}
 	legendRowEnd := strings.Index(body[legendRowIdx:], `<div class="governance-map-body"`)
 	if legendRowEnd < 0 {
-		t.Fatal("could not bound .governance-map-legend block")
+		t.Fatal("could not bound .governance-map-toolbar block")
 	}
 	legendRowBody := body[legendRowIdx : legendRowIdx+legendRowEnd]
 	// Negative pin: connection-key wrapper class must NOT appear in
-	// the toolbar legend row.
+	// the toolbar row.
 	if strings.Contains(legendRowBody, `class="gmap-connection-key"`) {
-		t.Error("D24c: toolbar legend row must NOT contain gmap-connection-key (it lives in the canvas overlay)")
+		t.Error("D24c: toolbar row must NOT contain gmap-connection-key (it lives in the canvas overlay)")
 	}
 	// Negative pin: connection-key swatch labels must NOT appear in
 	// the toolbar legend row. Search for the swatch-text form
@@ -2097,9 +5226,13 @@ func TestExplorer_HTML_GovernanceMap_FocusModePolish(t *testing.T) {
 	// Search, orientation context, and stats out of the toolbar
 	// entirely (toolbar element removed). Same intent: focus toggle
 	// is co-located with the camera surface, not chip row chrome.
-	chipRowIdx := strings.Index(body, `class="governance-map-legend"`)
+	// D26g-impl-1 — the workbench-frame strip above the canvas was
+	// renamed from `.governance-map-legend` to `.governance-map-toolbar`.
+	// The legend class remains as a back-compat token in the class
+	// list, but tests pin the new primary class.
+	chipRowIdx := strings.Index(body, `class="governance-map-toolbar`)
 	if chipRowIdx < 0 {
-		t.Fatal("governance-map-legend (chip row) not found")
+		t.Fatal("governance-map-toolbar (chip row) not found")
 	}
 	chipRowEnd := strings.Index(body[chipRowIdx:], `class="governance-map-body"`)
 	if chipRowEnd < 0 {
@@ -2107,15 +5240,18 @@ func TestExplorer_HTML_GovernanceMap_FocusModePolish(t *testing.T) {
 	}
 	chipRowBody := body[chipRowIdx : chipRowIdx+chipRowEnd]
 	if strings.Contains(chipRowBody, `id="gmap-focus-toggle"`) {
-		t.Error("D23/D24c/D24d: chip row must NOT contain gmap-focus-toggle (it lives in the camera bar)")
+		t.Error("D23/D24c/D24d: chip row must NOT contain gmap-focus-toggle (it lives in the camera cluster)")
 	}
-	barIdx := strings.Index(body, `class="gmap-camera-bar"`)
+	// D26g-impl-2 — focus toggle now lives in the camera cluster
+	// (formerly the camera bar; the cluster carries Zoom/Fit/Centre/
+	// Focus, and the mode rail carries Pan/Select).
+	barIdx := strings.Index(body, `class="gmap-camera-cluster"`)
 	if barIdx < 0 {
-		t.Fatal("camera bar not found")
+		t.Fatal("D26g-impl-2: gmap-camera-cluster not found")
 	}
 	barEnd := strings.Index(body[barIdx:], "</div>")
 	if barEnd < 0 || !strings.Contains(body[barIdx:barIdx+barEnd], `id="gmap-focus-toggle"`) {
-		t.Error("D23/D24c: camera bar must contain gmap-focus-toggle")
+		t.Error("D26g-impl-2: camera cluster must contain gmap-focus-toggle")
 	}
 
 	// === 2. Canvas border-bottom dropped in focus mode ===
@@ -2251,8 +5387,9 @@ func TestExplorer_HTML_GovernanceMap_FocusModePolish(t *testing.T) {
 
 	// === Regression pins — every prior camera/search/filter/inspector
 	// + focus-mode + camera-surface affordance must still be present. ===
-	// D24c renamed `gmap-camera-puck` to `gmap-camera-bar` — same
-	// camera-surface intent, new container name.
+	// D24c renamed `gmap-camera-puck` to `gmap-camera-bar` (same
+	// camera-surface intent, new container name). D26g-impl-2 split
+	// `gmap-camera-bar` into `gmap-mode-rail` + `gmap-camera-cluster`.
 	for _, want := range []string{
 		"fitGmapToBounds",
 		"focusGmapOnRoot",
@@ -2264,7 +5401,8 @@ func TestExplorer_HTML_GovernanceMap_FocusModePolish(t *testing.T) {
 		"gmap-fit-button",
 		"gmap-back-button",
 		"gmap-inspector-toggle",
-		"gmap-camera-bar",
+		"gmap-mode-rail",
+		"gmap-camera-cluster",
 		"reframe-around-this",
 		"gmap-root-node",
 		"governance-map-body",
@@ -2331,16 +5469,18 @@ func TestExplorer_HTML_GovernanceMap_FocusMode(t *testing.T) {
 			t.Errorf("Step 24/D24c toggle markup missing literal %q", want)
 		}
 	}
-	// D23 → D24c — toggle now lives inside the camera BAR (renamed
-	// from camera puck). It is operationally a graph workspace
-	// mode control; same stable-location intent as D23.
-	barIdx := strings.Index(body, `class="gmap-camera-bar"`)
+	// D23 → D24c → D26g-impl-2 — toggle has a stable home in the
+	// camera-control surface. D24c put it in .gmap-camera-bar; D26g-
+	// impl-2 split that bar into mode rail + camera cluster, with
+	// Focus living in the camera cluster (Focus is a viewport-mode
+	// control, grouped with Zoom/Fit/Centre).
+	barIdx := strings.Index(body, `class="gmap-camera-cluster"`)
 	if barIdx < 0 {
-		t.Fatal("camera bar not found")
+		t.Fatal("D26g-impl-2: gmap-camera-cluster not found")
 	}
 	barEnd := strings.Index(body[barIdx:], "</div>")
 	if barEnd < 0 || !strings.Contains(body[barIdx:barIdx+barEnd], `id="gmap-focus-toggle"`) {
-		t.Error(`gmap-focus-toggle must live inside the camera bar (D24c)`)
+		t.Error(`D26g-impl-2: gmap-focus-toggle must live inside the camera cluster`)
 	}
 
 	// === CSS rules for focus mode ===
@@ -2734,15 +5874,15 @@ func TestExplorer_HTML_GovernanceMap_VisibilityFilters(t *testing.T) {
 			t.Errorf("Step 22 chip label missing: %q", label)
 		}
 	}
-	// The chip group must live inside .governance-map-legend (so it
-	// pairs with the existing connector-class swatches and does not
-	// require a toolbar redesign).
-	legendIdx := strings.Index(body, `class="governance-map-legend"`)
+	// The chip group must live inside the workbench toolbar.
+	// D26g-impl-1 renamed `.governance-map-legend` to `.governance-map-
+	// toolbar` (the legend class is preserved as a back-compat token).
+	legendIdx := strings.Index(body, `class="governance-map-toolbar`)
 	if legendIdx < 0 {
-		t.Fatal("governance-map-legend not found in markup")
+		t.Fatal("governance-map-toolbar not found in markup")
 	}
 	if !strings.Contains(body[legendIdx:legendIdx+4096], `class="gmap-filter-chips"`) {
-		t.Error(`gmap-filter-chips group must live inside .governance-map-legend`)
+		t.Error(`gmap-filter-chips group must live inside .governance-map-toolbar`)
 	}
 
 	// === CSS classes for the chips + visibility ===
@@ -2942,18 +6082,19 @@ func TestExplorer_HTML_GovernanceMap_SearchAndFocus(t *testing.T) {
 			t.Errorf("Step 21 toolbar markup missing literal %q", want)
 		}
 	}
-	// D18 → D24d — Search input relocated from the toolbar to
-	// .gmap-top-left-overlay (a canvas-edge overlay anchored at
-	// top-left, above the camera bar). The original assertion
-	// "Search co-locates with toolbar chrome" is preserved as
-	// "Search co-locates with the canvas-edge overlay" — same
-	// stable-location intent, new container.
-	overlayIdx := strings.Index(body, `class="gmap-top-left-overlay"`)
-	if overlayIdx < 0 {
-		t.Fatal(".gmap-top-left-overlay not found in markup")
+	// D18 → D24d → D26g-impl-1 — Search input relocated:
+	//   D18:        original toolbar
+	//   D24d:       .gmap-top-left-overlay (canvas-edge overlay)
+	//   D26g-impl-1: .governance-map-toolbar (consolidated workbench
+	//                toolbar, replaces both legend strip + the two
+	//                top canvas-edge overlays).
+	// Same stable-location intent each time; only the container moves.
+	toolbarIdx := strings.Index(body, `class="governance-map-toolbar`)
+	if toolbarIdx < 0 {
+		t.Fatal("governance-map-toolbar not found in markup")
 	}
-	if !strings.Contains(body[overlayIdx:overlayIdx+4096], `id="gmap-search-input"`) {
-		t.Error(`gmap-search-input must live inside .gmap-top-left-overlay (D24d relocation)`)
+	if !strings.Contains(body[toolbarIdx:toolbarIdx+4096], `id="gmap-search-input"`) {
+		t.Error(`gmap-search-input must live inside .governance-map-toolbar (D26g-impl-1 relocation)`)
 	}
 
 	// === CSS pins ===
@@ -3313,15 +6454,17 @@ func TestExplorer_HTML_GovernanceMap_FitToBoundsButton(t *testing.T) {
 			t.Errorf("Step 19/D24c Fit markup missing literal %q", want)
 		}
 	}
-	// D24c — Fit lives inside the camera bar (renamed from puck).
-	// Same intent: Fit is co-located with the camera surface.
-	barIdx := strings.Index(body, `class="gmap-camera-bar"`)
+	// D24c → D26g-impl-2 — Fit lives inside the camera cluster
+	// (the half of the split camera bar that carries viewport
+	// controls: Zoom in/out, Fit, Centre, Focus). Same intent: Fit
+	// is co-located with the camera surface.
+	barIdx := strings.Index(body, `class="gmap-camera-cluster"`)
 	if barIdx < 0 {
-		t.Fatal("gmap-camera-bar not found in markup")
+		t.Fatal("D26g-impl-2: gmap-camera-cluster not found in markup")
 	}
 	barEnd := strings.Index(body[barIdx:], "</div>")
 	if barEnd < 0 || !strings.Contains(body[barIdx:barIdx+barEnd], `id="gmap-fit-button"`) {
-		t.Error("gmap-fit-button must live inside the camera bar")
+		t.Error("D26g-impl-2: gmap-fit-button must live inside the camera cluster")
 	}
 
 	// === Helper presence ===
@@ -3816,16 +6959,17 @@ func TestExplorer_HTML_GovernanceMap_SafeAreaCameraModel(t *testing.T) {
 		"function focusGmapOnNode(nodeId)",
 		// Constants preserved.
 		"ROOT_VIEWPORT_OFFSET_RATIO",
-		// Camera bar markup + button ids (D24c).
-		`class="gmap-camera-bar"`,
+		// D24c camera bar split into mode rail + camera cluster (D26g-impl-2).
+		`class="gmap-mode-rail"`,
+		`class="gmap-camera-cluster"`,
 		`id="gmap-fit-button"`,
 		`id="gmap-centre-button"`,
 		`id="gmap-zoom-in"`,
 		`id="gmap-zoom-out"`,
 		`id="gmap-focus-toggle"`,
-		// Top-row overlays (D24d) + bottom legend (D24c).
-		`class="gmap-top-left-overlay"`,
-		`class="gmap-top-right-overlay"`,
+		// D26g-impl-1 — top-row overlays replaced by the workbench
+		// toolbar above the canvas; bottom legend overlay unchanged.
+		`class="governance-map-toolbar`,
 		`class="gmap-legend-overlay"`,
 		// Inspector pane + toggle (D24e + D24f).
 		`id="gmap-details"`,
@@ -3928,14 +7072,15 @@ func TestExplorer_HTML_GovernanceMap_CentreOnRootButton(t *testing.T) {
 			t.Errorf("Step 18/D24c Centre markup missing literal %q", want)
 		}
 	}
-	// D24c — Centre lives inside the camera bar (renamed from puck).
-	barIdx := strings.Index(body, `class="gmap-camera-bar"`)
+	// D24c → D26g-impl-2 — Centre lives inside the camera cluster
+	// (the viewport-controls half of the split camera bar).
+	barIdx := strings.Index(body, `class="gmap-camera-cluster"`)
 	if barIdx < 0 {
-		t.Fatal("gmap-camera-bar not found in markup")
+		t.Fatal("D26g-impl-2: gmap-camera-cluster not found in markup")
 	}
 	barEnd := strings.Index(body[barIdx:], "</div>")
 	if barEnd < 0 || !strings.Contains(body[barIdx:barIdx+barEnd], `id="gmap-centre-button"`) {
-		t.Error("gmap-centre-button must live inside the camera bar")
+		t.Error("D26g-impl-2: gmap-centre-button must live inside the camera cluster")
 	}
 
 	// === Wiring IIFE pins ===
@@ -4479,10 +7624,12 @@ func TestExplorer_HTML_GovernanceMap_InspectorTopLevelPane(t *testing.T) {
 	// === 6. Pre-D24e inspector-aware overlay offsets gone ===
 	// The canvas-edge overlays no longer key off
 	// .governance-map-body.inspector-collapsed because the inspector
-	// is no longer inside the body. .gmap-top-right-overlay's right
-	// inset went from 328px (320 inspector + 8 margin) to 8px;
-	// .gmap-legend-overlay went from `calc(50% - 160px)` to true
-	// centre `left: 50%`.
+	// is no longer inside the body. The .gmap-legend-overlay went from
+	// `calc(50% - 160px)` to true centre `left: 50%` in D24e, and
+	// then to bottom-left placement in D26g-impl-3 (compact edge key).
+	// D26g-impl-1 removed .gmap-top-right-overlay entirely; its
+	// right-edge anchoring becomes irrelevant because the toolbar
+	// sits above the canvas, not anchored to the canvas right edge.
 	for _, gone := range []string{
 		"right: 328px;",
 		".governance-map-body.inspector-collapsed",
@@ -4492,10 +7639,6 @@ func TestExplorer_HTML_GovernanceMap_InspectorTopLevelPane(t *testing.T) {
 		if strings.Contains(body, gone) {
 			t.Errorf("D24e: pre-D24e inspector-aware overlay literal must be removed: %q", gone)
 		}
-	}
-	// Top-right overlay anchors to the workbench's right edge.
-	if !strings.Contains(body, "right: 8px;") {
-		t.Error("D24e .gmap-top-right-overlay must use right: 8px (was 328px before D24e)")
 	}
 
 	// === 7. setServicesSubView wires body.gmap-mode ===
@@ -4563,10 +7706,13 @@ func TestExplorer_HTML_GovernanceMap_InspectorTopLevelPane(t *testing.T) {
 		"reframe-around-this",
 		"gmap-root-node",
 		"governance-map-body",
-		"gmap-camera-bar",
+		// D26g-impl-2 — camera bar split into two clusters.
+		"gmap-mode-rail",
+		"gmap-camera-cluster",
 		"gmap-legend-overlay",
-		"gmap-top-left-overlay",
-		"gmap-top-right-overlay",
+		// D26g-impl-1 — top overlays consolidated into the workbench
+		// toolbar above the canvas.
+		"governance-map-toolbar",
 		// Focus mode + sidebar.
 		"gmap-focus-mode",
 		"shell-sidebar-toggle",
@@ -4881,17 +8027,18 @@ func TestExplorer_HTML_GovernanceMap_EvidenceDriftTray(t *testing.T) {
 
 	// === 11. Regression — every prior camera/chrome/inspector affordance ===
 	for _, want := range []string{
-		// Camera bar + buttons.
-		`class="gmap-camera-bar"`,
+		// D26g-impl-2 — camera bar split into mode rail + camera cluster.
+		`class="gmap-mode-rail"`,
+		`class="gmap-camera-cluster"`,
 		`id="gmap-fit-button"`,
 		`id="gmap-centre-button"`,
 		`id="gmap-zoom-in"`,
 		`id="gmap-zoom-out"`,
 		`id="gmap-focus-toggle"`,
 		`id="gmap-back-button"`,
-		// Top overlays + legend.
-		`class="gmap-top-left-overlay"`,
-		`class="gmap-top-right-overlay"`,
+		// D26g-impl-1 — workbench toolbar above the canvas + bottom
+		// connector legend overlay.
+		`class="governance-map-toolbar`,
 		`class="gmap-legend-overlay"`,
 		// Search + filter.
 		`id="gmap-search-input"`,
@@ -5180,6 +8327,495 @@ func TestExplorer_HTML_GovernanceMap_EvidenceTraySemantics(t *testing.T) {
 	}
 }
 
+// TestExplorer_HTML_GovernanceMap_EvidenceTrayAnalyticalLayout pins the
+// D26f contract: the Drift tab body now uses a two-column analytical
+// layout (compact signal column on the left, dominant chart panel on
+// the right) instead of a vertical stack of (controls + tile grid +
+// chart). Structural exposure nodes share the same shell with the
+// exposure-explanation panel on the right; preview kinds remain a
+// simple placeholder. The Activity tab is unchanged. Drift semantics
+// (D25e) and Activity provenance (D26c) are regression-pinned.
+func TestExplorer_HTML_GovernanceMap_EvidenceTrayAnalyticalLayout(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// === 1. Analytical-layout CSS rules exist ===
+	for _, want := range []string{
+		".gmap-evidence-tray-analytic-layout {",
+		".gmap-evidence-tray-signal-column {",
+		".gmap-evidence-tray-chart-panel {",
+		".gmap-evidence-tray-signal-list {",
+		".gmap-evidence-tray-signal-item {",
+		".gmap-evidence-tray-signal-label {",
+		".gmap-evidence-tray-signal-value {",
+		".gmap-evidence-tray-provenance-compact {",
+		".gmap-evidence-tray-controls-compact {",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26f: missing analytical-layout CSS rule %q", want)
+		}
+	}
+	// The CSS grid must split into a compact left column + flex right
+	// column. Pin the grid-template-columns declaration.
+	if !strings.Contains(body, "grid-template-columns: 280px minmax(0, 1fr)") {
+		t.Error(`D26f: analytical layout must use grid-template-columns: 280px minmax(0, 1fr)`)
+	}
+
+	// === 2. Drift renderer emits the analytical layout ===
+	driftIdx := strings.Index(body, "function renderGmapEvidenceTrayDriftPanel()")
+	if driftIdx < 0 {
+		t.Fatal("D26f: renderGmapEvidenceTrayDriftPanel not found")
+	}
+	// Grab the renderer body up to the next top-level function so the
+	// downstream pins are scoped to renderer-emitted markup, not unrelated
+	// code elsewhere on the page.
+	driftTail := body[driftIdx:]
+	driftEnd := strings.Index(driftTail, "function renderGmapEvidenceTrayActivityPanel")
+	if driftEnd < 0 {
+		t.Fatal("D26f: renderer end marker not found (renderGmapEvidenceTrayActivityPanel)")
+	}
+	driftBody := driftTail[:driftEnd]
+	for _, want := range []string{
+		"gmap-evidence-tray-analytic-layout",
+		"gmap-evidence-tray-signal-column",
+		"gmap-evidence-tray-chart-panel",
+		"gmap-evidence-tray-signal-list",
+	} {
+		if !strings.Contains(driftBody, want) {
+			t.Errorf("D26f: drift renderer must emit class %q", want)
+		}
+	}
+
+	// === 3. Direct-drift branch — chart inside the chart panel ===
+	// In the renderer body, the chart-panel <div> must wrap the chart
+	// container. Pin ordering: the chart-panel class string appears
+	// before the chart container id within the same direct-drift
+	// branch. Use a window scoped to the direct_drift branch.
+	directIdx := strings.Index(driftBody, "semantics.signalClass === 'direct_drift'")
+	if directIdx < 0 {
+		t.Fatal(`D26f: direct_drift branch not found in drift renderer`)
+	}
+	directBranch := driftBody[directIdx:]
+	exposureMarker := strings.Index(directBranch, "semantics.signalClass === 'exposure'")
+	if exposureMarker < 0 {
+		t.Fatal(`D26f: exposure branch end marker not found`)
+	}
+	directBranch = directBranch[:exposureMarker]
+	chartPanelIdx := strings.Index(directBranch, "gmap-evidence-tray-chart-panel")
+	chartIdIdx := strings.Index(directBranch, `id="gmap-evidence-tray-chart"`)
+	chartSvgIdx := strings.Index(directBranch, `id="gmap-evidence-tray-chart-svg"`)
+	if chartPanelIdx < 0 {
+		t.Error("D26f: direct-drift branch must mount the chart inside .gmap-evidence-tray-chart-panel")
+	}
+	if chartIdIdx < 0 || chartSvgIdx < 0 {
+		t.Error("D26f: direct-drift branch must keep the chart container + SVG ids")
+	}
+	if chartPanelIdx >= 0 && chartIdIdx >= 0 && chartPanelIdx > chartIdIdx {
+		t.Error("D26f: chart-panel wrapper must precede the chart container in the direct-drift branch")
+	}
+
+	// === 4. Exposure branch — explanation panel inside chart panel, no SVG chart ===
+	exposureBranchStart := exposureMarker + directIdx
+	// Slice the exposure branch from the original drift body (not the
+	// directBranch slice) so the indices line up; rebuild from driftBody.
+	exposureFromBody := driftBody[exposureBranchStart:]
+	previewMarker := strings.Index(exposureFromBody, "} else {")
+	if previewMarker < 0 {
+		t.Fatal("D26f: preview branch fallback not found in drift renderer")
+	}
+	exposureBranch := exposureFromBody[:previewMarker]
+	if !strings.Contains(exposureBranch, "gmap-evidence-tray-chart-panel") {
+		t.Error("D26f: exposure branch must reuse the same two-column shell (chart-panel wrapper)")
+	}
+	if !strings.Contains(exposureBranch, "gmap-evidence-tray-exposure-explanation") {
+		t.Error("D26f: exposure branch must render the exposure-explanation copy block")
+	}
+	if strings.Contains(exposureBranch, `id="gmap-evidence-tray-chart-svg"`) {
+		t.Error(`D26f: exposure branch must NOT mount a direct-drift SVG chart (D25e: structural nodes do not directly drift)`)
+	}
+
+	// === 5. Compact signal-item classes used by tile renderer ===
+	tilesIdx := strings.Index(body, "function renderGmapEvidenceTrayTiles()")
+	if tilesIdx < 0 {
+		t.Fatal("D26f: renderGmapEvidenceTrayTiles not found")
+	}
+	tilesTail := body[tilesIdx:]
+	tilesEnd := strings.Index(tilesTail, "\n  }\n")
+	if tilesEnd < 0 {
+		t.Fatal("D26f: renderGmapEvidenceTrayTiles end marker not found")
+	}
+	tilesBody := tilesTail[:tilesEnd]
+	for _, want := range []string{
+		`'gmap-evidence-tray-signal-item'`,
+		`'gmap-evidence-tray-signal-label'`,
+		`'gmap-evidence-tray-signal-value'`,
+		"gmap-evidence-tray-signal-list",
+	} {
+		if !strings.Contains(tilesBody, want) {
+			t.Errorf("D26f: tile renderer must use compact signal-item class %q", want)
+		}
+	}
+
+	// === 6. Tile labels — D25e canonical labels still rendered ===
+	// These travel through the semantics helper into the tile/signal
+	// renderer. Pin a representative subset to detect regressions.
+	for _, want := range []string{
+		"'Signal'",
+		"'Driver'",
+		"'Baseline → Current'",
+		"'Window / Volume'",
+		"'Exposure'",
+		"'Affected surfaces'",
+		"'Primary driver'",
+		"'Highest contributor'",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26f: canonical signal label %q must remain", want)
+		}
+	}
+
+	// === 7. Provenance — compact line + full disclaimer in DOM ===
+	// The compact provenance class lives in the served CSS + the
+	// renderer body. The full D25e disclaimer text remains in the DOM
+	// (via the title attribute on the compact element) so the trust
+	// pin keeps matching.
+	if !strings.Contains(body, "gmap-evidence-tray-provenance-compact") {
+		t.Error("D26f: compact provenance class must exist on the rendered Drift tab")
+	}
+	if !strings.Contains(body, "Illustrative demo signal. Not calculated from runtime envelopes.") {
+		t.Error("D26f: full D25e disclaimer must remain in the DOM (title attribute on the compact provenance element)")
+	}
+	if !strings.Contains(body, "DEMO DATA") {
+		t.Error("D26f: tray DEMO DATA badge must remain")
+	}
+
+	// === 8. Drift overflow rule unchanged — tray panel does NOT scroll ===
+	// .gmap-evidence-tray-panel must NOT carry overflow-y: auto. This is
+	// the load-bearing pin from D25b-fix; D26f preserves it because the
+	// chart now fills the right column at full height with no need to
+	// scroll the tray itself. Activity opt-in keeps using .is-scrollable.
+	panelIdx := strings.Index(body, ".gmap-evidence-tray-panel {")
+	if panelIdx < 0 {
+		t.Fatal("D26f: .gmap-evidence-tray-panel rule not found")
+	}
+	panelRule := body[panelIdx : panelIdx+strings.Index(body[panelIdx:], "}")]
+	if strings.Contains(panelRule, "overflow-y: auto") {
+		t.Error("D26f: .gmap-evidence-tray-panel must NOT carry overflow-y: auto")
+	}
+	// Activity list still scrolls internally.
+	activityListIdx := strings.Index(body, ".gmap-evidence-tray-activity-list {")
+	if activityListIdx < 0 {
+		t.Fatal("D26f: .gmap-evidence-tray-activity-list rule not found")
+	}
+	activityRule := body[activityListIdx : activityListIdx+strings.Index(body[activityListIdx:], "}")]
+	if !strings.Contains(activityRule, "overflow-y: auto") {
+		t.Error("D26f: Activity list must continue to scroll internally (overflow-y: auto)")
+	}
+
+	// === 9. D25e semantics regression — kind labels + disallowed wording ===
+	for _, want := range []string{
+		"'Service drift exposure'",
+		"'Capability drift exposure'",
+		"'Process drift signals'",
+		"'Decision surface drift'",
+		"'AI usage / outcome drift'",
+		"'Coverage drift'",
+		"'Authority drift exposure'",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26f: D25e semantic title %q must remain", want)
+		}
+	}
+	semIdx := strings.Index(body, "function getGmapEvidenceSignalSemantics(nodeId)")
+	if semIdx < 0 {
+		t.Fatal("D26f: getGmapEvidenceSignalSemantics not found")
+	}
+	semBody := body[semIdx:]
+	semEnd := strings.Index(semBody, "\n  }\n")
+	if semEnd < 0 {
+		t.Fatal("D26f: getGmapEvidenceSignalSemantics end marker not found")
+	}
+	semBody = semBody[:semEnd]
+	for _, gone := range []string{
+		"'Drift status'",
+		"'Capability is drifting'",
+		"'Business Service drift detected'",
+		"'Process drift detected'",
+	} {
+		if strings.Contains(semBody, gone) {
+			t.Errorf("D26f: disallowed wording must not appear in semantics helper: %q", gone)
+		}
+		if strings.Contains(driftBody, gone) {
+			t.Errorf("D26f: disallowed wording must not appear in drift renderer: %q", gone)
+		}
+	}
+
+	// === 10. Activity-tab regression — D26c contract preserved ===
+	for _, want := range []string{
+		"/explorer/envelopes?limit=50",
+		"Loading runtime activity",
+		"No runtime activity yet",
+		"Could not load runtime activity",
+		"Activity uses real Explorer runtime envelopes",
+		"function renderGmapEvidenceTrayActivityPanel()",
+		"function loadGmapEvidenceActivity()",
+		`data-envelope-id="`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26f: D26c Activity-tab affordance must remain: %q", want)
+		}
+	}
+
+	// === 11. Records-runtime regression — D26b/D26d still in place ===
+	for _, want := range []string{
+		"function loadExplorerRuntimeRecords()",
+		"function mapExplorerEnvelopeToRecordRow(item)",
+		"function computeRecordsRuntimeMetrics(rows)",
+		`>Explorer runtime<`,
+		`id="records-metric-total"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26f: D26b/D26d records affordance must remain: %q", want)
+		}
+	}
+
+	// === 12. Tray height + panel chrome regression ===
+	for _, want := range []string{
+		`id="gmap-evidence-tray"`,
+		"Runtime Evidence",
+		"height: 320px;",
+		"transition: height 0.18s ease-out",
+		`id="gmap-evidence-tray-toggle"`,
+		`id="gmap-evidence-tray-chart-svg"`,
+		`preserveAspectRatio="none"`,
+		// Drift renderer + chart fn still present so unit pins from
+		// D25b/D25e do not drift.
+		"function renderGmapEvidenceTrayDriftPanel()",
+		"function renderGmapEvidenceTrayChart()",
+		"function renderGmapEvidenceTrayTiles()",
+		// D24i / D24i-fix3 affordances unaffected.
+		`id="gmap-pan-mode-button"`,
+		`id="gmap-select-mode-button"`,
+		"const gmapSelectedNodeIds = new Set()",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26f must NOT remove %q", want)
+		}
+	}
+}
+
+// TestExplorer_HTML_GovernanceMap_EvidenceTrayActivityFromExplorerEnvelopes
+// pins the D26c contract for the Evidence Tray Activity tab: it consumes
+// the D26a runtime feed (GET /explorer/envelopes), surfaces honest
+// loading / empty / error states, has provenance copy that distinguishes
+// it from the still-illustrative Drift tab, and applies a local
+// selection-aware filter for nodes whose kind maps cleanly to an
+// envelope summary field (surface / business / process). Drift tab
+// semantics from D25e remain untouched and are regression-pinned at
+// the bottom of the test.
+func TestExplorer_HTML_GovernanceMap_EvidenceTrayActivityFromExplorerEnvelopes(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// === 1. Activity-specific helpers exist with expected signatures ===
+	for _, want := range []string{
+		"async function loadGmapEvidenceActivity()",
+		"function renderGmapEvidenceTrayActivityPanel()",
+		"function filterGmapEvidenceActivityForSelection(items, nodeId)",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26c: missing helper declaration %q", want)
+		}
+	}
+
+	// Module-level state pins
+	for _, decl := range []string{
+		"let gmapEvidenceActivityItems",
+		"let gmapEvidenceActivityLoading",
+		"let gmapEvidenceActivityError",
+	} {
+		if !strings.Contains(body, decl) {
+			t.Errorf("D26c: missing Activity-tab state declaration %q", decl)
+		}
+	}
+
+	// === 2. Endpoint usage — consumes D26a, never /v1/envelopes ===
+	// Activity uses the Explorer-scoped list endpoint with limit=50.
+	if !strings.Contains(body, "/explorer/envelopes?limit=50") {
+		t.Error("D26c: Activity tab must fetch /explorer/envelopes?limit=50")
+	}
+	// Defensive negative: the Activity loader must not call /v1/envelopes.
+	loaderBody := extractBetween(t, body,
+		"async function loadGmapEvidenceActivity()",
+		"function filterGmapEvidenceActivityForSelection")
+	if strings.Contains(loaderBody, "/v1/envelopes") {
+		t.Error("D26c: Activity loader must not fetch /v1/envelopes — Explorer is scoped to /explorer/envelopes")
+	}
+	// Detail click path remains available for the next tranche.
+	if !strings.Contains(body, "/explorer/envelopes/") {
+		t.Error("D26c: /explorer/envelopes/ detail path must remain referenced for future detail-fetch wiring")
+	}
+
+	// === 3. Activity panel state copy ===
+	for _, want := range []string{
+		"Loading runtime activity",
+		"No runtime activity yet",
+		"Run an Explorer evaluation to create an envelope",
+		"Could not load runtime activity",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26c: missing Activity-state copy %q", want)
+		}
+	}
+
+	// === 4. Provenance — Activity is real, Drift remains illustrative ===
+	// Activity must distinguish itself from the synthetic Drift signal.
+	for _, want := range []string{
+		"Activity uses real Explorer runtime envelopes",
+		"Drift signals remain illustrative until analytics is wired",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26c: missing per-tab provenance copy %q", want)
+		}
+	}
+	// The Drift panel still carries the D25e disclaimer verbatim.
+	if !strings.Contains(body, "Illustrative demo signal. Not calculated from runtime envelopes.") {
+		t.Error("D26c: D25e Drift disclaimer must remain — Drift tab semantics preserved")
+	}
+	// Tray-level DEMO DATA badge remains because Drift is still synthetic.
+	if !strings.Contains(body, "DEMO DATA") {
+		t.Error("D26c: tray DEMO DATA badge must remain while Drift is still synthetic")
+	}
+
+	// === 5. Mapping — Activity consumes the D26a fields ===
+	// Pins are on field reads in the row mapper / loader / filter helper.
+	// The test scopes mapper-field pins to the body of the existing
+	// mapExplorerEnvelopeToRecordRow, which D26c extends with process_id.
+	mapperIdx := strings.Index(body, "function mapExplorerEnvelopeToRecordRow(item)")
+	if mapperIdx < 0 {
+		t.Fatal("D26c: mapExplorerEnvelopeToRecordRow not found — D26b helper must remain available")
+	}
+	mapperBody := body[mapperIdx:]
+	mapperEnd := strings.Index(mapperBody, "\n  }\n")
+	if mapperEnd < 0 {
+		t.Fatal("D26c: mapExplorerEnvelopeToRecordRow end marker not found")
+	}
+	mapperBody = mapperBody[:mapperEnd]
+	for _, want := range []string{
+		"item.id",
+		"item.state",
+		"item.outcome",
+		"item.reason_code",
+		"item.request_source",
+		"item.surface_id",
+		"item.business_service_id",
+		"item.process_id",
+		"item.profile_id",
+		"item.grant_id",
+		"item.agent_id",
+		"item.created_at",
+	} {
+		if !strings.Contains(mapperBody, want) {
+			t.Errorf("D26c: row mapper must read D26a field %s", want)
+		}
+	}
+
+	// === 6. Selection filter — kind-aware local filtering ===
+	filterBody := extractBetween(t, body,
+		"function filterGmapEvidenceActivityForSelection(items, nodeId)",
+		"function renderGmapEvidenceTrayActivityPanel()")
+	for _, want := range []string{
+		"it.surface_id",
+		"it.business_service_id",
+		"it.process_id",
+		"pos.kind === 'surface'",
+		"pos.kind === 'business'",
+		"pos.kind === 'proc'",
+	} {
+		if !strings.Contains(filterBody, want) {
+			t.Errorf("D26c: selection filter must consume %s", want)
+		}
+	}
+	// Provenance branches for filtered / unfiltered / unsupported kinds.
+	for _, want := range []string{
+		"Locally filtered from recent Explorer runtime envelopes by surface_id match.",
+		"Locally filtered from recent Explorer runtime envelopes by business_service_id match.",
+		"Locally filtered from recent Explorer runtime envelopes by process_id match.",
+		"No matching runtime activity for this selected node",
+		"Showing the latest session activity instead.",
+		"Showing recent Explorer runtime envelopes for this session.",
+		"Node-scoped filtering for this kind requires a future analytics endpoint.",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26c: missing provenance branch copy %q", want)
+		}
+	}
+
+	// === 7. Tab switching invokes Activity render + load ===
+	// The wireGmapEvidenceTray IIFE dispatches on which === 'activity'.
+	wireBody := extractBetween(t, body, "function wireGmapEvidenceTray()", "function wireGmapEvidenceTraySelectors()")
+	if !strings.Contains(wireBody, "which === 'activity'") {
+		t.Error("D26c: tab switcher must branch on which === 'activity'")
+	}
+	if !strings.Contains(wireBody, "renderGmapEvidenceTrayActivityPanel()") ||
+		!strings.Contains(wireBody, "loadGmapEvidenceActivity()") {
+		t.Error("D26c: Activity tab click must call renderGmapEvidenceTrayActivityPanel() and loadGmapEvidenceActivity()")
+	}
+	// applyGmapEvidenceTrayState honours the Activity tab on expand.
+	applyBody := extractBetween(t, body, "function applyGmapEvidenceTrayState()", "// Wire the tray's expand/collapse toggle")
+	if !strings.Contains(applyBody, "gmapEvidenceTrayActiveTab === 'activity'") {
+		t.Error("D26c: applyGmapEvidenceTrayState must honour the Activity tab on expand")
+	}
+	// notifyGmapEvidenceTraySelectionChanged refreshes Activity for selection.
+	notifyBody := extractBetween(t, body,
+		"function notifyGmapEvidenceTraySelectionChanged()",
+		"// ── D26c: Activity tab")
+	if !strings.Contains(notifyBody, "gmapEvidenceTrayActiveTab === 'activity'") ||
+		!strings.Contains(notifyBody, "renderGmapEvidenceTrayActivityPanel()") {
+		t.Error("D26c: notifyGmapEvidenceTraySelectionChanged must re-render Activity panel when tab is active")
+	}
+
+	// === 8. Activity-coming-soon placeholder must be gone ===
+	if strings.Contains(body, "activity panels arrive with the runtime analytics endpoint") {
+		t.Error("D26c: Activity-coming-soon placeholder must be replaced — Activity is now wired to D26a")
+	}
+
+	// === 9. Regression — D25e Drift semantics + canvas affordances ===
+	// The Drift panel rebuilder, semantics helper, and key canonical
+	// titles must all still be present. This is a defensive guard
+	// against accidental regressions to the synthetic Drift surface.
+	for _, want := range []string{
+		"function renderGmapEvidenceTrayDriftPanel()",
+		"function getGmapEvidenceSignalSemantics(nodeId)",
+		"'Decision surface drift'",
+		"'Service drift exposure'",
+		"'Capability drift exposure'",
+		"'Authority drift exposure'",
+		// D24i + D24i-fix3 canvas affordances regression-pinned.
+		"id=\"gmap-pan-mode-button\"",
+		"id=\"gmap-select-mode-button\"",
+		// D25b-fix tray height regression pin.
+		"height: 320px;",
+		// D26a/D26b runtime feed prerequisites still in place.
+		"function loadExplorerRuntimeRecords()",
+		"function mapExplorerEnvelopeToRecordRow(item)",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D26c: regression — missing %q (must NOT be removed)", want)
+		}
+	}
+}
+
 // TestExplorer_HTML_GovernanceMap_InteractionModeToggle pins the
 // Phase 2B Step 39 (D24i-fix3) Pan / Select mode toggle. The two
 // new camera-bar buttons let the operator choose whether empty-
@@ -5259,33 +8895,41 @@ func TestExplorer_HTML_GovernanceMap_InteractionModeToggle(t *testing.T) {
 		t.Error("D24i-fix3: Select-mode button must NOT ship with is-active (default mode is Pan)")
 	}
 
-	// === 3. Buttons live inside .gmap-camera-bar and order is Back → Pan → Select → Zoom-in ===
-	cameraBarIdx := strings.Index(body, `class="gmap-camera-bar"`)
-	if cameraBarIdx < 0 {
-		t.Fatal(".gmap-camera-bar not found")
+	// === 3. Pan/Select live inside .gmap-mode-rail (D26g-impl-2) ===
+	// D26g-impl-1 moved Back out of the camera bar into the workbench
+	// toolbar. D26g-impl-2 split what remained of the camera bar:
+	// Pan/Select live in the mode rail (top-left of canvas), and the
+	// camera/viewport controls live in a separate camera cluster
+	// (bottom-right of canvas). Order inside the mode rail: Pan →
+	// Select.
+	modeRailIdx := strings.Index(body, `class="gmap-mode-rail"`)
+	if modeRailIdx < 0 {
+		t.Fatal("D26g-impl-2: .gmap-mode-rail not found")
 	}
-	cameraBarTail := body[cameraBarIdx:]
-	cameraBarEnd := strings.Index(cameraBarTail, `</div>`)
-	if cameraBarEnd < 0 {
-		t.Fatal(".gmap-camera-bar closing tag not found")
+	modeRailTail := body[modeRailIdx:]
+	modeRailEnd := strings.Index(modeRailTail, `</div>`)
+	if modeRailEnd < 0 {
+		t.Fatal("D26g-impl-2: .gmap-mode-rail closing tag not found")
 	}
-	cameraBarBody := cameraBarTail[:cameraBarEnd]
+	modeRailBody := modeRailTail[:modeRailEnd]
 	for _, want := range []string{
-		`id="gmap-back-button"`,
 		`id="gmap-pan-mode-button"`,
 		`id="gmap-select-mode-button"`,
-		`id="gmap-zoom-in"`,
 	} {
-		if !strings.Contains(cameraBarBody, want) {
-			t.Errorf("D24i-fix3: %q must live inside .gmap-camera-bar", want)
+		if !strings.Contains(modeRailBody, want) {
+			t.Errorf("D26g-impl-2: %q must live inside .gmap-mode-rail", want)
 		}
 	}
-	backIdx := strings.Index(cameraBarBody, `id="gmap-back-button"`)
-	panIdx := strings.Index(cameraBarBody, `id="gmap-pan-mode-button"`)
-	selIdx := strings.Index(cameraBarBody, `id="gmap-select-mode-button"`)
-	zoomIdx := strings.Index(cameraBarBody, `id="gmap-zoom-in"`)
-	if !(backIdx < panIdx && panIdx < selIdx && selIdx < zoomIdx) {
-		t.Errorf("D24i-fix3: camera-bar button order must be Back → Pan → Select → Zoom-in (back=%d pan=%d sel=%d zoom=%d)", backIdx, panIdx, selIdx, zoomIdx)
+	if strings.Contains(modeRailBody, `id="gmap-zoom-in"`) {
+		t.Error("D26g-impl-2: zoom controls must NOT live inside the mode rail (they live in the camera cluster)")
+	}
+	if strings.Contains(modeRailBody, `id="gmap-back-button"`) {
+		t.Error("D26g-impl-2: gmap-back-button must NOT live inside .gmap-mode-rail (it lives in the workbench toolbar)")
+	}
+	panIdx := strings.Index(modeRailBody, `id="gmap-pan-mode-button"`)
+	selIdx := strings.Index(modeRailBody, `id="gmap-select-mode-button"`)
+	if !(panIdx < selIdx) {
+		t.Errorf("D26g-impl-2: mode-rail button order must be Pan → Select (pan=%d sel=%d)", panIdx, selIdx)
 	}
 
 	// === 4. State + helper declarations ===
@@ -5379,7 +9023,9 @@ func TestExplorer_HTML_GovernanceMap_InteractionModeToggle(t *testing.T) {
 	for _, want := range []string{
 		`body.gmap-mode-select .governance-map-canvas-scroll`,
 		`cursor: crosshair`,
-		`.gmap-camera-bar button.is-active`,
+		// D26g-impl-2 — camera bar split; Pan/Select active styling
+		// now lives on the mode rail's button.is-active rule.
+		`.gmap-mode-rail button.is-active`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("D24i-fix3 mode CSS literal missing: %q", want)
@@ -5388,8 +9034,9 @@ func TestExplorer_HTML_GovernanceMap_InteractionModeToggle(t *testing.T) {
 
 	// === 9. Regression — every prior camera/canvas affordance preserved ===
 	for _, want := range []string{
-		// Camera bar + buttons.
-		`class="gmap-camera-bar"`,
+		// D26g-impl-2 — camera bar split into mode rail + camera cluster.
+		`class="gmap-mode-rail"`,
+		`class="gmap-camera-cluster"`,
 		`id="gmap-back-button"`,
 		`id="gmap-fit-button"`,
 		`id="gmap-centre-button"`,
@@ -5519,11 +9166,14 @@ func TestExplorer_HTML_GovernanceMap_CanvasInteraction(t *testing.T) {
 		"scrollEl.addEventListener('pointercancel'",
 		// Interactive-origin guard — common interactive children must
 		// be ignored so the gesture doesn't fight node drag, button
-		// click, input typing, etc.
+		// click, input typing, etc. D26g-impl-2 — camera bar split
+		// into mode rail + camera cluster; the guard list adopts both
+		// new selectors.
 		"INTERACTIVE_ORIGIN_SELECTOR",
 		"closest(INTERACTIVE_ORIGIN_SELECTOR)",
 		".gmap-node",
-		".gmap-camera-bar",
+		".gmap-mode-rail",
+		".gmap-camera-cluster",
 		// Pan + lasso branches.
 		"e.shiftKey",
 		"interaction = 'pan-pending'",
@@ -5710,14 +9360,21 @@ func TestExplorer_HTML_GovernanceMap_CanvasInteraction(t *testing.T) {
 	}
 
 	// === 9. applyGmapMultiSelection invoked at end of render ===
-	// Pin a small substring near the renderGovernanceMap finale —
+	// Pin a substring window near the renderGovernanceMap finale —
 	// applyGmapMultiSelection() must run after focusGmapOnRoot so
-	// stale-id pruning fires after positions are settled.
+	// stale-id pruning fires after positions are settled. The window
+	// size accommodates D26h-fix2's synchronous applyGmapFitMode(true)
+	// + scheduleGmapFitToView() block between focusGmapOnRoot and
+	// applyGmapMultiSelection.
 	rgmIdx := strings.Index(body, "focusGmapOnRoot(rootCardId);")
 	if rgmIdx < 0 {
 		t.Fatal("focusGmapOnRoot(rootCardId); finale call not found")
 	}
-	rgmTail := body[rgmIdx:rgmIdx+512]
+	rgmEnd := rgmIdx + 2048
+	if rgmEnd > len(body) {
+		rgmEnd = len(body)
+	}
+	rgmTail := body[rgmIdx:rgmEnd]
 	if !strings.Contains(rgmTail, "applyGmapMultiSelection()") {
 		t.Error("D24i: applyGmapMultiSelection() must be called after focusGmapOnRoot in renderGovernanceMap so multi-selection visuals reconcile after each render")
 	}
@@ -5737,10 +9394,12 @@ func TestExplorer_HTML_GovernanceMap_CanvasInteraction(t *testing.T) {
 		"gmapDragOverrides",
 		"effectiveGmapPosition",
 		"GMAP_DRAG_THRESHOLD_PX",
-		// Existing chrome anchors.
-		`class="gmap-camera-bar"`,
-		`class="gmap-top-left-overlay"`,
-		`class="gmap-top-right-overlay"`,
+		// Existing chrome anchors. D26g-impl-1 consolidated the two
+		// top overlays into .governance-map-toolbar; D26g-impl-2 split
+		// the camera bar into mode rail + camera cluster.
+		`class="gmap-mode-rail"`,
+		`class="gmap-camera-cluster"`,
+		`class="governance-map-toolbar`,
 		`class="gmap-legend-overlay"`,
 		`id="gmap-search-input"`,
 		`id="gmap-back-button"`,
@@ -5820,37 +9479,57 @@ func TestExplorer_HTML_GovernanceMap_BackStackHistory(t *testing.T) {
 	// === Back button markup ===
 	// D24h-fix — button ships disabled (no history, no fallback at
 	// first paint) but VISIBLE. The hidden attribute is gone so the
-	// camera bar's vertical column doesn't shift on history-state
-	// changes. The bespoke .gmap-back-button class is dropped; the
-	// camera-bar's own `.gmap-camera-bar button` rule styles it.
+	// containing chrome doesn't shift on history-state changes. The
+	// bespoke .gmap-back-button class is dropped; the toolbar's own
+	// styling applies via .governance-map-toolbar-left #gmap-back-
+	// button (D26g-impl-1 location).
 	if !strings.Contains(body, `id="gmap-back-button"`) {
 		t.Error("Step 15 Back-button markup literal missing: id=\"gmap-back-button\"")
 	}
 	if strings.Contains(body, `class="gmap-back-button"`) {
-		t.Error("D24h-fix: bespoke `class=\"gmap-back-button\"` must be removed (camera-bar's own button rule applies)")
+		t.Error("D24h-fix: bespoke `class=\"gmap-back-button\"` must be removed")
 	}
 	if strings.Contains(body, ` hidden disabled`) {
 		t.Error("D24h-fix: back button must ship visible (no `hidden` attribute) so camera-bar layout stays stable")
 	}
 
-	// === Camera-bar relocation: back button is FIRST child, before zoom-in ===
-	cameraBarIdx := strings.Index(body, `class="gmap-camera-bar"`)
-	if cameraBarIdx < 0 {
-		t.Fatal("D24h-fix: .gmap-camera-bar not found in markup")
+	// === Back button location: workbench toolbar (D26g-impl-1) ===
+	// D24h-fix moved Back from the top-left overlay into the camera bar.
+	// D26g-impl-1 promoted it again into the new workbench toolbar
+	// above the canvas. D26g-impl-2 split the camera bar into mode rail
+	// + camera cluster; Back is in neither (it lives in the toolbar).
+	if strings.Contains(body, `class="gmap-camera-bar"`) {
+		t.Error("D26g-impl-2: unified .gmap-camera-bar must be replaced by .gmap-mode-rail + .gmap-camera-cluster")
 	}
-	cameraBarTail := body[cameraBarIdx:]
-	cameraBarEnd := strings.Index(cameraBarTail, `</div>`)
-	if cameraBarEnd < 0 {
-		t.Fatal("D24h-fix: .gmap-camera-bar closing tag not found")
+	for _, container := range []string{
+		`class="gmap-mode-rail"`,
+		`class="gmap-camera-cluster"`,
+	} {
+		idx := strings.Index(body, container)
+		if idx < 0 {
+			t.Fatalf("D26g-impl-2: %q not found in markup", container)
+		}
+		end := strings.Index(body[idx:], `</div>`)
+		if end > 0 && strings.Contains(body[idx:idx+end], `id="gmap-back-button"`) {
+			t.Errorf("D26g-impl-2: gmap-back-button must NOT live inside %s (it moved to .governance-map-toolbar)", container)
+		}
 	}
-	cameraBarBody := cameraBarTail[:cameraBarEnd]
-	if !strings.Contains(cameraBarBody, `id="gmap-back-button"`) {
-		t.Error("D24h-fix: id=\"gmap-back-button\" must live inside .gmap-camera-bar")
+	toolbarIdx := strings.Index(body, `class="governance-map-toolbar`)
+	if toolbarIdx < 0 {
+		t.Fatal("D26g-impl-1: .governance-map-toolbar not found")
 	}
-	backIdxInBar := strings.Index(cameraBarBody, `id="gmap-back-button"`)
-	zoomInIdxInBar := strings.Index(cameraBarBody, `id="gmap-zoom-in"`)
-	if backIdxInBar < 0 || zoomInIdxInBar < 0 || backIdxInBar > zoomInIdxInBar {
-		t.Errorf("D24h-fix: back button must appear BEFORE zoom-in inside .gmap-camera-bar (back=%d zoomIn=%d)", backIdxInBar, zoomInIdxInBar)
+	toolbarEnd := strings.Index(body[toolbarIdx:], `class="governance-map-body"`)
+	if toolbarEnd < 0 {
+		t.Fatal("D26g-impl-1: could not bound .governance-map-toolbar block")
+	}
+	toolbarBody := body[toolbarIdx : toolbarIdx+toolbarEnd]
+	if !strings.Contains(toolbarBody, `id="gmap-back-button"`) {
+		t.Error("D26g-impl-1: id=\"gmap-back-button\" must live inside .governance-map-toolbar")
+	}
+	backIdxInToolbar := strings.Index(toolbarBody, `id="gmap-back-button"`)
+	searchIdxInToolbar := strings.Index(toolbarBody, `id="gmap-search-input"`)
+	if backIdxInToolbar < 0 || searchIdxInToolbar < 0 || backIdxInToolbar > searchIdxInToolbar {
+		t.Errorf("D26g-impl-1: Back button must appear BEFORE the search input inside .governance-map-toolbar (back=%d search=%d)", backIdxInToolbar, searchIdxInToolbar)
 	}
 
 	// === Helpers + state-update semantics ===
@@ -6572,7 +10251,9 @@ func TestExplorer_HTML_GovernanceMap_ZoomControls(t *testing.T) {
 	for _, marker := range []string{
 		`id="gmap-zoom-out"`,
 		`id="gmap-zoom-in"`,
-		`gmap-camera-bar`,
+		// D26g-impl-2 — zoom controls live in .gmap-camera-cluster
+		// (split from the unified .gmap-camera-bar).
+		`gmap-camera-cluster`,
 		`aria-label="Zoom out"`,
 		`aria-label="Zoom in"`,
 		`id="gmap-scene"`,

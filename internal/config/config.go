@@ -181,6 +181,12 @@ type ServerConfig struct {
 	// IdleTimeout bounds how long to keep idle keep-alive connections open.
 	// Default: "120s". Zero falls back to ReadTimeout.
 	IdleTimeout Duration `yaml:"idle_timeout"`
+	// HandlerTimeout bounds the wall-clock time any single API handler may
+	// spend producing a response. On timeout the request returns 503 with a
+	// JSON {"error":"request timed out"} body. The /metrics endpoint is
+	// exempt — Prometheus scrapers manage their own timeouts.
+	// Default: "30s". Must be > 0; zero would disable the safety bound.
+	HandlerTimeout Duration `yaml:"handler_timeout"`
 	// ExplorerEnabled serves the interactive evaluation sandbox at /explorer.
 	// Enabled by default; set false in production if the UI is not needed.
 	ExplorerEnabled bool `yaml:"explorer_enabled"`
@@ -199,6 +205,23 @@ type StoreConfig struct {
 	// DSN is the Postgres connection string. Required when Backend is "postgres".
 	// Supports placeholder expansion: "${DATABASE_URL}".
 	DSN string `yaml:"dsn"`
+
+	// MaxOpenConns bounds the total number of open Postgres connections held
+	// by this MIDAS instance. Sized so the sum across replicas does not exceed
+	// the Postgres connection budget. Must be > 0. Ignored when Backend is
+	// "memory".
+	MaxOpenConns int `yaml:"max_open_conns"`
+	// MaxIdleConns bounds the idle connection pool. Must be in [0, MaxOpenConns].
+	// Ignored when Backend is "memory".
+	MaxIdleConns int `yaml:"max_idle_conns"`
+	// ConnMaxLifetime caps how long a connection may be reused before the
+	// pool retires it. Helps with network/LB/Postgres failover hygiene.
+	// Zero means "no limit" (database/sql semantics). Must be >= 0.
+	ConnMaxLifetime Duration `yaml:"conn_max_lifetime"`
+	// ConnMaxIdleTime caps how long an idle connection may sit in the pool
+	// before the pool closes it. Prevents stale-idle buildup. Zero means
+	// "no limit" (database/sql semantics). Must be >= 0.
+	ConnMaxIdleTime Duration `yaml:"conn_max_idle_time"`
 }
 
 // AuthConfig controls authentication enforcement on governance routes.
@@ -222,12 +245,20 @@ type TokenEntry struct {
 	Roles string `yaml:"roles"`
 }
 
-// ObservabilityConfig controls logging behaviour.
+// ObservabilityConfig controls logging and metrics behaviour.
 type ObservabilityConfig struct {
 	// LogLevel controls verbosity. Valid: "debug", "info", "warn", "error". Default: "info".
 	LogLevel string `yaml:"log_level"`
 	// LogFormat selects the output format. Valid: "json", "text". Default: "json".
 	LogFormat string `yaml:"log_format"`
+	// MetricsEnabled controls whether the Prometheus runtime metrics
+	// recorders are wired into the orchestrator and store, and whether the
+	// metrics path is registered on the HTTP mux. Default: true.
+	MetricsEnabled bool `yaml:"metrics_enabled"`
+	// MetricsPath is the HTTP path at which Prometheus-format metrics are
+	// served. Must start with "/" and be non-empty when MetricsEnabled is
+	// true. Default: "/metrics".
+	MetricsPath string `yaml:"metrics_path"`
 }
 
 // ControlPlaneConfig enables or disables the control plane endpoints.

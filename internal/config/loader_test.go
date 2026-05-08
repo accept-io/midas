@@ -212,6 +212,148 @@ func TestLoad_InvalidDispatcherEnabled(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Postgres pool env vars
+// ---------------------------------------------------------------------------
+
+func TestLoad_StorePoolEnvOverrides(t *testing.T) {
+	result, err := Load(LoadOptions{
+		SearchPaths: noDiscovery,
+		EnvOverride: env(
+			"MIDAS_DATABASE_MAX_OPEN_CONNS", "50",
+			"MIDAS_DATABASE_MAX_IDLE_CONNS", "10",
+			"MIDAS_DATABASE_CONN_MAX_LIFETIME", "45m",
+			"MIDAS_DATABASE_CONN_MAX_IDLE_TIME", "90s",
+		),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if result.Config.Store.MaxOpenConns != 50 {
+		t.Errorf("max_open_conns: want 50, got %d", result.Config.Store.MaxOpenConns)
+	}
+	if result.Config.Store.MaxIdleConns != 10 {
+		t.Errorf("max_idle_conns: want 10, got %d", result.Config.Store.MaxIdleConns)
+	}
+	if result.Config.Store.ConnMaxLifetime.D().String() != "45m0s" {
+		t.Errorf("conn_max_lifetime: want 45m0s, got %s", result.Config.Store.ConnMaxLifetime.D())
+	}
+	if result.Config.Store.ConnMaxIdleTime.D().String() != "1m30s" {
+		t.Errorf("conn_max_idle_time: want 1m30s, got %s", result.Config.Store.ConnMaxIdleTime.D())
+	}
+	if result.Sources["store"] != SourceEnv {
+		t.Errorf("store source: want env, got %s", result.Sources["store"])
+	}
+}
+
+func TestLoad_StorePool_MalformedMaxOpenConns(t *testing.T) {
+	_, err := Load(LoadOptions{
+		SearchPaths: noDiscovery,
+		EnvOverride: env("MIDAS_DATABASE_MAX_OPEN_CONNS", "not-a-number"),
+	})
+	if err == nil {
+		t.Error("want parse error for non-integer MIDAS_DATABASE_MAX_OPEN_CONNS")
+	}
+}
+
+func TestLoad_StorePool_MalformedMaxIdleConns(t *testing.T) {
+	_, err := Load(LoadOptions{
+		SearchPaths: noDiscovery,
+		EnvOverride: env("MIDAS_DATABASE_MAX_IDLE_CONNS", "abc"),
+	})
+	if err == nil {
+		t.Error("want parse error for non-integer MIDAS_DATABASE_MAX_IDLE_CONNS")
+	}
+}
+
+func TestLoad_StorePool_MalformedLifetime(t *testing.T) {
+	_, err := Load(LoadOptions{
+		SearchPaths: noDiscovery,
+		EnvOverride: env("MIDAS_DATABASE_CONN_MAX_LIFETIME", "thirty-minutes"),
+	})
+	if err == nil {
+		t.Error("want parse error for non-duration MIDAS_DATABASE_CONN_MAX_LIFETIME")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Handler timeout env var (D27d)
+// ---------------------------------------------------------------------------
+
+func TestLoad_HandlerTimeoutEnvOverride(t *testing.T) {
+	result, err := Load(LoadOptions{
+		SearchPaths: noDiscovery,
+		EnvOverride: env("MIDAS_HTTP_HANDLER_TIMEOUT", "45s"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Config.Server.HandlerTimeout.D().String() != "45s" {
+		t.Errorf("handler_timeout: want 45s, got %s", result.Config.Server.HandlerTimeout.D())
+	}
+	if result.Sources["server"] != SourceEnv {
+		t.Errorf("server source: want env, got %s", result.Sources["server"])
+	}
+}
+
+func TestLoad_HandlerTimeout_MalformedDuration(t *testing.T) {
+	_, err := Load(LoadOptions{
+		SearchPaths: noDiscovery,
+		EnvOverride: env("MIDAS_HTTP_HANDLER_TIMEOUT", "thirty-seconds"),
+	})
+	if err == nil {
+		t.Error("want parse error for non-duration MIDAS_HTTP_HANDLER_TIMEOUT")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Metrics env vars
+// ---------------------------------------------------------------------------
+
+func TestLoad_MetricsEnvOverrides(t *testing.T) {
+	result, err := Load(LoadOptions{
+		SearchPaths: noDiscovery,
+		EnvOverride: env(
+			"MIDAS_METRICS_ENABLED", "false",
+			"MIDAS_METRICS_PATH", "/internal/metrics",
+		),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Config.Observability.MetricsEnabled {
+		t.Error("metrics_enabled: want false (env override), got true")
+	}
+	if result.Config.Observability.MetricsPath != "/internal/metrics" {
+		t.Errorf("metrics_path: want \"/internal/metrics\", got %q", result.Config.Observability.MetricsPath)
+	}
+	if result.Sources["observability"] != SourceEnv {
+		t.Errorf("observability source: want env, got %s", result.Sources["observability"])
+	}
+}
+
+func TestLoad_MetricsEnabled_MalformedBool(t *testing.T) {
+	_, err := Load(LoadOptions{
+		SearchPaths: noDiscovery,
+		EnvOverride: env("MIDAS_METRICS_ENABLED", "perhaps"),
+	})
+	if err == nil {
+		t.Error("want parse error for non-boolean MIDAS_METRICS_ENABLED")
+	}
+}
+
+func TestLoad_StorePool_MalformedIdleTime(t *testing.T) {
+	_, err := Load(LoadOptions{
+		SearchPaths: noDiscovery,
+		EnvOverride: env("MIDAS_DATABASE_CONN_MAX_IDLE_TIME", "5"),
+	})
+	// "5" lacks a unit suffix and is rejected by time.ParseDuration.
+	if err == nil {
+		t.Error("want parse error for non-duration MIDAS_DATABASE_CONN_MAX_IDLE_TIME")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Load — file loading
 // ---------------------------------------------------------------------------
 

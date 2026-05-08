@@ -28,6 +28,7 @@ import (
 	"github.com/accept-io/midas/internal/httpapi"
 	"github.com/accept-io/midas/internal/identity"
 	"github.com/accept-io/midas/internal/localiam"
+	"github.com/accept-io/midas/internal/metrics"
 	"github.com/accept-io/midas/internal/oidc"
 	"github.com/accept-io/midas/internal/outbox"
 	"github.com/accept-io/midas/internal/policy"
@@ -107,9 +108,27 @@ func main() {
 
 	config.LogStartupSummary(cfgResult)
 
+	// --- Metrics: build runtime metrics bundle (or nil when disabled) ---
+	// Constructed before the store and orchestrator so both can be wired
+	// with the real recorders. When metrics are disabled the bundle is nil
+	// and the recorders fall back to NoOp inside their constructors.
+
+	var runtimeMetrics *metrics.RuntimeMetrics
+	if cfg.Observability.MetricsEnabled {
+		runtimeMetrics = metrics.NewRuntimeMetrics()
+	}
+	slog.Info("midas_metrics_configured",
+		"enabled", cfg.Observability.MetricsEnabled,
+		"path", cfg.Observability.MetricsPath,
+	)
+
 	// --- Store: build repositories ---
 
-	repos, repoStore, outboxRepo, cleanup, readyFn, err := buildRepositories(context.Background(), cfg.Store)
+	var txRecorder store.TransactionRecorder
+	if runtimeMetrics != nil {
+		txRecorder = runtimeMetrics.Transactions
+	}
+	repos, repoStore, outboxRepo, cleanup, readyFn, err := buildRepositories(context.Background(), cfg.Store, txRecorder)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -151,7 +170,11 @@ func main() {
 		)
 	}
 
-	orchestrator, err := decision.NewOrchestrator(repoStore, policyEval, nil)
+	var evalRecorder decision.EvaluationRecorder
+	if runtimeMetrics != nil {
+		evalRecorder = runtimeMetrics.Evaluation
+	}
+	orchestrator, err := decision.NewOrchestrator(repoStore, policyEval, evalRecorder)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -298,6 +321,11 @@ func main() {
 	srv.WithStoreBackend(cfg.Store.Backend)
 	srv.WithDemoSeeded(demoSeeded)
 	srv.WithSeedDemoUser(cfg.Dev.SeedDemoUser)
+	srv.WithHandlerTimeout(cfg.Server.HandlerTimeout.D())
+
+	if runtimeMetrics != nil {
+		srv.WithMetrics(runtimeMetrics.Handler, cfg.Observability.MetricsPath)
+	}
 
 	// iamSvc is captured outside the headless branch so the post-headless
 	// composeAuthenticator call sees the correct value (nil when Local IAM
@@ -517,7 +545,12 @@ func buildAuthenticator(authCfg config.AuthConfig) (auth.Authenticator, error) {
 }
 
 // buildRepositories constructs the store backend from StoreConfig.
-func buildRepositories(ctx context.Context, storeCfg config.StoreConfig) (
+//
+// txRecorder, when non-nil, is wired into the Postgres store so its
+// transaction lifecycle observations are exported as Prometheus metrics.
+// Pass nil to fall back to NoOp metrics (e.g. tests, or when metrics are
+// disabled in config). Memory backend ignores the recorder.
+func buildRepositories(ctx context.Context, storeCfg config.StoreConfig, txRecorder store.TransactionRecorder) (
 	*store.Repositories,
 	decision.RepositoryStore,
 	outbox.Repository,
@@ -536,6 +569,11 @@ func buildRepositories(ctx context.Context, storeCfg config.StoreConfig) (
 			return nil, nil, nil, nil, nil, err
 		}
 
+		// Apply pool tuning before the startup ping so the ping uses the
+		// configured pool behaviour. database/sql treats zero durations as
+		// "no limit" — validated upstream in config.ValidateStructural.
+		configureSQLDBPool(db, storeCfg)
+
 		if err := db.PingContext(ctx); err != nil {
 			_ = db.Close()
 			return nil, nil, nil, nil, nil, err
@@ -546,7 +584,7 @@ func buildRepositories(ctx context.Context, storeCfg config.StoreConfig) (
 			return nil, nil, nil, nil, nil, err
 		}
 
-		pgStore, err := postgres.NewStore(db, nil)
+		pgStore, err := postgres.NewStore(db, txRecorder)
 		if err != nil {
 			_ = db.Close()
 			return nil, nil, nil, nil, nil, err
@@ -582,6 +620,23 @@ func buildRepositories(ctx context.Context, storeCfg config.StoreConfig) (
 	default:
 		return nil, nil, nil, nil, nil, fmt.Errorf("unsupported store.backend: %q", storeCfg.Backend)
 	}
+}
+
+// configureSQLDBPool applies the validated Postgres pool settings to db and
+// emits the midas_database_pool_configured startup log line. Factored out so
+// that pool-application can be unit-tested without opening a live Postgres
+// connection.
+func configureSQLDBPool(db *sql.DB, storeCfg config.StoreConfig) {
+	db.SetMaxOpenConns(storeCfg.MaxOpenConns)
+	db.SetMaxIdleConns(storeCfg.MaxIdleConns)
+	db.SetConnMaxLifetime(storeCfg.ConnMaxLifetime.D())
+	db.SetConnMaxIdleTime(storeCfg.ConnMaxIdleTime.D())
+	slog.Info("midas_database_pool_configured",
+		"max_open_conns", storeCfg.MaxOpenConns,
+		"max_idle_conns", storeCfg.MaxIdleConns,
+		"conn_max_lifetime", storeCfg.ConnMaxLifetime.D().String(),
+		"conn_max_idle_time", storeCfg.ConnMaxIdleTime.D().String(),
+	)
 }
 
 // configToOIDC converts a config.PlatformOIDCConfig to the oidc.Config

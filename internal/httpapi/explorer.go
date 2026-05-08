@@ -6,14 +6,27 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/accept-io/midas/internal/bootstrap"
 	"github.com/accept-io/midas/internal/decision"
+	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/governancecoverage"
 	"github.com/accept-io/midas/internal/platformauth"
 	"github.com/accept-io/midas/internal/policy"
 	"github.com/accept-io/midas/internal/store/memory"
+)
+
+// Explorer envelope list pagination bounds.
+//
+// These mirror the convention used by /v1/coverage and /v1/controlplane/audit:
+// values above max return 400 rather than silently clamping. Default 50 keeps
+// the list compact for the Records view and the Bottom Evidence Tray.
+const (
+	explorerEnvelopeListDefaultLimit = 50
+	explorerEnvelopeListMaxLimit     = 500
 )
 
 //go:embed explorer
@@ -164,7 +177,7 @@ func (s *Server) handleExplorerGetEnvelope(w http.ResponseWriter, r *http.Reques
 
 	env, err := s.explorerOrchestrator.GetEnvelopeByID(r.Context(), id)
 	if err != nil {
-		statusCode, errResp := mapDomainError(err, entityEnvelope)
+		statusCode, errResp := mapDomainError(err, entityEnvelope, false)
 		writeJSON(w, statusCode, errResp)
 		return
 	}
@@ -189,7 +202,7 @@ func (s *Server) handleExplorerEvaluate(w http.ResponseWriter, r *http.Request) 
 		})
 		return
 	}
-	s.handleEvaluateWith(w, r, s.explorerOrchestrator, false)
+	s.handleEvaluateWith(w, r, s.explorerOrchestrator, false, auditStatusExplorer)
 }
 
 // handleExplorerSimulate handles POST /explorer/simulate using the Explorer's
@@ -211,4 +224,197 @@ func (s *Server) handleExplorerSimulate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.handleSimulateWith(w, r, s.explorerOrchestrator)
+}
+
+// explorerEnvelopeSummary is the compact wire format for one envelope in the
+// /explorer/envelopes list response. Full detail remains available via
+// GET /explorer/envelopes/{id}.
+type explorerEnvelopeSummary struct {
+	ID             string     `json:"id"`
+	State          string     `json:"state"`
+	RequestID      string     `json:"request_id"`
+	RequestSource  string     `json:"request_source"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+	EvaluatedAt    *time.Time `json:"evaluated_at,omitempty"`
+	Outcome        string     `json:"outcome,omitempty"`
+	ReasonCode     string     `json:"reason_code,omitempty"`
+	SurfaceID      string     `json:"surface_id,omitempty"`
+	SurfaceVersion int        `json:"surface_version,omitempty"`
+	ProfileID      string     `json:"profile_id,omitempty"`
+	ProfileVersion int        `json:"profile_version,omitempty"`
+	GrantID        string     `json:"grant_id,omitempty"`
+	AgentID        string     `json:"agent_id,omitempty"`
+	SubjectID      string     `json:"subject_id,omitempty"`
+	// BusinessServiceID and ProcessID are read from Resolved.Structure
+	// snapshots, which are point-in-time evidence frozen at evaluation
+	// time. They may be empty when the resolved chain did not include
+	// service-led structural context.
+	BusinessServiceID string `json:"business_service_id,omitempty"`
+	ProcessID         string `json:"process_id,omitempty"`
+}
+
+// explorerEnvelopeListResponse is the wire format for GET /explorer/envelopes.
+//
+// items is always present (never null) — empty list is an empty array.
+// count reflects the number of envelopes returned after filtering and limit.
+// limit echoes the effective limit applied (default or caller-supplied,
+// after validation).
+type explorerEnvelopeListResponse struct {
+	Items []explorerEnvelopeSummary `json:"items"`
+	Count int                       `json:"count"`
+	Limit int                       `json:"limit"`
+}
+
+// handleExplorerListEnvelopes serves GET /explorer/envelopes against the
+// Explorer's isolated in-memory orchestrator. It returns a compact list
+// of envelope summaries — full detail remains available via
+// GET /explorer/envelopes/{id}.
+//
+// Isolation: this endpoint reads only from s.explorerOrchestrator (the
+// isolated in-memory runtime built in initExplorerRuntime). Production
+// envelope state (s.orchestrator) is never consulted here. The same
+// disjointness property pinned by /explorer/coverage applies here.
+//
+// Query parameters (all optional):
+//   - state           — exact-match envelope lifecycle state filter; one of
+//     received, evaluating, outcome_recorded, escalated,
+//     awaiting_review, closed. Invalid value → 400.
+//   - since, until    — RFC3339 timestamps; filter by envelope created_at.
+//     since is inclusive, until is exclusive. Invalid → 400.
+//   - limit           — positive integer ≤ explorerEnvelopeListMaxLimit
+//     (500). Default explorerEnvelopeListDefaultLimit (50).
+//     Malformed or above-max → 400.
+//
+// Sorting: created_at descending. Items are sorted in the handler since the
+// underlying repository (memory.EnvelopeRepo) iterates a map.
+//
+// Empty result returns 200 with items: [], count: 0, limit: <effective>.
+func (s *Server) handleExplorerListEnvelopes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	if s.explorerOrchestrator == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "explorer runtime not available",
+		})
+		return
+	}
+
+	q := r.URL.Query()
+
+	stateParam := strings.TrimSpace(q.Get("state"))
+	if stateParam != "" && !isValidEnvelopeState(envelope.EnvelopeState(stateParam)) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "invalid state filter: must be one of received, evaluating, outcome_recorded, escalated, awaiting_review, closed",
+		})
+		return
+	}
+
+	since, err := parseRFC3339Param(q.Get("since"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "since must be an RFC3339 timestamp",
+		})
+		return
+	}
+	until, err := parseRFC3339Param(q.Get("until"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "until must be an RFC3339 timestamp",
+		})
+		return
+	}
+
+	limit := explorerEnvelopeListDefaultLimit
+	if limitStr := strings.TrimSpace(q.Get("limit")); limitStr != "" {
+		parsed, perr := parsePositiveInt(limitStr)
+		if perr != nil || parsed <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "limit must be a positive integer",
+			})
+			return
+		}
+		if parsed > explorerEnvelopeListMaxLimit {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "limit exceeds maximum allowed value",
+			})
+			return
+		}
+		limit = parsed
+	}
+
+	envs, err := s.explorerOrchestrator.ListEnvelopesByState(r.Context(), envelope.EnvelopeState(stateParam))
+	if err != nil {
+		statusCode, errResp := mapDomainError(err, entityEnvelope, false)
+		writeJSON(w, statusCode, errResp)
+		return
+	}
+
+	// Filter by created_at against since (inclusive) and until (exclusive),
+	// matching the coverage endpoint's documented semantics.
+	filtered := make([]*envelope.Envelope, 0, len(envs))
+	for _, env := range envs {
+		if env == nil {
+			continue
+		}
+		if !since.IsZero() && env.CreatedAt.Before(since) {
+			continue
+		}
+		if !until.IsZero() && !env.CreatedAt.Before(until) {
+			continue
+		}
+		filtered = append(filtered, env)
+	}
+
+	// Newest first by created_at. SliceStable so envelopes with identical
+	// timestamps keep repository iteration order rather than being shuffled.
+	sort.SliceStable(filtered, func(i, j int) bool {
+		return filtered[i].CreatedAt.After(filtered[j].CreatedAt)
+	})
+
+	if len(filtered) > limit {
+		filtered = filtered[:limit]
+	}
+
+	resp := explorerEnvelopeListResponse{
+		Items: make([]explorerEnvelopeSummary, 0, len(filtered)),
+		Count: len(filtered),
+		Limit: limit,
+	}
+	for _, env := range filtered {
+		resp.Items = append(resp.Items, toExplorerEnvelopeSummary(env))
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// toExplorerEnvelopeSummary projects an envelope into the compact list DTO.
+// Optional fields read from Resolved.Structure / Resolved.Subject are emitted
+// only when present; the underlying snapshots are point-in-time evidence and
+// may legitimately be empty.
+func toExplorerEnvelopeSummary(env *envelope.Envelope) explorerEnvelopeSummary {
+	sum := explorerEnvelopeSummary{
+		ID:             env.ID(),
+		State:          string(env.State),
+		RequestID:      env.RequestID(),
+		RequestSource:  env.RequestSource(),
+		CreatedAt:      env.CreatedAt,
+		UpdatedAt:      env.UpdatedAt,
+		EvaluatedAt:    env.Evaluation.EvaluatedAt,
+		Outcome:        string(env.Evaluation.Outcome),
+		ReasonCode:     string(env.Evaluation.ReasonCode),
+		SurfaceID:      env.Resolved.Authority.SurfaceID,
+		SurfaceVersion: env.Resolved.Authority.SurfaceVersion,
+		ProfileID:      env.Resolved.Authority.ProfileID,
+		ProfileVersion: env.Resolved.Authority.ProfileVersion,
+		GrantID:        env.Resolved.Authority.GrantID,
+		AgentID:        env.Resolved.Authority.AgentID,
+	}
+	if env.Resolved.Subject != nil {
+		sum.SubjectID = env.Resolved.Subject.ID
+	}
+	sum.BusinessServiceID = env.Resolved.Structure.BusinessService.ID
+	sum.ProcessID = env.Resolved.Structure.Process.ID
+	return sum
 }

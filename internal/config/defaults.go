@@ -16,12 +16,17 @@ func DefaultConfig() Config {
 			ReadHeaderTimeout: Duration(10 * time.Second),
 			WriteTimeout:      Duration(60 * time.Second),
 			IdleTimeout:       Duration(120 * time.Second),
+			HandlerTimeout:    Duration(30 * time.Second),
 			ExplorerEnabled:   true,
 			Headless:          false,
 		},
 		Store: StoreConfig{
-			Backend: "memory",
-			DSN:     "",
+			Backend:         "memory",
+			DSN:             "",
+			MaxOpenConns:    25,
+			MaxIdleConns:    5,
+			ConnMaxLifetime: Duration(30 * time.Minute),
+			ConnMaxIdleTime: Duration(5 * time.Minute),
 		},
 		Auth: AuthConfig{
 			Mode:   AuthModeOpen,
@@ -42,8 +47,10 @@ func DefaultConfig() Config {
 			UsePKCE:       true,
 		},
 		Observability: ObservabilityConfig{
-			LogLevel:  "info",
-			LogFormat: "json",
+			LogLevel:       "info",
+			LogFormat:      "json",
+			MetricsEnabled: true,
+			MetricsPath:    "/metrics",
 		},
 		ControlPlane: ControlPlaneConfig{
 			Enabled: true,

@@ -179,7 +179,9 @@ Full variable reference: [docs/operations/deployment.md](docs/operations/deploym
 | [docs/guides/lifecycle-management.md](docs/guides/lifecycle-management.md) | Inferred structure lifecycle: promote and cleanup |
 | [docs/guides/authentication.md](docs/guides/authentication.md) | Local IAM, OIDC/SSO, and API bearer token authentication |
 | [docs/guides/rego-policies.md](docs/guides/rego-policies.md) | Policy behavior: NoOp default and future direction |
-| [docs/operations/deployment.md](docs/operations/deployment.md) | Surface lifecycle: apply → approve → active → deprecated |
+| [docs/operations/runtime-readiness.md](docs/operations/runtime-readiness.md) | Operator runbook: pilot deployment, observability, incident response, benchmark interpretation, fail-mode guidance |
+| [docs/operations/deployment.md](docs/operations/deployment.md) | Surface lifecycle, Postgres pool, runtime metrics, runtime safety |
+| [docs/operations/performance.md](docs/operations/performance.md) | Reference inline-evaluation benchmarks (direct + HTTP) and interpretation |
 | [docs/operations/escalations.md](docs/operations/escalations.md) | Escalation outcomes, listing and resolving |
 | [docs/operations/events.md](docs/operations/events.md) | Outbox, dispatcher, Kafka, event contracts |
 | [docs/operations/integrations.md](docs/operations/integrations.md) | Kafka integration, SSO/OIDC |
