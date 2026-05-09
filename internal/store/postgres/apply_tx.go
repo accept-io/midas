@@ -55,6 +55,7 @@ func (a *ApplyTxRunner) WithTx(
 			AISystems:                    repos.AISystems,
 			AISystemVersions:             repos.AISystemVersions,
 			AISystemBindings:             repos.AISystemBindings,
+			FailModePolicies:             repos.FailModePolicies,
 		})
 	})
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/accept-io/midas/internal/capability"
 	"github.com/accept-io/midas/internal/controlaudit"
 	"github.com/accept-io/midas/internal/envelope"
+	"github.com/accept-io/midas/internal/failmode"
 	"github.com/accept-io/midas/internal/governanceexpectation"
 	"github.com/accept-io/midas/internal/localiam"
 	"github.com/accept-io/midas/internal/outbox"
@@ -62,4 +63,12 @@ type Repositories struct {
 	AISystems        aisystem.SystemRepository
 	AISystemVersions aisystem.VersionRepository
 	AISystemBindings aisystem.BindingRepository
+
+	// FailModePolicies is the repository for the closed-only FailModePolicy
+	// entity introduced in D27j-impl-1a. Nil-safe: no runtime path consults
+	// it in this tranche; memory-mode tests that build a partial
+	// Repositories may leave it nil. Future tranches that resolve
+	// FailModePolicy at evaluation time will be required to nil-check at
+	// each call site.
+	FailModePolicies failmode.PolicyRepository
 }

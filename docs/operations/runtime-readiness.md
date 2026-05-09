@@ -407,6 +407,15 @@ Failure responses on any path do not carry `audit_status`. The marker is for gov
 
 The marker is mandatory in the OpenAPI sense (`required` on `EvaluateResponse`); strict-schema clients break without coordination. F1 takes the clean-break stance — there is no compatibility shim and no opt-in flag. Operators promoting past F1 must update their `/v1/evaluate` consumers.
 
+**Current narrow fail-mode fields.** Two narrow fail-mode fields exist in the model today. Their runtime status is asymmetric — operators applying surfaces and profiles must understand which one actually changes behaviour.
+
+| Field (Go / column) | Persisted? | Runtime-effective today? | Scope | Future direction |
+|---|---|---|---|---|
+| `surface.FailureMode` / `decision_surfaces.failure_mode` | Yes | **No** | Legacy surface-level field. Accepted by control-plane apply and stored, but not consulted by the inline runtime evaluator. | Expected to be replaced by FailModePolicy. May be retired once surfaces have migrated to a FailModePolicy reference. |
+| `authority.FailMode` / `authority_profiles.fail_mode` | Yes | **Yes** | Policy-evaluator-error handling only. `open` skips the policy step on evaluator error (canonically audited; see caveat below); `closed` escalates with `ReasonPolicyError`. No other failure path consults this field. | Expected to migrate into FailModePolicy. The narrow `open` path's audit-payload encoding is fixed at the same time. |
+
+Operators applying a Surface with `failure_mode: closed` or `failure_mode: open` should know the value is round-tripped through the control plane but has no behavioural effect at evaluation time today. The runtime fail-closed posture for surfaces is a property of MIDAS's F1 baseline (see "what F1 ships" above), not of the surface field.
+
 **Named exception — the narrow fail-open path.** When a profile sets `authority.FailMode = open`, a policy-evaluator error during evaluation does *not* surface as a class-aware 503. Instead, the orchestrator returns `OutcomeAccept`, writes a canonical audit envelope, and the inline path returns its normal 200 response. The path is canonically audited (it produces an envelope and an audit event), but the audit-event payload encodes the fail-open decision as `allowed:true` rather than as an explicit degradation marker. **This is a known limitation.** Explicit `degraded:true` / `class:resource` audit-event payload encoding is FailModePolicy work (§15), deliberately deferred from F1.
 
 Operationally: for surfaces that opt into fail-open via `authority.FailMode = open`, briefly degraded outcomes are recorded but are not distinguishable in the audit chain from normal accepts without inspecting upstream context. Operators relying on the audit chain to discriminate degraded from normal accepts on these surfaces should not promote them past Tier 3 until FailModePolicy ships.

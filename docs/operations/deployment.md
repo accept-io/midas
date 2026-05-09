@@ -108,6 +108,8 @@ spec:
   status: active
 ```
 
+> **Note on `failure_mode` and `fail_mode` in the bundle above.** The `failure_mode` field on Surface is persisted by the control plane but is **not consulted by the inline runtime evaluator today** — the value is round-tripped through apply for compatibility but has no behavioural effect at evaluation time. The `fail_mode` field on Profile **is** consulted at runtime, but only for the narrow policy-evaluator-error sub-case (and only on the profile resolved at evaluation time). See [docs/operations/runtime-readiness.md §11](runtime-readiness.md) for the full narrow-field table, the audit-payload caveat on the `open` path, and the planned migration into the FailModePolicy entity.
+
 ---
 
 ## Step 2: Dry-run with plan

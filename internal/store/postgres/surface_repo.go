@@ -38,7 +38,8 @@ const surfaceColumns = `
 	updated_at,
 	approved_by,
 	approved_at,
-	process_id
+	process_id,
+	fail_mode_policy_id
 `
 
 // surfaceColumnsAliased is used in CTE queries where the surfaces table is
@@ -56,16 +57,18 @@ const surfaceColumnsAliased = `
 	s.updated_at,
 	s.approved_by,
 	s.approved_at,
-	s.process_id
+	s.process_id,
+	s.fail_mode_policy_id
 `
 
 // scanSurface scans the canonical column set into a DecisionSurface.
 func scanSurface(scan func(dest ...any) error) (*surface.DecisionSurface, error) {
 	var (
-		s          surface.DecisionSurface
-		approvedBy sql.NullString
-		approvedAt sql.NullTime
-		processID  sql.NullString
+		s                surface.DecisionSurface
+		approvedBy       sql.NullString
+		approvedAt       sql.NullTime
+		processID        sql.NullString
+		failModePolicyID sql.NullString
 	)
 	if err := scan(
 		&s.ID,
@@ -81,6 +84,7 @@ func scanSurface(scan func(dest ...any) error) (*surface.DecisionSurface, error)
 		&approvedBy,
 		&approvedAt,
 		&processID,
+		&failModePolicyID,
 	); err != nil {
 		return nil, err
 	}
@@ -93,6 +97,9 @@ func scanSurface(scan func(dest ...any) error) (*surface.DecisionSurface, error)
 	}
 	if processID.Valid {
 		s.ProcessID = processID.String
+	}
+	if failModePolicyID.Valid {
+		s.FailModePolicyID = failModePolicyID.String
 	}
 	return &s, nil
 }
@@ -400,9 +407,10 @@ func (r *SurfaceRepo) Create(ctx context.Context, s *surface.DecisionSurface) er
 			updated_at,
 			approved_by,
 			approved_at,
-			process_id
+			process_id,
+			fail_mode_policy_id
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
 		)
 	`
 
@@ -422,6 +430,7 @@ func (r *SurfaceRepo) Create(ctx context.Context, s *surface.DecisionSurface) er
 		nullableString(s.ApprovedBy),
 		nullableTime(s.ApprovedAt),
 		s.ProcessID,
+		nullableString(s.FailModePolicyID),
 	)
 	return err
 }
@@ -446,7 +455,8 @@ func (r *SurfaceRepo) Update(ctx context.Context, s *surface.DecisionSurface) er
 			updated_at = $9,
 			approved_by = $10,
 			approved_at = $11,
-			process_id = $12
+			process_id = $12,
+			fail_mode_policy_id = $13
 		WHERE id = $1
 		  AND version = $2
 	`
@@ -466,6 +476,7 @@ func (r *SurfaceRepo) Update(ctx context.Context, s *surface.DecisionSurface) er
 		nullableString(s.ApprovedBy),
 		nullableTime(s.ApprovedAt),
 		s.ProcessID,
+		nullableString(s.FailModePolicyID),
 	)
 	if err != nil {
 		return err

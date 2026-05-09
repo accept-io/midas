@@ -221,6 +221,16 @@ CREATE TABLE IF NOT EXISTS decision_surfaces (
     -- same rule, so this constraint acts as the data-integrity backstop.
     process_id TEXT NOT NULL,
 
+    -- Fail-mode policy link (D27j-impl-2). Optional logical reference to a
+    -- failmode.FailModePolicy. NULL means "no surface-level override" — the
+    -- runtime resolver falls back to the BusinessService default and then
+    -- the deployment default. No FK because fail_mode_policies is keyed by
+    -- (id, version) and the reference is logical-ID-based with active-version
+    -- resolution at apply time (mirrors authority_profiles.surface_id and
+    -- decision_surfaces.replaces). Apply-time validation rejects refs to
+    -- missing, review, deprecated, or retired policies.
+    fail_mode_policy_id TEXT,
+
     -- Inferred-structure fields (schema v2.3)
     -- origin: 'manual' for operator-applied surfaces, 'inferred' for system-discovered.
     -- managed: false means the record is read-only from the inferred source.
@@ -680,6 +690,110 @@ CREATE INDEX IF NOT EXISTS idx_governance_expectations_status
     ON governance_expectations (status);
 
 -- =============================================================================
+-- FAIL MODE POLICIES (D27j-impl-1a)
+-- =============================================================================
+-- FailModePolicy is the future first-class governed structural entity for
+-- fail-mode posture. D27j-impl-1a introduces the entity in closed-only form:
+-- the table accepts policy rows whose JSONB rules carry only PermittedMode
+-- "closed" (for non-input correctness classes) or "not_applicable" (for the
+-- input class). Soft / open admittance is gated on Option B prerequisites
+-- and a deliberate later tranche.
+--
+-- The Go validator in internal/failmode enforces deeper rule structure
+-- (exhaustiveness over the five correctness classes, no duplicates,
+-- closed-only PermittedMode). This schema enforces only that the rules
+-- column is a JSONB array, alongside the standard lifecycle and approval
+-- invariants used by the other authority/control artefacts.
+--
+-- D27j-impl-1a deliberately adds NO reference columns to existing tables
+-- (decision_surfaces.fail_mode_policy_id and
+-- business_services.fail_mode_policy_id are reserved for D27j-impl-2). No
+-- runtime path consults this table in this tranche.
+
+CREATE TABLE IF NOT EXISTS fail_mode_policies (
+    -- Composite logical-version key
+    id      TEXT    NOT NULL,
+    version INTEGER NOT NULL,
+
+    -- Identity / docs
+    name        TEXT NOT NULL,
+    description TEXT,
+
+    -- Lifecycle (mirrors authority_profiles)
+    status          TEXT        NOT NULL,
+    effective_date  TIMESTAMPTZ NOT NULL,
+    effective_until TIMESTAMPTZ,
+    retired_at      TIMESTAMPTZ,
+
+    -- Rules: exhaustive over the five correctness classes
+    -- (governance_integrity, persistence, input, resource, consistency).
+    -- JSONB array of {correctness_class, permitted_mode, reason?} objects.
+    -- Inner-structure validation lives in internal/failmode and (in
+    -- D27j-impl-1b) the control-plane validator.
+    rules JSONB NOT NULL DEFAULT '[]',
+
+    -- Ownership
+    business_owner  TEXT NOT NULL,
+    technical_owner TEXT NOT NULL,
+
+    -- Successor / origin (mirrors decision_surfaces / ai_systems)
+    successor_policy_id TEXT,
+    successor_version   INTEGER,
+    origin              TEXT    NOT NULL DEFAULT 'manual',
+    managed             BOOLEAN NOT NULL DEFAULT TRUE,
+    replaces            TEXT,
+
+    -- Timestamps
+    created_at  TIMESTAMPTZ NOT NULL,
+    updated_at  TIMESTAMPTZ NOT NULL,
+    created_by  TEXT,
+    approved_by TEXT,
+    approved_at TIMESTAMPTZ,
+
+    PRIMARY KEY (id, version),
+
+    -- Optional self-reference for successor version, mirroring decision_surfaces
+    CONSTRAINT fk_fmp_successor
+        FOREIGN KEY (successor_policy_id, successor_version)
+        REFERENCES fail_mode_policies (id, version)
+        DEFERRABLE INITIALLY DEFERRED,
+
+    CONSTRAINT chk_fmp_status
+        CHECK (status IN ('draft', 'review', 'active', 'deprecated', 'retired')),
+
+    CONSTRAINT chk_fmp_origin
+        CHECK (origin IN ('manual', 'inferred')),
+
+    CONSTRAINT chk_fmp_effective_dates
+        CHECK (effective_until IS NULL OR effective_until > effective_date),
+
+    CONSTRAINT chk_fmp_retired_at
+        CHECK (retired_at IS NULL OR retired_at >= effective_date),
+
+    CONSTRAINT chk_fmp_approval_fields
+        CHECK (
+            (status IN ('draft', 'review') AND approved_at IS NULL)
+            OR (status IN ('active', 'deprecated', 'retired'))
+        ),
+
+    CONSTRAINT chk_fmp_no_self_replace
+        CHECK (replaces IS NULL OR replaces <> id),
+
+    CONSTRAINT chk_fmp_rules_array
+        CHECK (jsonb_typeof(rules) = 'array')
+);
+
+CREATE INDEX IF NOT EXISTS idx_fail_mode_policies_id_version_desc
+    ON fail_mode_policies (id, version DESC);
+
+CREATE INDEX IF NOT EXISTS idx_fail_mode_policies_status
+    ON fail_mode_policies (status);
+
+CREATE INDEX IF NOT EXISTS idx_fail_mode_policies_active_window
+    ON fail_mode_policies (id, effective_date)
+    WHERE status = 'active';
+
+-- =============================================================================
 -- OPERATIONAL ENVELOPES
 -- =============================================================================
 -- Denormalized authority-chain identifiers are stored as top-level columns for:
@@ -1063,6 +1177,13 @@ CREATE TABLE IF NOT EXISTS business_services (
     managed             BOOLEAN NOT NULL DEFAULT TRUE,
     replaces            TEXT,
     owner_id            TEXT,
+
+    -- Fail-mode policy default (D27j-impl-2). Optional logical reference to
+    -- a failmode.FailModePolicy. NULL means "no service-level default".
+    -- Surfaces under this service inherit the policy when they have no
+    -- explicit override. No FK; same posture as decision_surfaces.fail_mode_policy_id.
+    fail_mode_policy_id TEXT,
+
     created_at          TIMESTAMPTZ NOT NULL,
     updated_at          TIMESTAMPTZ NOT NULL,
 

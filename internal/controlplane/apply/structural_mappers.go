@@ -58,18 +58,19 @@ func mapBusinessServiceDocumentToBusinessService(doc types.BusinessServiceDocume
 		return nil, err
 	}
 	return &businessservice.BusinessService{
-		ID:              strings.TrimSpace(doc.Metadata.ID),
-		Name:            strings.TrimSpace(doc.Metadata.Name),
-		Description:     strings.TrimSpace(doc.Spec.Description),
-		ServiceType:     businessservice.ServiceType(strings.TrimSpace(doc.Spec.ServiceType)),
-		RegulatoryScope: strings.TrimSpace(doc.Spec.RegulatoryScope),
-		Status:          strings.TrimSpace(doc.Spec.Status),
-		OwnerID:         strings.TrimSpace(doc.Spec.OwnerID),
-		Origin:          "manual",
-		Managed:         true,
-		CreatedAt:       now,
-		UpdatedAt:       now,
-		ExternalRef:     ref,
+		ID:               strings.TrimSpace(doc.Metadata.ID),
+		Name:             strings.TrimSpace(doc.Metadata.Name),
+		Description:      strings.TrimSpace(doc.Spec.Description),
+		ServiceType:      businessservice.ServiceType(strings.TrimSpace(doc.Spec.ServiceType)),
+		RegulatoryScope:  strings.TrimSpace(doc.Spec.RegulatoryScope),
+		Status:           strings.TrimSpace(doc.Spec.Status),
+		OwnerID:          strings.TrimSpace(doc.Spec.OwnerID),
+		FailModePolicyID: strings.TrimSpace(doc.Spec.FailModePolicyID),
+		Origin:           "manual",
+		Managed:          true,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+		ExternalRef:      ref,
 	}, nil
 }
 

@@ -342,6 +342,17 @@ components:
         fail_mode:
           type: string
           enum: [open, closed]
+          description: >
+            Narrow runtime fail-mode for the policy-evaluator-error sub-case
+            on this profile. The only currently runtime-effective fail-mode
+            field. "open" skips the policy step on evaluator error (the
+            canonically-audited narrow exception); "closed" escalates with
+            ReasonPolicyError. No other failure path consults this value.
+            Future broader fail-mode posture is governed by the FailModePolicy
+            entity (planned). The `open` path's audit-event payload currently
+            records `allowed:true`; explicit degradation encoding is part of
+            the FailModePolicy migration. See
+            docs/operations/runtime-readiness.md §11.
         policy_reference:
           type: string
         required_context_keys:
@@ -465,6 +476,133 @@ components:
           type: integer
           minimum: 1
         approved_by:
+          type: string
+
+    FailModePolicyRule:
+      type: object
+      description: >
+        A single rule binding a correctness class to its permitted
+        runtime degradation mode (D27j-impl-1c). The closed-only invariant
+        constrains permitted_mode to "closed" for all classes other than
+        "input", which carries "not_applicable". "soft" and "open" are
+        deliberately excluded from this enum until a future tranche
+        admits them subject to durable secondary audit prerequisites.
+      required: [correctness_class, permitted_mode]
+      properties:
+        correctness_class:
+          type: string
+          enum: [governance_integrity, persistence, input, resource, consistency]
+        permitted_mode:
+          type: string
+          enum: [closed, not_applicable]
+        reason:
+          type: string
+          description: Optional free-form note explaining the rule.
+
+    FailModePolicy:
+      type: object
+      description: >
+        Governed, versioned fail-mode policy resource. Lifecycle mirrors
+        AuthorityProfile — review-forced apply, approval transitions to
+        active, deprecation transitions to deprecated. The persisted
+        version is planner-authored at apply time; lifecycle.version on
+        the apply document is informational. See
+        docs/operations/runtime-readiness.md §11 for the operator-facing
+        narrow-fail-mode summary.
+      required:
+        - id
+        - version
+        - name
+        - status
+        - effective_date
+        - business_owner
+        - technical_owner
+        - rules
+        - origin
+        - managed
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        version:
+          type: integer
+        name:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [draft, review, active, deprecated, retired]
+        effective_date:
+          type: string
+          format: date-time
+        effective_until:
+          type: string
+          format: date-time
+          nullable: true
+        retired_at:
+          type: string
+          format: date-time
+          nullable: true
+        business_owner:
+          type: string
+        technical_owner:
+          type: string
+        rules:
+          type: array
+          items:
+            $ref: "#/components/schemas/FailModePolicyRule"
+        origin:
+          type: string
+          enum: [manual, inferred]
+        managed:
+          type: boolean
+        replaces:
+          type: string
+        successor_policy_id:
+          type: string
+        successor_version:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        created_by:
+          type: string
+        approved_by:
+          type: string
+        approved_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    ApproveFailModePolicyRequest:
+      type: object
+      required: [version, approved_by]
+      properties:
+        version:
+          type: integer
+          minimum: 1
+        approved_by:
+          type: string
+
+    DeprecateFailModePolicyRequest:
+      type: object
+      description: >
+        FailModePolicy has no DeprecationReason field on the persisted
+        row; the operator-supplied reason is captured in the
+        control-audit record only.
+      required: [version, deprecated_by]
+      properties:
+        version:
+          type: integer
+          minimum: 1
+        deprecated_by:
+          type: string
+        reason:
           type: string
 
     GrantLifecycleRequest:
@@ -754,6 +892,18 @@ components:
             Optional structured reference to an external system. Always
             present in the response; rendered as null when no external
             reference is recorded (Epic 1, PR 3).
+        fail_mode_policy_id:
+          type: string
+          description: >
+            Optional default FailModePolicy identifier for this business
+            service (D27j-impl-2). When set, processes/surfaces under
+            this BusinessService inherit this policy unless the surface
+            declares its own override. Validated at apply time: must
+            reference a FailModePolicy whose status is `active` at the
+            time of apply. Omitted when no default is configured. In
+            this tranche the resolver records the policy as observability
+            metadata only — it does not affect outcomes or appear in the
+            /v1/evaluate response.
 
     BusinessServicesResponse:
       type: object
@@ -2052,6 +2202,12 @@ components:
               fail_mode:
                 type: string
                 enum: [open, closed]
+                description: >
+                  Narrow runtime fail-mode for the policy-evaluator-error
+                  sub-case on this profile. The only currently runtime-
+                  effective fail-mode field; see the AuthorityProfile schema
+                  description for full semantics and the audit-payload
+                  caveat.
               escalation_mode:
                 type: string
                 enum: [auto, manual]
@@ -3097,6 +3253,144 @@ paths:
                 $ref: "#/components/schemas/Error"
         "404":
           description: Profile not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/controlplane/fail_mode_policies/{id}/approve:
+    post:
+      operationId: approveFailModePolicy
+      summary: Approve a FailModePolicy version in review state
+      description: >
+        Transitions a specific FailModePolicy version from review to
+        active. Requires platform.admin or governance.approver role
+        (permission `fail_mode_policy:approve`). Mirrors the
+        AuthorityProfile approval lifecycle.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApproveFailModePolicyRequest"
+      responses:
+        "200":
+          description: FailModePolicy approved
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [policy_id, version, status, approved_by]
+                properties:
+                  policy_id:
+                    type: string
+                  version:
+                    type: integer
+                  status:
+                    type: string
+                  approved_by:
+                    type: string
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission (requires fail_mode_policy:approve)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: FailModePolicy not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: FailModePolicy is not in review state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/controlplane/fail_mode_policies/{id}/deprecate:
+    post:
+      operationId: deprecateFailModePolicy
+      summary: Deprecate an active FailModePolicy version
+      description: >
+        Transitions a specific FailModePolicy version from active to
+        deprecated. The operator-supplied reason is captured in the
+        control-audit record only — failmode.FailModePolicy has no
+        DeprecationReason field on the persisted row. Requires
+        platform.admin role (permission `fail_mode_policy:deprecate`,
+        admin-only by deliberate maker-checker boundary).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeprecateFailModePolicyRequest"
+      responses:
+        "200":
+          description: FailModePolicy deprecated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [policy_id, version, status]
+                properties:
+                  policy_id:
+                    type: string
+                  version:
+                    type: integer
+                  status:
+                    type: string
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission (requires fail_mode_policy:deprecate)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: FailModePolicy not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: FailModePolicy is not in active state
           content:
             application/json:
               schema:

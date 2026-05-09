@@ -76,6 +76,11 @@ const (
 	PermGrantRevoke                  Permission = "grant:revoke"
 	PermGrantReinstate               Permission = "grant:reinstate"
 	PermGovernanceExpectationApprove Permission = "governanceexpectation:approve"
+	// FailModePolicy lifecycle permissions (D27j-impl-1c). Approve mirrors
+	// surface/profile/governanceexpectation approve in role assignment;
+	// deprecate is admin-only, matching profile-deprecate posture.
+	PermFailModePolicyApprove   Permission = "fail_mode_policy:approve"
+	PermFailModePolicyDeprecate Permission = "fail_mode_policy:deprecate"
 )
 
 // allControlPlaneWritePermissions is the canonical control-plane write
@@ -109,6 +114,8 @@ var allControlPlaneWritePermissions = []Permission{
 	PermProfileApprove,
 	PermProfileDeprecate,
 	PermGovernanceExpectationApprove,
+	PermFailModePolicyApprove,
+	PermFailModePolicyDeprecate,
 	PermGrantSuspend,
 	PermGrantRevoke,
 	PermGrantReinstate,
@@ -145,6 +152,10 @@ var roleBundles = map[string][]Permission{
 		PermSurfaceApprove,
 		PermProfileApprove,
 		PermGovernanceExpectationApprove,
+		// FailModePolicyApprove follows the surface/profile/expectation
+		// approver pattern. The corresponding deprecate permission is
+		// deliberately admin-only.
+		PermFailModePolicyApprove,
 	},
 
 	// Operator, viewer, and reviewer hold no control-plane write permissions

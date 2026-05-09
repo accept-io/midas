@@ -19,6 +19,7 @@ const (
 	KindAISystem                    = "AISystem"
 	KindAISystemVersion             = "AISystemVersion"
 	KindAISystemBinding             = "AISystemBinding"
+	KindFailModePolicy              = "FailModePolicy"
 )
 
 // Document is the common interface implemented by all control plane documents.
@@ -121,6 +122,13 @@ type SurfaceSpec struct {
 
 	// Process link
 	ProcessID string `json:"process_id,omitempty" yaml:"process_id,omitempty"`
+
+	// FailModePolicyID is the optional logical reference to a
+	// FailModePolicy (D27j-impl-2). Empty means "no surface-level
+	// override". Apply-time validation rejects references to missing,
+	// review, deprecated, or retired policies, and to policies whose
+	// effective window does not cover this surface's effective_from.
+	FailModePolicyID string `json:"fail_mode_policy_id,omitempty" yaml:"fail_mode_policy_id,omitempty"`
 }
 
 // ContextSchema defines the structure and validation rules for the context map
@@ -379,6 +387,13 @@ type BusinessServiceSpec struct {
 	Status          string `json:"status" yaml:"status"`
 	OwnerID         string `json:"owner_id,omitempty" yaml:"owner_id,omitempty"`
 
+	// FailModePolicyID is the optional logical reference to a
+	// FailModePolicy that supplies the default fail-mode posture for
+	// surfaces under this service when those surfaces have no explicit
+	// override (D27j-impl-2). Apply-time validation rejects references
+	// to missing, review, deprecated, or retired policies.
+	FailModePolicyID string `json:"fail_mode_policy_id,omitempty" yaml:"fail_mode_policy_id,omitempty"`
+
 	// ExternalRef is optional structured metadata about the entity in an
 	// external system (Epic 1, PR 3). Nil when the YAML omits the field.
 	ExternalRef *ExternalRefSpec `json:"external_ref,omitempty" yaml:"external_ref,omitempty"`
@@ -628,3 +643,72 @@ type AISystemBindingSpec struct {
 
 func (b AISystemBindingDocument) GetKind() string { return b.Kind }
 func (b AISystemBindingDocument) GetID() string   { return b.Metadata.ID }
+
+// ---------------------------------------------------------------------------
+// FailModePolicy (D27j-impl-1b)
+// ---------------------------------------------------------------------------
+//
+// FailModePolicy is a governed, versioned fail-mode policy. The control-plane
+// document carries the policy id (logical identifier across versions), the
+// owner-supplied rule set keyed by correctness class, optional
+// origin/managed/replaces metadata, and an optional lifecycle block.
+//
+// Apply posture: review-forced. Whatever lifecycle.status the bundle declares
+// is accepted by the validator (when one of the canonical values) but the
+// mapper always persists the row as "review". Promotion to "active" lives
+// in a future approval-endpoint tranche (-1c) and is not part of -1b.
+//
+// Versioning: planner-authored. Lifecycle.Version is informational only; the
+// planner reads the latest persisted version via FindByID and assigns
+// existing.Version+1 (or 1 for first create).
+//
+// Closed-only invariant (D27j-impl-1b): rule.permitted_mode for the input
+// correctness class must be "not_applicable"; for the four other classes it
+// must be "closed". "soft" and "open" are rejected outright until a deliberate
+// later tranche admits them.
+
+type FailModePolicyDocument struct {
+	APIVersion string                  `json:"apiVersion" yaml:"apiVersion"`
+	Kind       string                  `json:"kind" yaml:"kind"`
+	Metadata   DocumentMetadata        `json:"metadata" yaml:"metadata"`
+	Spec       FailModePolicySpec      `json:"spec" yaml:"spec"`
+	Lifecycle  FailModePolicyLifecycle `json:"lifecycle,omitempty" yaml:"lifecycle,omitempty"`
+}
+
+// FailModePolicySpec carries the policy's substantive content. Origin
+// defaults to "manual" in the mapper; Managed defaults to true via the
+// pointer-bool convention so callers can disambiguate "unset" from
+// "explicit false".
+type FailModePolicySpec struct {
+	Name           string                   `json:"name" yaml:"name"`
+	Description    string                   `json:"description,omitempty" yaml:"description,omitempty"`
+	BusinessOwner  string                   `json:"business_owner" yaml:"business_owner"`
+	TechnicalOwner string                   `json:"technical_owner" yaml:"technical_owner"`
+	Rules          []FailModePolicyRuleSpec `json:"rules" yaml:"rules"`
+	Origin         string                   `json:"origin,omitempty" yaml:"origin,omitempty"`
+	Managed        *bool                    `json:"managed,omitempty" yaml:"managed,omitempty"`
+	Replaces       string                   `json:"replaces,omitempty" yaml:"replaces,omitempty"`
+}
+
+// FailModePolicyRuleSpec is the document shape for a single rule. Strings
+// at the document layer; the validator and mapper perform the closed-only
+// permitted-mode check using internal/failmode constants.
+type FailModePolicyRuleSpec struct {
+	CorrectnessClass string `json:"correctness_class" yaml:"correctness_class"`
+	PermittedMode    string `json:"permitted_mode" yaml:"permitted_mode"`
+	Reason           string `json:"reason,omitempty" yaml:"reason,omitempty"`
+}
+
+// FailModePolicyLifecycle mirrors ProfileLifecycle / GovernanceExpectation
+// Lifecycle: dates are RFC3339 strings parsed in the mapper, status is
+// informational and forced to "review" on persistence, and Version is
+// informational because the planner is authoritative on persisted version.
+type FailModePolicyLifecycle struct {
+	Status         string `json:"status,omitempty" yaml:"status,omitempty"`                   // accepted but persistence is always 'review'
+	EffectiveFrom  string `json:"effective_from,omitempty" yaml:"effective_from,omitempty"`   // RFC3339
+	EffectiveUntil string `json:"effective_until,omitempty" yaml:"effective_until,omitempty"` // RFC3339
+	Version        int    `json:"version,omitempty" yaml:"version,omitempty"`                 // informational; planner authoritative
+}
+
+func (f FailModePolicyDocument) GetKind() string { return f.Kind }
+func (f FailModePolicyDocument) GetID() string   { return f.Metadata.ID }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/accept-io/midas/internal/authority"
 	"github.com/accept-io/midas/internal/controlaudit"
+	"github.com/accept-io/midas/internal/failmode"
 	"github.com/accept-io/midas/internal/governanceexpectation"
 	"github.com/accept-io/midas/internal/identity"
 	"github.com/accept-io/midas/internal/outbox"
@@ -24,6 +25,11 @@ var (
 	ErrProfileNotActive                 = errors.New("profile is not in active state")
 	ErrGovernanceExpectationNotFound    = errors.New("governance expectation not found")
 	ErrGovernanceExpectationNotInReview = errors.New("governance expectation is not in review state")
+	// FailModePolicy lifecycle sentinels (D27j-impl-1c). The HTTP layer
+	// translates these to 404 / 409 via mapApprovalError.
+	ErrFailModePolicyNotFound    = errors.New("fail mode policy not found")
+	ErrFailModePolicyNotInReview = errors.New("fail mode policy is not in review state")
+	ErrFailModePolicyNotActive   = errors.New("fail mode policy is not in active state")
 )
 
 type SurfaceRepository interface {
@@ -48,6 +54,15 @@ type ExpectationRepository interface {
 	Update(ctx context.Context, e *governanceexpectation.GovernanceExpectation) error
 }
 
+// FailModePolicyRepository is the minimal read/write interface required
+// by FailModePolicy lifecycle operations (D27j-impl-1c). Mirrors
+// ProfileRepository: versioned (id, version) lookup + lifecycle/audit-
+// only Update.
+type FailModePolicyRepository interface {
+	FindByIDAndVersion(ctx context.Context, id string, version int) (*failmode.FailModePolicy, error)
+	Update(ctx context.Context, p *failmode.FailModePolicy) error
+}
+
 // Service orchestrates surface lifecycle governance: approval and deprecation.
 //
 // If an outbox.Repository is provided (via NewServiceWithOutbox), a surface.approved
@@ -58,12 +73,13 @@ type ExpectationRepository interface {
 // If a controlaudit.Repository is provided, a control-plane audit record is
 // appended after each successful lifecycle transition.
 type Service struct {
-	repo            SurfaceRepository
-	profileRepo     ProfileRepository     // nil-safe: profile operations unavailable if nil
-	expectationRepo ExpectationRepository // nil-safe: GE operations unavailable if nil
-	policy          Policy
-	outbox          outbox.Repository       // nil-safe: no event emitted if nil
-	controlAudit    controlaudit.Repository // nil-safe: no audit record if nil
+	repo               SurfaceRepository
+	profileRepo        ProfileRepository        // nil-safe: profile operations unavailable if nil
+	expectationRepo    ExpectationRepository    // nil-safe: GE operations unavailable if nil
+	failModePolicyRepo FailModePolicyRepository // nil-safe: FailModePolicy operations unavailable if nil
+	policy             Policy
+	outbox             outbox.Repository       // nil-safe: no event emitted if nil
+	controlAudit       controlaudit.Repository // nil-safe: no audit record if nil
 }
 
 // NewService constructs a Service without outbox emission. Existing callers
@@ -130,6 +146,16 @@ func NewServiceWithProfileAndOutbox(repo SurfaceRepository, profileRepo ProfileR
 // constructors already wire.
 func (s *Service) WithExpectationRepository(repo ExpectationRepository) *Service {
 	s.expectationRepo = repo
+	return s
+}
+
+// WithFailModePolicyRepository injects the FailModePolicy repository used
+// by ApproveFailModePolicy / DeprecateFailModePolicy (D27j-impl-1c). When
+// nil, FailModePolicy lifecycle methods return an error explaining the
+// repository is not configured. Returns the receiver for chaining,
+// matching the WithExpectationRepository builder.
+func (s *Service) WithFailModePolicyRepository(repo FailModePolicyRepository) *Service {
+	s.failModePolicyRepo = repo
 	return s
 }
 
@@ -493,6 +519,115 @@ func (s *Service) ApproveGovernanceExpectation(
 	}
 
 	s.appendControlAudit(ctx, controlaudit.NewGovernanceExpectationApprovedRecord(approvedBy, current.ID, current.Version))
+
+	return current, nil
+}
+
+// ---------------------------------------------------------------------------
+// FailModePolicy lifecycle (D27j-impl-1c)
+// ---------------------------------------------------------------------------
+
+// ApproveFailModePolicy promotes a FailModePolicy version from review to
+// active. Mirrors ApproveProfile in shape — versioned (id, version)
+// lookup, CanTransitionTo gate, lifecycle/audit fields persisted via the
+// repository's narrow Update, control-audit record emitted after a
+// successful update.
+//
+// Only policies in review status may be approved. Other states return
+// ErrFailModePolicyNotInReview, mapped by the HTTP layer to 409.
+//
+// approvedBy is recorded on the row's ApprovedBy field. Tests and the
+// HTTP layer derive it from the authenticated principal (or a body-
+// supplied fallback) before calling this method, mirroring
+// ApproveProfile.
+//
+// No outbox event is emitted: failmode_policy.approved has no consumer
+// today. The control-audit record is the source of truth for "this
+// policy was approved" until that consumer arrives.
+func (s *Service) ApproveFailModePolicy(
+	ctx context.Context,
+	policyID string,
+	version int,
+	approvedBy string,
+) (*failmode.FailModePolicy, error) {
+	if s.failModePolicyRepo == nil {
+		return nil, fmt.Errorf("fail mode policy repository not configured")
+	}
+
+	current, err := s.failModePolicyRepo.FindByIDAndVersion(ctx, policyID, version)
+	if err != nil {
+		return nil, err
+	}
+	if current == nil {
+		return nil, ErrFailModePolicyNotFound
+	}
+
+	if !current.CanTransitionTo(failmode.FailModePolicyStatusActive) {
+		return nil, ErrFailModePolicyNotInReview
+	}
+
+	now := time.Now().UTC()
+	current.Status = failmode.FailModePolicyStatusActive
+	current.ApprovedBy = approvedBy
+	current.ApprovedAt = &now
+	current.UpdatedAt = now
+
+	// Defensive fallback mirroring ApproveProfile / ApproveGovernanceExpectation.
+	// The apply mapper (D27j-impl-1b) always sets a non-zero EffectiveDate;
+	// this branch covers any future code path that bypasses apply.
+	if current.EffectiveDate.IsZero() {
+		current.EffectiveDate = now
+	}
+
+	if err := s.failModePolicyRepo.Update(ctx, current); err != nil {
+		return nil, err
+	}
+
+	s.appendControlAudit(ctx, controlaudit.NewFailModePolicyApprovedRecord(approvedBy, current.ID, current.Version))
+
+	return current, nil
+}
+
+// DeprecateFailModePolicy transitions an active FailModePolicy version to
+// deprecated. Mirrors DeprecateProfile in shape, with one difference:
+// failmode.FailModePolicy has no DeprecationReason field, so the
+// operator-supplied reason is captured only in the control-audit record
+// (Metadata.DeprecationReason) and not on the persisted policy row.
+//
+// Only policies in active status may be deprecated. Other states return
+// ErrFailModePolicyNotActive, mapped by the HTTP layer to 409.
+func (s *Service) DeprecateFailModePolicy(
+	ctx context.Context,
+	policyID string,
+	version int,
+	deprecatedBy string,
+	reason string,
+) (*failmode.FailModePolicy, error) {
+	if s.failModePolicyRepo == nil {
+		return nil, fmt.Errorf("fail mode policy repository not configured")
+	}
+
+	current, err := s.failModePolicyRepo.FindByIDAndVersion(ctx, policyID, version)
+	if err != nil {
+		return nil, err
+	}
+	if current == nil {
+		return nil, ErrFailModePolicyNotFound
+	}
+
+	if !current.CanTransitionTo(failmode.FailModePolicyStatusDeprecated) {
+		return nil, ErrFailModePolicyNotActive
+	}
+
+	now := time.Now().UTC()
+	current.Status = failmode.FailModePolicyStatusDeprecated
+	current.UpdatedAt = now
+
+	if err := s.failModePolicyRepo.Update(ctx, current); err != nil {
+		return nil, err
+	}
+
+	s.appendControlAudit(ctx, controlaudit.NewFailModePolicyDeprecatedRecord(deprecatedBy, current.ID, current.Version, reason))
 
 	return current, nil
 }

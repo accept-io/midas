@@ -255,14 +255,32 @@ type EvidenceRequirement struct {
 // Policy Integration
 // ---------------------------------------------------------------------------
 
-// FailureMode determines orchestrator behavior when policy evaluation fails.
+// FailureMode is the legacy surface-level policy-evaluator failure posture.
+//
+// Runtime status (D27i-c chunk 1 inspection / D27j-impl-0): this field is
+// persisted and round-tripped by the control plane for compatibility with
+// existing surface definitions, but the inline runtime evaluator does not
+// currently consult it. Runtime policy-evaluator-error handling is governed
+// today by authority.FailMode on the resolved profile.
+//
+// A future FailModePolicy entity (D27j) is expected to replace this legacy
+// surface field. Until then, applying a Surface with an explicit
+// failure_mode value is accepted and stored, but has no behavioural effect
+// at evaluation time. See docs/operations/runtime-readiness.md §11 for the
+// operator-facing summary and migration plan.
 type FailureMode string
 
 const (
-	// FailureModeOpen: policy failure allows decision to proceed (logs warning)
+	// FailureModeOpen is the persisted legacy value indicating that policy-
+	// evaluator failures should allow the decision to proceed. Today this
+	// value is stored but not consulted by the inline runtime evaluator —
+	// see the FailureMode type comment above.
 	FailureModeOpen FailureMode = "open"
 
-	// FailureModeClosed: policy failure escalates decision (safe default)
+	// FailureModeClosed is the persisted legacy value (and conventional
+	// default) indicating that policy-evaluator failures should escalate.
+	// Today this value is stored but not consulted by the inline runtime
+	// evaluator — see the FailureMode type comment above.
 	FailureModeClosed FailureMode = "closed"
 )
 
@@ -369,7 +387,13 @@ type DecisionSurface struct {
 	// IMMUTABLE after activation.
 	PolicyVersion string `json:"policy_version,omitempty"`
 
-	// FailureMode controls behavior when policy evaluation fails.
+	// FailureMode is the legacy surface-level policy-evaluator failure
+	// posture. Persisted for control-plane compatibility but NOT consulted
+	// by the inline runtime evaluator today; runtime policy-evaluator-error
+	// handling is governed by authority.FailMode on the resolved profile.
+	// See the FailureMode type comment above and docs/operations/
+	// runtime-readiness.md §11 for the migration plan into the future
+	// FailModePolicy entity.
 	// MUTABLE: operational policy can change.
 	FailureMode FailureMode `json:"failure_mode"`
 
@@ -504,6 +528,23 @@ type DecisionSurface struct {
 	// ProcessID links this surface to its governing process.
 	// Optional. When set, must reference an existing process in the processes table.
 	ProcessID string `json:"process_id,omitempty"`
+
+	// FailModePolicyID is the optional logical reference to a
+	// failmode.FailModePolicy that overrides the BusinessService default
+	// at evaluation time (D27j-impl-2). Empty means "no surface-level
+	// override". Apply-time validation rejects references to missing,
+	// review, deprecated, or retired policies, and to policies whose
+	// effective window does not cover this surface's effective_from.
+	//
+	// Runtime status: the resolver in internal/failmode/resolve.go
+	// identifies the effective FailModePolicy and records it on the
+	// internal EvaluationResult for observability. The resolved policy's
+	// rules are NOT consulted in this tranche (closed-only invariant);
+	// soft/open admittance is deferred to a future tranche gated on
+	// Option B durable-secondary-audit prerequisites.
+	//
+	// MUTABLE: operational policy can change.
+	FailModePolicyID string `json:"fail_mode_policy_id,omitempty"`
 }
 
 // ---------------------------------------------------------------------------

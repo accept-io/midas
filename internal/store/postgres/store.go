@@ -239,6 +239,11 @@ func newRepositories(db sqltx.DBTX) (*store.Repositories, error) {
 		return nil, err
 	}
 
+	failModePolicies, err := NewFailModePolicyRepo(db)
+	if err != nil {
+		return nil, err
+	}
+
 	return &store.Repositories{
 		Capabilities:                 caps,
 		Processes:                    procs,
@@ -260,5 +265,6 @@ func newRepositories(db sqltx.DBTX) (*store.Repositories, error) {
 		AISystems:                    aiSystems,
 		AISystemVersions:             aiSystemVersions,
 		AISystemBindings:             aiSystemBindings,
+		FailModePolicies:             failModePolicies,
 	}, nil
 }

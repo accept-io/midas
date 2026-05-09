@@ -14,6 +14,7 @@ import (
 	"github.com/accept-io/midas/internal/businessservicecapability"
 	"github.com/accept-io/midas/internal/capability"
 	"github.com/accept-io/midas/internal/envelope"
+	"github.com/accept-io/midas/internal/failmode"
 	"github.com/accept-io/midas/internal/governanceexpectation"
 	"github.com/accept-io/midas/internal/outbox"
 	"github.com/accept-io/midas/internal/process"
@@ -629,6 +630,7 @@ func NewRepositories() *store.Repositories {
 		AISystems:                    aiSystemRepo,
 		AISystemVersions:             aiVersionRepo,
 		AISystemBindings:             aiBindingRepo,
+		FailModePolicies:             NewFailModePolicyRepo(),
 	}
 }
 
@@ -645,3 +647,4 @@ var _ governanceexpectation.Repository = (*GovernanceExpectationRepo)(nil)
 var _ aisystem.SystemRepository = (*AISystemRepo)(nil)
 var _ aisystem.VersionRepository = (*AISystemVersionRepo)(nil)
 var _ aisystem.BindingRepository = (*AISystemBindingRepo)(nil)
+var _ failmode.PolicyRepository = (*FailModePolicyRepo)(nil)

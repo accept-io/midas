@@ -56,6 +56,7 @@ type Service struct {
 	aiSystemRepo                  AISystemRepository
 	aiVersionRepo                 AISystemVersionRepository
 	aiBindingRepo                 AISystemBindingRepository
+	failModePolicyRepo            FailModePolicyRepository
 	controlAuditRepo              controlaudit.Repository
 	tx                            TxRunner
 }
@@ -94,6 +95,7 @@ func NewServiceWithRepos(repos RepositorySet) *Service {
 		aiSystemRepo:                  repos.AISystems,
 		aiVersionRepo:                 repos.AISystemVersions,
 		aiBindingRepo:                 repos.AISystemBindings,
+		failModePolicyRepo:            repos.FailModePolicies,
 		controlAuditRepo:              repos.ControlAudit,
 		tx:                            repos.Tx,
 	}
@@ -525,6 +527,14 @@ func (s *Service) buildApplyPlan(ctx context.Context, docs []parser.ParsedDocume
 					bundleProcessIDs, bundleSurfaceIDs,
 					bundleSurfaceProcessIDs, bundleProcessBusinessServiceIDs,
 					bundleBSCPairs, &entry)
+			case types.KindFailModePolicy:
+				if s.failModePolicyRepo != nil {
+					s.planFailModePolicyEntry(ctx, doc, &entry)
+				} else {
+					entry.Action = ApplyActionCreate
+					entry.DecisionSource = DecisionSourceValidation
+					entry.CreateKind = CreateKindNew
+				}
 			default:
 				entry.Action = ApplyActionCreate
 				entry.DecisionSource = DecisionSourceValidation
@@ -821,6 +831,11 @@ func (s *Service) planSurfaceEntry(ctx context.Context, doc parser.ParsedDocumen
 		if !s.checkProcessExists(ctx, doc, surfaceDoc.Spec.ProcessID, bundleProcessIDs, entry) {
 			return
 		}
+		// FailModePolicy reference (D27j-impl-2): optional; when set, must
+		// resolve to an active policy at the surface's effective_from.
+		if !s.checkFailModePolicyReference(ctx, doc, surfaceDoc.Spec.FailModePolicyID, surfaceEffectiveAt(surfaceDoc), "spec.fail_mode_policy_id", entry) {
+			return
+		}
 		entry.Action = ApplyActionCreate
 		entry.DecisionSource = DecisionSourcePersistedState
 		entry.CreateKind = CreateKindNew
@@ -844,6 +859,9 @@ func (s *Service) planSurfaceEntry(ctx context.Context, doc parser.ParsedDocumen
 	// Latest version is in draft, active, deprecated, or retired status.
 	// The versioning model creates a new governed version in each case.
 	if !s.checkProcessExists(ctx, doc, surfaceDoc.Spec.ProcessID, bundleProcessIDs, entry) {
+		return
+	}
+	if !s.checkFailModePolicyReference(ctx, doc, surfaceDoc.Spec.FailModePolicyID, surfaceEffectiveAt(surfaceDoc), "spec.fail_mode_policy_id", entry) {
 		return
 	}
 	entry.Action = ApplyActionCreate
@@ -999,6 +1017,13 @@ func (s *Service) planBusinessServiceEntry(ctx context.Context, doc parser.Parse
 			"business service %q already exists; business services are immutable once created in the apply path",
 			bsDoc.Metadata.ID,
 		)
+		return
+	}
+
+	// FailModePolicy reference (D27j-impl-2): optional. BusinessService has
+	// no effective_from at the document layer, so the ref-check helper
+	// falls back to FindByID + active-status check.
+	if !s.checkFailModePolicyReference(ctx, doc, bsDoc.Spec.FailModePolicyID, time.Time{}, "spec.fail_mode_policy_id", entry) {
 		return
 	}
 
@@ -2209,6 +2234,12 @@ func (s *Service) applyCreateEntry(
 			return nil
 		}
 		return s.applyAISystemBinding(ctx, repos, entry.Doc, now, actor, result)
+	case types.KindFailModePolicy:
+		if repos.FailModePolicies == nil {
+			result.AddCreated(entry.Kind, entry.ID)
+			return nil
+		}
+		return s.applyFailModePolicy(ctx, repos, entry.Doc, now, actor, entry.NewVersion, result)
 	default:
 		result.AddCreated(entry.Kind, entry.ID)
 		return nil
@@ -2234,6 +2265,7 @@ func (s *Service) ownRepositorySet() *RepositorySet {
 		AISystems:                    s.aiSystemRepo,
 		AISystemVersions:             s.aiVersionRepo,
 		AISystemBindings:             s.aiBindingRepo,
+		FailModePolicies:             s.failModePolicyRepo,
 	}
 }
 
@@ -2274,8 +2306,9 @@ func (s *Service) appendControlAudit(ctx context.Context, rec *controlaudit.Cont
 // 11. AISystem                  — depends on BusinessService (logical only — replaces is self-FK; no hard FK)
 // 12. AISystemVersion           — depends on AISystem (composite FK to ai_systems.id)
 // 13. AISystemBinding           — depends on AISystem, AISystemVersion (composite FK), BS, Capability, Process; references logical Surface ID
+// 14. FailModePolicy            — no cross-kind dependencies in D27j-impl-1b (D27j-impl-2 will add Surface/BusinessService refs that depend on this tier)
 //
-// 14. Other                     — unknown kinds, emitted after known kinds
+// 15. Other                     — unknown kinds, emitted after known kinds
 //
 // Within most tiers, relative document order is preserved. The
 // Capability and Process tiers additionally enforce parent-before-child
@@ -2305,10 +2338,11 @@ func orderedEntries(entries []ApplyPlanEntry) []ApplyPlanEntry {
 		types.KindAISystem:                    10, // after BS (per Epic 1, PR 2 brief)
 		types.KindAISystemVersion:             11, // after AISystem (FK)
 		types.KindAISystemBinding:             12, // after AISystemVersion + all referenced context
+		types.KindFailModePolicy:              13, // independent in D27j-impl-1b; -2 will add Surface/BS refs
 	}
 
 	// Separate create entries (must respect order) from non-create entries.
-	creates := make([][]ApplyPlanEntry, 14) // 13 known tiers + 1 unknown
+	creates := make([][]ApplyPlanEntry, 15) // 14 known tiers + 1 unknown
 	var nonCreates []ApplyPlanEntry
 
 	for _, e := range entries {
@@ -2318,7 +2352,7 @@ func orderedEntries(entries []ApplyPlanEntry) []ApplyPlanEntry {
 		}
 		tier, known := kindOrder[e.Kind]
 		if !known {
-			tier = 13
+			tier = 14
 		}
 		creates[tier] = append(creates[tier], e)
 	}
@@ -2773,6 +2807,102 @@ func (s *Service) applyBusinessServiceCapability(
 
 	if err := repos.BusinessServiceCapabilities.Create(ctx, bsc); err != nil {
 		return fmt.Errorf("create business service capability: %w", err)
+	}
+
+	result.AddCreated(doc.Kind, doc.ID)
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// FailModePolicy (D27j-impl-1b)
+// ---------------------------------------------------------------------------
+
+// planFailModePolicyEntry plans a single FailModePolicy document. The Kind
+// is versioned in the same way as Profile and GovernanceExpectation:
+// applying a document whose logical ID already exists creates a new
+// version (CreateKindNewVersion, NewVersion = existing.Version+1) rather
+// than conflicting. First-time applies plan a Create with NewVersion = 1.
+//
+// FailModePolicy has no cross-document references in D27j-impl-1b, so this
+// planner performs no referential checks. D27j-impl-2 will introduce
+// Surface/BusinessService references and the corresponding referential
+// resolution.
+func (s *Service) planFailModePolicyEntry(ctx context.Context, doc parser.ParsedDocument, entry *ApplyPlanEntry) {
+	fmpDoc, ok := doc.Doc.(types.FailModePolicyDocument)
+	if !ok {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourceValidation
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Message: "document payload is not a FailModePolicyDocument",
+		})
+		return
+	}
+
+	existing, err := s.failModePolicyRepo.FindByID(ctx, fmpDoc.Metadata.ID)
+	if err != nil {
+		entry.Action = ApplyActionInvalid
+		entry.DecisionSource = DecisionSourcePersistedState
+		entry.ValidationErrors = append(entry.ValidationErrors, types.ValidationError{
+			Kind:    doc.Kind,
+			ID:      doc.ID,
+			Message: "repository error during planning: " + err.Error(),
+		})
+		return
+	}
+
+	entry.Action = ApplyActionCreate
+	entry.DecisionSource = DecisionSourcePersistedState
+
+	if existing != nil {
+		entry.NewVersion = existing.Version + 1
+		entry.CreateKind = CreateKindNewVersion
+		entry.Message = fmt.Sprintf(
+			"fail mode policy %q exists at version %d; will create version %d",
+			fmpDoc.Metadata.ID, existing.Version, existing.Version+1,
+		)
+		if diff := computeFailModePolicyDiff(existing, fmpDoc); diff != nil {
+			entry.Diff = diff
+		}
+	} else {
+		entry.NewVersion = 1
+		entry.CreateKind = CreateKindNew
+	}
+}
+
+// applyFailModePolicy maps a FailModePolicyDocument to a failmode.FailModePolicy
+// domain model and persists it. version is the planned version number assigned
+// by planFailModePolicyEntry: 1 for first-time creates, N+1 when appending to
+// an existing logical lineage. The mapper forces
+// Status = FailModePolicyStatusReview regardless of any lifecycle.status field
+// in the document.
+//
+// Audit emission: deferred to D27j-impl-1c. The future approval-endpoint
+// tranche will add the four control-audit constructors (created, versioned,
+// approved, deprecated) as a coherent set; this tranche emits no
+// FailModePolicy audit record.
+func (s *Service) applyFailModePolicy(
+	ctx context.Context,
+	repos *RepositorySet,
+	doc parser.ParsedDocument,
+	now time.Time,
+	actor string,
+	version int,
+	result *types.ApplyResult,
+) error {
+	fmpDoc, ok := doc.Doc.(types.FailModePolicyDocument)
+	if !ok {
+		return fmt.Errorf("%w: invalid document payload for kind %q", ErrInvalidBundle, types.KindFailModePolicy)
+	}
+
+	p, err := mapFailModePolicyDocumentToDomain(fmpDoc, now, actor, version)
+	if err != nil {
+		return fmt.Errorf("map fail mode policy document: %w", err)
+	}
+
+	if err := repos.FailModePolicies.Create(ctx, p); err != nil {
+		return fmt.Errorf("create fail mode policy: %w", err)
 	}
 
 	result.AddCreated(doc.Kind, doc.ID)

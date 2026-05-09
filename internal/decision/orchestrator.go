@@ -15,8 +15,10 @@ import (
 	"github.com/accept-io/midas/internal/agent"
 	"github.com/accept-io/midas/internal/audit"
 	"github.com/accept-io/midas/internal/authority"
+	"github.com/accept-io/midas/internal/businessservice"
 	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/eval"
+	"github.com/accept-io/midas/internal/failmode"
 	"github.com/accept-io/midas/internal/governancecoverage"
 	"github.com/accept-io/midas/internal/outbox"
 	"github.com/accept-io/midas/internal/policy"
@@ -132,6 +134,17 @@ type EvaluationResult struct {
 	PolicyMode      string
 	PolicyReference string
 	PolicySkipped   bool
+
+	// EffectiveFailModePolicy is the resolved fail-mode policy for this
+	// evaluation (D27j-impl-2). Nil when no policy is configured at any
+	// level, when resolution failed, or when fail-mode resolution was not
+	// reached because the evaluation finished earlier. This field is a
+	// Go-only test observable: it is intentionally NOT serialised on the
+	// /v1/evaluate response, NOT included in audit-event payloads, and
+	// NOT consulted to compute outcomes in this tranche. Future tranches
+	// will plumb the policy through to evaluation logic; for now the
+	// resolver runs purely for observability and regression-pinning.
+	EffectiveFailModePolicy *failmode.EffectiveFailModePolicy
 }
 
 // RepositoryStore abstracts transactional repository access.
@@ -566,7 +579,7 @@ func (o *Orchestrator) evaluate(
 	// (the structural FKs in schema make these states impossible under
 	// healthy data) — wrap as authority-resolution failures so they surface
 	// as system errors, not request-clarification outcomes.
-	procSnap, bsSnap, capSnaps, err := o.resolveStructure(ctx, repos, s.ProcessID)
+	procSnap, bsSnap, bs, capSnaps, err := o.resolveStructure(ctx, repos, s.ProcessID)
 	if err != nil {
 		return EvaluationResult{}, wrapFailure(FailureCategoryAuthorityResolution, err)
 	}
@@ -576,6 +589,64 @@ func (o *Orchestrator) evaluate(
 		"business_service_id", bsSnap.ID,
 		"enabling_capability_count", len(capSnaps),
 	)
+
+	// Step 1.55: Effective FailModePolicy resolution (D27j-impl-2)
+	// + audit-chain evidence emission (D27j-impl-3).
+	//
+	// Bounded resolver: at most three FindActiveAt calls (Surface override
+	// → BusinessService default → deployment default). The deployment
+	// default parameter is intentionally empty in this tranche; operator
+	// config wiring is deferred to a later tranche. Resolution is
+	// observability-only — it does not change the outcome and is not
+	// surfaced on the /v1/evaluate response.
+	//
+	// Resolver-error posture (unchanged from D27j-impl-2): a non-empty
+	// reference that fails to resolve logs a warning and does NOT fail
+	// the evaluation, change the outcome, or emit a
+	// FAIL_MODE_POLICY_RESOLVED event. The apply-time validator is the
+	// authoritative gate that prevents this state from being reachable
+	// in normal approved configuration; the runtime resolver runs purely
+	// for observability and regression-pinning until a future tranche
+	// plumbs the resolved policy into outcome computation.
+	//
+	// On successful resolution to a non-empty source (Surface,
+	// BusinessService, or deployment default) the resolver emits a
+	// single FAIL_MODE_POLICY_RESOLVED runtime audit event before
+	// AGENT_RESOLVED — see appendFailModePolicyResolvedEvent. The event
+	// is evidence-only: it names the policy, version, source, and
+	// timestamps, and never carries rules, permitted modes, or any
+	// decision-outcome fields. The event participates in the standard
+	// hash chain via acc.recordObservation → persistNew → Audit.Append.
+	var effectiveFailMode *failmode.EffectiveFailModePolicy
+	if repos.FailModePolicies != nil {
+		effective, resolveErr := failmode.Resolve(ctx, repos.FailModePolicies, s, bs, now, "")
+		if resolveErr != nil {
+			slog.Warn("fail_mode_policy_resolution_failed",
+				"request_id", req.RequestID,
+				"surface_id", s.ID,
+				"business_service_id", bsSnap.ID,
+				"error", resolveErr,
+			)
+		} else if effective.Source != failmode.ResolutionSourceNone {
+			eff := effective
+			effectiveFailMode = &eff
+			if err := o.appendFailModePolicyResolvedEvent(acc, env, s, bsSnap.ID, eff, now); err != nil {
+				return EvaluationResult{}, err
+			}
+		}
+	}
+
+	// withFailModeMeta attaches the effective FailModePolicy resolver result
+	// to any EvaluationResult produced after structural resolution. It is a
+	// no-op on error paths and when no policy was resolved at any level. The
+	// field is intentionally Go-only (not part of the HTTP response) — see
+	// EvaluationResult.EffectiveFailModePolicy doc for rationale.
+	withFailModeMeta := func(res EvaluationResult, finishErr error) (EvaluationResult, error) {
+		if finishErr == nil && effectiveFailMode != nil {
+			res.EffectiveFailModePolicy = effectiveFailMode
+		}
+		return res, finishErr
+	}
 
 	// Step 1.6: Governance Coverage Assurance (#54).
 	//
@@ -604,7 +675,7 @@ func (o *Orchestrator) evaluate(
 		return EvaluationResult{}, err
 	}
 	if outcome != "" {
-		return o.finish(ctx, repos, acc, env, outcome, reason)
+		return withFailModeMeta(o.finish(ctx, repos, acc, env, outcome, reason))
 	}
 	slog.Debug("agent_resolved", "request_id", req.RequestID, "agent_id", a.ID)
 	if err := acc.recordObservation(env.RequestSource(), env.RequestID(), audit.AuditEventAgentResolved, map[string]any{
@@ -619,7 +690,7 @@ func (o *Orchestrator) evaluate(
 		return EvaluationResult{}, err
 	}
 	if outcome != "" {
-		return o.finish(ctx, repos, acc, env, outcome, reason)
+		return withFailModeMeta(o.finish(ctx, repos, acc, env, outcome, reason))
 	}
 	slog.Debug("authority_chain_resolved", "request_id", req.RequestID, "grant_id", g.ID, "profile_id", p.ID)
 	if err := acc.recordObservation(env.RequestSource(), env.RequestID(), audit.AuditEventAuthorityChainResolved, map[string]any{
@@ -635,12 +706,17 @@ func (o *Orchestrator) evaluate(
 	profilePolicyRef := p.PolicyReference
 	policySkipped := o.policyMode == policy.PolicyModeNoop && profilePolicyRef != ""
 
-	// withPolicyMeta attaches policy transparency fields to any EvaluationResult
-	// produced after the profile has been resolved. It is a no-op on error paths.
+	// withPolicyMeta attaches policy transparency fields and the
+	// resolver-derived effective FailModePolicy (D27j-impl-2) to any
+	// EvaluationResult produced after the profile has been resolved. It is
+	// a no-op on error paths.
 	withPolicyMeta := func(res EvaluationResult, finishErr error) (EvaluationResult, error) {
 		if finishErr == nil {
 			res.PolicyReference = profilePolicyRef
 			res.PolicySkipped = policySkipped
+			if effectiveFailMode != nil {
+				res.EffectiveFailModePolicy = effectiveFailMode
+			}
 		}
 		return res, finishErr
 	}
@@ -1411,6 +1487,55 @@ func (o *Orchestrator) appendPolicyEvaluatedEvent(
 	})
 }
 
+// appendFailModePolicyResolvedEvent records that the runtime FailModePolicy
+// resolver attributed an effective policy for this evaluation
+// (D27j-impl-3). The event is evidence-only: it names the policy, version,
+// source, and resolution timestamps. It must NOT carry rules, permitted
+// modes, allow/deny markers, or any decision-outcome fields — the runtime
+// resolver remains observability-only and the closed-only invariant
+// prohibits rule consultation in this tranche.
+//
+// Emission contract:
+//   - Caller invokes this only when the resolver succeeded and produced a
+//     non-empty source (Surface, BusinessService, or deployment default).
+//     No-source resolutions and resolver errors do not reach this helper.
+//   - The event is queued via acc.recordObservation, so it participates in
+//     the audit hash chain and Integrity.AuditEventIDs identically to
+//     SURFACE_RESOLVED, AGENT_RESOLVED, etc.
+//   - The optional contextual fields (surface_id, surface_version,
+//     business_service_id) are populated from data already loaded by the
+//     orchestrator's structural resolution; no additional repository
+//     lookup is performed.
+func (o *Orchestrator) appendFailModePolicyResolvedEvent(
+	acc *evaluationAccumulator,
+	env *envelope.Envelope,
+	sur *surface.DecisionSurface,
+	businessServiceID string,
+	effective failmode.EffectiveFailModePolicy,
+	evaluationTime time.Time,
+) error {
+	payload := map[string]any{
+		"fail_mode_policy_id":      effective.PolicyID,
+		"fail_mode_policy_version": effective.Version,
+		"source":                   string(effective.Source),
+		"resolved_at":              evaluationTime.UTC().Format(time.RFC3339Nano),
+		"evaluation_time":          evaluationTime.UTC().Format(time.RFC3339Nano),
+	}
+	if sur != nil {
+		if sur.ID != "" {
+			payload["surface_id"] = sur.ID
+		}
+		if sur.Version != 0 {
+			payload["surface_version"] = sur.Version
+		}
+	}
+	if businessServiceID != "" {
+		payload["business_service_id"] = businessServiceID
+	}
+	return acc.recordObservation(env.RequestSource(), env.RequestID(),
+		audit.AuditEventFailModePolicyResolved, payload)
+}
+
 // ---------------------------------------------------------------------------
 // Resolution helpers
 // ---------------------------------------------------------------------------
@@ -1479,30 +1604,30 @@ func (o *Orchestrator) resolveStructure(
 	ctx context.Context,
 	repos *store.Repositories,
 	processID string,
-) (envelope.ProcessSnapshot, envelope.BusinessServiceSnapshot, []envelope.CapabilitySnapshot, error) {
+) (envelope.ProcessSnapshot, envelope.BusinessServiceSnapshot, *businessservice.BusinessService, []envelope.CapabilitySnapshot, error) {
 	proc, err := repos.Processes.GetByID(ctx, processID)
 	if err != nil {
-		return envelope.ProcessSnapshot{}, envelope.BusinessServiceSnapshot{}, nil,
+		return envelope.ProcessSnapshot{}, envelope.BusinessServiceSnapshot{}, nil, nil,
 			fmt.Errorf("resolve process %q: %w", processID, err)
 	}
 	if proc == nil {
-		return envelope.ProcessSnapshot{}, envelope.BusinessServiceSnapshot{}, nil,
+		return envelope.ProcessSnapshot{}, envelope.BusinessServiceSnapshot{}, nil, nil,
 			fmt.Errorf("resolve process %q: not found (referential integrity drift)", processID)
 	}
 
 	bs, err := repos.BusinessServices.GetByID(ctx, proc.BusinessServiceID)
 	if err != nil {
-		return envelope.ProcessSnapshot{}, envelope.BusinessServiceSnapshot{}, nil,
+		return envelope.ProcessSnapshot{}, envelope.BusinessServiceSnapshot{}, nil, nil,
 			fmt.Errorf("resolve business service %q: %w", proc.BusinessServiceID, err)
 	}
 	if bs == nil {
-		return envelope.ProcessSnapshot{}, envelope.BusinessServiceSnapshot{}, nil,
+		return envelope.ProcessSnapshot{}, envelope.BusinessServiceSnapshot{}, nil, nil,
 			fmt.Errorf("resolve business service %q: not found (referential integrity drift)", proc.BusinessServiceID)
 	}
 
 	links, err := repos.BusinessServiceCapabilities.ListByBusinessServiceID(ctx, bs.ID)
 	if err != nil {
-		return envelope.ProcessSnapshot{}, envelope.BusinessServiceSnapshot{}, nil,
+		return envelope.ProcessSnapshot{}, envelope.BusinessServiceSnapshot{}, nil, nil,
 			fmt.Errorf("list enabling capabilities for business service %q: %w", bs.ID, err)
 	}
 
@@ -1510,11 +1635,11 @@ func (o *Orchestrator) resolveStructure(
 	for _, link := range links {
 		c, err := repos.Capabilities.GetByID(ctx, link.CapabilityID)
 		if err != nil {
-			return envelope.ProcessSnapshot{}, envelope.BusinessServiceSnapshot{}, nil,
+			return envelope.ProcessSnapshot{}, envelope.BusinessServiceSnapshot{}, nil, nil,
 				fmt.Errorf("resolve capability %q for business service %q: %w", link.CapabilityID, bs.ID, err)
 		}
 		if c == nil {
-			return envelope.ProcessSnapshot{}, envelope.BusinessServiceSnapshot{}, nil,
+			return envelope.ProcessSnapshot{}, envelope.BusinessServiceSnapshot{}, nil, nil,
 				fmt.Errorf("resolve capability %q for business service %q: not found (referential integrity drift)", link.CapabilityID, bs.ID)
 		}
 		caps = append(caps, envelope.CapabilitySnapshot{
@@ -1541,7 +1666,11 @@ func (o *Orchestrator) resolveStructure(
 		Replaces: bs.Replaces,
 		Status:   bs.Status,
 	}
-	return procSnap, bsSnap, caps, nil
+	// bs is returned alongside the snapshot so the FailModePolicy resolver
+	// (D27j-impl-2) can read FailModePolicyID without re-fetching. The
+	// snapshot is intentionally narrower — adding fields to the snapshot
+	// would change the audit-chain payload, which is forbidden in -2.
+	return procSnap, bsSnap, bs, caps, nil
 }
 
 // resolveAuthorityChain finds the active grant and profile for an agent

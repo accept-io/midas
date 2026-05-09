@@ -225,7 +225,9 @@ func main() {
 		approval.DefaultPolicy(),
 		outboxRepo,
 		repos.ControlAudit,
-	).WithExpectationRepository(repos.GovernanceExpectations)
+	).
+		WithExpectationRepository(repos.GovernanceExpectations).
+		WithFailModePolicyRepository(repos.FailModePolicies)
 
 	introspectionSvc := httpapi.NewIntrospectionServiceFull(repos.Surfaces, repos.Profiles, repos.Agents, repos.Grants)
 	structuralSvc := httpapi.NewStructuralService(repos.Capabilities, repos.Processes, repos.Surfaces).

@@ -35,6 +35,23 @@ const (
 	AuditEventConsequenceChecked     AuditEventType = "CONSEQUENCE_CHECKED"
 	AuditEventPolicyEvaluated        AuditEventType = "POLICY_EVALUATED"
 
+	// AuditEventFailModePolicyResolved records that the runtime
+	// FailModePolicy resolver successfully attributed an effective policy
+	// for this evaluation (D27j-impl-3). The event is evidence-only — it
+	// names what policy was resolved and why (Surface override vs.
+	// BusinessService default vs. deployment default), but never carries
+	// rules, permitted modes, allow/deny markers, or any decision-outcome
+	// fields. The event is emitted between SURFACE_RESOLVED and
+	// AGENT_RESOLVED, well before POLICY_EVALUATED, and only when a
+	// non-empty source resolved without error. No event is emitted when
+	// no policy is configured at any level, when the resolver returns an
+	// error (logged-only per the D27j-impl-2 posture), or when the
+	// FailModePolicies repository is not wired in. The runtime resolver
+	// remains observability-only in this tranche; the new event
+	// participates in the audit hash chain like every other observation
+	// but does not influence outcome computation.
+	AuditEventFailModePolicyResolved AuditEventType = "FAIL_MODE_POLICY_RESOLVED"
+
 	// AuditEventGovernanceConditionDetected records that an active
 	// GovernanceExpectation matched the runtime input during evaluation.
 	// It is the runtime-evidence event for Governance Coverage Assurance

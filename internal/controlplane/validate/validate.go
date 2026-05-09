@@ -8,6 +8,7 @@ import (
 
 	"github.com/accept-io/midas/internal/controlplane/parser"
 	"github.com/accept-io/midas/internal/controlplane/types"
+	"github.com/accept-io/midas/internal/failmode"
 )
 
 const (
@@ -109,6 +110,8 @@ func ValidateDocument(doc parser.ParsedDocument) []types.ValidationError {
 		errs = append(errs, validateAISystemVersion(d)...)
 	case types.AISystemBindingDocument:
 		errs = append(errs, validateAISystemBinding(d)...)
+	case types.FailModePolicyDocument:
+		errs = append(errs, validateFailModePolicy(d)...)
 	default:
 		errs = append(errs, types.ValidationError{
 			Kind:    doc.Kind,
@@ -295,6 +298,14 @@ func validateBusinessService(doc types.BusinessServiceDocument) []types.Validati
 	} else if !contains(ValidBusinessServiceStatuses, doc.Spec.Status) {
 		errs = append(errs, enumErr(doc, "spec.status", doc.Spec.Status, ValidBusinessServiceStatuses))
 	}
+	// fail_mode_policy_id (D27j-impl-2): optional logical ID; format-check
+	// only at this layer. Active/exists checking happens at apply time
+	// because document-shape validation has no repository access.
+	if id := strings.TrimSpace(doc.Spec.FailModePolicyID); id != "" {
+		if err := validateIDFormat(id); err != nil {
+			errs = append(errs, fieldErr(doc, "spec.fail_mode_policy_id", err.Error()))
+		}
+	}
 	errs = append(errs, validateExternalRefSpec(doc, doc.Spec.ExternalRef)...)
 	return errs
 }
@@ -472,6 +483,15 @@ func validateSurface(doc types.SurfaceDocument) []types.ValidationError {
 		errs = append(errs, requiredFieldErr(doc, "spec.process_id"))
 	} else if err := validateIDFormat(doc.Spec.ProcessID); err != nil {
 		errs = append(errs, fieldErr(doc, "spec.process_id", err.Error()))
+	}
+
+	// fail_mode_policy_id (D27j-impl-2): optional logical ID; format-check
+	// only at this layer. Active/exists checking happens at apply time
+	// because document-shape validation has no repository access.
+	if id := strings.TrimSpace(doc.Spec.FailModePolicyID); id != "" {
+		if err := validateIDFormat(id); err != nil {
+			errs = append(errs, fieldErr(doc, "spec.fail_mode_policy_id", err.Error()))
+		}
 	}
 
 	return errs
@@ -1018,6 +1038,216 @@ func validateExternalRefSpec(doc document, ref *types.ExternalRefSpec) []types.V
 		}
 	}
 	return errs
+}
+
+// ---------------------------------------------------------------------------
+// FailModePolicy (D27j-impl-1b)
+// ---------------------------------------------------------------------------
+
+// ValidFailModePolicyStatuses mirrors the 5-element FailModePolicyStatus
+// enum in internal/failmode. Apply forces 'review' regardless of what the
+// document states; this list is used only for shape validation of an
+// explicitly-supplied lifecycle.status field. Mirrors
+// ValidExpectationStatuses posture.
+var ValidFailModePolicyStatuses = []string{"draft", "review", "active", "deprecated", "retired"}
+
+// ValidFailModePolicyOrigins mirrors chk_fmp_origin in
+// internal/store/postgres/schema.sql.
+var ValidFailModePolicyOrigins = []string{"manual", "inferred"}
+
+// validateFailModePolicy validates a FailModePolicy document. It performs
+// document-shape checks (apiVersion already handled by validateIdentity,
+// metadata.id, length bounds, lifecycle dates, replaces ≠ id) and then
+// reuses internal/failmode.Validate for the closed-only invariant on the
+// rule set.
+//
+// Closed-only invariant (D27j-impl-1b): rule.permitted_mode for
+// correctness_class "input" must be "not_applicable"; for the four other
+// classes it must be "closed". "soft" and "open" are rejected outright.
+//
+// Persisted status is always "review"; an explicit lifecycle.status in the
+// document is accepted (when one of the canonical values) but does not
+// influence persistence.
+func validateFailModePolicy(doc types.FailModePolicyDocument) []types.ValidationError {
+	var errs []types.ValidationError
+
+	// metadata.name: optional but length-bounded if present.
+	if len(doc.Metadata.Name) > MaxNameLength {
+		errs = append(errs, fieldErr(doc, "metadata.name",
+			fmt.Sprintf("exceeds maximum length of %d characters", MaxNameLength)))
+	}
+
+	// spec.name: required.
+	specName := strings.TrimSpace(doc.Spec.Name)
+	if specName == "" {
+		errs = append(errs, requiredFieldErr(doc, "spec.name"))
+	} else if len(doc.Spec.Name) > MaxNameLength {
+		errs = append(errs, fieldErr(doc, "spec.name",
+			fmt.Sprintf("exceeds maximum length of %d characters", MaxNameLength)))
+	}
+
+	// spec.business_owner: required.
+	if strings.TrimSpace(doc.Spec.BusinessOwner) == "" {
+		errs = append(errs, requiredFieldErr(doc, "spec.business_owner"))
+	} else if len(doc.Spec.BusinessOwner) > MaxFieldLength {
+		errs = append(errs, fieldErr(doc, "spec.business_owner",
+			fmt.Sprintf("exceeds maximum length of %d characters", MaxFieldLength)))
+	}
+
+	// spec.technical_owner: required.
+	if strings.TrimSpace(doc.Spec.TechnicalOwner) == "" {
+		errs = append(errs, requiredFieldErr(doc, "spec.technical_owner"))
+	} else if len(doc.Spec.TechnicalOwner) > MaxFieldLength {
+		errs = append(errs, fieldErr(doc, "spec.technical_owner",
+			fmt.Sprintf("exceeds maximum length of %d characters", MaxFieldLength)))
+	}
+
+	// spec.description: optional, length-bounded.
+	if len(doc.Spec.Description) > MaxFieldLength {
+		errs = append(errs, fieldErr(doc, "spec.description",
+			fmt.Sprintf("exceeds maximum length of %d characters", MaxFieldLength)))
+	}
+
+	// spec.origin: optional; if present, must be manual|inferred.
+	if origin := strings.TrimSpace(doc.Spec.Origin); origin != "" {
+		if !contains(ValidFailModePolicyOrigins, origin) {
+			errs = append(errs, enumErr(doc, "spec.origin", origin, ValidFailModePolicyOrigins))
+		}
+	}
+
+	// spec.replaces: optional; if present, must not equal metadata.id.
+	if replaces := strings.TrimSpace(doc.Spec.Replaces); replaces != "" {
+		if replaces == strings.TrimSpace(doc.Metadata.ID) {
+			errs = append(errs, fieldErr(doc, "spec.replaces",
+				"must not equal metadata.id (no self-reference)"))
+		}
+	}
+
+	// spec.rules: closed-only invariant. Delegate to failmode.Validate via
+	// the synthetic-policy strategy so the validator and the domain stay in
+	// sync. Document-level error messages are constructed from the domain
+	// errors, then prefixed with the spec.rules field path.
+	errs = append(errs, validateFailModePolicyRules(doc)...)
+
+	// lifecycle.status: optional; if present, must be one of the 5
+	// FailModePolicyStatus values. Apply forces 'review' regardless.
+	if status := strings.TrimSpace(doc.Lifecycle.Status); status != "" {
+		if !contains(ValidFailModePolicyStatuses, status) {
+			errs = append(errs, enumErr(doc, "lifecycle.status", status, ValidFailModePolicyStatuses))
+		}
+	}
+
+	// lifecycle dates: RFC3339 strings; if both present, until > from.
+	var effectiveFrom, effectiveUntil time.Time
+	var effectiveFromOK, effectiveUntilOK bool
+
+	if s := strings.TrimSpace(doc.Lifecycle.EffectiveFrom); s != "" {
+		parsed, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			errs = append(errs, fieldErr(doc, "lifecycle.effective_from",
+				"must be a valid RFC3339 timestamp"))
+		} else {
+			effectiveFrom = parsed
+			effectiveFromOK = true
+		}
+	}
+
+	if s := strings.TrimSpace(doc.Lifecycle.EffectiveUntil); s != "" {
+		parsed, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			errs = append(errs, fieldErr(doc, "lifecycle.effective_until",
+				"must be a valid RFC3339 timestamp"))
+		} else {
+			effectiveUntil = parsed
+			effectiveUntilOK = true
+		}
+	}
+
+	if effectiveFromOK && effectiveUntilOK && !effectiveUntil.After(effectiveFrom) {
+		errs = append(errs, fieldErr(doc, "lifecycle.effective_until",
+			"must be after lifecycle.effective_from"))
+	}
+
+	// lifecycle.version: optional; informational. Negative values are an
+	// obvious operator mistake — reject them. Zero is treated as
+	// "unspecified" (yaml.v3 cannot distinguish from omitempty).
+	if doc.Lifecycle.Version < 0 {
+		errs = append(errs, fieldErr(doc, "lifecycle.version",
+			"must be ≥ 0 (informational; planner authors persisted version)"))
+	}
+
+	return errs
+}
+
+// validateFailModePolicyRules constructs a synthetic *failmode.FailModePolicy
+// from the document's rule set and runs failmode.Validate to enforce the
+// closed-only invariant. Domain-level errors are translated into
+// document-level ValidationError entries with field paths under spec.rules.
+//
+// The synthetic policy is populated only with fields needed to exercise
+// validateRules; all other fields are filled with placeholder values that
+// the rule validator does not inspect. This avoids drift between the
+// document validator and the domain validator: there is exactly one place
+// that knows the closed-only matrix.
+func validateFailModePolicyRules(doc types.FailModePolicyDocument) []types.ValidationError {
+	rules := make([]failmode.FailModePolicyRule, 0, len(doc.Spec.Rules))
+	for _, r := range doc.Spec.Rules {
+		rules = append(rules, failmode.FailModePolicyRule{
+			CorrectnessClass: failmode.CorrectnessClass(strings.TrimSpace(r.CorrectnessClass)),
+			PermittedMode:    failmode.PermittedMode(strings.TrimSpace(r.PermittedMode)),
+			Reason:           strings.TrimSpace(r.Reason),
+		})
+	}
+
+	// Synthetic policy with placeholder non-rule fields. Validate is invoked
+	// only for the rule errors here; the validator's own document checks
+	// (above) cover the metadata/spec fields.
+	now := time.Now()
+	synthetic := &failmode.FailModePolicy{
+		ID:             "x",
+		Version:        1,
+		Name:           "x",
+		Status:         failmode.FailModePolicyStatusReview,
+		EffectiveDate:  now,
+		BusinessOwner:  "x",
+		TechnicalOwner: "x",
+		Rules:          rules,
+		Origin:         "manual",
+		Managed:        true,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+		CreatedBy:      "x",
+	}
+	domainErrs := failmode.Validate(synthetic)
+
+	var errs []types.ValidationError
+	for _, e := range domainErrs {
+		// Skip placeholder-field errors. The placeholder-field set is fixed
+		// and known here; only rule errors should be surfaced into the
+		// document validator output.
+		msg := e.Error()
+		if isFailModeRuleError(msg) {
+			errs = append(errs, fieldErr(doc, "spec.rules", msg))
+		}
+	}
+	return errs
+}
+
+// isFailModeRuleError reports whether a failmode.Validate error message is
+// rule-related (as opposed to a metadata-field error from a placeholder
+// value). The rule errors are the only ones that should be surfaced into
+// the control-plane validator output, since metadata/owner/timestamp errors
+// are independently checked at the document level.
+func isFailModeRuleError(msg string) bool {
+	switch {
+	case strings.Contains(msg, "rule"),
+		strings.Contains(msg, "rules"),
+		strings.Contains(msg, "CorrectnessClass"),
+		strings.Contains(msg, "PermittedMode"),
+		strings.Contains(msg, "not admitted"):
+		return true
+	}
+	return false
 }
 
 func requiredFieldErr(doc document, field string) types.ValidationError {

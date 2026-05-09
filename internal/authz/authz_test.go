@@ -25,14 +25,16 @@ import (
 // Epic 1 PR 1 added PermBusinessServiceRelationshipWrite. Epic 1 PR 2
 // added PermAISystemWrite, PermAISystemVersionWrite, and
 // PermAISystemBindingWrite for the AI System Registration substrate.
+// D27j-impl-1c added PermFailModePolicyApprove and
+// PermFailModePolicyDeprecate for the FailModePolicy lifecycle endpoints.
 // Adding or removing a permission requires updating this count
 // deliberately, which forces a review of the corresponding
 // platform.admin bundle.
 func TestAllControlPlaneWritePermissions_Count(t *testing.T) {
 	got := authz.AllControlPlaneWritePermissions()
-	// 23 = 20 prior + 3 AI System write permissions (Epic 1, PR 2).
-	if len(got) != 23 {
-		t.Errorf("want 23 control-plane write permissions, got %d", len(got))
+	// 25 = 23 prior + 2 FailModePolicy lifecycle permissions (D27j-impl-1c).
+	if len(got) != 25 {
+		t.Errorf("want 25 control-plane write permissions, got %d", len(got))
 	}
 }
 
@@ -108,18 +110,20 @@ func TestPlatformAdmin_IsNotWildcard(t *testing.T) {
 }
 
 // TestGovernanceApprover_ExactScope fixes the approver bundle to exactly
-// the three approve permissions (surface, profile, governance
-// expectation — the latter added by #57). Widening it to cover
-// deprecate or write actions would regress the maker–checker split the
-// prior role model enforced. PermGovernanceExpectationWrite is
+// the four approve permissions (surface, profile, governance expectation,
+// fail-mode policy — the last added by D27j-impl-1c). Widening it to
+// cover deprecate or write actions would regress the maker–checker split
+// the prior role model enforced. *Write and *Deprecate permissions are
 // deliberately NOT in this bundle: write is authoring (admin-only);
-// approve is the maker-checker counterparty.
+// deprecate is the lifecycle counterparty (admin-only); approve is the
+// maker-checker counterparty.
 func TestGovernanceApprover_ExactScope(t *testing.T) {
 	got := authz.PermissionsForRole(identity.RoleGovernanceApprover)
 	want := []authz.Permission{
 		authz.PermSurfaceApprove,
 		authz.PermProfileApprove,
 		authz.PermGovernanceExpectationApprove,
+		authz.PermFailModePolicyApprove,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("governance.approver bundle size: want %d, got %d (%v)", len(want), len(got), got)
@@ -133,12 +137,14 @@ func TestGovernanceApprover_ExactScope(t *testing.T) {
 	// Explicit denials — one representative permission per category.
 	// PermGovernanceExpectationWrite is in the denial set to pin the
 	// #57 asymmetry: governance.approver gets *approve* on
-	// GovernanceExpectations but never *write*. Authoring stays
-	// admin-only.
+	// GovernanceExpectations but never *write*. PermFailModePolicyDeprecate
+	// pins the same asymmetry for FailModePolicy: approve is granted to
+	// approvers, deprecate stays admin-only.
 	p := &identity.Principal{Roles: []string{identity.RoleGovernanceApprover}}
 	for _, denied := range []authz.Permission{
 		authz.PermSurfaceDeprecate,
 		authz.PermProfileDeprecate,
+		authz.PermFailModePolicyDeprecate,
 		authz.PermControlplaneApply,
 		authz.PermControlplanePlan,
 		authz.PermGrantSuspend,

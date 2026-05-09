@@ -28,7 +28,28 @@ const (
 	EscalationModeManual EscalationMode = "manual"
 )
 
-// FailMode controls what happens when the policy evaluator returns an error.
+// FailMode controls the narrow runtime behaviour when the policy evaluator
+// returns an error for this authority profile. It is the only currently
+// runtime-effective fail-mode field in MIDAS (the sibling surface.FailureMode
+// is persisted but runtime-dead — see internal/surface for that field's
+// status). Scope is precisely the policy-evaluator-error sub-case in
+// internal/decision/orchestrator.go (evaluatePolicy); no other failure path
+// consults this value.
+//
+//   - FailModeOpen:   on policy-evaluator error, the policy step is skipped
+//                     and evaluation continues. The path is canonically
+//                     audited (envelope + audit event are written), but the
+//                     policy_evaluated audit-event payload currently records
+//                     allowed:true rather than an explicit degraded marker.
+//                     This audit-payload encoding is a known legacy
+//                     limitation, scheduled for migration when FailModePolicy
+//                     lands (D27j).
+//   - FailModeClosed: on policy-evaluator error, the decision escalates with
+//                     ReasonPolicyError. Conventional default.
+//
+// Broader fail-mode posture across correctness classes will be governed by
+// the future FailModePolicy entity. See docs/operations/runtime-readiness.md
+// §11 for the operator-facing summary.
 type FailMode string
 
 const (
@@ -72,8 +93,15 @@ type AuthorityProfile struct {
 	PolicyReference string
 
 	// Governance semantics
-	EscalationMode      EscalationMode
-	FailMode            FailMode
+	EscalationMode EscalationMode
+
+	// FailMode is the only currently runtime-effective fail-mode field. It
+	// scopes the policy-evaluator-error sub-case at evaluation time —
+	// nothing else. See the FailMode type comment for full semantics and
+	// the audit-payload caveat. Future broad fail-mode posture will be
+	// governed by FailModePolicy (D27j).
+	FailMode FailMode
+
 	RequiredContextKeys []string
 
 	// Metadata

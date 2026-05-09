@@ -2,6 +2,7 @@ package apply
 
 import (
 	"context"
+	"time"
 
 	"github.com/accept-io/midas/internal/agent"
 	"github.com/accept-io/midas/internal/aisystem"
@@ -10,6 +11,7 @@ import (
 	"github.com/accept-io/midas/internal/businessservicecapability"
 	"github.com/accept-io/midas/internal/capability"
 	"github.com/accept-io/midas/internal/controlaudit"
+	"github.com/accept-io/midas/internal/failmode"
 	"github.com/accept-io/midas/internal/governanceexpectation"
 	"github.com/accept-io/midas/internal/process"
 	"github.com/accept-io/midas/internal/surface"
@@ -125,6 +127,20 @@ type AISystemBindingRepository interface {
 	Create(ctx context.Context, b *aisystem.AISystemBinding) error
 }
 
+// FailModePolicyRepository is the apply-side persistence interface for the
+// FailModePolicy entity (D27j-impl-1b, extended in D27j-impl-2). The planner
+// uses FindByID (latest version) to decide first-create vs new-version;
+// Create appends a (id, version) row; FindActiveAt is the bounded
+// active-version lookup used by Surface and BusinessService apply-time
+// referential validation (D27j-impl-2). Mirrors
+// GovernanceExpectationRepository posture for the other versioned, review-
+// forced Kind.
+type FailModePolicyRepository interface {
+	FindByID(ctx context.Context, id string) (*failmode.FailModePolicy, error)
+	FindActiveAt(ctx context.Context, id string, at time.Time) (*failmode.FailModePolicy, error)
+	Create(ctx context.Context, p *failmode.FailModePolicy) error
+}
+
 type RepositorySet struct {
 	Surfaces                     SurfaceRepository
 	Agents                       AgentRepository
@@ -139,6 +155,7 @@ type RepositorySet struct {
 	AISystems                    AISystemRepository
 	AISystemVersions             AISystemVersionRepository
 	AISystemBindings             AISystemBindingRepository
+	FailModePolicies             FailModePolicyRepository
 	ControlAudit                 controlaudit.Repository
 	// Tx, when non-nil, wraps the executor's mutation loop in an
 	// atomic transaction. The callback receives a scoped *RepositorySet

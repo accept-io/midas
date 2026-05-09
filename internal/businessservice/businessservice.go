@@ -36,6 +36,16 @@ type BusinessService struct {
 	// external system (Epic 1, PR 3). Nil when no external reference is
 	// recorded. Carries no lifecycle behaviour and does not gate apply.
 	ExternalRef *externalref.ExternalRef
+
+	// FailModePolicyID is the optional logical reference to a
+	// failmode.FailModePolicy that supplies the default fail-mode posture
+	// for surfaces under this service when those surfaces have no
+	// explicit FailModePolicy override (D27j-impl-2). Empty means "no
+	// service-level default". Apply-time validation rejects references
+	// to missing, review, deprecated, or retired policies. Runtime
+	// resolution is observability-only in this tranche; rules are not
+	// consulted.
+	FailModePolicyID string
 }
 
 // BusinessServiceRepository defines persistence operations for business services.

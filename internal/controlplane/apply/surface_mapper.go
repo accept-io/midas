@@ -96,6 +96,7 @@ func mapSurfaceDocumentToDecisionSurface(
 	}
 
 	ds.ProcessID = strings.TrimSpace(doc.Spec.ProcessID)
+	ds.FailModePolicyID = strings.TrimSpace(doc.Spec.FailModePolicyID)
 
 	return ds, nil
 }

@@ -20,6 +20,7 @@ import (
 	"github.com/accept-io/midas/internal/decision"
 	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/eval"
+	"github.com/accept-io/midas/internal/failmode"
 	"github.com/accept-io/midas/internal/governanceexpectation"
 	"github.com/accept-io/midas/internal/identity"
 	"github.com/accept-io/midas/internal/surface"
@@ -2634,6 +2635,8 @@ type mockApprovalService struct {
 	approveProfileFn               func(ctx context.Context, profileID string, version int, approvedBy string) (*authority.AuthorityProfile, error)
 	deprecateProfileFn             func(ctx context.Context, profileID string, version int, deprecatedBy string) (*authority.AuthorityProfile, error)
 	approveGovernanceExpectationFn func(ctx context.Context, expectationID string, version int, approvedBy string) (*governanceexpectation.GovernanceExpectation, error)
+	approveFailModePolicyFn        func(ctx context.Context, policyID string, version int, approvedBy string) (*failmode.FailModePolicy, error)
+	deprecateFailModePolicyFn      func(ctx context.Context, policyID string, version int, deprecatedBy string, reason string) (*failmode.FailModePolicy, error)
 }
 
 func (m *mockApprovalService) ApproveSurface(ctx context.Context, surfaceID string, submitter identity.Principal, approver identity.Principal) (*surface.DecisionSurface, error) {
@@ -2669,6 +2672,20 @@ func (m *mockApprovalService) ApproveGovernanceExpectation(ctx context.Context, 
 		return m.approveGovernanceExpectationFn(ctx, expectationID, version, approvedBy)
 	}
 	return nil, fmt.Errorf("approveGovernanceExpectation not implemented")
+}
+
+func (m *mockApprovalService) ApproveFailModePolicy(ctx context.Context, policyID string, version int, approvedBy string) (*failmode.FailModePolicy, error) {
+	if m.approveFailModePolicyFn != nil {
+		return m.approveFailModePolicyFn(ctx, policyID, version, approvedBy)
+	}
+	return nil, fmt.Errorf("approveFailModePolicy not implemented")
+}
+
+func (m *mockApprovalService) DeprecateFailModePolicy(ctx context.Context, policyID string, version int, deprecatedBy string, reason string) (*failmode.FailModePolicy, error) {
+	if m.deprecateFailModePolicyFn != nil {
+		return m.deprecateFailModePolicyFn(ctx, policyID, version, deprecatedBy, reason)
+	}
+	return nil, fmt.Errorf("deprecateFailModePolicy not implemented")
 }
 
 // ---------------------------------------------------------------------------

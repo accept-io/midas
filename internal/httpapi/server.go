@@ -34,6 +34,7 @@ import (
 	"github.com/accept-io/midas/internal/eval"
 	"github.com/accept-io/midas/internal/externalref"
 	"github.com/accept-io/midas/internal/governancecoverage"
+	"github.com/accept-io/midas/internal/failmode"
 	"github.com/accept-io/midas/internal/governanceexpectation"
 	"github.com/accept-io/midas/internal/identity"
 	"github.com/accept-io/midas/internal/localiam"
@@ -77,6 +78,11 @@ type approvalService interface {
 	ApproveProfile(ctx context.Context, profileID string, version int, approvedBy string) (*authority.AuthorityProfile, error)
 	DeprecateProfile(ctx context.Context, profileID string, version int, deprecatedBy string) (*authority.AuthorityProfile, error)
 	ApproveGovernanceExpectation(ctx context.Context, expectationID string, version int, approvedBy string) (*governanceexpectation.GovernanceExpectation, error)
+	// FailModePolicy lifecycle (D27j-impl-1c). Reason on deprecate is
+	// captured in control-audit only; failmode.FailModePolicy has no
+	// dedicated DeprecationReason field.
+	ApproveFailModePolicy(ctx context.Context, policyID string, version int, approvedBy string) (*failmode.FailModePolicy, error)
+	DeprecateFailModePolicy(ctx context.Context, policyID string, version int, deprecatedBy string, reason string) (*failmode.FailModePolicy, error)
 }
 
 // introspectionService defines the read-only operator visibility contract.
@@ -444,16 +450,17 @@ type processResponse struct {
 // owner_id was added by the live-BS-selector change. It is purely additive
 // (omitempty), so existing clients that ignore the field continue to work.
 type businessServiceResponse struct {
-	ID              string               `json:"id"`
-	Name            string               `json:"name"`
-	Description     string               `json:"description,omitempty"`
-	ServiceType     string               `json:"service_type"`
-	RegulatoryScope string               `json:"regulatory_scope,omitempty"`
-	Status          string               `json:"status"`
-	OwnerID         string               `json:"owner_id,omitempty"`
-	CreatedAt       time.Time            `json:"created_at"`
-	UpdatedAt       time.Time            `json:"updated_at"`
-	ExternalRef     *externalRefResponse `json:"external_ref"`
+	ID               string               `json:"id"`
+	Name             string               `json:"name"`
+	Description      string               `json:"description,omitempty"`
+	ServiceType      string               `json:"service_type"`
+	RegulatoryScope  string               `json:"regulatory_scope,omitempty"`
+	Status           string               `json:"status"`
+	OwnerID          string               `json:"owner_id,omitempty"`
+	CreatedAt        time.Time            `json:"created_at"`
+	UpdatedAt        time.Time            `json:"updated_at"`
+	ExternalRef      *externalRefResponse `json:"external_ref"`
+	FailModePolicyID string               `json:"fail_mode_policy_id,omitempty"`
 }
 
 // businessServicesResponse wraps the list endpoint payload. The
@@ -1545,6 +1552,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/v1/controlplane/surfaces/", s.requireAuth(s.handleSurfaceActions))
 	s.mux.HandleFunc("/v1/controlplane/profiles/", s.requireAuth(s.handleProfileActions))
 	s.mux.HandleFunc("/v1/controlplane/expectations/", s.requireAuth(s.handleExpectationActions))
+	s.mux.HandleFunc("/v1/controlplane/fail_mode_policies/", s.requireAuth(s.handleFailModePolicyActions))
 	s.mux.HandleFunc("/v1/controlplane/grants/", s.requireAuth(s.handleGrantActions))
 
 	// Operator introspection — platform.viewer or above.
@@ -3117,16 +3125,17 @@ func toExternalRefResponse(ref *externalref.ExternalRef) *externalRefResponse {
 // toBusinessServiceResponse maps a BusinessService to its wire format.
 func toBusinessServiceResponse(s *businessservice.BusinessService) businessServiceResponse {
 	return businessServiceResponse{
-		ID:              s.ID,
-		Name:            s.Name,
-		Description:     s.Description,
-		ServiceType:     string(s.ServiceType),
-		RegulatoryScope: s.RegulatoryScope,
-		Status:          s.Status,
-		OwnerID:         s.OwnerID,
-		CreatedAt:       s.CreatedAt,
-		UpdatedAt:       s.UpdatedAt,
-		ExternalRef:     toExternalRefResponse(s.ExternalRef),
+		ID:               s.ID,
+		Name:             s.Name,
+		Description:      s.Description,
+		ServiceType:      string(s.ServiceType),
+		RegulatoryScope:  s.RegulatoryScope,
+		Status:           s.Status,
+		OwnerID:          s.OwnerID,
+		CreatedAt:        s.CreatedAt,
+		UpdatedAt:        s.UpdatedAt,
+		ExternalRef:      toExternalRefResponse(s.ExternalRef),
+		FailModePolicyID: s.FailModePolicyID,
 	}
 }
 
@@ -4038,6 +4047,12 @@ func mapApprovalError(err error) (int, map[string]string) {
 	case errors.Is(err, approval.ErrGovernanceExpectationNotFound):
 		return http.StatusNotFound, map[string]string{"error": "governance expectation not found"}
 	case errors.Is(err, approval.ErrGovernanceExpectationNotInReview):
+		return http.StatusConflict, map[string]string{"error": err.Error()}
+	case errors.Is(err, approval.ErrFailModePolicyNotFound):
+		return http.StatusNotFound, map[string]string{"error": "fail mode policy not found"}
+	case errors.Is(err, approval.ErrFailModePolicyNotInReview):
+		return http.StatusConflict, map[string]string{"error": err.Error()}
+	case errors.Is(err, approval.ErrFailModePolicyNotActive):
 		return http.StatusConflict, map[string]string{"error": err.Error()}
 	default:
 		return http.StatusInternalServerError, map[string]string{"error": err.Error()}
