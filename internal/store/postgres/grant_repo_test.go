@@ -2,10 +2,12 @@ package postgres
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/accept-io/midas/internal/authority"
+	"github.com/accept-io/midas/internal/value"
 )
 
 func TestGrantRepo_Create_GrantReasonRoundTrip(t *testing.T) {
@@ -281,5 +283,165 @@ func TestGrantRepo_Update_ReinstateClears_SuspensionFields(t *testing.T) {
 	}
 	if got.SuspendReason != "" {
 		t.Errorf("SuspendReason: want empty, got %q", got.SuspendReason)
+	}
+}
+
+// TestGrantRepo_Create_CapabilitiesAndConstraintsRoundTrip pins that the
+// D31i JSONB columns survive an INSERT → SELECT round trip with full
+// fidelity. Exercises every constraint kind so a future shape change
+// (e.g. a new payload field) shows up here.
+func TestGrantRepo_Create_CapabilitiesAndConstraintsRoundTrip(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+
+	agentID := "tst-agent-caps-constraints"
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO agents (id, name, type, owner, operational_state, capabilities, metadata, created_at, updated_at)
+		VALUES ($1, 'test', 'ai', 'owner', 'active', '[]', '{}', NOW(), NOW())
+		ON CONFLICT (id) DO NOTHING
+	`, agentID); err != nil {
+		t.Fatalf("insert agent: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, `DELETE FROM authority_grants WHERE agent_id = $1`, agentID)
+		_, _ = db.ExecContext(ctx, `DELETE FROM agents WHERE id = $1`, agentID)
+	})
+
+	repo, err := NewGrantRepo(db)
+	if err != nil {
+		t.Fatalf("NewGrantRepo: %v", err)
+	}
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	winStart := now.Add(-time.Hour).Truncate(time.Millisecond)
+	winEnd := now.Add(time.Hour).Truncate(time.Millisecond)
+
+	want := &authority.AuthorityGrant{
+		ID:            "grant-caps-rt-1",
+		AgentID:       agentID,
+		ProfileID:     "profile-1",
+		GrantedBy:     "admin",
+		Status:        authority.GrantStatusActive,
+		EffectiveDate: now.Add(-time.Hour),
+		CreatedAt:     now,
+		UpdatedAt:     now,
+		Capabilities: []authority.Capability{
+			authority.CapabilityRecommend,
+			authority.CapabilityApprove,
+			authority.CapabilityStop,
+		},
+		Constraints: []authority.Constraint{
+			{Kind: authority.ConstraintKindConfidenceThresholdMin, MinConfidence: 0.85},
+			{Kind: authority.ConstraintKindConsequenceThresholdMax, MaxConsequence: authority.Consequence{
+				Type: value.ConsequenceTypeMonetary, Amount: 1000, Currency: "USD",
+			}},
+			{Kind: authority.ConstraintKindHumanOnly},
+			{Kind: authority.ConstraintKindTimeWindow, StartTime: winStart, EndTime: winEnd},
+		},
+	}
+
+	if err := repo.Create(ctx, want); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, `DELETE FROM authority_grants WHERE id = $1`, want.ID)
+	})
+
+	got, err := repo.FindByID(ctx, want.ID)
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected grant, got nil")
+	}
+
+	if !reflect.DeepEqual(got.Capabilities, want.Capabilities) {
+		t.Errorf("Capabilities mismatch:\nwant %#v\ngot  %#v", want.Capabilities, got.Capabilities)
+	}
+	if len(got.Constraints) != len(want.Constraints) {
+		t.Fatalf("Constraints len: want %d, got %d", len(want.Constraints), len(got.Constraints))
+	}
+	for i, gc := range got.Constraints {
+		wc := want.Constraints[i]
+		if gc.Kind != wc.Kind {
+			t.Errorf("Constraints[%d].Kind: want %q, got %q", i, wc.Kind, gc.Kind)
+		}
+		switch wc.Kind {
+		case authority.ConstraintKindConfidenceThresholdMin:
+			if gc.MinConfidence != wc.MinConfidence {
+				t.Errorf("Constraints[%d].MinConfidence: want %v, got %v", i, wc.MinConfidence, gc.MinConfidence)
+			}
+		case authority.ConstraintKindConsequenceThresholdMax:
+			if gc.MaxConsequence != wc.MaxConsequence {
+				t.Errorf("Constraints[%d].MaxConsequence: want %+v, got %+v", i, wc.MaxConsequence, gc.MaxConsequence)
+			}
+		case authority.ConstraintKindTimeWindow:
+			if !gc.StartTime.Equal(wc.StartTime) {
+				t.Errorf("Constraints[%d].StartTime: want %v, got %v", i, wc.StartTime, gc.StartTime)
+			}
+			if !gc.EndTime.Equal(wc.EndTime) {
+				t.Errorf("Constraints[%d].EndTime: want %v, got %v", i, wc.EndTime, gc.EndTime)
+			}
+		}
+	}
+}
+
+// TestGrantRepo_Create_EmptyCapabilitiesAndConstraints pins the
+// DEFAULT '[]' columns produce nil slices on read, matching the
+// memory repo's zero-value shape so parity tests across the two
+// implementations remain consistent.
+func TestGrantRepo_Create_EmptyCapabilitiesAndConstraints(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+
+	agentID := "tst-agent-caps-empty"
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO agents (id, name, type, owner, operational_state, capabilities, metadata, created_at, updated_at)
+		VALUES ($1, 'test', 'ai', 'owner', 'active', '[]', '{}', NOW(), NOW())
+		ON CONFLICT (id) DO NOTHING
+	`, agentID); err != nil {
+		t.Fatalf("insert agent: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, `DELETE FROM authority_grants WHERE agent_id = $1`, agentID)
+		_, _ = db.ExecContext(ctx, `DELETE FROM agents WHERE id = $1`, agentID)
+	})
+
+	repo, err := NewGrantRepo(db)
+	if err != nil {
+		t.Fatalf("NewGrantRepo: %v", err)
+	}
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	g := &authority.AuthorityGrant{
+		ID:            "grant-caps-empty-1",
+		AgentID:       agentID,
+		ProfileID:     "profile-1",
+		GrantedBy:     "admin",
+		Status:        authority.GrantStatusActive,
+		EffectiveDate: now.Add(-time.Hour),
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if err := repo.Create(ctx, g); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, `DELETE FROM authority_grants WHERE id = $1`, g.ID)
+	})
+
+	got, err := repo.FindByID(ctx, g.ID)
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	if got.Capabilities != nil {
+		t.Errorf("Capabilities: want nil, got %#v", got.Capabilities)
+	}
+	if got.Constraints != nil {
+		t.Errorf("Constraints: want nil, got %#v", got.Constraints)
 	}
 }

@@ -32,6 +32,41 @@ const (
 	ReasonProfileNotFound             ReasonCode = "PROFILE_NOT_FOUND"
 	ReasonGrantProfileSurfaceMismatch ReasonCode = "GRANT_PROFILE_SURFACE_MISMATCH"
 
+	// D31i Reject reasons — recorded in EvaluationResult.ReasonCode and
+	// the OUTCOME_RECORDED audit event when the orchestrator rejects a
+	// request because the grant lacks the requested capability or one
+	// of the grant's constraints failed for this specific request.
+	//
+	// ReasonCapabilityNotGranted: the request named a RequestedCapability
+	// that is not in the grant's Capabilities set. The granular
+	// capability value flows through AUTHORITY_CHAIN_RESOLVED's payload
+	// and the future capability-violation event; OUTCOME_RECORDED
+	// carries only the generic reason code.
+	//
+	// ReasonInvalidCapability: the request named a RequestedCapability
+	// value that is not one of the canonical five Capability constants.
+	// A caller bug; rejecting deterministically keeps invalid input
+	// from silently sneaking through under a more permissive code
+	// path.
+	//
+	// ReasonConstraintViolated: at least one of the grant's typed
+	// constraints failed against the request. The granular constraint
+	// kind and reason flow through AUTHORITY_CONSTRAINT_VIOLATED;
+	// OUTCOME_RECORDED carries the generic reason code.
+	ReasonCapabilityNotGranted ReasonCode = "CAPABILITY_NOT_GRANTED"
+	ReasonInvalidCapability    ReasonCode = "INVALID_CAPABILITY"
+	ReasonConstraintViolated   ReasonCode = "CONSTRAINT_VIOLATED"
+
+	// D31j Reject reason — the resolved agent was not in
+	// operational_state=active (suspended, revoked, or any
+	// non-canonical/empty value). The orchestrator emits
+	// AGENT_OPERATIONAL_STATE_BLOCKED_AUTHORITY and rejects with
+	// this reason BEFORE evaluating grant constraints, capabilities,
+	// profile thresholds, or policy. A non-active agent must not be
+	// able to exercise authority even when the grant otherwise
+	// satisfies every other check.
+	ReasonAgentOperationalStateBlocked ReasonCode = "AGENT_OPERATIONAL_STATE_BLOCKED"
+
 	// Request clarification reasons
 	ReasonInsufficientContext ReasonCode = "INSUFFICIENT_CONTEXT"
 

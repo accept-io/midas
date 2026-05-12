@@ -181,6 +181,73 @@ const (
 	// and is deferred to a future issue.
 	AuditEventGovernanceCoverageGap AuditEventType = "GOVERNANCE_COVERAGE_GAP"
 
+	// AuditEventAuthorityConstraintViolated records that a runtime
+	// request failed to satisfy an AuthorityGrant's typed constraint
+	// (D31i). Emitted only when authority chain resolution succeeded
+	// (we have a real grant in hand) AND the first constraint
+	// evaluation against the request returned a violation. The event
+	// is the runtime-evidence companion to the deterministic
+	// Reject + CONSTRAINT_VIOLATED outcome the orchestrator returns;
+	// it carries the violating grant id, the constraint kind that
+	// failed, and a short human-readable reason in the payload. The
+	// event MUST NOT carry raw secrets, the full constraint
+	// configuration, or stack traces — operators read the kind and
+	// follow the grant id to the configuration store for full detail.
+	//
+	// Emission is observational: it participates in the audit hash
+	// chain via acc.recordObservation and is included in
+	// Envelope.Integrity.AuditEventIDs, just like the FAIL_MODE_*
+	// observational events.
+	AuditEventAuthorityConstraintViolated AuditEventType = "AUTHORITY_CONSTRAINT_VIOLATED"
+
+	// AuditEventAgentOperationalStateBlockedAuthority records that
+	// the runtime blocked authority resolution because the resolved
+	// agent was not in operational_state=active (D31j). Emitted only
+	// after authority chain resolution succeeded — we have a real
+	// agent, grant, profile, and surface — and the gate fired
+	// because the resolved agent.OperationalState was suspended,
+	// revoked, or any non-canonical/empty value. The orchestrator
+	// follows emission with a deterministic Reject using
+	// ReasonAgentOperationalStateBlocked.
+	//
+	// The event's payload carries agent_id, grant_id, profile_id,
+	// surface_id, operational_state, and a short reason string —
+	// enough for an operator reading the audit chain to understand
+	// why the otherwise-valid grant did not authorise the request.
+	// Like AUTHORITY_CONSTRAINT_VIOLATED it is observational: emitted
+	// via acc.recordObservation, participates in the audit hash
+	// chain, and is included in Envelope.Integrity.AuditEventIDs.
+	AuditEventAgentOperationalStateBlockedAuthority AuditEventType = "AGENT_OPERATIONAL_STATE_BLOCKED_AUTHORITY"
+
+	// AuditEventEscalationTargetSelected records that the runtime
+	// resolved a non-empty EscalationTargetID on the active profile
+	// at escalation time AND the EscalationTarget repository
+	// returned an active version (D31k-impl-1). Emitted via
+	// acc.recordObservation, participates in the audit hash chain,
+	// and is included in Envelope.Integrity.AuditEventIDs.
+	//
+	// Payload (where existing audit style allows):
+	//
+	//   profile_id, profile_version, grant_id, agent_id, surface_id,
+	//   escalation_target_id, escalation_target_version,
+	//   escalation_target_kind, escalation_target_handle
+	//
+	// The event describes the routing decision only — the outcome
+	// remains the underlying Escalate verdict produced by the
+	// confidence/consequence/policy steps. EscalationMode (auto /
+	// manual) is independent and is not changed by this event.
+	AuditEventEscalationTargetSelected AuditEventType = "ESCALATION_TARGET_SELECTED"
+
+	// AuditEventEscalationTargetResolutionFailed records that the
+	// active profile carried a non-empty EscalationTargetID but the
+	// repository returned no active version at evaluation time
+	// (D31k-impl-1). The orchestrator preserves the escalation
+	// outcome and emits this event so operators can see the dangling
+	// reference. Payload mirrors ESCALATION_TARGET_SELECTED minus
+	// the resolved-target metadata (only escalation_target_id is
+	// populated alongside the authority spine).
+	AuditEventEscalationTargetResolutionFailed AuditEventType = "ESCALATION_TARGET_RESOLUTION_FAILED"
+
 	// ---------------------------------------------------------------------------
 	// Deprecated — retained for backward compatibility with existing audit rows
 	// and integrity_test.go stubs. New code must not emit this event type.

@@ -12,6 +12,7 @@ import (
 	"github.com/accept-io/midas/internal/businessservice"
 	"github.com/accept-io/midas/internal/businessservicecapability"
 	"github.com/accept-io/midas/internal/capability"
+	"github.com/accept-io/midas/internal/escalation"
 	"github.com/accept-io/midas/internal/failmode"
 	"github.com/accept-io/midas/internal/process"
 	"github.com/accept-io/midas/internal/store"
@@ -940,6 +941,7 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 		},
 
 		EscalationMode:      authority.EscalationModeAuto,
+		EscalationTargetID:  "et-governance-approver",
 		FailMode:            authority.FailModeClosed,
 		RequiredContextKeys: []string{},
 
@@ -960,6 +962,14 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 		Status:        authority.GrantStatusActive,
 		CreatedAt:     now,
 		UpdatedAt:     now,
+		// D31i: standard baseline — the demo evaluator may
+		// recommend or approve merchant-payment authorisations.
+		// No stop authority and no constraints; the Authority
+		// Graph shows this grant as a healthy posture baseline.
+		Capabilities: []authority.Capability{
+			authority.CapabilityRecommend,
+			authority.CapabilityApprove,
+		},
 	}); err != nil {
 		return err
 	}
@@ -1009,6 +1019,10 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 		Status:        authority.GrantStatusActive,
 		CreatedAt:     now,
 		UpdatedAt:     now,
+		Capabilities: []authority.Capability{
+			authority.CapabilityRecommend,
+			authority.CapabilityApprove,
+		},
 	}); err != nil {
 		return err
 	}
@@ -1046,6 +1060,17 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 		EffectiveDate: effective,
 		Status:        authority.GrantStatusActive,
 		CreatedAt:     now, UpdatedAt: now,
+		Capabilities: []authority.Capability{
+			authority.CapabilityRecommend,
+			authority.CapabilityApprove,
+		},
+		// D31i: a confidence_threshold_min constraint demonstrates the
+		// runtime-narrowing semantics in the demo — credit assessment
+		// approvals require ≥0.90 confidence on top of the profile's
+		// own 0.82 threshold.
+		Constraints: []authority.Constraint{
+			{Kind: authority.ConstraintKindConfidenceThresholdMin, MinConfidence: 0.90},
+		},
 	}); err != nil {
 		return err
 	}
@@ -1077,6 +1102,15 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 		EffectiveDate: effective,
 		Status:        authority.GrantStatusActive,
 		CreatedAt:     now, UpdatedAt: now,
+		// D31i: fraud detection exercises the full authority spine
+		// including stop. The bot may recommend, escalate, reject,
+		// or invoke a kill-switch via the stop capability.
+		Capabilities: []authority.Capability{
+			authority.CapabilityRecommend,
+			authority.CapabilityEscalate,
+			authority.CapabilityReject,
+			authority.CapabilityStop,
+		},
 	}); err != nil {
 		return err
 	}
@@ -1365,6 +1399,39 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 		}
 	}
 
+	// --- Escalation targets (D31k-impl-1) -------------------------------
+	// Seeds one active role target (et-governance-approver) that
+	// profile-v2-standard references via EscalationTargetID. The seed
+	// remains a no-op when the repository is unwired (memory-mode
+	// tests that construct a partial Repositories may leave it nil).
+	if repos.EscalationTargets != nil {
+		approvedAt := now
+		targets := []*escalation.EscalationTarget{
+			{
+				ID:             "et-governance-approver",
+				Version:        1,
+				Name:           "Governance Approver",
+				Description:    "Default human reviewer for escalated decisions in the demo dataset",
+				Kind:           escalation.KindRole,
+				Handle:         "governance.approver",
+				Status:         escalation.StatusActive,
+				EffectiveDate:  effective,
+				BusinessOwner:  "platform",
+				TechnicalOwner: "platform",
+				CreatedAt:      now,
+				UpdatedAt:      now,
+				CreatedBy:      "system",
+				ApprovedBy:     "system",
+				ApprovedAt:     &approvedAt,
+			},
+		}
+		for _, t := range targets {
+			if err := ensureEscalationTarget(ctx, repos.EscalationTargets, t); err != nil {
+				return err
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -1596,6 +1663,26 @@ func ensureAISystemBinding(ctx context.Context, repo aisystem.BindingRepository,
 	}
 	if err := repo.Create(ctx, b); err != nil {
 		return fmt.Errorf("create ai_system_binding %s: %w", b.ID, err)
+	}
+	return nil
+}
+
+// ensureEscalationTarget mirrors ensureFailModePolicy / ensureProfile:
+// look up by (id, version) and only Create when the row is absent.
+// EscalationTarget is versioned; the demo seed always inserts
+// Version=1 and the desired idempotency is "create if (id, version)
+// does not yet exist" — same posture as the other versioned-entity
+// seed helpers.
+func ensureEscalationTarget(ctx context.Context, repo escalation.Repository, t *escalation.EscalationTarget) error {
+	existing, err := repo.FindByIDAndVersion(ctx, t.ID, t.Version)
+	if err != nil {
+		return fmt.Errorf("lookup escalation target %s v%d: %w", t.ID, t.Version, err)
+	}
+	if existing != nil {
+		return nil
+	}
+	if err := repo.Create(ctx, t); err != nil {
+		return fmt.Errorf("create escalation target %s v%d: %w", t.ID, t.Version, err)
 	}
 	return nil
 }

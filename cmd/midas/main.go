@@ -23,8 +23,8 @@ import (
 	"github.com/accept-io/midas/internal/controlplane/approval"
 	"github.com/accept-io/midas/internal/decision"
 	"github.com/accept-io/midas/internal/governancecoverage"
-	"github.com/accept-io/midas/internal/authoritygraph"
-	"github.com/accept-io/midas/internal/governancemap"
+	authoritygraph "github.com/accept-io/midas/internal/graph/authority"
+	contextgraph "github.com/accept-io/midas/internal/graph/context"
 	"github.com/accept-io/midas/internal/httpapi"
 	"github.com/accept-io/midas/internal/identity"
 	"github.com/accept-io/midas/internal/localiam"
@@ -315,6 +315,12 @@ func main() {
 	// lifecycle handlers are unaffected. The runtime resolver and the
 	// approval service continue to consume the same repository.
 	srv.WithFailModePolicyReadService(httpapi.NewFailModePolicyReadService(repos.FailModePolicies))
+	// D31k-impl-1: wire the read-only EscalationTarget service backing
+	// /v1/escalation_targets/*. A nil reader produces 501 on every
+	// route. The orchestrator's runtime escalation-target resolver
+	// uses repos.EscalationTargets directly — this wiring affects the
+	// HTTP read surface only.
+	srv.WithEscalationTargetReadService(httpapi.NewEscalationTargetReadService(repos.EscalationTargets))
 	// D30b: wire the read-only runtime evidence service that backs
 	// GET /v1/evidence/envelopes/{id}/audit-events. Reads the
 	// production envelope + audit repositories — disjoint from the
@@ -336,10 +342,12 @@ func main() {
 	if repos.Audit != nil {
 		srv.WithCoverageReadService(governancecoverage.NewReadService(repos.Audit))
 	}
-	// Epic 1, PR 4: wire the governance map read service that powers
-	// GET /v1/businessservices/{id}/governance-map. Composes existing
-	// repository readers via narrow per-entity interfaces.
-	governanceMapReader := governancemap.NewReadService(
+	// D31d — Context Graph wiring. Single endpoint GET /v1/graphs/context
+	// powers the Explorer's graph workbench for service / ai_system /
+	// decision_surface views. The internal ReadService composes context
+	// from existing repository readers; the projection service wraps it
+	// and walks scope-target lookups for the non-service views.
+	contextMapReader := contextgraph.NewReadService(
 		repos.BusinessServices,
 		repos.BusinessServiceRelationships,
 		repos.BusinessServiceCapabilities,
@@ -352,21 +360,29 @@ func main() {
 		repos.AISystemVersions,
 		repos.AISystemBindings,
 	)
-	srv.WithGovernanceMap(governanceMapReader)
-	// Authority Graph: multi-view projection. ViewService reuses the
-	// governance-map read service (no new repository reads).
-	// ViewAISystem walks ai_system → bindings → scope targets via the
-	// scope-resolving readers below; new views are new projector
-	// registrations on the authoritygraph.Service, not new repository
-	// calls.
-	srv.WithAuthorityGraph(authoritygraph.NewServiceWithReaders(authoritygraph.Readers{
-		GovernanceMap:    governanceMapReader,
+	srv.WithContextGraph(contextgraph.NewServiceWithReaders(contextgraph.Readers{
+		GovernanceMap:    contextMapReader,
 		AISystem:         repos.AISystems,
 		AISystemBindings: repos.AISystemBindings,
 		BusinessServices: repos.BusinessServices,
 		Capabilities:     repos.Capabilities,
 		Processes:        repos.Processes,
 		Surfaces:         repos.Surfaces,
+	}))
+	// D31f — Authority Graph wiring. GET /v1/graphs/authority projects
+	// the authority spine (BS → Surface → Profile → Grant → Agent)
+	// plus fail-mode policy edges. The projection package reuses
+	// existing per-entity repositories — no new repository methods,
+	// no shared state with the Context Graph.
+	srv.WithAuthorityGraph(authoritygraph.NewService(authoritygraph.Readers{
+		BusinessServices:  repos.BusinessServices,
+		Processes:         repos.Processes,
+		Surfaces:          repos.Surfaces,
+		Profiles:          repos.Profiles,
+		Grants:            repos.Grants,
+		Agents:            repos.Agents,
+		FailModePolicies:  repos.FailModePolicies,
+		EscalationTargets: repos.EscalationTargets,
 	}))
 	srv.WithStructuralMode(cfg.Structural.Mode)
 	// NOTE: WithAuthenticator is called below, AFTER the optional Local IAM

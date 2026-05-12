@@ -165,7 +165,7 @@ func seedSpyStore(s *spyStore) {
 	seedStructuralChain(s.processes, s.businessServices, s.bscLinks, s.capabilities,
 		testProcessID, testBusinessServiceID, nil)
 	s.agents.agents = map[string]*agent.Agent{
-		testAgentID: {ID: testAgentID},
+		testAgentID: {ID: testAgentID, OperationalState: agent.OperationalStateActive},
 	}
 	s.grants.grants = map[string][]*authority.AuthorityGrant{
 		testAgentID: {

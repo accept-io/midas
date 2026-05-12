@@ -582,6 +582,18 @@ components:
         escalation_mode:
           type: string
           enum: [auto, manual]
+        escalation_target_id:
+          type: string
+          description: >
+            Optional logical id of an EscalationTarget that should
+            receive escalations produced under this profile (D31k-impl-1).
+            Empty means no explicit target — the orchestrator preserves
+            its existing escalation behaviour. The active version is
+            resolved at runtime by the EscalationTarget repository; no
+            FK is enforced at the SQL layer. Complementary to
+            escalation_mode (auto / manual): mode describes the
+            behaviour at escalation time, target describes the
+            destination.
         fail_mode:
           type: string
           enum: [open, closed]
@@ -879,6 +891,102 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/FailModePolicy"
+
+    # ---------------------------------------------------------------
+    # EscalationTarget read API (D31k-impl-1)
+    # ---------------------------------------------------------------
+    EscalationTargetKind:
+      type: string
+      description: >
+        Discriminator for the EscalationTarget Handle field. role =
+        identity role name (e.g. governance.approver); agent =
+        registered agent id; surface = decision surface id; external =
+        external system or URI identifier. Cross-context existence is
+        not enforced at the repository layer.
+      enum: [role, agent, surface, external]
+
+    EscalationTargetStatus:
+      type: string
+      description: >
+        Lifecycle state of an EscalationTarget version. Mirrors
+        AuthorityProfile / DecisionSurface / FailModePolicy status
+        values. Only `active` versions participate in runtime
+        escalation resolution.
+      enum: [draft, review, active, deprecated, retired]
+
+    EscalationTarget:
+      type: object
+      description: >
+        Governed, versioned escalation target. Composite (id, version)
+        primary key. The runtime escalation-target resolver picks the
+        highest active version whose effective window covers the
+        moment of escalation, mirroring FailModePolicy resolution.
+      required:
+        - id
+        - version
+        - name
+        - kind
+        - handle
+        - status
+        - effective_date
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        version:
+          type: integer
+        name:
+          type: string
+        description:
+          type: string
+        kind:
+          $ref: "#/components/schemas/EscalationTargetKind"
+        handle:
+          type: string
+          description: >
+            Kind-specific identifier. For role, the role name; for
+            agent, the agent id; for surface, the surface id; for
+            external, the external system/URI identifier.
+        status:
+          $ref: "#/components/schemas/EscalationTargetStatus"
+        effective_date:
+          type: string
+          format: date-time
+        effective_until:
+          type: string
+          format: date-time
+          nullable: true
+        business_owner:
+          type: string
+        technical_owner:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        created_by:
+          type: string
+        approved_by:
+          type: string
+        approved_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    EscalationTargetListResponse:
+      type: object
+      description: >
+        List wrapper for EscalationTarget GET endpoints. The array
+        always serialises non-null (empty list when no targets exist).
+      required: [escalation_targets]
+      properties:
+        escalation_targets:
+          type: array
+          items:
+            $ref: "#/components/schemas/EscalationTarget"
 
     # ---------------------------------------------------------------
     # DriftDefinition lifecycle (Drift-1e)
@@ -1325,355 +1433,17 @@ components:
             $ref: "#/components/schemas/BusinessServiceRelationship"
 
     # ------------------------------------------------------------------
-    # Governance Map Read Model (Epic 1, PR 4)
-    # ------------------------------------------------------------------
-    # Composes the existing structural surface for a single business
-    # service. Includes only active surfaces; includes AI systems
-    # regardless of status. The recent_decisions field is intentionally
-    # omitted in PR 4 — see Step 0.5 deferral; PR 8 will revisit.
-
-    GovernanceMapResponse:
-      type: object
-      description: >
-        Top-level governance map response. All array fields are always
-        present (never null). authority_summary and coverage are
-        always present even when their counts are zero. recent_decisions
-        is deliberately not included in PR 4 (deferred to PR 8).
-      required:
-        - business_service
-        - relationships
-        - capabilities
-        - processes
-        - surfaces
-        - ai_systems
-        - authority_summary
-        - coverage
-      properties:
-        business_service:
-          $ref: "#/components/schemas/GovernanceMapBusinessService"
-        relationships:
-          $ref: "#/components/schemas/GovernanceMapRelationships"
-        capabilities:
-          type: array
-          items:
-            $ref: "#/components/schemas/GovernanceMapCapability"
-        processes:
-          type: array
-          items:
-            $ref: "#/components/schemas/GovernanceMapProcess"
-        surfaces:
-          type: array
-          items:
-            $ref: "#/components/schemas/GovernanceMapSurface"
-        ai_systems:
-          type: array
-          items:
-            $ref: "#/components/schemas/GovernanceMapAISystem"
-        authority_summary:
-          $ref: "#/components/schemas/GovernanceMapAuthoritySummary"
-        coverage:
-          $ref: "#/components/schemas/GovernanceMapCoverage"
-
-    GovernanceMapBusinessService:
-      type: object
-      description: Root business service node in the governance map.
-      required: [id, name, service_type, status, external_ref]
-      properties:
-        id:
-          type: string
-        name:
-          type: string
-        description:
-          type: string
-        service_type:
-          type: string
-        regulatory_scope:
-          type: string
-        status:
-          type: string
-        owner_id:
-          type: string
-        external_ref:
-          allOf:
-            - $ref: "#/components/schemas/ExternalRef"
-          nullable: true
-          description: Optional structured external reference. Always present; null when absent (Epic 1, PR 3).
-
-    GovernanceMapRelationships:
-      type: object
-      description: >
-        Relationships partitioned by direction. Both arrays are always
-        present (never null).
-      required: [outgoing, incoming]
-      properties:
-        outgoing:
-          type: array
-          items:
-            $ref: "#/components/schemas/GovernanceMapRelationship"
-        incoming:
-          type: array
-          items:
-            $ref: "#/components/schemas/GovernanceMapRelationship"
-
-    GovernanceMapRelationship:
-      type: object
-      description: >
-        A single directed relationship rendered for the governance map.
-        other_name is the opposing service's name (target name for
-        outgoing rows, source name for incoming rows). Empty when the
-        opposing service cannot be resolved.
-      required: [id, source_business_service_id, target_business_service_id, relationship_type]
-      properties:
-        id:
-          type: string
-        source_business_service_id:
-          type: string
-        target_business_service_id:
-          type: string
-        other_name:
-          type: string
-        relationship_type:
-          type: string
-          enum: [depends_on, supports, part_of]
-        description:
-          type: string
-
-    GovernanceMapCapability:
-      type: object
-      description: A capability linked to the root business service via BSC.
-      required: [id, name, status]
-      properties:
-        id:
-          type: string
-        name:
-          type: string
-        description:
-          type: string
-        status:
-          type: string
-
-    GovernanceMapProcess:
-      type: object
-      description: A process under the root business service.
-      required: [id, name, business_service_id, status]
-      properties:
-        id:
-          type: string
-        name:
-          type: string
-        business_service_id:
-          type: string
-        status:
-          type: string
-
-    GovernanceMapSurface:
-      type: object
-      description: >
-        An active decision surface under one of the root business
-        service's processes, with per-surface AI binding IDs and
-        authority counts. ai_bindings is always present (never null).
-        Per-surface counts use distinct sets at each level
-        (profiles distinct on this surface, grants distinct across
-        those profiles, agents distinct across those grants).
-      required:
-        - id
-        - version
-        - name
-        - process_id
-        - status
-        - ai_bindings
-        - profile_count
-        - grant_count
-        - agent_count
-      properties:
-        id:
-          type: string
-        version:
-          type: integer
-        name:
-          type: string
-        process_id:
-          type: string
-        status:
-          type: string
-        ai_bindings:
-          type: array
-          items:
-            type: string
-          description: AISystemBinding IDs whose surface_id matches this surface.
-        profile_count:
-          type: integer
-        grant_count:
-          type: integer
-        agent_count:
-          type: integer
-
-    GovernanceMapAISystem:
-      type: object
-      description: >
-        An AI system included in the governance map via the four-way OR
-        binding rule. Status is included verbatim; deprecated AI systems
-        with bindings remain visible. active_version may be null when
-        no version is in active status. bindings contains only the
-        bindings relevant to the root business service context — bindings
-        to other business services for the same AI system are excluded.
-      required: [id, name, status, external_ref, active_version, bindings]
-      properties:
-        id:
-          type: string
-        name:
-          type: string
-        vendor:
-          type: string
-        system_type:
-          type: string
-        status:
-          type: string
-          enum: [active, deprecated, retired]
-        external_ref:
-          allOf:
-            - $ref: "#/components/schemas/ExternalRef"
-          nullable: true
-          description: Optional structured external reference. Always present; null when absent (Epic 1, PR 3).
-        active_version:
-          allOf:
-            - $ref: "#/components/schemas/GovernanceMapAISystemVersion"
-          nullable: true
-          description: The latest version whose status is 'active'. Null when no active version exists.
-        bindings:
-          type: array
-          items:
-            $ref: "#/components/schemas/GovernanceMapAISystemBinding"
-
-    GovernanceMapAISystemVersion:
-      type: object
-      description: >
-        Subset of an AISystemVersion embedded inside a GovernanceMapAISystem.
-        The full version detail is available via
-        GET /v1/aisystems/{id}/versions/{version}.
-      required: [ai_system_id, version, status]
-      properties:
-        ai_system_id:
-          type: string
-        version:
-          type: integer
-          minimum: 1
-        release_label:
-          type: string
-        status:
-          type: string
-          enum: [review, active, deprecated, retired]
-
-    GovernanceMapAISystemBinding:
-      type: object
-      description: >
-        An AI system binding rendered in the governance map. Pointer-typed
-        fields render as JSON null when absent. ai_system_version is
-        nullable; business_service_id, capability_id, process_id, and
-        surface_id are independently nullable.
-      required:
-        - id
-        - ai_system_id
-        - ai_system_version
-        - business_service_id
-        - capability_id
-        - process_id
-        - surface_id
-      properties:
-        id:
-          type: string
-        ai_system_id:
-          type: string
-        ai_system_version:
-          type: integer
-          nullable: true
-        business_service_id:
-          type: string
-          nullable: true
-        capability_id:
-          type: string
-          nullable: true
-        process_id:
-          type: string
-          nullable: true
-        surface_id:
-          type: string
-          nullable: true
-        role:
-          type: string
-        description:
-          type: string
-
-    GovernanceMapAuthoritySummary:
-      type: object
-      description: >
-        Aggregate authority counts across all surfaces in the response.
-        Each count uses distinct sets at its level (profiles distinct
-        across surfaces, grants distinct across profiles, agents
-        distinct across grants). All four fields are always present;
-        zero values are used for empty results.
-      required:
-        - surface_count
-        - active_profile_count
-        - active_grant_count
-        - active_agent_count
-      properties:
-        surface_count:
-          type: integer
-        active_profile_count:
-          type: integer
-        active_grant_count:
-          type: integer
-        active_agent_count:
-          type: integer
-
-    GovernanceMapCoverage:
-      type: object
-      description: >
-        AI binding coverage across the root business service's surfaces.
-        Always present even for empty services. Derived from the
-        surfaces array; never requires additional repository queries.
-
-        The three AI-binding counters are mutually exclusive at the
-        surface level (a surface counts in exactly one of direct,
-        scoped, or none) and sum to surface_count by construction.
-      required:
-        - surface_count
-        - surfaces_with_direct_ai_binding
-        - surfaces_with_scoped_ai_binding
-        - surfaces_with_no_ai_binding
-      properties:
-        surface_count:
-          type: integer
-          description: Total number of active surfaces under the business service.
-        surfaces_with_direct_ai_binding:
-          type: integer
-          description: >
-            Surfaces with at least one direct surface-scope AI binding
-            (a binding whose surface_id matches the surface).
-        surfaces_with_scoped_ai_binding:
-          type: integer
-          description: >
-            Surfaces with no direct binding but covered by an inherited
-            binding from process, capability, or business-service scope.
-        surfaces_with_no_ai_binding:
-          type: integer
-          description: >
-            Surfaces with neither a direct nor an inherited AI binding
-            at any scope.
-
-    # ------------------------------------------------------------------
-    # Authority Graph (Phase 1 — view=service only)
+    # Context Graph (D31d — graphs family taxonomy)
     # ------------------------------------------------------------------
     #
-    # Generic node/edge projection rooted at a single entity. Phase 1
+    # Generic node/edge projection rooted at a single entity. D31d
     # only emits the kinds documented under the `enum` lists below.
     # Forbidden Phase 1 kinds (authority_profile, authority_grant,
     # agent, ai_system_version, governed_by, has_grant, granted_to,
     # has_active_version) are not in the enums and never appear on the
     # wire.
 
-    AuthorityGraphNodeRef:
+    ContextGraphNodeRef:
       type: object
       description: >
         (kind, id) pair uniquely identifying a node within a single
@@ -1684,12 +1454,12 @@ components:
       properties:
         kind:
           type: string
-          description: Node kind (one of the AuthorityGraphNode kinds).
+          description: Node kind (one of the ContextGraphNode kinds).
         id:
           type: string
           description: Entity identifier within its kind.
 
-    AuthorityGraphNode:
+    ContextGraphNode:
       type: object
       description: >
         One projected entity. Phase 1 fields (kind, id, label) are
@@ -1726,30 +1496,30 @@ components:
         # Typed per-kind data. Exactly one is populated per node and
         # matches `kind`; the rest are omitted from the wire payload.
         business_service:
-          $ref: "#/components/schemas/AuthorityGraphBusinessServiceData"
+          $ref: "#/components/schemas/ContextGraphBusinessServiceData"
         related_business_service:
-          $ref: "#/components/schemas/AuthorityGraphRelatedBusinessServiceData"
+          $ref: "#/components/schemas/ContextGraphRelatedBusinessServiceData"
         capability:
-          $ref: "#/components/schemas/AuthorityGraphCapabilityData"
+          $ref: "#/components/schemas/ContextGraphCapabilityData"
         process:
-          $ref: "#/components/schemas/AuthorityGraphProcessData"
+          $ref: "#/components/schemas/ContextGraphProcessData"
         decision_surface:
-          $ref: "#/components/schemas/AuthorityGraphDecisionSurfaceData"
+          $ref: "#/components/schemas/ContextGraphDecisionSurfaceData"
         ai_system:
-          $ref: "#/components/schemas/AuthorityGraphAISystemData"
+          $ref: "#/components/schemas/ContextGraphAISystemData"
         ai_system_binding:
-          $ref: "#/components/schemas/AuthorityGraphAISystemBindingData"
+          $ref: "#/components/schemas/ContextGraphAISystemBindingData"
         authority_summary:
-          $ref: "#/components/schemas/AuthorityGraphAuthoritySummaryData"
+          $ref: "#/components/schemas/ContextGraphAuthoritySummaryData"
         coverage:
-          $ref: "#/components/schemas/AuthorityGraphCoverageData"
+          $ref: "#/components/schemas/ContextGraphCoverageData"
 
-    AuthorityGraphEdge:
+    ContextGraphEdge:
       type: object
       description: >
         One directed link in the projection. Direction is encoded as
         (src → dst) per the kind contract documented on
-        /v1/authority-graph.
+        /v1/graphs/context.
       required:
         - kind
         - src
@@ -1767,9 +1537,9 @@ components:
             - summarises
             - reports_coverage
         src:
-          $ref: "#/components/schemas/AuthorityGraphNodeRef"
+          $ref: "#/components/schemas/ContextGraphNodeRef"
         dst:
-          $ref: "#/components/schemas/AuthorityGraphNodeRef"
+          $ref: "#/components/schemas/ContextGraphNodeRef"
         label:
           type: string
           description: >
@@ -1777,10 +1547,10 @@ components:
             empty) when not populated. Phase 1 emits no edge labels;
             reserved for the inline edge explanation epic.
 
-    AuthorityGraphProjection:
+    ContextGraphProjection:
       type: object
       description: >
-        Top-level response shape for GET /v1/authority-graph. Nodes are
+        Top-level response shape for GET /v1/graphs/context. Nodes are
         sorted by (kind, id) ascending; edges are sorted by
         (kind, src.kind, src.id, dst.kind, dst.id) ascending. Both
         arrays are always present (never null); an empty depth=0
@@ -1793,7 +1563,7 @@ components:
         - edges
       properties:
         root:
-          $ref: "#/components/schemas/AuthorityGraphNodeRef"
+          $ref: "#/components/schemas/ContextGraphNodeRef"
         view:
           type: string
           enum: [service, ai_system, decision_surface]
@@ -1818,14 +1588,14 @@ components:
         nodes:
           type: array
           items:
-            $ref: "#/components/schemas/AuthorityGraphNode"
+            $ref: "#/components/schemas/ContextGraphNode"
         edges:
           type: array
           items:
-            $ref: "#/components/schemas/AuthorityGraphEdge"
+            $ref: "#/components/schemas/ContextGraphEdge"
 
     # ------------------------------------------------------------------
-    # Authority Graph per-kind typed data (Phase 2A)
+    # Context Graph per-kind typed data
     # ------------------------------------------------------------------
     #
     # Each schema carries the typed information for one node kind. The
@@ -1833,7 +1603,7 @@ components:
     # fields available on the underlying domain type. There is NO
     # generic attrs map — every projected datum is a typed field.
 
-    AuthorityGraphExternalRefData:
+    ContextGraphExternalRefData:
       type: object
       description: >
         External reference structure mirroring the governance-map
@@ -1857,7 +1627,7 @@ components:
           format: date-time
           description: RFC3339 UTC timestamp.
 
-    AuthorityGraphBusinessServiceData:
+    ContextGraphBusinessServiceData:
       type: object
       description: >
         Typed data for a node of kind `business_service`. Mirrors the
@@ -1901,9 +1671,9 @@ components:
             verbatim — no policy lookup or rule inspection is performed
             on the read path.
         external_ref:
-          $ref: "#/components/schemas/AuthorityGraphExternalRefData"
+          $ref: "#/components/schemas/ContextGraphExternalRefData"
 
-    AuthorityGraphRelatedBusinessServiceData:
+    ContextGraphRelatedBusinessServiceData:
       type: object
       description: >
         Typed data for a node of kind `related_business_service`. One
@@ -1923,11 +1693,11 @@ components:
         name:
           type: string
         outgoing:
-          $ref: "#/components/schemas/AuthorityGraphRelatedBusinessServiceRow"
+          $ref: "#/components/schemas/ContextGraphRelatedBusinessServiceRow"
         incoming:
-          $ref: "#/components/schemas/AuthorityGraphRelatedBusinessServiceRow"
+          $ref: "#/components/schemas/ContextGraphRelatedBusinessServiceRow"
 
-    AuthorityGraphRelatedBusinessServiceRow:
+    ContextGraphRelatedBusinessServiceRow:
       type: object
       description: >
         Per-direction relationship row data carried on a
@@ -1948,7 +1718,7 @@ components:
         description:
           type: string
 
-    AuthorityGraphCapabilityData:
+    ContextGraphCapabilityData:
       type: object
       description: Typed data for a node of kind `capability`.
       required:
@@ -1969,9 +1739,9 @@ components:
         parent_capability_id:
           type: string
         external_ref:
-          $ref: "#/components/schemas/AuthorityGraphExternalRefData"
+          $ref: "#/components/schemas/ContextGraphExternalRefData"
 
-    AuthorityGraphProcessData:
+    ContextGraphProcessData:
       type: object
       description: >
         Typed data for a node of kind `process`. The process domain
@@ -1997,7 +1767,7 @@ components:
         business_service_id:
           type: string
 
-    AuthorityGraphDecisionSurfaceData:
+    ContextGraphDecisionSurfaceData:
       type: object
       description: >
         Typed data for a node of kind `decision_surface`. The two
@@ -2052,7 +1822,7 @@ components:
         agent_count:
           type: integer
 
-    AuthorityGraphAISystemData:
+    ContextGraphAISystemData:
       type: object
       description: >
         Typed data for a node of kind `ai_system`. `active_version`,
@@ -2090,9 +1860,9 @@ components:
             draft, active, retired). Mirrors the governance-map
             ai_systems[].active_version.status field.
         external_ref:
-          $ref: "#/components/schemas/AuthorityGraphExternalRefData"
+          $ref: "#/components/schemas/ContextGraphExternalRefData"
 
-    AuthorityGraphAISystemBindingData:
+    ContextGraphAISystemBindingData:
       type: object
       description: >
         Typed data for a node of kind `ai_system_binding`. The four
@@ -2153,7 +1923,7 @@ components:
             `<short_kind>:<id>` (e.g. `surface:surf-x`). `unscoped`
             when no scope is set.
 
-    AuthorityGraphAuthoritySummaryData:
+    ContextGraphAuthoritySummaryData:
       type: object
       description: >
         Typed data for the synthetic `authority_summary` node.
@@ -2174,7 +1944,7 @@ components:
         active_agent_count:
           type: integer
 
-    AuthorityGraphCoverageData:
+    ContextGraphCoverageData:
       type: object
       description: >
         Typed data for the synthetic `coverage` node. Mirrors the
@@ -2195,6 +1965,1000 @@ components:
           type: integer
         surfaces_with_no_ai_binding:
           type: integer
+
+    # ------------------------------------------------------------------
+    # Authority Graph (D31f — distinct from Context Graph)
+    # ------------------------------------------------------------------
+    #
+    # Generic node/edge projection rooted at a business service. Six
+    # MVP node kinds (business_service, decision_surface,
+    # authority_profile, authority_grant, agent, fail_mode_policy)
+    # and six edge kinds wire the authority spine plus fail-mode
+    # policy references.
+
+    AuthorityGraphNodeRef:
+      type: object
+      description: >
+        Reference to a node by its (kind, id) pair. Used by edge
+        endpoints and the projection root.
+      required:
+        - kind
+        - id
+      properties:
+        kind:
+          type: string
+          description: Node kind (one of the AuthorityGraphNode kinds).
+          enum:
+            - business_service
+            - decision_surface
+            - authority_profile
+            - authority_grant
+            - agent
+            - fail_mode_policy
+        id:
+          type: string
+
+    AuthorityGraphNode:
+      type: object
+      description: >
+        One entity in the projected Authority Graph. Exactly one
+        typed-data slot is populated per node, matched to kind.
+        Unused slots are omitted from the wire payload via
+        omitempty so a node serialises to a compact shape with
+        only its kind's data block.
+      required:
+        - kind
+        - id
+        - label
+      properties:
+        kind:
+          type: string
+          enum:
+            - business_service
+            - decision_surface
+            - authority_profile
+            - authority_grant
+            - agent
+            - fail_mode_policy
+            - escalation_target
+        id:
+          type: string
+        label:
+          type: string
+        business_service:
+          $ref: "#/components/schemas/AuthorityGraphBusinessServiceData"
+        decision_surface:
+          $ref: "#/components/schemas/AuthorityGraphDecisionSurfaceData"
+        authority_profile:
+          $ref: "#/components/schemas/AuthorityGraphAuthorityProfileData"
+        authority_grant:
+          $ref: "#/components/schemas/AuthorityGraphAuthorityGrantData"
+        agent:
+          $ref: "#/components/schemas/AuthorityGraphAgentData"
+        fail_mode_policy:
+          $ref: "#/components/schemas/AuthorityGraphFailModePolicyData"
+        escalation_target:
+          $ref: "#/components/schemas/AuthorityGraphEscalationTargetData"
+
+    AuthorityGraphEdge:
+      type: object
+      description: >
+        One directed link in the Authority Graph. Direction is
+        encoded as (src → dst) per the kind contract documented on
+        /v1/graphs/authority. The fail-mode-policy edges carry a
+        label of "default" (BS-level) or "override" (surface-level);
+        other edge kinds leave label empty.
+      required:
+        - kind
+        - src
+        - dst
+      properties:
+        kind:
+          type: string
+          enum:
+            - business_service_has_surface
+            - surface_uses_profile
+            - profile_has_grant
+            - grant_authorises_agent
+            - surface_has_fail_mode_policy
+            - business_service_has_fail_mode_policy
+            - profile_escalates_to
+        src:
+          $ref: "#/components/schemas/AuthorityGraphNodeRef"
+        dst:
+          $ref: "#/components/schemas/AuthorityGraphNodeRef"
+        label:
+          type: string
+          description: >
+            For fail-mode-policy edges, one of "default" or
+            "override". Empty for other kinds.
+
+    AuthorityGraphProjection:
+      type: object
+      description: >
+        Top-level response shape for GET /v1/graphs/authority. Nodes
+        are sorted by (kind, id) ascending; edges are sorted by
+        (kind, src.kind, src.id, dst.kind, dst.id) ascending. Both
+        arrays are always present (never null); an empty depth=0
+        projection still carries the root in `nodes`.
+
+
+        D31g adds `summary` and `diagnostics`. Both are optional on
+        the wire (omitempty when empty) and describe the FULL pre-
+        depth-filter projection — they remain meaningful at depth=0.
+      required:
+        - root
+        - view
+        - depth
+        - nodes
+        - edges
+      properties:
+        root:
+          $ref: "#/components/schemas/AuthorityGraphNodeRef"
+        view:
+          type: string
+          enum: [service]
+          description: >
+            Perspective the projection was computed in. MVP supports
+            only `service`.
+        depth:
+          type: integer
+          description: >
+            Maximum BFS hops from the root applied to this
+            projection. May differ from the request's depth when the
+            caller-supplied value was silently clamped to MaxDepth.
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuthorityGraphNode"
+        edges:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuthorityGraphEdge"
+        summary:
+          $ref: "#/components/schemas/AuthorityGraphSummary"
+        diagnostics:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuthorityGraphDiagnostic"
+          description: >
+            Operator-actionable conditions observed during projection.
+            Sorted by (severity rank, kind, first node ref). Severity
+            rank is critical < warning < info.
+        diagnostic_summary:
+          $ref: "#/components/schemas/AuthorityGraphDiagnosticSummary"
+        surface_posture:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuthorityGraphSurfaceAuthorityPosture"
+          description: >
+            Per-surface authority posture rollup (D31m). One entry per
+            emitted active decision surface, sorted by surface id
+            ascending. Describes the FULL pre-depth-filter projection —
+            depth=0 callers still see posture for every surface.
+
+    AuthorityGraphDiagnosticSeverity:
+      type: string
+      description: Operator-facing severity for diagnostics.
+      enum:
+        - info
+        - warning
+        - critical
+
+    AuthorityGraphDiagnosticKind:
+      type: string
+      description: Operator-facing diagnostic vocabulary.
+      enum:
+        - business_service_has_no_active_surface
+        - surface_has_no_active_profile
+        - profile_has_no_active_grant
+        - grant_references_missing_agent
+        - grant_references_inactive_agent
+        - fail_mode_policy_reference_dangling
+        - surface_inherits_business_service_policy
+        - surface_overrides_business_service_default
+        - surface_override_matches_business_service_default
+        - profile_future_dated
+        - profile_expired
+        - grant_future_dated
+        - grant_expired
+        - duplicate_active_profile_versions_for_surface
+        - grant_has_no_capabilities
+        - profile_has_no_escalation_target
+        - escalation_target_reference_dangling
+
+    AuthorityGraphDiagnostic:
+      type: object
+      description: >
+        One operator-actionable condition observed during projection.
+        node_refs identifies the entities the diagnostic applies to
+        (most-specific entity first, supporting context refs trailing).
+      required:
+        - kind
+        - severity
+      properties:
+        kind:
+          $ref: "#/components/schemas/AuthorityGraphDiagnosticKind"
+        severity:
+          $ref: "#/components/schemas/AuthorityGraphDiagnosticSeverity"
+        node_refs:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuthorityGraphNodeRef"
+        message:
+          type: string
+
+    AuthorityGraphValidityStatus:
+      type: string
+      description: >
+        Time-window classification an authority profile or grant
+        carries on its typed data. Emitted nodes always carry
+        "effective"; future-dated and expired entities are filtered
+        out of the node set and produce diagnostics instead.
+      enum:
+        - effective
+        - future_dated
+        - expired
+
+    AuthorityGraphEffectivePolicySource:
+      type: string
+      description: >
+        Resolved fail-mode-policy origin per decision surface.
+        "override" — the surface had a non-empty FailModePolicyID
+        that resolved to an active version. "business_service_default"
+        — the surface inherits from the BS-level default (surface
+        had no override OR its override was dangling). "none" — no
+        effective fail-mode policy resolves for this surface.
+      enum:
+        - override
+        - business_service_default
+        - none
+
+    AuthorityGraphSummary:
+      type: object
+      description: >
+        Backend-computed posture rollup for a service-view Authority
+        Graph projection. Count fields are always present;
+        per-entity gap lists use omitempty. Summary describes the
+        FULL pre-depth-filter projection — operators at depth=0
+        still see the authority posture.
+      required:
+        - surface_count
+        - active_profile_count
+        - active_grant_count
+        - active_agent_count
+        - fail_mode_policy_count
+        - complete_authority_paths
+        - incomplete_authority_paths
+        - surfaces_with_policy_override
+        - surfaces_inheriting_bs_policy
+        - grants_with_stop_capability
+        - grants_with_constraints
+        - escalation_target_count
+        - profiles_with_escalation_target
+      properties:
+        surface_count:
+          type: integer
+        active_profile_count:
+          type: integer
+        active_grant_count:
+          type: integer
+        active_agent_count:
+          type: integer
+        fail_mode_policy_count:
+          type: integer
+        complete_authority_paths:
+          type: integer
+          description: >
+            Surfaces with at least one effective profile → effective
+            grant → resolved agent chain. Counted per surface, not
+            per chain.
+        incomplete_authority_paths:
+          type: integer
+          description: >
+            Emitted surfaces with no complete authority path.
+        surfaces_without_profiles:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuthorityGraphNodeRef"
+        profiles_without_grants:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuthorityGraphNodeRef"
+        grants_without_agents:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuthorityGraphNodeRef"
+        surfaces_without_effective_fail_mode_policy:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuthorityGraphNodeRef"
+        surfaces_with_policy_override:
+          type: integer
+        surfaces_inheriting_bs_policy:
+          type: integer
+        policies_missing_active_version:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuthorityGraphNodeRef"
+          description: >
+            Deduped fail-mode-policy NodeRefs that were referenced
+            (at BS or surface level) but had no active version. The
+            entries are NodeRefs even though no fail_mode_policy
+            node is emitted for them.
+        grants_with_stop_capability:
+          type: integer
+          description: >
+            Count of emitted authority_grant nodes whose
+            capabilities slice contains "stop".
+        grants_with_constraints:
+          type: integer
+          description: >
+            Count of emitted authority_grant nodes that carry at
+            least one Constraint.
+        grants_without_capabilities:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuthorityGraphNodeRef"
+          description: >
+            Emitted grants that carry zero Capabilities. Paired
+            with the grant_has_no_capabilities warning diagnostic.
+        escalation_target_count:
+          type: integer
+          description: >
+            Count of deduped escalation_target nodes emitted in the
+            full pre-depth-filter projection (D31l).
+        profiles_with_escalation_target:
+          type: integer
+          description: >
+            Count of effective profiles whose EscalationTargetID
+            resolved to an active escalation target.
+        profiles_without_escalation_target:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuthorityGraphNodeRef"
+          description: >
+            Effective profiles with an empty EscalationTargetID.
+            Paired with the profile_has_no_escalation_target info
+            diagnostic.
+        profiles_with_dangling_escalation_target:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuthorityGraphNodeRef"
+          description: >
+            Effective profiles whose configured EscalationTargetID
+            did not resolve to an active target. Paired with the
+            escalation_target_reference_dangling warning diagnostic.
+
+    # ---------------------------------------------------------------
+    # D31m — DiagnosticSummary + SurfaceAuthorityPosture
+    # ---------------------------------------------------------------
+
+    AuthorityGraphSeverityRollupValue:
+      type: string
+      description: >
+        Severity-rollup vocabulary used by DiagnosticSummary.highest_severity
+        and SurfaceAuthorityPosture.highest_severity. The three non-"none"
+        values share string identity with AuthorityGraphDiagnosticSeverity.
+      enum:
+        - none
+        - info
+        - warning
+        - critical
+
+    AuthorityGraphDiagnosticSummary:
+      type: object
+      description: >
+        Per-severity rollup over the full pre-depth diagnostics
+        array (D31m). Counts sum to len(diagnostics). highest_severity
+        is "none" when the array is empty, otherwise the most-severe
+        present (critical > warning > info). by_kind is omitted when
+        no diagnostics exist.
+      required:
+        - info
+        - warning
+        - critical
+        - highest_severity
+      properties:
+        info:
+          type: integer
+        warning:
+          type: integer
+        critical:
+          type: integer
+        highest_severity:
+          $ref: "#/components/schemas/AuthorityGraphSeverityRollupValue"
+        by_kind:
+          type: object
+          additionalProperties:
+            type: integer
+          description: >
+            Per-diagnostic-kind count. Keys are AuthorityGraphDiagnosticKind
+            values. Omitted when no diagnostics are present.
+
+    AuthorityGraphAuthorityStatus:
+      type: string
+      description: >
+        Surface-level authority posture roll-up. Precedence
+        (worst → best): uncovered > incomplete > degraded > complete.
+        Info-only diagnostics do NOT degrade a complete surface.
+      enum:
+        - complete
+        - incomplete
+        - degraded
+        - uncovered
+
+    AuthorityGraphProfileStatus:
+      type: string
+      description: >
+        Surface-level profile coverage. "covered" when at least one
+        effective profile attaches to the surface; "missing" otherwise.
+      enum:
+        - covered
+        - missing
+
+    AuthorityGraphGrantStatus:
+      type: string
+      description: >
+        Surface-level grant coverage. "covered" when at least one
+        effective profile under the surface has at least one effective
+        grant; "missing" otherwise.
+      enum:
+        - covered
+        - missing
+
+    AuthorityGraphAgentStatus:
+      type: string
+      description: >
+        Surface-level agent coverage. Precedence: blocked > missing >
+        covered. "blocked" when any grant under the surface fires a
+        critical missing/inactive-agent diagnostic; "covered" when at
+        least one complete path resolves with an active agent;
+        "missing" when profiles/grants exist but no agent resolves.
+      enum:
+        - covered
+        - missing
+        - blocked
+
+    AuthorityGraphFailModePolicyStatus:
+      type: string
+      description: >
+        Surface-level fail-mode posture. "override" — surface's own
+        FailModePolicyID resolved. "inherited" — BS default supplies
+        the effective policy. "missing" — no effective policy at any
+        level. "dangling" — any non-empty policy reference (surface
+        override or BS default) failed to resolve. Dangling wins over
+        inherited and missing.
+      enum:
+        - override
+        - inherited
+        - missing
+        - dangling
+
+    AuthorityGraphEscalationStatus:
+      type: string
+      description: >
+        Surface-level escalation routing posture. "targeted" — at
+        least one effective profile under the surface references an
+        active EscalationTarget. "not_targeted" — no profile has an
+        explicit target. "dangling" — at least one profile references
+        a target id that does not resolve. Dangling wins over targeted.
+      enum:
+        - targeted
+        - not_targeted
+        - dangling
+
+    AuthorityGraphSurfaceAuthorityPosture:
+      type: object
+      description: >
+        Per-surface authority posture (D31m). One record per emitted
+        active decision surface in the FULL pre-depth-filter
+        projection. Frontends consume this to render per-surface
+        health without walking edges or interpreting diagnostics.
+      required:
+        - surface
+        - authority_status
+        - profile_status
+        - grant_status
+        - agent_status
+        - fail_mode_policy_status
+        - escalation_status
+        - complete_paths
+        - incomplete_paths
+        - highest_severity
+      properties:
+        surface:
+          $ref: "#/components/schemas/AuthorityGraphNodeRef"
+        authority_status:
+          $ref: "#/components/schemas/AuthorityGraphAuthorityStatus"
+        profile_status:
+          $ref: "#/components/schemas/AuthorityGraphProfileStatus"
+        grant_status:
+          $ref: "#/components/schemas/AuthorityGraphGrantStatus"
+        agent_status:
+          $ref: "#/components/schemas/AuthorityGraphAgentStatus"
+        fail_mode_policy_status:
+          $ref: "#/components/schemas/AuthorityGraphFailModePolicyStatus"
+        escalation_status:
+          $ref: "#/components/schemas/AuthorityGraphEscalationStatus"
+        complete_paths:
+          type: integer
+        incomplete_paths:
+          type: integer
+        highest_severity:
+          $ref: "#/components/schemas/AuthorityGraphSeverityRollupValue"
+        diagnostic_kinds:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuthorityGraphDiagnosticKind"
+          description: >
+            Unique diagnostic kinds whose NodeRefs associate with this
+            surface (direct surface ref, or profile/grant/agent ref
+            anchored to this surface). Sorted alphabetically.
+
+    AuthorityGraphBusinessServiceData:
+      type: object
+      description: Typed data for a business_service node.
+      required:
+        - id
+        - name
+        - status
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+        owner:
+          type: string
+        service_type:
+          type: string
+        external_ref:
+          $ref: "#/components/schemas/AuthorityGraphExternalRefData"
+        fail_mode_policy_id:
+          type: string
+          description: >
+            Optional reference to a FailModePolicy logical id used as
+            the BS-level default. The projection emits a separate
+            fail_mode_policy node and business_service_has_fail_mode_policy
+            edge when this reference resolves to an active version.
+
+    AuthorityGraphDecisionSurfaceData:
+      type: object
+      description: >
+        Typed data for a decision_surface node.
+
+        D31g adds resolved fail-mode-policy metadata
+        (effective_policy_source, effective_policy_id,
+        effective_policy_version, inherits_bs_policy). Operators
+        see at a glance whether a surface has an explicit override,
+        inherits the BS-level default, or has no effective policy.
+
+        business_service_id
+        is derived during projection from the parent process; the
+        surface domain type does not own a BS pointer directly.
+        process_id is carried for traceability even though the
+        Authority Graph collapses process traversal into the
+        BS → Surface edge.
+      required:
+        - id
+        - version
+        - name
+        - status
+      properties:
+        id:
+          type: string
+        version:
+          type: integer
+        name:
+          type: string
+        status:
+          type: string
+        process_id:
+          type: string
+        business_service_id:
+          type: string
+        fail_mode_policy_id:
+          type: string
+          description: >
+            Optional reference to a FailModePolicy logical id used as
+            a surface-level override. The projection emits a separate
+            fail_mode_policy node and surface_has_fail_mode_policy
+            edge when this reference resolves to an active version.
+        effective_policy_source:
+          $ref: "#/components/schemas/AuthorityGraphEffectivePolicySource"
+        effective_policy_id:
+          type: string
+          description: >
+            Resolved fail-mode policy id. Set when effective_policy_source
+            is "override" (= surface override) or "business_service_default"
+            (= BS-level fallback). Empty when source is "none".
+        effective_policy_version:
+          type: integer
+          description: >
+            Resolved policy version corresponding to effective_policy_id.
+        inherits_bs_policy:
+          type: boolean
+          description: >
+            True when the surface inherits the BS-level default
+            (either because it has no override or its override is
+            dangling and BS-default is available). False when the
+            surface has its own override OR no effective policy at
+            all.
+
+    AuthorityGraphConsequenceThreshold:
+      type: object
+      description: >
+        Typed value object representing an authority profile's
+        consequence threshold. Exactly one variant is populated
+        based on type — monetary (amount + currency) or risk_rating
+        (risk_rating). Mirrors authority.Consequence.
+      required:
+        - type
+      properties:
+        type:
+          type: string
+          description: Either "monetary" or "risk_rating".
+        amount:
+          type: number
+        currency:
+          type: string
+        risk_rating:
+          type: string
+
+    AuthorityGraphAuthorityProfileData:
+      type: object
+      description: >
+        Typed data for an authority_profile node. Includes lifecycle
+        fields (status, effective_date, approved_by/at) plus the
+        runtime-relevant configuration (thresholds, escalation_mode,
+        fail_mode, policy_reference).
+      required:
+        - id
+        - version
+        - surface_id
+        - name
+        - status
+        - confidence_threshold
+      properties:
+        id:
+          type: string
+        version:
+          type: integer
+        surface_id:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+        effective_date:
+          type: string
+          format: date-time
+        effective_until:
+          type: string
+          format: date-time
+          description: >
+            Validity-window upper bound. Profile is no longer
+            effective at or after this instant.
+        validity_status:
+          $ref: "#/components/schemas/AuthorityGraphValidityStatus"
+        confidence_threshold:
+          type: number
+        consequence_threshold:
+          $ref: "#/components/schemas/AuthorityGraphConsequenceThreshold"
+        escalation_mode:
+          type: string
+        fail_mode:
+          type: string
+        policy_reference:
+          type: string
+        approved_by:
+          type: string
+        approved_at:
+          type: string
+          format: date-time
+        escalation_target_id:
+          type: string
+          description: >
+            Configured EscalationTargetID carried verbatim from the
+            domain (D31l). Empty when the profile has no explicit
+            target. The resolved active target — if any — appears as
+            a separate escalation_target node + profile_escalates_to
+            edge.
+
+    AuthorityGraphAuthorityGrantData:
+      type: object
+      description: >
+        Typed data for an authority_grant node. Grant references the
+        profile by logical id (not by version). Noisy lifecycle
+        fields (suspend/revoke metadata, GrantReason) are
+        intentionally excluded from the graph wire shape.
+
+
+        D31i adds `capabilities` and `constraints`. Capabilities is
+        the SET of canonical Capability values the grant authorises
+        (omitempty when empty — the projection also emits a
+        grant_has_no_capabilities warning diagnostic). Constraints
+        is the typed list of grant constraints (omitempty when
+        empty).
+      required:
+        - id
+        - profile_id
+        - agent_id
+        - status
+      properties:
+        id:
+          type: string
+        profile_id:
+          type: string
+        agent_id:
+          type: string
+        status:
+          type: string
+        effective_date:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        validity_status:
+          $ref: "#/components/schemas/AuthorityGraphValidityStatus"
+        granted_by:
+          type: string
+        capabilities:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuthorityCapability"
+          description: >
+            The SET of authority Capability values this grant
+            authorises. Empty / omitted when the grant carries no
+            capabilities.
+        constraints:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuthorityConstraint"
+          description: >
+            Typed runtime constraints that narrow the grant on every
+            request. Empty / omitted when the grant has no
+            constraints.
+
+    AuthorityCapability:
+      type: string
+      description: >
+        One of the five canonical capabilities an AuthorityGrant may
+        authorise. The set is fixed; new capability values require a
+        domain change. Stop is intentionally a CAPABILITY VALUE — it
+        is enforced by the orchestrator the same way as the other
+        four (the grant must explicitly carry "stop" for the agent
+        to invoke a stop action).
+      enum:
+        - recommend
+        - approve
+        - reject
+        - escalate
+        - stop
+
+    AuthorityConstraintKind:
+      type: string
+      description: >
+        Discriminator for the AuthorityConstraint value object. Each
+        kind populates exactly the fields relevant to its variant:
+
+
+        - confidence_threshold_min:  uses min_confidence
+
+        - consequence_threshold_max: uses max_consequence
+
+        - human_only / ai_only:      no payload fields
+
+        - time_window:               uses start_time + end_time
+      enum:
+        - confidence_threshold_min
+        - consequence_threshold_max
+        - human_only
+        - ai_only
+        - time_window
+
+    AuthorityConstraint:
+      type: object
+      description: >
+        One typed runtime constraint attached to an AuthorityGrant.
+        The orchestrator evaluates each constraint on every request;
+        the first violation rejects with reason_code
+        CONSTRAINT_VIOLATED and emits an AUTHORITY_CONSTRAINT_VIOLATED
+        audit event.
+      required:
+        - kind
+      properties:
+        kind:
+          $ref: "#/components/schemas/AuthorityConstraintKind"
+        min_confidence:
+          type: number
+          description: >
+            confidence_threshold_min variant: minimum allowed
+            request.confidence (in [0,1]).
+        max_consequence:
+          $ref: "#/components/schemas/AuthorityGraphConsequenceThreshold"
+        start_time:
+          type: string
+          format: date-time
+          description: >
+            time_window variant: inclusive lower bound of the
+            permitted window.
+        end_time:
+          type: string
+          format: date-time
+          description: >
+            time_window variant: exclusive upper bound of the
+            permitted window.
+
+    AuthorityGraphAgentData:
+      type: object
+      description: >
+        Typed data for an agent node. Agent.Endpoint is intentionally
+        not exposed via the graph — it is an internal URL not
+        appropriate for a read-only projection.
+      required:
+        - id
+        - name
+        - type
+        - operational_state
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+          description: One of "ai", "service", or "operator".
+        owner:
+          type: string
+        model_version:
+          type: string
+        operational_state:
+          type: string
+
+    AuthorityGraphRuleCountByClass:
+      type: object
+      description: >
+        Per-correctness-class rule count summary for a FailModePolicy.
+        All five CorrectnessClass values are present, defaulting to
+        zero. Provides at-a-glance coverage without pushing the full
+        rules array into the graph payload.
+      required:
+        - governance_integrity
+        - persistence
+        - input
+        - resource
+        - consistency
+      properties:
+        governance_integrity:
+          type: integer
+        persistence:
+          type: integer
+        input:
+          type: integer
+        resource:
+          type: integer
+        consistency:
+          type: integer
+
+    AuthorityGraphFailModePolicyData:
+      type: object
+      description: >
+        Typed data for a fail_mode_policy node. Carries identity,
+        lifecycle, and ownership; the full Rules array is omitted
+        (operator-noisy) but the per-class rule count is exposed so
+        operators see coverage at a glance.
+      required:
+        - id
+        - version
+        - name
+        - status
+        - managed
+      properties:
+        id:
+          type: string
+        version:
+          type: integer
+        name:
+          type: string
+        status:
+          type: string
+        effective_date:
+          type: string
+          format: date-time
+        effective_until:
+          type: string
+          format: date-time
+          description: >
+            Validity-window upper bound. Policy version is no longer
+            active at or after this instant.
+        business_owner:
+          type: string
+        technical_owner:
+          type: string
+        origin:
+          type: string
+        managed:
+          type: boolean
+        rule_count_by_class:
+          $ref: "#/components/schemas/AuthorityGraphRuleCountByClass"
+
+    AuthorityGraphEscalationTargetData:
+      type: object
+      description: >
+        Typed data for an escalation_target node (D31l). Mirrors the
+        escalation.EscalationTarget domain fields the graph projects
+        as a read model. The escalation context owns the authoritative
+        EscalationTarget schema under /v1/escalation_targets; this is
+        the graph-specific projection.
+      required:
+        - id
+        - version
+        - name
+        - kind
+        - handle
+        - status
+      properties:
+        id:
+          type: string
+        version:
+          type: integer
+        name:
+          type: string
+        description:
+          type: string
+        kind:
+          type: string
+          description: >
+            One of role / agent / surface / external. The canonical
+            enum lives on EscalationTargetKind under the escalation
+            HTTP API; the Authority Graph emits the value verbatim.
+        handle:
+          type: string
+          description: >
+            Kind-specific identifier. For role, the role name; for
+            agent, the agent id; for surface, the surface id; for
+            external, the external system/URI identifier.
+        status:
+          type: string
+          description: One of draft / review / active / deprecated / retired.
+        effective_date:
+          type: string
+          format: date-time
+        effective_until:
+          type: string
+          format: date-time
+        business_owner:
+          type: string
+        technical_owner:
+          type: string
+        approved_by:
+          type: string
+        approved_at:
+          type: string
+          format: date-time
+
+    AuthorityGraphExternalRefData:
+      type: object
+      description: >
+        Optional external reference for a business service node.
+        Mirrors the externalref domain type. Field set matches
+        ContextGraphExternalRefData but is kept as a sibling so the
+        Authority Graph schema family stays self-contained.
+      properties:
+        source_system:
+          type: string
+        source_id:
+          type: string
+        source_url:
+          type: string
+        source_version:
+          type: string
+        last_synced_at:
+          type: string
 
     # ------------------------------------------------------------------
     # AI System Registration (Epic 1, PR 2)
@@ -6120,72 +6884,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
-  /v1/businessservices/{id}/governance-map:
-    get:
-      operationId: getBusinessServiceGovernanceMap
-      summary: Get the governance map for a business service
-      description: >
-        Returns a service-centric governance map for the queried business
-        service. The map composes the root BusinessService, its directed
-        relationships, capabilities, processes, active surfaces, AI
-        systems with their active versions and bindings, and authority
-        and coverage summary counts.
-
-        Includes only active surfaces (status = 'active'). Includes AI
-        systems regardless of status — bindings to deprecated AI systems
-        remain visible for audit/compliance review. AI systems are
-        included via a four-way OR over bindings to the root BS, its
-        capabilities, its processes, or its active surfaces; bindings
-        relevant to other business services are excluded per AI system.
-
-        The `recent_decisions` field is intentionally not present in PR 4.
-        It will land in PR 8 alongside the OperationalEnvelope changes
-        for AI system fields. Requires platform.viewer or above.
-        See Epic 1, PR 4 (Service-Centric AI Governance Map read model).
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-          description: Business service identifier.
-      responses:
-        "200":
-          description: Governance map for the business service.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/GovernanceMapResponse"
-        "401":
-          description: Unauthenticated
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "403":
-          description: Insufficient role (requires platform.viewer or above)
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "404":
-          description: Business service not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "500":
-          description: Repository error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "501":
-          description: Governance map read service not configured
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
+  # D31d: removed /v1/businessservices/{id}/governance-map. Use
+  # GET /v1/graphs/context?view=service&id={id} instead.
 
   /v1/aisystems:
     get:
@@ -6439,34 +7139,51 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
-  /v1/authority-graph:
-    get:
-      operationId: getAuthorityGraph
-      summary: Project a depth-bounded authority graph rooted at an entity
-      description: >
-        Returns a generic node/edge projection of the authority graph
-        rooted at the entity identified by (view, id). Phase 1 supports
-        only view=service, which projects the same core information as
-        GET /v1/businessservices/{id}/governance-map but in a generic
-        nodes/edges shape suitable for traversal and depth-bounded
-        queries.
+  # D31f — graphs family taxonomy. Context Graph and Authority Graph
+  # are both implemented. Knowledge Graph remains reserved:
+  #
+  #   /v1/graphs/context     implemented (D31d)
+  #   /v1/graphs/authority   implemented (D31f)
+  #   /v1/graphs/knowledge   future Knowledge Graph (not implemented;
+  #                          no handler, no schema, no path entry)
+  #
+  # The Context Graph (D31d) replaced the prior /v1/authority-graph
+  # (which was misleadingly named — it always returned a context-
+  # flavoured projection) and the /v1/businessservices/{id}/governance-map
+  # endpoint (a functional duplicate of view=service).
+  #
+  # The Authority Graph (D31f) projects the authority spine — business
+  # service → decision surface → authority profile → authority grant →
+  # agent — plus fail-mode-policy edges. It has its own AuthorityGraph*
+  # schema family (no reuse from ContextGraph*).
 
-        Phase 1 node kinds:
+  /v1/graphs/context:
+    get:
+      operationId: getContextGraph
+      summary: Project a depth-bounded Context Graph rooted at an entity
+      description: >
+        Returns a generic node/edge projection of business and
+        operational context rooted at the entity identified by
+        (view, id). Supported views: `service` (rooted at a
+        BusinessService), `ai_system` (rooted at an AI system),
+        `decision_surface` (rooted at a surface).
+
+        Node kinds:
         business_service, related_business_service, capability, process,
         decision_surface, ai_system, ai_system_binding, authority_summary,
         coverage.
 
-        Phase 1 edge kinds (all directed):
+        Edge kinds (all directed):
         relates_to, has_capability, has_process, has_surface, bound_to
         (ai_system_binding to most-specific scope), system_of
         (ai_system_binding to ai_system), summarises, reports_coverage.
 
         The `depth` parameter is interpreted as undirected BFS hops
         from the root. Default is 3; values above 5 are silently
-        clamped to 5. Forbidden Phase 1 kinds (authority_profile,
-        authority_grant, agent, ai_system_version, governed_by,
-        has_grant, granted_to, has_active_version) never appear in
-        the response — they are reserved for later phases.
+        clamped to 5. Per-entity authority detail (authority_profile,
+        authority_grant, agent, fail_mode_policy) is intentionally
+        absent from the Context Graph and will be first-class on the
+        future /v1/graphs/authority endpoint.
       parameters:
         - name: view
           in: query
@@ -6475,13 +7192,11 @@ paths:
             type: string
             enum: [service, ai_system, decision_surface]
           description: >
-            Perspective. `service` is rooted at a business service and
-            reuses the governance-map read service. `ai_system` is
-            rooted at an AI system and walks bindings to their scope
-            targets. `decision_surface` is rooted at a surface and
-            emits parent process / business service plus AI systems
-            bound directly to the surface. Other views (agent, risk)
-            are reserved for later phases.
+            Perspective. `service` is rooted at a business service.
+            `ai_system` is rooted at an AI system and walks bindings to
+            their scope targets. `decision_surface` is rooted at a
+            surface and emits parent process / business service plus
+            AI systems bound directly to the surface.
         - name: id
           in: query
           required: true
@@ -6504,11 +7219,11 @@ paths:
             negative or non-numeric values return 400.
       responses:
         "200":
-          description: Authority graph projection
+          description: Context Graph projection
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AuthorityGraphProjection"
+                $ref: "#/components/schemas/ContextGraphProjection"
         "400":
           description: Invalid view, id, or depth
           content:
@@ -6529,6 +7244,391 @@ paths:
                 $ref: "#/components/schemas/Error"
         "404":
           description: Root entity not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "405":
+          description: Wrong HTTP method (only GET allowed)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: Context graph projection service not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/graphs/authority:
+    get:
+      operationId: getAuthorityGraph
+      summary: Project a depth-bounded Authority Graph rooted at a business service
+      description: >
+        Returns a generic node/edge projection of the authority spine
+        rooted at a business service. Answers the operator question:
+        "for this business service, which decision surfaces are
+        governed by which authority profiles, which grants, which
+        agents, and which fail-mode policies?"
+
+        Node kinds (7):
+        business_service, decision_surface, authority_profile,
+        authority_grant, agent, fail_mode_policy, escalation_target.
+
+        Edge kinds (7, all directed):
+        business_service_has_surface (bs → surface),
+        surface_uses_profile (surface → profile),
+        profile_has_grant (profile → grant),
+        grant_authorises_agent (grant → agent),
+        surface_has_fail_mode_policy (surface → policy, label="override"),
+        business_service_has_fail_mode_policy (bs → policy, label="default"),
+        profile_escalates_to (profile → escalation_target).
+
+        Process nodes are intentionally not projected — the BS →
+        Surface relationship is collapsed into a single edge.
+        The Surface node's typed data carries process_id for
+        traceability.
+
+        Fail-mode policies are resolved at request time via the
+        FailModePolicies repository's active-version lookup; missing
+        active versions are skipped defensively without emitting a
+        warning.
+
+        The `depth` parameter is interpreted as undirected BFS hops
+        from the root. Default is 4 (one higher than the Context
+        Graph's 3) so the default view reaches agent nodes at the
+        end of the BS → Surface → Profile → Grant → Agent chain.
+        Values above 5 are silently clamped to 5.
+
+        MVP supports view=service only. Per-entity views (agent,
+        surface) are reserved for later tranches.
+      parameters:
+        - name: view
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [service]
+          description: >
+            Perspective. Only `service` is supported at MVP — root
+            at a business service and walk the authority spine.
+        - name: id
+          in: query
+          required: true
+          schema:
+            type: string
+          description: >
+            Root entity id. For view=service this is the
+            business_service id.
+        - name: depth
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 5
+            default: 4
+          description: >
+            Maximum BFS hops from the root, treating edges as
+            undirected. Default 4 reaches agent nodes. Values above
+            5 are silently clamped to 5; negative or non-numeric
+            values return 400.
+      responses:
+        "200":
+          description: Authority Graph projection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthorityGraphProjection"
+              examples:
+                healthy_authority_graph:
+                  summary: Healthy authority graph with no diagnostics
+                  description: >
+                    Single business service with one surface, one
+                    profile, one grant, one active agent, and a
+                    resolved escalation target. No diagnostics → all
+                    rollup counters are zero; surface posture reports
+                    authority_status=complete and highest_severity=none.
+                  value:
+                    root:
+                      kind: business_service
+                      id: bs-1
+                    view: service
+                    depth: 4
+                    nodes:
+                      - kind: business_service
+                        id: bs-1
+                        label: BS One
+                      - kind: decision_surface
+                        id: surf-1
+                        label: Surface One
+                      - kind: authority_profile
+                        id: prof-1
+                        label: Profile One
+                      - kind: authority_grant
+                        id: grant-1
+                        label: grant-1
+                      - kind: agent
+                        id: agent-1
+                        label: Agent One
+                      - kind: escalation_target
+                        id: et-1
+                        label: Governance Approver
+                    edges:
+                      - kind: business_service_has_surface
+                        src: {kind: business_service, id: bs-1}
+                        dst: {kind: decision_surface, id: surf-1}
+                      - kind: surface_uses_profile
+                        src: {kind: decision_surface, id: surf-1}
+                        dst: {kind: authority_profile, id: prof-1}
+                      - kind: profile_has_grant
+                        src: {kind: authority_profile, id: prof-1}
+                        dst: {kind: authority_grant, id: grant-1}
+                      - kind: grant_authorises_agent
+                        src: {kind: authority_grant, id: grant-1}
+                        dst: {kind: agent, id: agent-1}
+                      - kind: profile_escalates_to
+                        src: {kind: authority_profile, id: prof-1}
+                        dst: {kind: escalation_target, id: et-1}
+                    summary:
+                      surface_count: 1
+                      active_profile_count: 1
+                      active_grant_count: 1
+                      active_agent_count: 1
+                      fail_mode_policy_count: 0
+                      complete_authority_paths: 1
+                      incomplete_authority_paths: 0
+                      surfaces_with_policy_override: 0
+                      surfaces_inheriting_bs_policy: 0
+                      grants_with_stop_capability: 0
+                      grants_with_constraints: 0
+                      escalation_target_count: 1
+                      profiles_with_escalation_target: 1
+                    diagnostics: []
+                    diagnostic_summary:
+                      info: 0
+                      warning: 0
+                      critical: 0
+                      highest_severity: none
+                    surface_posture:
+                      - surface: {kind: decision_surface, id: surf-1}
+                        authority_status: complete
+                        profile_status: covered
+                        grant_status: covered
+                        agent_status: covered
+                        fail_mode_policy_status: missing
+                        escalation_status: targeted
+                        complete_paths: 1
+                        incomplete_paths: 0
+                        highest_severity: none
+
+                mixed_diagnostics_authority_graph:
+                  summary: Authority graph with both warning and critical diagnostics
+                  description: >
+                    A surface with an inactive agent (critical) and a
+                    grant carrying no capabilities (warning). The
+                    rollup highest_severity is critical and the
+                    affected surface posture reports
+                    authority_status=degraded.
+                  value:
+                    root:
+                      kind: business_service
+                      id: bs-1
+                    view: service
+                    depth: 4
+                    nodes:
+                      - kind: business_service
+                        id: bs-1
+                        label: BS One
+                      - kind: decision_surface
+                        id: surf-1
+                        label: Surface One
+                      - kind: authority_profile
+                        id: prof-1
+                        label: Profile One
+                      - kind: authority_grant
+                        id: grant-1
+                        label: grant-1
+                      - kind: agent
+                        id: agent-1
+                        label: Suspended Agent
+                    edges:
+                      - kind: business_service_has_surface
+                        src: {kind: business_service, id: bs-1}
+                        dst: {kind: decision_surface, id: surf-1}
+                      - kind: surface_uses_profile
+                        src: {kind: decision_surface, id: surf-1}
+                        dst: {kind: authority_profile, id: prof-1}
+                      - kind: profile_has_grant
+                        src: {kind: authority_profile, id: prof-1}
+                        dst: {kind: authority_grant, id: grant-1}
+                      - kind: grant_authorises_agent
+                        src: {kind: authority_grant, id: grant-1}
+                        dst: {kind: agent, id: agent-1}
+                    summary:
+                      surface_count: 1
+                      active_profile_count: 1
+                      active_grant_count: 1
+                      active_agent_count: 1
+                      fail_mode_policy_count: 0
+                      complete_authority_paths: 1
+                      incomplete_authority_paths: 0
+                      surfaces_with_policy_override: 0
+                      surfaces_inheriting_bs_policy: 0
+                      grants_with_stop_capability: 0
+                      grants_with_constraints: 0
+                      escalation_target_count: 0
+                      profiles_with_escalation_target: 0
+                    diagnostics:
+                      - kind: grant_references_inactive_agent
+                        severity: critical
+                        node_refs:
+                          - {kind: authority_grant, id: grant-1}
+                          - {kind: agent, id: agent-1}
+                        message: 'grant "grant-1" references agent "agent-1" whose operational_state is "suspended"; runtime authority will be blocked'
+                      - kind: grant_has_no_capabilities
+                        severity: warning
+                        node_refs:
+                          - {kind: authority_grant, id: grant-1}
+                        message: 'authority grant "grant-1" carries no capabilities — orchestrator capability checks against it always reject'
+                      - kind: profile_has_no_escalation_target
+                        severity: info
+                        node_refs:
+                          - {kind: authority_profile, id: prof-1}
+                        message: 'authority profile "prof-1" has no explicit escalation target; escalation will preserve the current outcome without target routing'
+                    diagnostic_summary:
+                      info: 1
+                      warning: 1
+                      critical: 1
+                      highest_severity: critical
+                      by_kind:
+                        grant_references_inactive_agent: 1
+                        grant_has_no_capabilities: 1
+                        profile_has_no_escalation_target: 1
+                    surface_posture:
+                      - surface: {kind: decision_surface, id: surf-1}
+                        authority_status: degraded
+                        profile_status: covered
+                        grant_status: covered
+                        agent_status: blocked
+                        fail_mode_policy_status: missing
+                        escalation_status: not_targeted
+                        complete_paths: 1
+                        incomplete_paths: 0
+                        highest_severity: critical
+                        diagnostic_kinds:
+                          - grant_has_no_capabilities
+                          - grant_references_inactive_agent
+                          - profile_has_no_escalation_target
+
+                dangling_escalation_target_authority_graph:
+                  summary: Authority graph with a dangling escalation target reference
+                  description: >
+                    A profile references an EscalationTarget id that
+                    does not resolve to an active version. No
+                    escalation_target node is emitted (no active
+                    target exists); the surface posture reports
+                    escalation_status=dangling and the rollup carries
+                    one warning.
+                  value:
+                    root:
+                      kind: business_service
+                      id: bs-1
+                    view: service
+                    depth: 4
+                    nodes:
+                      - kind: business_service
+                        id: bs-1
+                        label: BS One
+                      - kind: decision_surface
+                        id: surf-1
+                        label: Surface One
+                      - kind: authority_profile
+                        id: prof-1
+                        label: Profile One
+                      - kind: authority_grant
+                        id: grant-1
+                        label: grant-1
+                      - kind: agent
+                        id: agent-1
+                        label: Agent One
+                    edges:
+                      - kind: business_service_has_surface
+                        src: {kind: business_service, id: bs-1}
+                        dst: {kind: decision_surface, id: surf-1}
+                      - kind: surface_uses_profile
+                        src: {kind: decision_surface, id: surf-1}
+                        dst: {kind: authority_profile, id: prof-1}
+                      - kind: profile_has_grant
+                        src: {kind: authority_profile, id: prof-1}
+                        dst: {kind: authority_grant, id: grant-1}
+                      - kind: grant_authorises_agent
+                        src: {kind: authority_grant, id: grant-1}
+                        dst: {kind: agent, id: agent-1}
+                    summary:
+                      surface_count: 1
+                      active_profile_count: 1
+                      active_grant_count: 1
+                      active_agent_count: 1
+                      fail_mode_policy_count: 0
+                      complete_authority_paths: 1
+                      incomplete_authority_paths: 0
+                      surfaces_with_policy_override: 0
+                      surfaces_inheriting_bs_policy: 0
+                      grants_with_stop_capability: 0
+                      grants_with_constraints: 0
+                      escalation_target_count: 0
+                      profiles_with_escalation_target: 0
+                      profiles_with_dangling_escalation_target:
+                        - {kind: authority_profile, id: prof-1}
+                    diagnostics:
+                      - kind: escalation_target_reference_dangling
+                        severity: warning
+                        node_refs:
+                          - {kind: authority_profile, id: prof-1}
+                          - {kind: escalation_target, id: et-missing}
+                        message: 'authority profile "prof-1" references escalation target "et-missing", but no active version is available'
+                    diagnostic_summary:
+                      info: 0
+                      warning: 1
+                      critical: 0
+                      highest_severity: warning
+                      by_kind:
+                        escalation_target_reference_dangling: 1
+                    surface_posture:
+                      - surface: {kind: decision_surface, id: surf-1}
+                        authority_status: degraded
+                        profile_status: covered
+                        grant_status: covered
+                        agent_status: covered
+                        fail_mode_policy_status: missing
+                        escalation_status: dangling
+                        complete_paths: 1
+                        incomplete_paths: 0
+                        highest_severity: warning
+                        diagnostic_kinds:
+                          - escalation_target_reference_dangling
+        "400":
+          description: Invalid view, id, or depth
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Root business service not found
           content:
             application/json:
               schema:
@@ -7481,6 +8581,215 @@ paths:
                 $ref: "#/components/schemas/Error"
         "501":
           description: FailModePolicy reader not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # -------------------------------------------------------------------
+  # EscalationTarget read API (D31k-impl-1)
+  # -------------------------------------------------------------------
+  /v1/escalation_targets:
+    get:
+      operationId: listEscalationTargets
+      summary: List the latest version of every escalation target
+      description: >
+        Returns one row per logical escalation target id (the latest
+        version of each), sorted by id ascending. The array
+        always serialises non-null (empty list when no targets exist).
+        Read-only; D31k-impl-1 does not introduce write endpoints.
+      responses:
+        "200":
+          description: Escalation targets list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EscalationTargetListResponse"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Repository error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: EscalationTarget reader not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/escalation_targets/{id}:
+    get:
+      operationId: getEscalationTarget
+      summary: Get the latest version of an EscalationTarget by ID
+      description: >
+        Returns the highest-numbered EscalationTarget version for the
+        given id regardless of lifecycle status. Read-only.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: EscalationTarget
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EscalationTarget"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: EscalationTarget not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Repository error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: EscalationTarget reader not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/escalation_targets/{id}/versions:
+    get:
+      operationId: listEscalationTargetVersions
+      summary: List every persisted version of an EscalationTarget
+      description: >
+        Returns every revision of the EscalationTarget id in descending
+        version order. 404 when the id is unknown.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Versions list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EscalationTargetListResponse"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: EscalationTarget not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Repository error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: EscalationTarget reader not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/escalation_targets/{id}/versions/{version}:
+    get:
+      operationId: getEscalationTargetVersion
+      summary: Get a specific EscalationTarget revision
+      description: >
+        Returns the exact (id, version) revision. 404 when the pair
+        does not exist.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: version
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: EscalationTarget version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EscalationTarget"
+        "400":
+          description: Version path segment is not a positive integer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: EscalationTarget or version not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Repository error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: EscalationTarget reader not configured
           content:
             application/json:
               schema:

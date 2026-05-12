@@ -1,25 +1,34 @@
-// Package authoritygraph projects the existing governance map read
-// model into a generic node/edge graph for the Authority Graph
-// Workbench.
+// Package contextgraph projects business and operational context into
+// a generic node/edge graph. This is the Context Graph that powers
+// GET /v1/graphs/context.
 //
-// Phase 1 supports a single perspective — view=service — which projects
-// the same core information as
-// GET /v1/businessservices/{id}/governance-map but in a generic
-// nodes/edges shape suitable for traversal and depth-bounded queries.
+// Supported perspectives — view=service, view=ai_system, and
+// view=decision_surface — project the underlying context (business
+// services, capabilities, processes, decision surfaces, AI systems,
+// AI system bindings) into a generic nodes/edges shape suitable for
+// traversal and depth-bounded queries.
 //
-// Phase 2A (this revision) closes the wire-content parity gap with the
-// governance-map DTO without introducing a generic Attrs map. Each Node
-// kind carries an optional typed data pointer (e.g. Node.BusinessService,
-// Node.Coverage). Exactly one of the typed pointers is populated per
-// node, matched to Kind. The omitempty tags collapse the unused
-// pointers so a Node serialises to a compact shape with only its kind's
-// data block.
+// Each Node kind carries an optional typed data pointer (e.g.
+// Node.BusinessService, Node.Coverage). Exactly one of the typed
+// pointers is populated per node, matched to Kind. The omitempty tags
+// collapse the unused pointers so a Node serialises to a compact shape
+// with only its kind's data block.
 //
-// The package is strictly additive. It re-uses the existing
-// governancemap.ReadService (no new repository reads, no schema
-// change). Per-profile, per-grant, per-agent detail is out of scope —
-// those node kinds are reserved for later phases.
-package authoritygraph
+// authority_summary and coverage are retained as count-rollup nodes
+// in this revision for parity with the read service's aggregate
+// fields. A future tranche may remove them from the context
+// projection once Authority Graph counts surface those aggregates
+// natively.
+//
+// Per-profile, per-grant, per-agent detail is out of scope here.
+// Those entities will become first-class nodes in the upcoming
+// Authority Graph (GET /v1/graphs/authority — future tranche).
+//
+// Directory: internal/graph/context/. Package declaration:
+// "contextgraph" — the package name intentionally differs from the
+// directory name to avoid collision with Go's stdlib "context"
+// package on the import side.
+package contextgraph
 
 // View identifies the perspective the projection is computed in.
 //

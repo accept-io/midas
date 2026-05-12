@@ -3,11 +3,14 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/accept-io/midas/internal/authority"
 	"github.com/accept-io/midas/internal/store/sqltx"
+	"github.com/accept-io/midas/internal/value"
 )
 
 type GrantRepo struct {
@@ -24,6 +27,10 @@ func NewGrantRepo(db sqltx.DBTX) (*GrantRepo, error) {
 
 // grantColumns is the canonical SELECT column list for authority_grants.
 // All read methods use this list; it must match the column order in scanGrantRow.
+//
+// D31i appends capabilities and constraints (JSONB) to the end of the
+// list. New columns are emitted after the existing ones so the column
+// order remains backwards-compatible with the scanGrantRow scanner.
 const grantColumns = `
 	id,
 	agent_id,
@@ -40,7 +47,9 @@ const grantColumns = `
 	suspended_by,
 	suspend_reason,
 	created_at,
-	updated_at
+	updated_at,
+	capabilities,
+	constraints
 `
 
 func (r *GrantRepo) FindByID(ctx context.Context, id string) (*authority.AuthorityGrant, error) {
@@ -160,13 +169,24 @@ func (r *GrantRepo) Create(ctx context.Context, g *authority.AuthorityGrant) err
 			suspended_by,
 			suspend_reason,
 			created_at,
-			updated_at
+			updated_at,
+			capabilities,
+			constraints
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
 		)
 	`
 
-	_, err := r.db.ExecContext(
+	capsJSON, err := marshalCapabilities(g.Capabilities)
+	if err != nil {
+		return fmt.Errorf("marshal capabilities for grant %q: %w", g.ID, err)
+	}
+	constraintsJSON, err := marshalConstraints(g.Constraints)
+	if err != nil {
+		return fmt.Errorf("marshal constraints for grant %q: %w", g.ID, err)
+	}
+
+	_, err = r.db.ExecContext(
 		ctx,
 		q,
 		g.ID,
@@ -185,6 +205,8 @@ func (r *GrantRepo) Create(ctx context.Context, g *authority.AuthorityGrant) err
 		nullableString(g.SuspendReason),
 		g.CreatedAt,
 		g.UpdatedAt,
+		capsJSON,
+		constraintsJSON,
 	)
 	return err
 }
@@ -276,6 +298,11 @@ func (r *GrantRepo) Reactivate(ctx context.Context, id string) error {
 // Update persists all mutable fields of a grant atomically. Used by grant
 // lifecycle governance (suspend, revoke, reinstate) to write actor, reason,
 // and timestamp fields in a single operation.
+//
+// D31i: capabilities and constraints are also rewritten on every
+// Update so the full authority shape round-trips through the lifecycle
+// service when callers carry a freshly-loaded grant through a status
+// transition.
 func (r *GrantRepo) Update(ctx context.Context, g *authority.AuthorityGrant) error {
 	const q = `
 		UPDATE authority_grants
@@ -291,9 +318,20 @@ func (r *GrantRepo) Update(ctx context.Context, g *authority.AuthorityGrant) err
 			suspended_at      = $10,
 			suspended_by      = $11,
 			suspend_reason    = $12,
-			updated_at        = $13
+			updated_at        = $13,
+			capabilities     = $14,
+			constraints      = $15
 		WHERE id = $1
 	`
+
+	capsJSON, err := marshalCapabilities(g.Capabilities)
+	if err != nil {
+		return fmt.Errorf("marshal capabilities for grant %q: %w", g.ID, err)
+	}
+	constraintsJSON, err := marshalConstraints(g.Constraints)
+	if err != nil {
+		return fmt.Errorf("marshal constraints for grant %q: %w", g.ID, err)
+	}
 
 	res, err := r.db.ExecContext(
 		ctx, q,
@@ -310,6 +348,8 @@ func (r *GrantRepo) Update(ctx context.Context, g *authority.AuthorityGrant) err
 		nullableString(g.SuspendedBy),
 		nullableString(g.SuspendReason),
 		g.UpdatedAt,
+		capsJSON,
+		constraintsJSON,
 	)
 	if err != nil {
 		return err
@@ -343,6 +383,8 @@ func scanGrantRow(row grantScanner) (*authority.AuthorityGrant, error) {
 		suspendedAt      sql.NullTime
 		suspendedBy      sql.NullString
 		suspendReason    sql.NullString
+		capsRaw          []byte
+		constraintsRaw   []byte
 	)
 
 	err := row.Scan(
@@ -362,6 +404,8 @@ func scanGrantRow(row grantScanner) (*authority.AuthorityGrant, error) {
 		&suspendReason,
 		&g.CreatedAt,
 		&g.UpdatedAt,
+		&capsRaw,
+		&constraintsRaw,
 	)
 	if err != nil {
 		return nil, err
@@ -395,7 +439,147 @@ func scanGrantRow(row grantScanner) (*authority.AuthorityGrant, error) {
 		g.SuspendReason = suspendReason.String
 	}
 
+	g.Capabilities, err = unmarshalCapabilities(capsRaw)
+	if err != nil {
+		return nil, fmt.Errorf("unmarshal capabilities for grant %q: %w", g.ID, err)
+	}
+	g.Constraints, err = unmarshalConstraints(constraintsRaw)
+	if err != nil {
+		return nil, fmt.Errorf("unmarshal constraints for grant %q: %w", g.ID, err)
+	}
+
 	return &g, nil
+}
+
+// ---------------------------------------------------------------------------
+// D31i: capabilities + constraints JSON helpers
+// ---------------------------------------------------------------------------
+//
+// The persistence format pins each Capability as its canonical string
+// and each Constraint as a tagged-union object discriminated by "kind".
+// Per-kind payloads:
+//
+//	confidence_threshold_min:   { "min_confidence": 0.85 }
+//	consequence_threshold_max:  { "max_consequence": { "type": "monetary", "amount": 100, "currency": "USD" } }
+//	                            { "max_consequence": { "type": "risk_rating", "risk_rating": "medium" } }
+//	human_only:                 {}
+//	ai_only:                    {}
+//	time_window:                { "start_time": "2026-01-15T09:00:00Z", "end_time": "2026-01-15T17:00:00Z" }
+//
+// Marshal helpers always emit the empty array (`[]`) for nil/empty
+// slices so the JSONB column never goes through JSON-null; the
+// schema's chk_grants_*_array CHECK constraint is satisfied
+// regardless of how a caller built the grant struct.
+
+type constraintJSON struct {
+	Kind           string             `json:"kind"`
+	MinConfidence  *float64           `json:"min_confidence,omitempty"`
+	MaxConsequence *consequenceJSON   `json:"max_consequence,omitempty"`
+	StartTime      *time.Time         `json:"start_time,omitempty"`
+	EndTime        *time.Time         `json:"end_time,omitempty"`
+}
+
+type consequenceJSON struct {
+	Type       string  `json:"type"`
+	Amount     float64 `json:"amount,omitempty"`
+	Currency   string  `json:"currency,omitempty"`
+	RiskRating string  `json:"risk_rating,omitempty"`
+}
+
+func marshalCapabilities(caps []authority.Capability) ([]byte, error) {
+	if len(caps) == 0 {
+		return []byte("[]"), nil
+	}
+	out := make([]string, 0, len(caps))
+	for _, c := range caps {
+		out = append(out, string(c))
+	}
+	return json.Marshal(out)
+}
+
+func unmarshalCapabilities(raw []byte) ([]authority.Capability, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var strs []string
+	if err := json.Unmarshal(raw, &strs); err != nil {
+		return nil, err
+	}
+	if len(strs) == 0 {
+		return nil, nil
+	}
+	out := make([]authority.Capability, 0, len(strs))
+	for _, s := range strs {
+		out = append(out, authority.Capability(s))
+	}
+	return out, nil
+}
+
+func marshalConstraints(cs []authority.Constraint) ([]byte, error) {
+	if len(cs) == 0 {
+		return []byte("[]"), nil
+	}
+	out := make([]constraintJSON, 0, len(cs))
+	for _, c := range cs {
+		cj := constraintJSON{Kind: string(c.Kind)}
+		switch c.Kind {
+		case authority.ConstraintKindConfidenceThresholdMin:
+			m := c.MinConfidence
+			cj.MinConfidence = &m
+		case authority.ConstraintKindConsequenceThresholdMax:
+			cj.MaxConsequence = &consequenceJSON{
+				Type:       string(c.MaxConsequence.Type),
+				Amount:     c.MaxConsequence.Amount,
+				Currency:   c.MaxConsequence.Currency,
+				RiskRating: string(c.MaxConsequence.RiskRating),
+			}
+		case authority.ConstraintKindTimeWindow:
+			st := c.StartTime
+			et := c.EndTime
+			cj.StartTime = &st
+			cj.EndTime = &et
+		case authority.ConstraintKindHumanOnly, authority.ConstraintKindAIOnly:
+			// no payload
+		}
+		out = append(out, cj)
+	}
+	return json.Marshal(out)
+}
+
+func unmarshalConstraints(raw []byte) ([]authority.Constraint, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var rows []constraintJSON
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	out := make([]authority.Constraint, 0, len(rows))
+	for _, r := range rows {
+		c := authority.Constraint{Kind: authority.ConstraintKind(r.Kind)}
+		if r.MinConfidence != nil {
+			c.MinConfidence = *r.MinConfidence
+		}
+		if r.MaxConsequence != nil {
+			c.MaxConsequence = authority.Consequence{
+				Type:       value.ConsequenceType(r.MaxConsequence.Type),
+				Amount:     r.MaxConsequence.Amount,
+				Currency:   r.MaxConsequence.Currency,
+				RiskRating: value.RiskRating(r.MaxConsequence.RiskRating),
+			}
+		}
+		if r.StartTime != nil {
+			c.StartTime = *r.StartTime
+		}
+		if r.EndTime != nil {
+			c.EndTime = *r.EndTime
+		}
+		out = append(out, c)
+	}
+	return out, nil
 }
 
 var _ authority.GrantRepository = (*GrantRepo)(nil)

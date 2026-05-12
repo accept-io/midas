@@ -89,6 +89,15 @@ type Submitted struct {
 // ResolvedAuthority holds versioned references to the authority chain
 // MIDAS resolved for this evaluation. These are internal facts, not
 // caller-supplied claims.
+//
+// D31k-impl-1 adds the EscalationTarget* fields. They are populated
+// only when the active AuthorityProfile carried a non-empty
+// EscalationTargetID AND the runtime resolved an active target at
+// escalation time. Fields use omitempty so non-escalation evaluations
+// (and escalation evaluations where the profile carries no target)
+// produce an unchanged wire shape. EscalationTargetID may be set when
+// the resolver returned no active version — see
+// AuditEventEscalationTargetResolutionFailed for that case.
 type ResolvedAuthority struct {
 	SurfaceID      string `json:"surface_id"`
 	SurfaceVersion int    `json:"surface_version"`
@@ -96,6 +105,11 @@ type ResolvedAuthority struct {
 	ProfileVersion int    `json:"profile_version"`
 	AgentID        string `json:"agent_id"`
 	GrantID        string `json:"grant_id"`
+
+	EscalationTargetID      string `json:"escalation_target_id,omitempty"`
+	EscalationTargetVersion int    `json:"escalation_target_version,omitempty"`
+	EscalationTargetKind    string `json:"escalation_target_kind,omitempty"`
+	EscalationTargetHandle  string `json:"escalation_target_handle,omitempty"`
 }
 
 // ProcessSnapshot captures the point-in-time identity and lifecycle

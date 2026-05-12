@@ -174,3 +174,118 @@ func TestProfileRepo_Create_RejectsEmptyEscalationMode(t *testing.T) {
 		t.Fatal("Create accepted an empty EscalationMode; expected chk_profiles_escalation_mode to reject")
 	}
 }
+
+// TestProfileRepo_EscalationTargetID_RoundTrip pins the D31k-impl-1
+// additive field round-trips through the Postgres profile repository:
+// Create writes it, Update modifies it, FindByID reads it back.
+func TestProfileRepo_EscalationTargetID_RoundTrip(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	repo, err := NewProfileRepo(db)
+	if err != nil {
+		t.Fatalf("NewProfileRepo: %v", err)
+	}
+
+	id := "profile-rt-escalation-target"
+	const ver = 1
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, `DELETE FROM authority_profiles WHERE id = $1`, id)
+	})
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	p := &authority.AuthorityProfile{
+		ID:                  id,
+		Version:             ver,
+		SurfaceID:           "surf-rt-et",
+		Name:                "Round-trip with escalation target",
+		Status:              authority.ProfileStatusReview,
+		EffectiveDate:       now.Add(-time.Hour),
+		ConfidenceThreshold: 0.85,
+		ConsequenceThreshold: authority.Consequence{
+			Type:       value.ConsequenceTypeRiskRating,
+			RiskRating: value.RiskRatingHigh,
+		},
+		EscalationMode:     authority.EscalationModeAuto,
+		EscalationTargetID: "et-governance-approver",
+		FailMode:           authority.FailModeClosed,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}
+	if err := repo.Create(ctx, p); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	got, err := repo.FindByIDAndVersion(ctx, id, ver)
+	if err != nil {
+		t.Fatalf("FindByIDAndVersion: %v", err)
+	}
+	if got == nil {
+		t.Fatal("FindByIDAndVersion returned nil")
+	}
+	if got.EscalationTargetID != "et-governance-approver" {
+		t.Errorf("EscalationTargetID: want %q, got %q", "et-governance-approver", got.EscalationTargetID)
+	}
+
+	// Update clears the reference; round-trip again.
+	got.EscalationTargetID = ""
+	got.UpdatedAt = now.Add(time.Minute)
+	if err := repo.Update(ctx, got); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	roundtrip, err := repo.FindByIDAndVersion(ctx, id, ver)
+	if err != nil {
+		t.Fatalf("FindByIDAndVersion after update: %v", err)
+	}
+	if roundtrip.EscalationTargetID != "" {
+		t.Errorf("EscalationTargetID after clearing: want empty, got %q", roundtrip.EscalationTargetID)
+	}
+}
+
+// TestProfileRepo_EscalationTargetID_EmptyDefault pins that a profile
+// created without an explicit EscalationTargetID round-trips as the
+// empty string (matches memory-repo posture).
+func TestProfileRepo_EscalationTargetID_EmptyDefault(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	repo, err := NewProfileRepo(db)
+	if err != nil {
+		t.Fatalf("NewProfileRepo: %v", err)
+	}
+
+	id := "profile-rt-escalation-target-empty"
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, `DELETE FROM authority_profiles WHERE id = $1`, id)
+	})
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	p := &authority.AuthorityProfile{
+		ID:                  id,
+		Version:             1,
+		SurfaceID:           "surf-rt-empty",
+		Name:                "no target",
+		Status:              authority.ProfileStatusReview,
+		EffectiveDate:       now.Add(-time.Hour),
+		ConfidenceThreshold: 0.5,
+		ConsequenceThreshold: authority.Consequence{
+			Type: value.ConsequenceTypeRiskRating, RiskRating: value.RiskRatingLow,
+		},
+		EscalationMode: authority.EscalationModeAuto,
+		FailMode:       authority.FailModeOpen,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	if err := repo.Create(ctx, p); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	got, _ := repo.FindByIDAndVersion(ctx, id, 1)
+	if got == nil {
+		t.Fatal("FindByIDAndVersion returned nil")
+	}
+	if got.EscalationTargetID != "" {
+		t.Errorf("EscalationTargetID: want empty, got %q", got.EscalationTargetID)
+	}
+}

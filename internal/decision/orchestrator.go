@@ -446,10 +446,9 @@ func (o *Orchestrator) simulateEvaluate(
 	if outcome != "" {
 		return EvaluationResult{Outcome: outcome, ReasonCode: reason}, nil
 	}
-	_ = a
 
 	// Step 3: Authority chain (grant → profile)
-	_, p, outcome, reason, err := o.resolveAuthorityChain(ctx, repos.Grants, repos.Profiles, req.AgentID, req.SurfaceID, now)
+	g, p, outcome, reason, err := o.resolveAuthorityChain(ctx, repos.Grants, repos.Profiles, req.AgentID, req.SurfaceID, now)
 	if err != nil {
 		return EvaluationResult{}, err
 	}
@@ -465,6 +464,37 @@ func (o *Orchestrator) simulateEvaluate(
 		res.PolicyReference = profilePolicyRef
 		res.PolicySkipped = policySkipped
 		return res
+	}
+
+	// Step 3.4: Agent operational state gate (D31j). Simulation
+	// mirrors live evaluation but emits no audit events — the
+	// read-only path computes the verdict and returns it.
+	if a.OperationalState != agent.OperationalStateActive {
+		return withPolicyMeta(EvaluationResult{Outcome: eval.OutcomeReject, ReasonCode: eval.ReasonAgentOperationalStateBlocked}), nil
+	}
+
+	// Step 3.5: Grant constraints (D31i). Simulation mirrors live
+	// evaluation but emits no audit events — the read-only path
+	// computes the verdict and returns it.
+	if len(g.Constraints) > 0 {
+		if v := authority.EvaluateConstraints(g.Constraints, authority.ConstraintInput{
+			Confidence:  req.Confidence,
+			Consequence: req.Consequence,
+			AgentType:   a.Type,
+		}, now); v != nil {
+			return withPolicyMeta(EvaluationResult{Outcome: eval.OutcomeReject, ReasonCode: eval.ReasonConstraintViolated}), nil
+		}
+	}
+
+	// Step 3.6: Capability check (D31i). Mirror of the live path.
+	if req.RequestedCapability != "" {
+		requested := authority.Capability(req.RequestedCapability)
+		if !authority.IsValidCapability(requested) {
+			return withPolicyMeta(EvaluationResult{Outcome: eval.OutcomeReject, ReasonCode: eval.ReasonInvalidCapability}), nil
+		}
+		if !authority.HasCapability(g.Capabilities, requested) {
+			return withPolicyMeta(EvaluationResult{Outcome: eval.OutcomeReject, ReasonCode: eval.ReasonCapabilityNotGranted}), nil
+		}
 	}
 
 	// Step 4: Context validation
@@ -891,6 +921,12 @@ func (o *Orchestrator) evaluate(
 			ProfileVersion: p.Version,
 			AgentID:        a.ID,
 			GrantID:        g.ID,
+			// D31k-impl-1: copy the profile's configured escalation
+			// target id verbatim. The active target version is
+			// resolved later in finish() when the outcome is
+			// Escalate; the other EscalationTarget* fields are
+			// populated there too.
+			EscalationTargetID: p.EscalationTargetID,
 		},
 		Structure: envelope.ResolvedStructure{
 			Process:              procSnap,
@@ -962,6 +998,87 @@ func (o *Orchestrator) evaluate(
 	}
 	// Resolved and Evaluation sections are populated in-memory; acc.persistNew()
 	// at the end of finish() flushes everything in a single Envelopes.Update.
+
+	// Step 3.4: Agent operational state gate (D31j). A non-active
+	// agent must not exercise authority even when the grant otherwise
+	// satisfies every other check — operational state is the hard
+	// runtime gate operators expect when they suspend or revoke an
+	// agent. This check sits BEFORE constraint + capability checks
+	// because those are grant-narrowing pre-conditions; operational
+	// state is the agent-level gate that supersedes them.
+	//
+	// Closed-by-default: any value other than the canonical "active"
+	// (including suspended, revoked, or unknown/empty values) blocks.
+	// The orchestrator emits AGENT_OPERATIONAL_STATE_BLOCKED_AUTHORITY
+	// with the resolved authority spine identifiers, then rejects
+	// with AGENT_OPERATIONAL_STATE_BLOCKED. The Authority Graph's
+	// grant_references_inactive_agent diagnostic (now critical)
+	// surfaces the same condition statically.
+	if a.OperationalState != agent.OperationalStateActive {
+		if err := acc.recordObservation(env.RequestSource(), env.RequestID(),
+			audit.AuditEventAgentOperationalStateBlockedAuthority,
+			map[string]any{
+				"agent_id":          a.ID,
+				"grant_id":          g.ID,
+				"profile_id":        p.ID,
+				"surface_id":        s.ID,
+				"operational_state": string(a.OperationalState),
+				"reason":            "agent_operational_state_not_active",
+			}); err != nil {
+			return EvaluationResult{}, err
+		}
+		return withPolicyMeta(o.finish(ctx, repos, acc, env, eval.OutcomeReject, eval.ReasonAgentOperationalStateBlocked))
+	}
+
+	// Step 3.5: Grant constraints (D31i). The grant's typed Constraints
+	// are conjunctive — every one must pass for the grant to authorise
+	// the request. The first violation wins: the orchestrator emits
+	// AUTHORITY_CONSTRAINT_VIOLATED carrying the failing constraint
+	// kind plus a short reason, then rejects with CONSTRAINT_VIOLATED.
+	// Constraints execute BEFORE the confidence / consequence /
+	// policy steps because they are grant-narrowing pre-conditions —
+	// the grant is not "in effect" for this request until they pass.
+	if len(g.Constraints) > 0 {
+		if v := authority.EvaluateConstraints(g.Constraints, authority.ConstraintInput{
+			Confidence:  req.Confidence,
+			Consequence: req.Consequence,
+			AgentType:   a.Type,
+		}, now); v != nil {
+			if err := acc.recordObservation(env.RequestSource(), env.RequestID(),
+				audit.AuditEventAuthorityConstraintViolated,
+				map[string]any{
+					"grant_id":        g.ID,
+					"profile_id":      p.ID,
+					"agent_id":        a.ID,
+					"constraint_kind": string(v.Kind),
+					"reason":          v.Reason,
+				}); err != nil {
+				return EvaluationResult{}, err
+			}
+			return withPolicyMeta(o.finish(ctx, repos, acc, env, eval.OutcomeReject, eval.ReasonConstraintViolated))
+		}
+	}
+
+	// Step 3.6: Capability check (D31i). When the request explicitly
+	// names a RequestedCapability, validate it against the canonical
+	// set and against the grant's Capabilities. Empty values skip the
+	// check — callers that have not yet adopted the capability model
+	// behave as before. Non-canonical values reject with
+	// INVALID_CAPABILITY; canonical values not present on the grant
+	// reject with CAPABILITY_NOT_GRANTED. Both are deterministic
+	// Rejects that surface through OUTCOME_RECORDED; no special audit
+	// event is emitted in this tranche (the resolved Capabilities
+	// slice already participates in the audit chain via the grant
+	// payload on AUTHORITY_CHAIN_RESOLVED in a future tranche).
+	if req.RequestedCapability != "" {
+		requested := authority.Capability(req.RequestedCapability)
+		if !authority.IsValidCapability(requested) {
+			return withPolicyMeta(o.finish(ctx, repos, acc, env, eval.OutcomeReject, eval.ReasonInvalidCapability))
+		}
+		if !authority.HasCapability(g.Capabilities, requested) {
+			return withPolicyMeta(o.finish(ctx, repos, acc, env, eval.OutcomeReject, eval.ReasonCapabilityNotGranted))
+		}
+	}
 
 	// Step 4: Context
 	if err := o.appendContextValidatedEvent(acc, env, p.RequiredContextKeys, req.Context); err != nil {
@@ -1155,6 +1272,23 @@ func (o *Orchestrator) finish(
 	explanationText := buildExplanationText(env, outcome, reason)
 
 	if outcome == eval.OutcomeEscalate {
+		// D31k-impl-1: resolve the configured escalation target (if
+		// any) and emit the corresponding audit event before
+		// transitioning to ESCALATED. The resolved target is
+		// captured in env.Resolved.Authority so the persisted
+		// envelope carries the snapshot — evidence reads through
+		// the envelope, not through a runtime join.
+		//
+		// Failure to resolve a configured target preserves the
+		// escalation outcome (operator review will surface the
+		// dangling reference via the emitted
+		// ESCALATION_TARGET_RESOLUTION_FAILED event); converting
+		// the outcome to Reject would lose the human-review safety
+		// net that escalation itself provides.
+		if err := o.resolveAndEmitEscalationTarget(ctx, repos, acc, env, now); err != nil {
+			return EvaluationResult{}, err
+		}
+
 		// EVALUATING → ESCALATED
 		from := env.State
 		if err := acc.transition(envelope.EnvelopeStateEscalated, now); err != nil {
@@ -2586,4 +2720,110 @@ func classifyFailure(err error) string {
 	default:
 		return string(FailureCategoryUnknown)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// D31k-impl-1: escalation target resolution
+// ---------------------------------------------------------------------------
+
+// resolveAndEmitEscalationTarget is the runtime escalation-target
+// resolver invoked from finish() on the Escalate path. It does
+// nothing when:
+//
+//   - the active AuthorityProfile carried no EscalationTargetID
+//     (env.Resolved.Authority.EscalationTargetID is empty), OR
+//   - the EscalationTargets repository is not wired (memory-mode tests
+//     that build a partial Repositories may leave it nil).
+//
+// When the target id is set AND the repository is wired:
+//
+//   - call repos.EscalationTargets.FindActiveAt(ctx, id, now);
+//   - on success, emit ESCALATION_TARGET_SELECTED with the resolved
+//     authority spine identifiers + the target's id, version, kind,
+//     and handle, and capture the resolved version/kind/handle on
+//     env.Resolved.Authority so the persisted envelope snapshot is
+//     complete;
+//   - on resolver error or no-active-version, emit
+//     ESCALATION_TARGET_RESOLUTION_FAILED and preserve the escalate
+//     outcome. The dangling reference is surfaced via the audit
+//     event; the orchestrator does NOT convert the outcome to Reject
+//     because escalation is itself the fail-safe outcome and the
+//     human reviewer will see the audit event.
+//
+// All event emission is via acc.recordObservation; the events
+// participate in the audit hash chain and are included in
+// Envelope.Integrity.AuditEventIDs.
+func (o *Orchestrator) resolveAndEmitEscalationTarget(
+	ctx context.Context,
+	repos *store.Repositories,
+	acc *evaluationAccumulator,
+	env *envelope.Envelope,
+	now time.Time,
+) error {
+	targetID := env.Resolved.Authority.EscalationTargetID
+	if targetID == "" {
+		return nil
+	}
+	if repos.EscalationTargets == nil {
+		// Repository unwired; runtime treats the configured target as
+		// soft (no event emission). The HTTP read service returns 501
+		// in this configuration. Mirrors the FailModePolicies
+		// nil-safe posture.
+		return nil
+	}
+	t, err := repos.EscalationTargets.FindActiveAt(ctx, targetID, now)
+	if err != nil {
+		// Repository error — treat as a resolution failure so the
+		// audit chain records the configured-but-unresolved state.
+		// Don't propagate the error: doing so would fail the
+		// evaluation, but the escalate outcome itself is the
+		// fail-safe path. Operators see the dangling reference via
+		// the emitted event.
+		return acc.recordObservation(env.RequestSource(), env.RequestID(),
+			audit.AuditEventEscalationTargetResolutionFailed,
+			map[string]any{
+				"profile_id":           env.Resolved.Authority.ProfileID,
+				"profile_version":      env.Resolved.Authority.ProfileVersion,
+				"grant_id":             env.Resolved.Authority.GrantID,
+				"agent_id":             env.Resolved.Authority.AgentID,
+				"surface_id":           env.Resolved.Authority.SurfaceID,
+				"escalation_target_id": targetID,
+				"reason":               "escalation_target_resolver_error",
+				"error":                err.Error(),
+			})
+	}
+	if t == nil {
+		return acc.recordObservation(env.RequestSource(), env.RequestID(),
+			audit.AuditEventEscalationTargetResolutionFailed,
+			map[string]any{
+				"profile_id":           env.Resolved.Authority.ProfileID,
+				"profile_version":      env.Resolved.Authority.ProfileVersion,
+				"grant_id":             env.Resolved.Authority.GrantID,
+				"agent_id":             env.Resolved.Authority.AgentID,
+				"surface_id":           env.Resolved.Authority.SurfaceID,
+				"escalation_target_id": targetID,
+				"reason":               "no_active_escalation_target_version",
+			})
+	}
+
+	// Capture resolved-target snapshot on the envelope for evidence
+	// reads. Mirrors how the other authority spine fields are
+	// stored — operators consult the envelope, not a live join.
+	env.Resolved.Authority.EscalationTargetVersion = t.Version
+	env.Resolved.Authority.EscalationTargetKind = string(t.Kind)
+	env.Resolved.Authority.EscalationTargetHandle = t.Handle
+
+	return acc.recordObservation(env.RequestSource(), env.RequestID(),
+		audit.AuditEventEscalationTargetSelected,
+		map[string]any{
+			"profile_id":                env.Resolved.Authority.ProfileID,
+			"profile_version":           env.Resolved.Authority.ProfileVersion,
+			"grant_id":                  env.Resolved.Authority.GrantID,
+			"agent_id":                  env.Resolved.Authority.AgentID,
+			"surface_id":                env.Resolved.Authority.SurfaceID,
+			"escalation_target_id":      t.ID,
+			"escalation_target_version": t.Version,
+			"escalation_target_kind":    string(t.Kind),
+			"escalation_target_handle":  t.Handle,
+		})
 }

@@ -1,7 +1,9 @@
-// Package governancemap assembles a service-centric governance map for
-// a single BusinessService (Epic 1, PR 4). The Map type is the read
-// model; the ReadService composes existing repository readers via
-// narrow per-entity interfaces and produces it via sequenced calls.
+// source.go (folded from internal/governancemap/read_service.go in D31d):
+// assembles a service-centric context map for a single BusinessService.
+// The Map type is the underlying read model that powers the Context
+// Graph projection in this package; the ReadService composes existing
+// repository readers via narrow per-entity interfaces and produces it
+// via sequenced calls.
 //
 // Query strategy: sequenced repository calls, not multi-join SQL.
 // Reasoning per the PR 4 brief:
@@ -54,7 +56,7 @@
 // EnvelopeRepository has no ListByResolvedBusinessService method. Per
 // the PR 4 brief, PR 8 will revisit envelope shape when adding AI
 // system fields; the recent_decisions section ships with that PR.
-package governancemap
+package contextgraph
 
 import (
 	"context"
@@ -74,11 +76,6 @@ import (
 // Reader interfaces — narrow, consumer-fit, satisfied by existing repos
 // ---------------------------------------------------------------------------
 
-// BusinessServiceReader is the BS subset needed to load the root.
-type BusinessServiceReader interface {
-	GetByID(ctx context.Context, id string) (*businessservice.BusinessService, error)
-}
-
 // BusinessServiceRelationshipReader covers both relationship directions.
 type BusinessServiceRelationshipReader interface {
 	ListBySourceBusinessService(ctx context.Context, sourceID string) ([]*businessservice.BusinessServiceRelationship, error)
@@ -91,22 +88,20 @@ type BusinessServiceCapabilityReader interface {
 	ListByBusinessServiceID(ctx context.Context, businessServiceID string) ([]*businessservicecapability.BusinessServiceCapability, error)
 }
 
-// CapabilityReader is the capability subset needed to dereference BSC
-// rows into Capability records.
-type CapabilityReader interface {
-	GetByID(ctx context.Context, id string) (*capability.Capability, error)
-}
-
-// ProcessReader uses the new ListByBusinessService method added by
-// Cluster B (a single domain interface extension) to avoid scanning
-// the full processes table.
-type ProcessReader interface {
+// ProcessListReader lists processes under a BusinessService. Named
+// distinctly from service.go's ProcessReader (which has GetByID only)
+// to avoid an in-package collision. Cluster B added the
+// ListByBusinessService method on the process repo to avoid scanning
+// the full table.
+type ProcessListReader interface {
 	ListByBusinessService(ctx context.Context, businessServiceID string) ([]*process.Process, error)
 }
 
-// SurfaceReader returns latest-version surfaces under a given process.
-// The read service filters to Status == "active" in code.
-type SurfaceReader interface {
+// SurfaceListReader returns latest-version surfaces under a given
+// process. Named distinctly from service.go's SurfaceReader (which has
+// FindLatestByID) to avoid an in-package collision. The read service
+// filters to Status == "active" in code.
+type SurfaceListReader interface {
 	ListByProcessID(ctx context.Context, processID string) ([]*surface.DecisionSurface, error)
 }
 
@@ -124,11 +119,6 @@ type GrantReader interface {
 	ListByProfile(ctx context.Context, profileID string) ([]*authority.AuthorityGrant, error)
 }
 
-// AISystemReader resolves binding ai_system_id to system records.
-type AISystemReader interface {
-	GetByID(ctx context.Context, id string) (*aisystem.AISystem, error)
-}
-
 // AISystemVersionReader resolves the active version per AI system.
 type AISystemVersionReader interface {
 	GetActiveBySystem(ctx context.Context, aiSystemID string) (*aisystem.AISystemVersion, error)
@@ -142,6 +132,11 @@ type AISystemBindingReader interface {
 	ListByProcess(ctx context.Context, procID string) ([]*aisystem.AISystemBinding, error)
 	ListBySurface(ctx context.Context, surfID string) ([]*aisystem.AISystemBinding, error)
 }
+
+// BusinessServiceReader, CapabilityReader, and AISystemReader are
+// already declared in service.go (the projection-side readers); their
+// identical GetByID-only shape means source.go reuses those types
+// directly. Folded as part of D31d.
 
 // ---------------------------------------------------------------------------
 // Map — the read model
@@ -283,8 +278,8 @@ type ReadService struct {
 	businessServiceRelationships BusinessServiceRelationshipReader
 	businessServiceCapabilities  BusinessServiceCapabilityReader
 	capabilities                 CapabilityReader
-	processes                    ProcessReader
-	surfaces                     SurfaceReader
+	processes                    ProcessListReader
+	surfaces                     SurfaceListReader
 	profiles                     ProfileReader
 	grants                       GrantReader
 	aiSystems                    AISystemReader
@@ -301,8 +296,8 @@ func NewReadService(
 	businessServiceRelationships BusinessServiceRelationshipReader,
 	businessServiceCapabilities BusinessServiceCapabilityReader,
 	capabilities CapabilityReader,
-	processes ProcessReader,
-	surfaces SurfaceReader,
+	processes ProcessListReader,
+	surfaces SurfaceListReader,
 	profiles ProfileReader,
 	grants GrantReader,
 	aiSystems AISystemReader,

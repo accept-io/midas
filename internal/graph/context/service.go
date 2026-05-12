@@ -1,4 +1,4 @@
-package authoritygraph
+package contextgraph
 
 import (
 	"context"
@@ -12,7 +12,6 @@ import (
 	"github.com/accept-io/midas/internal/businessservice"
 	"github.com/accept-io/midas/internal/capability"
 	"github.com/accept-io/midas/internal/externalref"
-	"github.com/accept-io/midas/internal/governancemap"
 	"github.com/accept-io/midas/internal/process"
 	"github.com/accept-io/midas/internal/surface"
 )
@@ -35,16 +34,16 @@ const (
 //
 // Wrap with fmt.Errorf("...: %w", err) when adding context.
 var (
-	ErrInvalidView  = errors.New("authoritygraph: invalid view")
-	ErrInvalidID    = errors.New("authoritygraph: invalid id")
-	ErrInvalidDepth = errors.New("authoritygraph: invalid depth")
-	ErrNotFound     = errors.New("authoritygraph: root entity not found")
+	ErrInvalidView  = errors.New("contextgraph: invalid view")
+	ErrInvalidID    = errors.New("contextgraph: invalid id")
+	ErrInvalidDepth = errors.New("contextgraph: invalid depth")
+	ErrNotFound     = errors.New("contextgraph: root entity not found")
 )
 
-// GovernanceMapReader is the narrow dependency the service-view
-// projector requires. *governancemap.ReadService satisfies it.
-type GovernanceMapReader interface {
-	GetGovernanceMap(ctx context.Context, businessServiceID string) (*governancemap.Map, error)
+// MapReader is the narrow dependency the service-view projector
+// requires. *ReadService (defined in source.go) satisfies it.
+type MapReader interface {
+	GetGovernanceMap(ctx context.Context, businessServiceID string) (*Map, error)
 }
 
 // AISystemReader is the narrow read dependency for the ai_system view.
@@ -103,7 +102,7 @@ type SurfaceReader interface {
 // it; the constructor only registers a view's projector when its
 // required readers are non-nil.
 type Readers struct {
-	GovernanceMap    GovernanceMapReader
+	GovernanceMap    MapReader
 	AISystem         AISystemReader
 	AISystemBindings AISystemBindingRepository
 	BusinessServices BusinessServiceReader
@@ -198,7 +197,7 @@ func (s *Service) projectServiceViewEntry(ctx context.Context, id string, depth 
 // projection. The function is split into "build the unfiltered graph"
 // (every node and edge derivable from the Map) followed by
 // "depth-bounded filter + sort". Sort keys are pinned by tests.
-func projectServiceView(gmap *governancemap.Map, bsID string, depth int) *Projection {
+func projectServiceView(gmap *Map, bsID string, depth int) *Projection {
 	root := NodeRef{Kind: NodeKindBusinessService, ID: bsID}
 	nodes, edges := buildServiceGraph(gmap, bsID)
 
@@ -289,7 +288,7 @@ func projectServiceView(gmap *governancemap.Map, bsID string, depth int) *Projec
 //     prevents at apply time) emits no bound_to edge defensively.
 //
 //   - system_of always emits — it is the binding ↔ AI system edge.
-func buildServiceGraph(gmap *governancemap.Map, bsID string) ([]Node, []Edge) {
+func buildServiceGraph(gmap *Map, bsID string) ([]Node, []Edge) {
 	var nodes []Node
 	var edges []Edge
 

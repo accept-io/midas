@@ -1,6 +1,7 @@
-package governancemap
+package contextgraph
 
-// Read service tests for the governance map (Epic 1, PR 4).
+// Read service tests for the underlying context-map composer (folded
+// from internal/governancemap/read_service_test.go in D31d).
 //
 // Test posture: tests use stub readers backed by simple maps rather
 // than wiring full memory repositories. The aggregation logic is the
@@ -27,11 +28,11 @@ import (
 // Stub readers
 // ---------------------------------------------------------------------------
 
-type stubBSReader struct {
+type srcStubBSReader struct {
 	items map[string]*businessservice.BusinessService
 }
 
-func (r *stubBSReader) GetByID(_ context.Context, id string) (*businessservice.BusinessService, error) {
+func (r *srcStubBSReader) GetByID(_ context.Context, id string) (*businessservice.BusinessService, error) {
 	return r.items[id], nil
 }
 
@@ -129,9 +130,9 @@ func (r *stubGrantReader) ListByProfile(_ context.Context, profileID string) ([]
 	return out, nil
 }
 
-type stubAISystemReader struct{ items map[string]*aisystem.AISystem }
+type srcStubAISystemReader struct{ items map[string]*aisystem.AISystem }
 
-func (r *stubAISystemReader) GetByID(_ context.Context, id string) (*aisystem.AISystem, error) {
+func (r *srcStubAISystemReader) GetByID(_ context.Context, id string) (*aisystem.AISystem, error) {
 	return r.items[id], nil
 }
 
@@ -192,7 +193,7 @@ func (r *stubAIBindingReader) ListBySurface(_ context.Context, surfID string) ([
 // fixture wires a ReadService backed by stub readers. Each field is
 // directly mutable so tests can populate exactly the rows they need.
 type fixture struct {
-	bs       *stubBSReader
+	bs       *srcStubBSReader
 	bsr      *stubBSRReader
 	bsc      *stubBSCReader
 	caps     *stubCapabilityReader
@@ -200,14 +201,14 @@ type fixture struct {
 	surfaces *stubSurfaceReader
 	profiles *stubProfileReader
 	grants   *stubGrantReader
-	aiSys    *stubAISystemReader
+	aiSys    *srcStubAISystemReader
 	aiVer    *stubAIVersionReader
 	aiBind   *stubAIBindingReader
 }
 
 func newFixture() *fixture {
 	return &fixture{
-		bs:       &stubBSReader{items: map[string]*businessservice.BusinessService{}},
+		bs:       &srcStubBSReader{items: map[string]*businessservice.BusinessService{}},
 		bsr:      &stubBSRReader{},
 		bsc:      &stubBSCReader{},
 		caps:     &stubCapabilityReader{items: map[string]*capability.Capability{}},
@@ -215,7 +216,7 @@ func newFixture() *fixture {
 		surfaces: &stubSurfaceReader{},
 		profiles: &stubProfileReader{},
 		grants:   &stubGrantReader{},
-		aiSys:    &stubAISystemReader{items: map[string]*aisystem.AISystem{}},
+		aiSys:    &srcStubAISystemReader{items: map[string]*aisystem.AISystem{}},
 		aiVer:    &stubAIVersionReader{items: map[string]*aisystem.AISystemVersion{}},
 		aiBind:   &stubAIBindingReader{},
 	}
@@ -291,11 +292,11 @@ func TestGetGovernanceMap_ServiceNotConfigured_ReturnsErr(t *testing.T) {
 
 	// Missing one reader.
 	svc := NewReadService(
-		&stubBSReader{items: map[string]*businessservice.BusinessService{}},
+		&srcStubBSReader{items: map[string]*businessservice.BusinessService{}},
 		nil, // missing
 		&stubBSCReader{}, &stubCapabilityReader{}, &stubProcessReader{},
 		&stubSurfaceReader{}, &stubProfileReader{}, &stubGrantReader{},
-		&stubAISystemReader{}, &stubAIVersionReader{}, &stubAIBindingReader{},
+		&srcStubAISystemReader{}, &stubAIVersionReader{}, &stubAIBindingReader{},
 	)
 	_, err = svc.GetGovernanceMap(context.Background(), "bs")
 	if !errors.Is(err, ErrServiceNotConfigured) {

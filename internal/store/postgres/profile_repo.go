@@ -45,6 +45,7 @@ func (r *ProfileRepo) FindByID(ctx context.Context, id string) (*authority.Autho
 			consequence_risk_rating,
 			policy_reference,
 			escalation_mode,
+			escalation_target_id,
 			fail_mode,
 			required_context_keys,
 			created_at,
@@ -89,6 +90,7 @@ func (r *ProfileRepo) FindByIDAndVersion(ctx context.Context, id string, version
 			consequence_risk_rating,
 			policy_reference,
 			escalation_mode,
+			escalation_target_id,
 			fail_mode,
 			required_context_keys,
 			created_at,
@@ -136,6 +138,7 @@ func (r *ProfileRepo) FindActiveAt(ctx context.Context, id string, at time.Time)
 			consequence_risk_rating,
 			policy_reference,
 			escalation_mode,
+			escalation_target_id,
 			fail_mode,
 			required_context_keys,
 			created_at,
@@ -182,6 +185,7 @@ func (r *ProfileRepo) ListBySurface(ctx context.Context, surfaceID string) ([]*a
 			consequence_risk_rating,
 			policy_reference,
 			escalation_mode,
+			escalation_target_id,
 			fail_mode,
 			required_context_keys,
 			created_at,
@@ -237,6 +241,7 @@ func (r *ProfileRepo) ListVersions(ctx context.Context, id string) ([]*authority
 			consequence_risk_rating,
 			policy_reference,
 			escalation_mode,
+			escalation_target_id,
 			fail_mode,
 			required_context_keys,
 			created_at,
@@ -296,6 +301,7 @@ func (r *ProfileRepo) Create(ctx context.Context, p *authority.AuthorityProfile)
 			consequence_risk_rating,
 			policy_reference,
 			escalation_mode,
+			escalation_target_id,
 			fail_mode,
 			required_context_keys,
 			created_at,
@@ -304,7 +310,7 @@ func (r *ProfileRepo) Create(ctx context.Context, p *authority.AuthorityProfile)
 			approved_by,
 			approved_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24
 		)
 	`
 
@@ -327,6 +333,7 @@ func (r *ProfileRepo) Create(ctx context.Context, p *authority.AuthorityProfile)
 		nullableRiskRating(p.ConsequenceThreshold),
 		nullableString(p.PolicyReference),
 		p.EscalationMode,
+		nullableString(p.EscalationTargetID),
 		p.FailMode,
 		requiredContextKeys,
 		p.CreatedAt,
@@ -361,11 +368,12 @@ func (r *ProfileRepo) Update(ctx context.Context, p *authority.AuthorityProfile)
 			consequence_risk_rating = $14,
 			policy_reference = $15,
 			escalation_mode = $16,
-			fail_mode = $17,
-			required_context_keys = $18,
-			updated_at = $19,
-			approved_by = $20,
-			approved_at = $21
+			escalation_target_id = $17,
+			fail_mode = $18,
+			required_context_keys = $19,
+			updated_at = $20,
+			approved_by = $21,
+			approved_at = $22
 		WHERE id = $1
 		  AND version = $2
 	`
@@ -389,6 +397,7 @@ func (r *ProfileRepo) Update(ctx context.Context, p *authority.AuthorityProfile)
 		nullableRiskRating(p.ConsequenceThreshold),
 		nullableString(p.PolicyReference),
 		p.EscalationMode,
+		nullableString(p.EscalationTargetID),
 		p.FailMode,
 		requiredContextKeys,
 		p.UpdatedAt,
@@ -425,6 +434,7 @@ func scanProfileRow(row profileScanner) (*authority.AuthorityProfile, error) {
 		consequenceCurrency  sql.NullString
 		consequenceRisk      sql.NullString
 		policyReference      sql.NullString
+		escalationTargetID   sql.NullString
 		requiredContextBytes []byte
 		createdBy            sql.NullString
 		approvedBy           sql.NullString
@@ -448,6 +458,7 @@ func scanProfileRow(row profileScanner) (*authority.AuthorityProfile, error) {
 		&consequenceRisk,
 		&policyReference,
 		&p.EscalationMode,
+		&escalationTargetID,
 		&p.FailMode,
 		&requiredContextBytes,
 		&p.CreatedAt,
@@ -487,6 +498,9 @@ func scanProfileRow(row profileScanner) (*authority.AuthorityProfile, error) {
 	}
 	if policyReference.Valid {
 		p.PolicyReference = policyReference.String
+	}
+	if escalationTargetID.Valid {
+		p.EscalationTargetID = escalationTargetID.String
 	}
 
 	if len(requiredContextBytes) > 0 {

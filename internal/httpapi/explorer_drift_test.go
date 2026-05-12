@@ -550,32 +550,38 @@ func TestExplorer_DriftBackend_NoNewDriftRoutesRegistered(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestExplorer_HTML_SetServicesSubView_AcceptsDrift(t *testing.T) {
-	body := driftExplorerHTML(t)
-	// The state-machine must accept 'drift' as a fourth valid value
-	// alongside catalogue / detail / map. Pin the exact string that
-	// makes the condition include 'drift'.
-	if !strings.Contains(body, `view === 'drift'`) {
-		t.Error("setServicesSubView must accept 'drift' as a fourth valid sub-view value")
+	// D32a-impl-5 — Services sub-view orchestration moved from inline
+	// IIFE into assets/js/services/services-view.js. The state-machine
+	// pin migrated to the module body via getExplorerAllJS.
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	allJS := getExplorerAllJS(t, srv)
+	if !strings.Contains(allJS, `view === 'detail' || view === 'map' || view === 'drift'`) {
+		t.Error("MIDASExplorerServices.setSubView must accept 'drift' as a fourth valid sub-view value")
 	}
-	if !strings.Contains(body, `function showServicesDriftOverview()`) {
-		t.Error("index.html must define showServicesDriftOverview() as the drift sub-view entry point")
+	if !strings.Contains(allJS, "MIDASExplorerDrift.loadDriftHeatmap") {
+		t.Error("services-view.js showDriftOverview must call MIDASExplorerDrift.loadDriftHeatmap()")
 	}
-	if !strings.Contains(body, "MIDASExplorerDrift.loadDriftHeatmap") {
-		t.Error("showServicesDriftOverview must call window.MIDASExplorerDrift.loadDriftHeatmap()")
+	// The inline IIFE retains a thin shim for showServicesDriftOverview;
+	// pin its delegation through MIDASExplorerServices.
+	if !strings.Contains(allJS, "MIDASExplorerServices.showDriftOverview") {
+		t.Error("inline shim or wiring must dispatch through MIDASExplorerServices.showDriftOverview")
 	}
 }
 
 func TestExplorer_HTML_DriftButton_WiredInCatalogueHeader(t *testing.T) {
-	body := driftExplorerHTML(t)
-	// The open / back buttons are wired by id from the existing
-	// wireServicesSubViewControls IIFE.
+	// D32a-impl-5 — open/back-button wiring moved into services-view.js
+	// (init()). The DOM ids still live in index.html.
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	allJS := getExplorerAllJS(t, srv)
 	for _, want := range []string{
 		`services-drift-open-btn`,
 		`services-drift-back-btn`,
-		`addEventListener('click', showServicesDriftOverview)`,
+		`openDrift.addEventListener('click', showDriftOverview)`,
 	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("explorer HTML missing drift-button wiring %q", want)
+		if !strings.Contains(allJS, want) {
+			t.Errorf("explorer JS missing drift-button wiring %q", want)
 		}
 	}
 }

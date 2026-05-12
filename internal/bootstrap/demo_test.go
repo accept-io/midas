@@ -25,6 +25,7 @@ import (
 	"github.com/accept-io/midas/internal/businessservice"
 	"github.com/accept-io/midas/internal/businessservicecapability"
 	"github.com/accept-io/midas/internal/capability"
+	"github.com/accept-io/midas/internal/escalation"
 	"github.com/accept-io/midas/internal/process"
 	"github.com/accept-io/midas/internal/store"
 	"github.com/accept-io/midas/internal/store/memory"
@@ -802,3 +803,73 @@ func TestSeedDemo_RepeatedCallsRemainIdempotent_AuthorityProfiles(t *testing.T) 
 	}
 }
 
+
+// TestSeedDemo_EscalationTargetSeeded pins the D31k-impl-1 demo
+// invariants:
+//   - the seed creates et-governance-approver
+//   - the target is active + has an effective window
+//   - at least one seeded AuthorityProfile references it via
+//     EscalationTargetID (currently profile-v2-standard).
+func TestSeedDemo_EscalationTargetSeeded(t *testing.T) {
+	ctx := context.Background()
+	repos := freshRepos(t)
+	if err := SeedDemo(ctx, repos); err != nil {
+		t.Fatalf("SeedDemo: %v", err)
+	}
+
+	got, err := repos.EscalationTargets.FindByID(ctx, "et-governance-approver")
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected seed to create et-governance-approver")
+	}
+	if got.Status != escalation.StatusActive {
+		t.Errorf("Status: want active, got %q", got.Status)
+	}
+	if got.Kind != escalation.KindRole {
+		t.Errorf("Kind: want role, got %q", got.Kind)
+	}
+	if got.Handle == "" {
+		t.Errorf("Handle must be non-empty")
+	}
+
+	// FindActiveAt at "now" must resolve.
+	active, err := repos.EscalationTargets.FindActiveAt(ctx, "et-governance-approver", time.Now())
+	if err != nil || active == nil {
+		t.Errorf("FindActiveAt returned (%+v, %v); want non-nil", active, err)
+	}
+
+	// At least one active profile must reference it.
+	profile, err := repos.Profiles.FindByID(ctx, "profile-v2-standard")
+	if err != nil {
+		t.Fatalf("Profiles.FindByID: %v", err)
+	}
+	if profile == nil {
+		t.Fatal("profile-v2-standard missing from seed")
+	}
+	if profile.EscalationTargetID != "et-governance-approver" {
+		t.Errorf("profile-v2-standard.EscalationTargetID: want %q, got %q",
+			"et-governance-approver", profile.EscalationTargetID)
+	}
+}
+
+// TestSeedDemo_EscalationTargetIdempotent pins that repeated SeedDemo
+// calls do not create duplicate versions or mutate the seeded target.
+func TestSeedDemo_EscalationTargetIdempotent(t *testing.T) {
+	ctx := context.Background()
+	repos := freshRepos(t)
+	if err := SeedDemo(ctx, repos); err != nil {
+		t.Fatalf("SeedDemo (first): %v", err)
+	}
+	before, _ := repos.EscalationTargets.ListVersions(ctx, "et-governance-approver")
+
+	if err := SeedDemo(ctx, repos); err != nil {
+		t.Fatalf("SeedDemo (second): %v", err)
+	}
+	after, _ := repos.EscalationTargets.ListVersions(ctx, "et-governance-approver")
+
+	if len(before) != 1 || len(after) != 1 {
+		t.Errorf("EscalationTarget versions: want 1+1, got %d+%d", len(before), len(after))
+	}
+}

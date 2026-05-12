@@ -31,7 +31,8 @@ type testRepos struct {
 	businessServices *fakeBusinessServiceRepo
 	bscLinks         *fakeBSCRepo
 	capabilities     *fakeCapabilityRepo
-	failModePolicies *memory.FailModePolicyRepo
+	failModePolicies  *memory.FailModePolicyRepo
+	escalationTargets *memory.EscalationTargetRepo
 }
 
 func newRepos() testRepos {
@@ -46,7 +47,8 @@ func newRepos() testRepos {
 		businessServices: &fakeBusinessServiceRepo{},
 		bscLinks:         &fakeBSCRepo{},
 		capabilities:     &fakeCapabilityRepo{},
-		failModePolicies: memory.NewFailModePolicyRepo(),
+		failModePolicies:  memory.NewFailModePolicyRepo(),
+		escalationTargets: memory.NewEscalationTargetRepo(),
 	}
 }
 
@@ -65,6 +67,7 @@ func newOrchestrator(t *testing.T, r testRepos) *decision.Orchestrator {
 		BusinessServiceCapabilities: r.bscLinks,
 		Capabilities:                r.capabilities,
 		FailModePolicies:            r.failModePolicies,
+		EscalationTargets:           r.escalationTargets,
 	})
 
 	orch, err := decision.NewOrchestrator(

@@ -94,6 +94,20 @@ type AuthorityProfile struct {
 	// Governance semantics
 	EscalationMode EscalationMode
 
+	// EscalationTargetID is an optional reference to the logical id of
+	// the escalation.EscalationTarget that should receive escalations
+	// produced under this profile (D31k-impl-1). Empty means no
+	// explicit target; the orchestrator preserves its existing
+	// escalation behaviour. EscalationMode (auto / manual) and
+	// EscalationTargetID are complementary: Mode describes the
+	// behaviour at the moment of escalation, Target describes the
+	// destination. The reference is to the LOGICAL id only — the
+	// active version is resolved at runtime by the
+	// escalation.Repository.FindActiveAt path. No FK is enforced at
+	// the SQL layer; integrity is preserved by the apply-time
+	// validator and runtime resolver.
+	EscalationTargetID string
+
 	// FailMode is the only currently runtime-effective fail-mode field. It
 	// scopes the policy-evaluator-error sub-case at evaluation time —
 	// nothing else. See the FailMode type comment for full semantics and
@@ -136,8 +150,23 @@ const (
 	GrantStatusRevoked   GrantStatus = "revoked"
 )
 
-// AuthorityGrant is the thin link between an Agent and an AuthorityProfile.
-// It carries no governance semantics beyond the link itself.
+// AuthorityGrant links an Agent to an AuthorityProfile and carries the
+// discrete capabilities the grant authorises plus the constraints that
+// narrow each capability at runtime (D31i). Capabilities and Constraints
+// are the runtime-effective fields; the rest of the struct is governance
+// metadata (granted_by, lifecycle timestamps, revoke/suspend state).
+//
+// Capabilities is a SET (no duplicates) drawn from the canonical
+// Capability values — see capability.go. An empty Capabilities slice is
+// a valid domain state (the grant authorises no action), but the
+// Authority Graph emits a warning diagnostic for such grants so
+// operators see the gap.
+//
+// Constraints is a list of typed value objects (Constraint, see
+// constraint.go). At most one constraint per Kind. The orchestrator
+// evaluates constraints after authority chain resolution and before
+// capability check; a violation produces a reject outcome and an
+// AUTHORITY_CONSTRAINT_VIOLATED audit event.
 type AuthorityGrant struct {
 	ID        string
 	AgentID   string
@@ -146,6 +175,18 @@ type AuthorityGrant struct {
 	GrantedBy   string
 	GrantReason string
 	Status      GrantStatus
+
+	// Capabilities is the SET of actions this grant authorises.
+	// Drawn from the five canonical Capability values; empty means
+	// the grant authorises no action (valid domain state, but the
+	// Authority Graph flags it).
+	Capabilities []Capability
+
+	// Constraints narrow each capability with typed runtime
+	// conditions. Evaluated by the orchestrator on every request;
+	// any violation rejects the request and emits an
+	// AUTHORITY_CONSTRAINT_VIOLATED audit event.
+	Constraints []Constraint
 
 	// Temporal scope
 	EffectiveDate time.Time

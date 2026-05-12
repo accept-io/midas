@@ -172,7 +172,25 @@
       "Bash(MSYS_NO_PATHCONV=1 docker run --rm --network midas_default -v \"$\\(pwd\\):/app\" -w /app -e MIDAS_TEST_DATABASE_URL=\"postgresql://midas:midas@postgres:5432/midas?sslmode=disable\" golang:1.26-alpine sh -c \"go test -count=1 -run 'TestEvidence_Search' ./internal/httpapi/... -v -timeout 60s\")",
       "Bash(MSYS_NO_PATHCONV=1 docker run --rm --network midas_default -v \"$\\(pwd\\):/app\" -w /app -e MIDAS_TEST_DATABASE_URL=\"postgresql://midas:midas@postgres:5432/midas?sslmode=disable\" golang:1.26-alpine sh -c \"go test -count=1 ./internal/audit/... ./internal/httpapi/... -timeout 180s 2>&1 | tail -60\")",
       "Bash(MSYS_NO_PATHCONV=1 docker run --rm --network midas_default -v \"$\\(pwd\\):/app\" -w /app -e MIDAS_TEST_DATABASE_URL=\"postgresql://midas:midas@postgres:5432/midas?sslmode=disable\" golang:1.26-alpine sh -c \"go test -p 1 -count=1 -timeout 180s ./internal/httpapi/...\")",
-      "Bash(MSYS_NO_PATHCONV=1 docker run --rm --network midas_default -v \"$\\(pwd\\):/app\" -w /app -e MIDAS_TEST_DATABASE_URL=\"postgresql://midas:midas@postgres:5432/midas?sslmode=disable\" golang:1.26-alpine sh -c \"go test -p 1 -count=1 -timeout 180s ./internal/decision/... ./internal/audit/...\")"
+      "Bash(MSYS_NO_PATHCONV=1 docker run --rm --network midas_default -v \"$\\(pwd\\):/app\" -w /app -e MIDAS_TEST_DATABASE_URL=\"postgresql://midas:midas@postgres:5432/midas?sslmode=disable\" golang:1.26-alpine sh -c \"go test -p 1 -count=1 -timeout 180s ./internal/decision/... ./internal/audit/...\")",
+      "Bash(grep -E \"\\\\.\\(go|html\\)$\")",
+      "Bash(awk 'NR<1327 || NR>=1665' c:/Users/phil/dev/accept/midas/api/openapi/v1.yaml)",
+      "Bash(MSYS_NO_PATHCONV=1 docker run --rm --network midas_default -v \"$\\(pwd\\):/app\" -w /app -e MIDAS_TEST_DATABASE_URL=\"postgresql://midas:midas@postgres:5432/midas?sslmode=disable\" golang:1.26-alpine sh -c \"go test -count=1 ./internal/graph/authority/... ./internal/httpapi/... -timeout 180s\")",
+      "Bash(MSYS_NO_PATHCONV=1 docker run --rm --network midas_default -v \"$\\(pwd\\):/app\" -w /app golang:1.26-alpine sh -c \"go test -count=1 ./internal/graph/authority/...\")",
+      "Bash(MSYS_NO_PATHCONV=1 docker run --rm --network midas_default -v \"$\\(pwd\\):/app\" -w /app golang:1.26-alpine sh -c \"go build ./... 2>&1 && go test -count=1 ./internal/graph/authority/... ./internal/httpapi/...\")",
+      "Bash(bash test.sh build)",
+      "Bash(bash test.sh vet)",
+      "Bash(bash test.sh all)",
+      "Bash(grep -E \"^\\(--- FAIL|FAIL\\\\s|FAIL$|FAIL\\\\t\\)\")",
+      "Bash(grep -E \"^\\(--- FAIL|FAIL\\\\s|FAIL$|FAIL\\\\t|ok\\\\s+|ok\\\\t\\)\")",
+      "Bash(grep -n \"AuthorityGraphProjection\\\\\"$\\\\|/v1/graphs/authority:\\\\|AuthorityGraph projection\" c:/Users/phil/dev/accept/midas/api/openapi/v1.yaml)",
+      "Bash(bash ./test.sh build)",
+      "Bash(bash ./test.sh all)",
+      "Bash(grep -E \"^\\(FAIL|--- FAIL|ok |\\\\? |FAIL\\\\s|PASS$\\)\")",
+      "Bash(grep -E \"^\\(FAIL|--- FAIL|ok |PASS$\\)\")",
+      "Bash(awk 'NR==6742{flag=1} /^  function / && NR>6743{flag=0; print NR; exit} flag && /^  }$/{print NR; exit}' c:/Users/phil/dev/accept/midas/internal/httpapi/explorer/index.html)",
+      "Bash(awk 'NR==6619{flag=1} flag && /^  }$/{print NR; exit}' c:/Users/phil/dev/accept/midas/internal/httpapi/explorer/index.html)",
+      "Bash(awk 'NR==6619, NR==7438' c:/Users/phil/dev/accept/midas/internal/httpapi/explorer/index.html)"
     ],
     "additionalDirectories": [
       "\\tmp"

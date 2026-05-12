@@ -662,7 +662,7 @@ func seedStore(st *fakeStore) {
 	seedStructuralChain(st.processes, st.businessServices, st.bscLinks, st.capabilities,
 		testProcessID, testBusinessServiceID, nil)
 	st.agents.agents = map[string]*agent.Agent{
-		testAgentID: {ID: testAgentID},
+		testAgentID: {ID: testAgentID, OperationalState: agent.OperationalStateActive},
 	}
 	st.grants.grants = map[string][]*authority.AuthorityGrant{
 		testAgentID: {

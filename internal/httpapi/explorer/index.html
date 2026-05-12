@@ -3,6 +3,16 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- D32a-impl-1 — Explorer runtime config. core/config.js reads these
+     two meta tags and applies them to MIDASExplorerAPI.configure().
+     midas-api-base is the URL prefix prepended to every API path
+     (empty = same-origin, the production default). midas-auth-mode
+     selects between cookie (session-cookie, default) and bearer
+     (Authorization header). Operators / build steps may rewrite the
+     content attributes; the meta tags themselves must remain
+     present for the API client to read defaults. -->
+<meta name="midas-api-base" content="">
+<meta name="midas-auth-mode" content="cookie">
 <title>MIDAS Explorer</title>
 <!-- MIDAS favicon — inline SVG data URI mirrors the sidebar `.midas-logo-mark`:
      four equal vertical white bars on a black background, with bars 2 and 3
@@ -201,7 +211,7 @@
         <div class="services-catalogue-header-row">
           <div class="services-catalogue-header-titles">
             <h2 class="services-catalogue-title">Business Services</h2>
-            <p class="services-catalogue-subtitle">Browse business services in scope of the platform. Select one to view its record and governance map.</p>
+            <p class="services-catalogue-subtitle">Browse business services in scope of the platform. Select one to view its record and Context Graph.</p>
           </div>
           <!-- Drift-2b entry point — single header button, btn-secondary
                (less heavy than the per-service primary "Open Governance
@@ -223,8 +233,8 @@
          identity + primary action. Body shows identity strip, core
          details, related services, capabilities, processes, surfaces,
          AI systems, governance summary. All data comes from
-         GET /v1/authority-graph?view=service&id={id}&depth=5,
-         adapted via mapAuthorityGraphToGovernanceMapShape(). -->
+         GET /v1/graphs/context?view=service&id={id}&depth=5,
+         adapted via mapContextGraphToCardLayout(). -->
     <div id="services-record-view" class="services-subview services-record" role="region" aria-label="Business Service record">
       <header class="services-record-header">
         <button type="button" id="services-record-back-btn" class="services-record-back" aria-label="Back to Business Services catalogue">← Business Services</button>
@@ -234,7 +244,7 @@
           <span class="services-record-status" id="services-record-status"></span>
         </div>
         <div class="services-record-actions">
-          <button type="button" id="services-record-open-map-btn" class="btn btn-primary" aria-label="Open Governance Map for this service">Open Governance Map</button>
+          <button type="button" id="services-record-open-map-btn" class="btn btn-primary" aria-label="Open Context Graph for this service">Open Context Graph</button>
         </div>
       </header>
       <div id="services-record-body" class="services-record-body"></div>
@@ -246,9 +256,26 @@
          are preserved verbatim because the renderer references them by id.
          Only the outer container changes: a back-to-record header replaces
          the previous Overview/Map mode toggle. -->
-    <div id="services-map-view" class="services-subview" role="region" aria-label="Governance Map">
+    <div id="services-map-view" class="services-subview" role="region" aria-label="Context Graph">
       <header class="services-map-view-header">
         <button type="button" id="services-map-back-btn" class="services-record-back" aria-label="Back to Business Service record">← <span id="services-map-back-label">Record</span></button>
+        <!-- D32a-impl-1 — Graph lens switcher. Two-button segmented
+             control selecting which lens renders into the workbench
+             below. Context (the existing /v1/graphs/context-backed
+             Governance Map) is enabled today; Authority is visible
+             but disabled with an aria-disabled + "coming next"
+             title until the Authority Graph UI tranche lands. The
+             buttons carry data-lens so window.MIDASExplorerGraph.shell
+             can wire click handlers without re-querying ids. -->
+        <div class="graph-lens-switcher" role="group" aria-label="Graph lens">
+          <button type="button" class="graph-lens-button is-active" data-lens="context"
+                  aria-pressed="true" aria-label="Context lens" title="Context lens">Context</button>
+          <button type="button" class="graph-lens-button is-disabled" data-lens="authority"
+                  aria-pressed="false" aria-disabled="true"
+                  aria-label="Authority lens — coming next"
+                  title="Authority lens — coming next">Authority</button>
+          <span class="graph-lens-coming-next" aria-live="polite">Authority lens — coming next</span>
+        </div>
       </header>
       <div class="governance-map-workbench">
         <!-- D26g-impl-1 — Workbench toolbar consolidation. Replaces
@@ -1409,6 +1436,55 @@
      object identity. -->
 <script src="/explorer/assets/js/api.js"></script>
 <script src="/explorer/assets/js/state.js"></script>
+<!-- D32a-impl-1 — Explorer foundation: API client, config, router,
+     store. These modules attach to window.MIDASExplorer* namespaces
+     and provide the structured surfaces future tranches will migrate
+     to. They MUST load after api.js + state.js (so the
+     window.MIDASExplorerAPI/State namespaces exist for the client
+     to extend, and the api-client extension is non-destructive) and
+     BEFORE the inline IIFE (which binds these namespaces to locals).
+     core/api-client.js — adds graphs/businessServices/capabilities/
+       drift/evidence/escalationTargets/failModePolicies endpoint
+       groups plus configure/getConfig/request to MIDASExplorerAPI.
+     core/config.js — reads <meta name="midas-*"> and calls
+       MIDASExplorerAPI.configure(). Loads after api-client.js.
+     core/router.js — hash router with register/start/navigate/
+       current. Seed for the future top-level router migration.
+     core/store.js — pub/sub store with the canonical state shape
+       future state migrations should target. -->
+<script src="/explorer/assets/js/core/api-client.js"></script>
+<script src="/explorer/assets/js/core/config.js"></script>
+<script src="/explorer/assets/js/core/router.js"></script>
+<script src="/explorer/assets/js/core/store.js"></script>
+<!-- D32a-impl-1 — Graph shell + Context lens adapter. Lens-agnostic
+     shell modules (graph-types, graph-layout, graph-renderer,
+     graph-inspector, graph-shell) declare the surfaces lens adapters
+     register against. context-graph-adapter wraps the API client's
+     graphs.context method with the legacy 404/501 sentinel contract.
+     context-graph-view registers itself with the renderer + inspector
+     and forwards to the inline IIFE through
+     window.MIDASExplorerGovernanceMapBridge when present (no-op
+     today; subsequent tranches will populate the bridge). Authority
+     Graph UI is intentionally NOT included — the lens switcher's
+     Authority button is disabled with a "coming next" label. -->
+<script src="/explorer/assets/js/graph/graph-types.js"></script>
+<script src="/explorer/assets/js/graph/graph-layout.js"></script>
+<script src="/explorer/assets/js/graph/graph-renderer.js"></script>
+<script src="/explorer/assets/js/graph/graph-camera.js"></script>
+<script src="/explorer/assets/js/graph/graph-interactions.js"></script>
+<script src="/explorer/assets/js/graph/graph-selection.js"></script>
+<script src="/explorer/assets/js/graph/graph-inspector.js"></script>
+<script src="/explorer/assets/js/graph/graph-shell.js"></script>
+<script src="/explorer/assets/js/graph/context/context-graph-adapter.js"></script>
+<script src="/explorer/assets/js/graph/context/context-graph-inspector.js"></script>
+<script src="/explorer/assets/js/graph/context/context-graph-view.js"></script>
+<!-- D32a-impl-5 — Explorer Services + Capabilities view modules.
+     Each owns the production view orchestration formerly inline in
+     index.html. Loaded after the graph modules so the services view's
+     loadRecord can dispatch through ExplorerGraph.shell.refresh and
+     the capabilities view's cross-link can call into MIDASExplorerServices. -->
+<script src="/explorer/assets/js/services/services-view.js"></script>
+<script src="/explorer/assets/js/capabilities/capabilities-view.js"></script>
 <!-- D27j-ui-foundation-5: Governance Map module foundation. Three
      plain-script files attach low-risk constants and pure helpers to
      window.MIDASGovernanceMap. constants.js declares the GMAP /
@@ -1512,6 +1588,109 @@
   const capabilityRecordCache       = ExplorerState.capabilityRecordCache;
   const explorerEnvelopeDetailsById = ExplorerState.explorerEnvelopeDetailsById;
 
+  // D32a-impl-1 — Foundation namespaces: config, router, store, graph
+  // shell + context adapter. ExplorerStore / ExplorerGraph are bound
+  // here so future migrations (and the lens switcher init below)
+  // resolve at runtime without a window.* lookup at every call-site.
+  // ExplorerAPI is already bound above; api-client.js has extended
+  // it in-place with .request / .graphs / .businessServices / etc.
+  const ExplorerConfig = window.MIDASExplorerConfig || {};
+  const ExplorerRouter = window.MIDASExplorerRouter || {};
+  const ExplorerStore  = window.MIDASExplorerStore  || {};
+  const ExplorerGraph  = window.MIDASExplorerGraph  || {};
+
+  // D32a-impl-3 — Shared graph state namespace. graph-renderer.js
+  // declares window.MIDASExplorerGraph.state with mutable object
+  // containers (positions, dragOverrides, connectors, selectedNodeIds,
+  // visibilityFilters) and a reassignable scalar (selectedId). The
+  // inline IIFE binds local `const`s to the SAME object references
+  // so renderer-module mutations and inline-code mutations operate
+  // on shared memory. Reassignable scalars use the namespace
+  // accessors below.
+  const _ExplorerGraphState = window.MIDASExplorerGraph.state || {};
+
+  // D32a-impl-3 — Render-context hook bundle. The moved Context
+  // Graph renderer (graph/context/context-graph-view.js) and the
+  // moved primitives in graph-renderer.js call back into the still-
+  // inline orchestration through these wrappers. Defined here (the
+  // top of the IIFE) so module function-hoisting + the renderer
+  // module's lazy hook resolution both work. Each wrapper checks
+  // typeof so an early call (before the inline function declaration
+  // is reached at run time) still no-ops cleanly.
+  const _gmapRenderCtx = {
+    get view()   { return currentGraphView; },
+    get rootId() { return currentGraphRootId; },
+    setStatus:           function (t)        { if (typeof setGovernanceMapStatus === 'function') setGovernanceMapStatus(t); },
+    setCurrentRoot:      function (v, id, n) { if (typeof setGovernanceMapCurrentRoot === 'function') setGovernanceMapCurrentRoot(v, id, n); },
+    setSummary:          function (rows)     { if (typeof setGovernanceMapSummary === 'function') setGovernanceMapSummary(rows); },
+    setDetailsName:      function (name)     { if (typeof setGovernanceMapDetailsName === 'function') setGovernanceMapDetailsName(name); },
+    setDetailsFields:    function (rows)     { if (typeof setGovernanceMapDetailsFields === 'function') setGovernanceMapDetailsFields(rows); },
+    selectNode:          function (id)       { if (typeof selectGovernanceMapNode === 'function') selectGovernanceMapNode(id); },
+    applyZoom:           function ()         { if (typeof applyGmapZoom === 'function') applyGmapZoom(); },
+    focusOnRoot:         function (id)       { if (typeof focusGmapOnRoot === 'function') focusGmapOnRoot(id); },
+    applyFitMode:        function (on)       { if (typeof applyGmapFitMode === 'function') applyGmapFitMode(on); },
+    scheduleFitToView:   function ()         { if (typeof scheduleGmapFitToView === 'function') scheduleGmapFitToView(); },
+    applyMultiSelection: function ()         { if (typeof applyGmapMultiSelection === 'function') applyGmapMultiSelection(); },
+  };
+  // Expose the same context bundle on the namespace so the lens
+  // dispatcher (renderer.render('context', payload)) can look it up
+  // without a parameter pass.
+  window.MIDASExplorerGraph._renderCtx = _gmapRenderCtx;
+
+  // D32a-impl-3 — Renderer hooks. graph-renderer.js looks these up
+  // lazily via window.MIDASExplorerGraph._rendererHooks. They wire
+  // back into the still-inline drag / multi-select / inspector
+  // orchestration so addNode + addLiveConnector keep their existing
+  // side effects (drag attach, click → select, tooltip cleanup).
+  window.MIDASExplorerGraph._rendererHooks = {
+    attachDragHandlers:      function (node, id) { if (typeof attachGmapDragHandlers === 'function') attachGmapDragHandlers(node, id); },
+    selectNode:              function (id)       { if (typeof selectGovernanceMapNode === 'function') selectGovernanceMapNode(id); },
+    applyMultiSelection:     function ()         { if (typeof applyGmapMultiSelection === 'function') applyGmapMultiSelection(); },
+    connectorEndpointLabel:  function (id)       { return typeof gmapConnectorEndpointLabel === 'function' ? gmapConnectorEndpointLabel(id) : id; },
+    hideConnectorTooltip:    function ()         { if (typeof hideGmapConnectorTooltip === 'function') hideGmapConnectorTooltip(); },
+    getSelectedId:           function ()         { return gmapSelectedId; },
+    clearSelection:          function ()         { gmapSelectedId = null; },
+    clearInspector:          function () {
+      if (typeof setGovernanceMapDetailsName    === 'function') setGovernanceMapDetailsName('');
+      if (typeof setGovernanceMapDetailsFields  === 'function') setGovernanceMapDetailsFields([]);
+      if (typeof setGovernanceMapDetailsActions === 'function') setGovernanceMapDetailsActions([]);
+    },
+  };
+
+  // D32a-impl-4 — Interactions hooks. graph-interactions.js looks
+  // these up lazily via window.MIDASExplorerGraph._interactionsHooks.
+  // repaintConnectors stays inline (it walks gmapConnectors + reissues
+  // curvePath for each entry). Future tranche may move it into
+  // graph-renderer.js once gmapConnectors lives only on the state
+  // namespace.
+  window.MIDASExplorerGraph._interactionsHooks = {
+    repaintConnectors: function () { if (typeof repaintGmapConnectors === 'function') repaintGmapConnectors(); },
+  };
+
+  // D32a-impl-4 — Inspector hooks. context-graph-inspector.js looks
+  // these up via window.MIDASExplorerGraph._inspectorHooks. The
+  // evidence-tray + gmapData getter stay inline; the module reaches
+  // them through these wrappers so the inspector orchestration is
+  // module-owned without dragging the records / drift / demo-data
+  // pipeline into this tranche.
+  window.MIDASExplorerGraph._inspectorHooks = {
+    notifyEvidenceTraySelectionChanged: function () {
+      if (typeof notifyGmapEvidenceTraySelectionChanged === 'function') {
+        notifyGmapEvidenceTraySelectionChanged();
+      }
+    },
+    getGmapData: function () { return (typeof gmapData !== 'undefined') ? gmapData : null; },
+  };
+
+  // D32a-impl-4 — Action dispatcher hook. graph-inspector.js fires
+  // this from action-button click handlers so handleGovernanceMapAction
+  // (still inline; it cross-references showBusinessServiceRecord /
+  // showCapabilityRecord / refreshGovernanceMap and the graph history
+  // stack) keeps the same dispatch surface.
+  window.MIDASExplorerGraph._actionDispatcher = function (action) {
+    if (typeof handleGovernanceMapAction === 'function') handleGovernanceMapAction(action);
+  };
+
   // D27j-ui-foundation-5 — Governance Map module foundation. Local
   // consts bind to the namespace properties so every existing call-
   // site in renderGovernanceMap / addNode / addLiveConnector / drag
@@ -1585,7 +1764,17 @@
   }
 
   function viewFromHash() {
-    const h = (window.location.hash || '').replace(/^#/, '');
+    const raw = (window.location.hash || '').replace(/^#/, '');
+    // Strip any ?query suffix (D32a-impl-1 router param syntax).
+    const h = raw.split('?')[0];
+    // D32a-impl-1 — graph lens deep-links. Hashes of the form
+    // `graph/<lens>` are treated as services-view entries. The lens
+    // switcher's setActiveLens already updates the hash to keep
+    // history meaningful, but a direct entry like `#graph/context`
+    // must also land on the services view rather than fall through
+    // to DEFAULT_VIEW (which would land on services anyway, but
+    // would lose the lens selection in the URL).
+    if (h === 'graph/context' || h === 'graph/authority') return 'services';
     return VALID_VIEWS.includes(h) ? h : DEFAULT_VIEW;
   }
 
@@ -1602,6 +1791,33 @@
 
   // Initial view
   showView(viewFromHash());
+
+  // D32a-impl-1 — Initialise the graph lens switcher. The shell wires
+  // click handlers on the .graph-lens-switcher buttons, applies the
+  // disabled-state styling for Authority, and seeds the store with
+  // the active lens. The Context lens adapter is registered via
+  // graph/context/context-graph-view.js and forwards to the inline
+  // renderer once window.MIDASExplorerGovernanceMapBridge is wired
+  // (future tranche). Initialisation is wrapped in a typeof guard so
+  // failures of any shell module to load surface as a no-op rather
+  // than a ReferenceError. The inline IIFE remains the load-bearing
+  // path; the shell is additive.
+  if (ExplorerGraph && ExplorerGraph.shell && typeof ExplorerGraph.shell.init === 'function') {
+    ExplorerGraph.shell.init();
+  }
+  // Register the #graph/context hash route with the new router. The
+  // handler is intentionally a no-op for now — the inline showView
+  // owns the actual rendering. Future tranches can replace showView
+  // with router-driven dispatch without touching call-sites.
+  if (ExplorerRouter && typeof ExplorerRouter.register === 'function') {
+    ExplorerRouter.register('graph/context', () => {
+      showView('services');
+    });
+    ExplorerRouter.register('graph/authority', () => {
+      // Authority lens is disabled today; absorb the hash silently.
+      showView('services');
+    });
+  }
 
   // ── Collapsible sidebar ──────────────────────────────────────────────────
   // Module-level boolean flips a `body.sidebar-collapsed` class that
@@ -1653,8 +1869,8 @@
   // No path through this module reads STRUCTURAL_CONTEXT. The catalogue is
   // backed by GET /v1/businessservices (envelope-shape `{business_services}`);
   // the record page and the map sub-view both consume
-  // GET /v1/authority-graph?view=service&id={id}&depth=5 and run the
-  // response through mapAuthorityGraphToGovernanceMapShape(), which
+  // GET /v1/graphs/context?view=service&id={id}&depth=5 and run the
+  // response through mapContextGraphToCardLayout(), which
   // adapts to the historical governance-map wire shape the existing
   // renderers expect. Other Explorer views (Records, Settings, the
   // hidden Resource Reference panel) continue to read STRUCTURAL_CONTEXT —
@@ -1746,48 +1962,9 @@
   let liveBSError = null;
   let liveBSLoading = false;
 
+  // D32a-impl-5 — Thin shim. Production loadBusinessServicesList lives in services-view.js / capabilities-view.js.
   function loadBusinessServicesList() {
-    if (liveBSLoading) return;
-    liveBSLoading = true;
-    liveBSError = null;
-    renderServicesCatalogue();
-    fetch('/v1/businessservices', {
-      credentials: 'same-origin',
-      headers: { 'Accept': 'application/json' },
-    })
-      .then(resp => {
-        if (!resp.ok) {
-          return resp.text().then(t => ({ __status: resp.status, __text: t }));
-        }
-        return resp.json();
-      })
-      .then(payload => {
-        liveBSLoading = false;
-        if (payload && payload.__status) {
-          liveBSError = { status: payload.__status, message: 'HTTP ' + payload.__status };
-          liveBSList = null;
-          renderServicesCatalogue();
-          return;
-        }
-        // Envelope shape: payload.business_services is always an array.
-        liveBSList = (payload && payload.business_services) || [];
-        liveBSError = null;
-        // Default the selection from the live list when no current
-        // selection is set OR when the current selection is missing
-        // from the live list (e.g. a BS was removed between renders).
-        if (liveBSList.length === 0) {
-          currentSelectedService = null;
-        } else if (!liveBSList.some(bs => bs.id === currentSelectedService)) {
-          currentSelectedService = liveBSList[0].id;
-        }
-        renderServicesView();
-      })
-      .catch(err => {
-        liveBSLoading = false;
-        liveBSError = { status: 0, message: (err && err.message) || 'fetch failed' };
-        liveBSList = null;
-        renderServicesCatalogue();
-      });
+    return MIDASExplorerServices.loadCatalogue();
   }
 
   // ── Sub-view state machine ────────────────────────────────────────────────
@@ -1807,28 +1984,9 @@
   let serviceRecordLoading = false;
   let serviceRecordError = null;
 
+  // D32a-impl-5 — Thin shim. Production setServicesSubView lives in services-view.js / capabilities-view.js.
   function setServicesSubView(view) {
-    // Drift-2b — 'drift' is the fourth valid sub-view value, peer to
-    // catalogue / detail / map. Any other value falls back to
-    // catalogue.
-    servicesSubView = view === 'detail' || view === 'map' || view === 'drift' ? view : 'catalogue';
-    const cat = document.getElementById('services-catalogue-view');
-    const rec = document.getElementById('services-record-view');
-    const map = document.getElementById('services-map-view');
-    const drift = document.getElementById('services-drift-view');
-    if (cat) cat.classList.toggle('active', servicesSubView === 'catalogue');
-    if (rec) rec.classList.toggle('active', servicesSubView === 'detail');
-    if (map) map.classList.toggle('active', servicesSubView === 'map');
-    if (drift) drift.classList.toggle('active', servicesSubView === 'drift');
-    // Phase 2B Step 31 (D24e) — gmap-mode shell layout. The body class
-    // gates three shell rules (margin-right on .shell-main, right inset
-    // on .shell-header, right inset on .shell-footer) plus the
-    // top-level inspector rail's own display:flex. Set ONLY when the
-    // map sub-view is active so non-map views (catalogue / record /
-    // drift / and every other top-level view via showView) keep the
-    // pre-D24e shell chrome — full-width header/footer, no margin-right
-    // on main.
-    document.body.classList.toggle('gmap-mode', servicesSubView === 'map');
+    return MIDASExplorerServices.setSubView(view);
   }
 
   // Drift-2b — entry point for the Drift Overview sub-view. Called by
@@ -1836,154 +1994,42 @@
   // re-entry: each call re-runs the load pipeline so a refresh on
   // re-entry reflects the current repository state without requiring
   // the operator to leave and return.
+  // D32a-impl-5 — Thin shim. Production showServicesDriftOverview lives in services-view.js / capabilities-view.js.
   function showServicesDriftOverview() {
-    setServicesSubView('drift');
-    if (typeof gmapMode !== 'undefined') gmapMode = 'overview';
-    if (window.MIDASExplorerDrift
-        && typeof window.MIDASExplorerDrift.loadDriftHeatmap === 'function') {
-      window.MIDASExplorerDrift.loadDriftHeatmap();
-    }
+    return MIDASExplorerServices.showDriftOverview();
   }
 
+  // D32a-impl-5 — Thin shim. Production showServicesCatalogue lives in services-view.js / capabilities-view.js.
   function showServicesCatalogue() {
-    setServicesSubView('catalogue');
-    // The map sub-view is leaving the screen — return gmapMode so the map
-    // renderer's `if (gmapMode !== 'map') return` gate prevents a stale
-    // fetch firing for a different selection later.
-    if (typeof gmapMode !== 'undefined') gmapMode = 'overview';
-    renderServicesCatalogue();
+    return MIDASExplorerServices.showCatalogue();
   }
 
+  // D32a-impl-5 — Thin shim. Production showBusinessServiceRecord lives in services-view.js / capabilities-view.js.
   function showBusinessServiceRecord(serviceId) {
-    if (!serviceId) { showServicesCatalogue(); return; }
-    currentSelectedService = serviceId;
-    // Always reset the graph state to service-view rooted at the
-    // newly-selected BS. This guarantees a stale `reframe-around-this`
-    // state from the workbench cannot bleed into a record-page fetch
-    // and confuse it into requesting an AI-system view of a BS id.
-    currentGraphView = 'service';
-    currentGraphRootId = serviceId;
-    // Phase 2B Step 15: catalogue selection is a fresh-root entry, not
-    // a graph-traversal step. Wipe the back-stack so the operator
-    // does not back into a stale prior root. Same rationale at every
-    // catalogue / record-page / map sub-view entry point below.
-    gmapHistory.length = 0;
-    if (typeof updateGmapBackButtonState === 'function') updateGmapBackButtonState();
-    setServicesSubView('detail');
-    if (typeof gmapMode !== 'undefined') gmapMode = 'overview';
-    loadBusinessServiceRecord(serviceId);
+    currentSelectedService = serviceId || null;
+    return MIDASExplorerServices.showRecord(serviceId);
   }
 
+  // D32a-impl-5 — Thin shim. Production showBusinessServiceMap lives in services-view.js / capabilities-view.js.
   function showBusinessServiceMap(serviceId) {
-    if (!serviceId) { showServicesCatalogue(); return; }
-    currentSelectedService = serviceId;
-    // Always reset the graph state on map-sub-view entry. Operators
-    // re-entering the map from the catalogue see the BS-rooted view,
-    // not whatever reframe state was last active.
-    currentGraphView = 'service';
-    currentGraphRootId = serviceId;
-    // Phase 2B Step 15: fresh-root entry — clear back-stack.
-    gmapHistory.length = 0;
-    if (typeof updateGmapBackButtonState === 'function') updateGmapBackButtonState();
-    setServicesSubView('map');
-    // Update the back-affordance label to the selected BS name when known
-    // (cached payload). Falls back to "Record" if not yet loaded.
-    const cached = serviceRecordCache[serviceId];
-    const label = document.getElementById('services-map-back-label');
-    const bsName = (cached && cached.business_service && (cached.business_service.name || cached.business_service.id)) || serviceId;
-    if (label) label.textContent = bsName;
-    // Force the existing renderer to re-fetch even if it served the same
-    // BS earlier in this session — the record-page → map transition should
-    // always present a fresh map.
-    if (typeof gmapMode !== 'undefined') gmapMode = 'map';
-    if (typeof gmapLastBSId !== 'undefined') gmapLastBSId = null;
-    if (typeof refreshGovernanceMap === 'function') refreshGovernanceMap();
+    currentSelectedService = serviceId || null;
+    return MIDASExplorerServices.showMap(serviceId);
   }
 
   // renderServicesView re-renders the active sub-view. Used by the live BS
   // selector loader after the catalogue list comes back.
+  // D32a-impl-5 — Thin shim. Production renderServicesView lives in services-view.js / capabilities-view.js.
   function renderServicesView() {
-    if (servicesSubView === 'detail') {
-      // Re-render the record from cache; do not re-fetch here.
-      renderBusinessServiceRecord(currentSelectedService && serviceRecordCache[currentSelectedService]);
-    } else if (servicesSubView === 'map') {
-      // Map renderer is responsible for its own state — leave it alone.
-    } else {
-      renderServicesCatalogue();
-    }
+    return MIDASExplorerServices.renderView();
   }
 
   // renderServicesCatalogue renders the BS catalogue from the live state
   // machine. NEVER reads from STRUCTURAL_CONTEXT. The wire shape is
   // `{business_services: [{id, name, status, service_type, owner_id,
   // external_ref}]}`, accessed via liveBSList[i].
+  // D32a-impl-5 — Thin shim. Production renderServicesCatalogue lives in services-view.js / capabilities-view.js.
   function renderServicesCatalogue(filter) {
-    const list = document.getElementById('services-bs-list');
-    if (!list) return;
-    const q = (filter || '').toLowerCase().trim();
-
-    if (liveBSLoading) {
-      list.innerHTML = '<div class="services-bs-loading">Loading business services…</div>';
-      return;
-    }
-    if (liveBSError) {
-      const status = liveBSError.status ? ('HTTP ' + liveBSError.status) : 'Network error';
-      list.innerHTML =
-        '<div class="services-bs-error">' +
-          '<div><strong>Could not load business services</strong></div>' +
-          '<div>' + escHtml(status) + (liveBSError.message ? ' — ' + escHtml(liveBSError.message) : '') + '</div>' +
-        '</div>';
-      return;
-    }
-    if (!Array.isArray(liveBSList)) {
-      list.innerHTML = '<div class="services-bs-loading">Loading business services…</div>';
-      return;
-    }
-    if (liveBSList.length === 0) {
-      list.innerHTML =
-        '<div class="services-bs-empty">' +
-          '<div><strong>No business services found</strong></div>' +
-          '<div>Apply a BusinessService bundle to populate this list.</div>' +
-        '</div>';
-      return;
-    }
-
-    const filtered = liveBSList.filter(bs =>
-      !q ||
-      (bs.name || '').toLowerCase().includes(q) ||
-      (bs.id || '').toLowerCase().includes(q)
-    );
-    if (filtered.length === 0) {
-      list.innerHTML = '<div class="scenario-no-results">No services match “' + escHtml(q) + '”</div>';
-      return;
-    }
-
-    list.innerHTML = filtered.map(bs => {
-      const id = bs.id;
-      const status = bs.status ? '<span class="services-bs-card-status">' + escHtml(bs.status) + '</span>' : '';
-      const typePill = bs.service_type ? '<span class="services-bs-card-type">' + escHtml(bs.service_type) + '</span>' : '';
-      const ownerPill = bs.owner_id ? '<span class="services-bs-card-owner">owner: ' + escHtml(bs.owner_id) + '</span>' : '';
-      const extPill = bs.external_ref ? '<span class="services-bs-card-extref">EXT-REF</span>' : '';
-      const meta = (typePill || ownerPill || extPill)
-        ? '<div class="services-bs-card-meta">' + typePill + ownerPill + extPill + '</div>'
-        : '';
-      return (
-        '<button type="button" class="services-bs-card services-catalogue-card inactive" data-service-id="' + escHtml(id) + '">' +
-          '<div class="services-bs-card-header">' +
-            '<span class="services-bs-card-id">' + escHtml(id) + '</span>' +
-            status +
-          '</div>' +
-          '<div class="services-bs-card-name">' + escHtml(bs.name || id) + '</div>' +
-          meta +
-        '</button>'
-      );
-    }).join('');
-
-    list.querySelectorAll('.services-bs-card').forEach(btn => {
-      btn.addEventListener('click', () => {
-        showBusinessServiceRecord(btn.dataset.serviceId);
-      });
-    });
+    return MIDASExplorerServices.renderCatalogue(filter);
   }
 
   // ── Record page ──────────────────────────────────────────────────────────
@@ -1991,285 +2037,73 @@
   // optional fields, empty arrays. Renders empty-state strings instead of
   // throwing on unexpected payload shapes.
 
+  // D32a-impl-5 — Thin shim. Production loadBusinessServiceRecord lives in services-view.js / capabilities-view.js.
   function loadBusinessServiceRecord(serviceId) {
-    // Cache hit → render immediately. The map sub-view's renderer also
-    // does its own fetch with separate dedup; the duplicate cost is small.
-    const cached = serviceRecordCache[serviceId];
-    if (cached) {
-      serviceRecordLoading = false;
-      serviceRecordError = null;
-      renderBusinessServiceRecord(cached);
-      return;
-    }
-    serviceRecordLoading = true;
-    serviceRecordError = null;
-    renderBusinessServiceRecord(null);
-    // Record-page navigations are always service-rooted: defensively
-    // (re)set the graph state so a stale reframe never bleeds into a
-    // record fetch. showBusinessServiceRecord also sets these on
-    // every catalogue selection — this is belt-and-braces for the
-    // case where loadBusinessServiceRecord is invoked directly.
-    currentGraphView = 'service';
-    currentGraphRootId = serviceId;
-    // Phase 2B Step 15: same fresh-root semantics — a record-page
-    // fetch is not a graph-traversal step, so wipe the back-stack.
-    gmapHistory.length = 0;
-    if (typeof updateGmapBackButtonState === 'function') updateGmapBackButtonState();
-    const url = '/v1/authority-graph?view=' + encodeURIComponent(currentGraphView) +
-      '&id=' + encodeURIComponent(currentGraphRootId) + '&depth=5';
-    fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
-      .then(resp => {
-        if (!resp.ok) return resp.text().then(t => ({ __status: resp.status, __text: t }));
-        return resp.json();
-      })
-      .then(payload => {
-        serviceRecordLoading = false;
-        if (payload && payload.__status) {
-          serviceRecordError = { status: payload.__status, message: 'HTTP ' + payload.__status };
-          renderBusinessServiceRecord(null);
-          return;
-        }
-        // Discard if user navigated to a different service while in flight.
-        if (serviceId !== currentSelectedService) return;
-        const adapted = mapAuthorityGraphToGovernanceMapShape(payload, 'service');
-        serviceRecordCache[serviceId] = adapted;
-        serviceRecordError = null;
-        renderBusinessServiceRecord(adapted);
-      })
-      .catch(err => {
-        serviceRecordLoading = false;
-        serviceRecordError = { status: 0, message: (err && err.message) || 'fetch failed' };
-        renderBusinessServiceRecord(null);
-      });
+    return MIDASExplorerServices.loadRecord(serviceId);
   }
 
+  // D32a-impl-5 — Thin shim. Production renderRecordFieldGrid lives in services-view.js / capabilities-view.js.
   function renderRecordFieldGrid(rows) {
-    if (!rows || rows.length === 0) return '';
-    const cells = rows.map(([k, v]) =>
-      '<div class="services-record-field-key">' + escHtml(String(k)) + '</div>' +
-      formatFieldValue(v)
-    ).join('');
-    return '<div class="services-record-field-grid">' + cells + '</div>';
+    return MIDASExplorerServices.renderRecordFieldGrid(rows);
   }
 
+  // D32a-impl-5 — Thin shim. Production renderRecordSection lives in services-view.js / capabilities-view.js.
   function renderRecordSection(title, contentHtml) {
-    if (!contentHtml) return '';
-    return (
-      '<section class="services-record-section">' +
-        '<div class="services-record-section-title">' + escHtml(title) + '</div>' +
-        contentHtml +
-      '</section>'
-    );
+    return MIDASExplorerServices.renderRecordSection(title, contentHtml);
   }
 
+  // D32a-impl-5 — Thin shim. Production renderRelatedList lives in services-view.js / capabilities-view.js.
   function renderRelatedList(rows, emptyMessage) {
-    if (!rows || rows.length === 0) {
-      return '<div class="services-record-empty">' + escHtml(emptyMessage) + '</div>';
-    }
-    return '<div class="services-related-list">' +
-      rows.map(r =>
-        '<div class="services-related-row">' +
-          (r.id   ? '<span class="id">' + escHtml(r.id) + '</span>' : '') +
-          (r.name ? '<span class="name">' + escHtml(r.name) + '</span>' : '') +
-          (r.meta ? '<span class="meta">' + escHtml(r.meta) + '</span>' : '') +
-          (r.badge ? '<span class="badge ' + escHtml(r.badgeCls || '') + '">' + escHtml(r.badge) + '</span>' : '') +
-        '</div>'
-      ).join('') +
-    '</div>';
+    return MIDASExplorerServices.renderRelatedList(rows, emptyMessage);
   }
 
+  // D32a-impl-5 — Thin shim. Production renderBusinessServiceRecord lives in services-view.js / capabilities-view.js.
   function renderBusinessServiceRecord(payload) {
-    const body = document.getElementById('services-record-body');
-    const nameEl = document.getElementById('services-record-name');
-    const idEl = document.getElementById('services-record-id');
-    const statusEl = document.getElementById('services-record-status');
-    if (!body || !nameEl || !idEl || !statusEl) return;
-
-    if (serviceRecordLoading) {
-      body.innerHTML = '<div class="services-record-loading">Loading record…</div>';
-      nameEl.textContent = currentSelectedService || '—';
-      idEl.textContent = currentSelectedService || '';
-      statusEl.textContent = '';
-      return;
-    }
-    if (serviceRecordError) {
-      const status = serviceRecordError.status ? ('HTTP ' + serviceRecordError.status) : 'Network error';
-      body.innerHTML =
-        '<div class="services-record-error">' +
-          '<div><strong>Could not load record</strong></div>' +
-          '<div>' + escHtml(status) + (serviceRecordError.message ? ' — ' + escHtml(serviceRecordError.message) : '') + '</div>' +
-        '</div>';
-      nameEl.textContent = currentSelectedService || '—';
-      idEl.textContent = currentSelectedService || '';
-      statusEl.textContent = '';
-      return;
-    }
-    if (!payload || !payload.business_service) {
-      body.innerHTML = '<div class="services-record-empty">No record loaded.</div>';
-      nameEl.textContent = currentSelectedService || '—';
-      idEl.textContent = currentSelectedService || '';
-      statusEl.textContent = '';
-      return;
-    }
-
-    const bs = payload.business_service;
-    nameEl.textContent = bs.name || bs.id;
-    idEl.textContent = bs.id;
-    statusEl.textContent = bs.status || '';
-
-    const sections = [];
-
-    // 1. Identity strip — pills along the top of the body.
-    const identityPills = [];
-    if (bs.status)        identityPills.push({ key: 'status', val: bs.status });
-    if (bs.service_type)  identityPills.push({ key: 'type',   val: bs.service_type });
-    if (bs.owner_id)      identityPills.push({ key: 'owner',  val: bs.owner_id });
-    if (bs.external_ref)  identityPills.push({ key: 'ext',    val: 'EXT-REF' });
-    if (identityPills.length) {
-      const pills = identityPills.map(p =>
-        '<span class="services-record-identity-pill"><span class="key">' + escHtml(p.key) + '</span>' + escHtml(p.val) + '</span>'
-      ).join('');
-      sections.push(renderRecordSection('Identity', '<div class="services-record-identity">' + pills + '</div>'));
-    }
-
-    // 2. Core details — field grid. Field present, value missing → "—".
-    const coreRows = [
-      ['id',               bs.id],
-      ['name',             bs.name],
-      ['description',      bs.description],
-      ['service_type',     bs.service_type],
-      ['owner_id',         bs.owner_id],
-      ['regulatory_scope', bs.regulatory_scope],
-      ['external_ref',     bs.external_ref ? formatExternalRef(bs.external_ref) : ''],
-    ];
-    sections.push(renderRecordSection('Core details', renderRecordFieldGrid(coreRows)));
-
-    // 3. Related services — combine outgoing + incoming with a directional
-    //    indicator. Empty state renders explicit "No related services".
-    const rels = (payload.relationships && payload.relationships.outgoing) || [];
-    const relsIn = (payload.relationships && payload.relationships.incoming) || [];
-    const relRows = [];
-    rels.forEach(r => relRows.push({
-      id: r.id,
-      name: '→ ' + (r.other_name || r.target_business_service_id || ''),
-      meta: r.relationship_type || '',
-    }));
-    relsIn.forEach(r => relRows.push({
-      id: r.id,
-      name: '← ' + (r.other_name || r.source_business_service_id || ''),
-      meta: r.relationship_type || '',
-    }));
-    sections.push(renderRecordSection('Related services', renderRelatedList(relRows, 'No related services')));
-
-    // 4. Capabilities
-    const caps = (payload.capabilities || []).map(c => ({
-      id: c.id, name: c.name || c.id, meta: c.status || '',
-    }));
-    sections.push(renderRecordSection('Capabilities', renderRelatedList(caps, 'No capabilities linked')));
-
-    // 5. Processes
-    const procs = (payload.processes || []).map(p => ({
-      id: p.id, name: p.name || p.id, meta: p.status || '',
-    }));
-    sections.push(renderRecordSection('Processes', renderRelatedList(procs, 'No processes linked')));
-
-    // 6. Decision surfaces — id + version + name + status + AI-bound flag +
-    //    per-surface profile/grant/agent counts in the meta column.
-    const surfs = (payload.surfaces || []).map(s => {
-      const hasBinding = (s.ai_bindings || []).length > 0;
-      const counts = [];
-      if (s.profile_count != null) counts.push('p=' + s.profile_count);
-      if (s.grant_count != null)   counts.push('g=' + s.grant_count);
-      if (s.agent_count != null)   counts.push('a=' + s.agent_count);
-      return {
-        id: s.id + (s.version != null ? '·v' + s.version : ''),
-        name: s.name || s.id,
-        meta: [s.status || '', s.process_id ? 'proc=' + s.process_id : '', counts.join(' ')].filter(Boolean).join(' · '),
-        badge: hasBinding ? 'AI bound' : 'no AI',
-        badgeCls: hasBinding ? 'bind' : 'warn',
-      };
-    });
-    sections.push(renderRecordSection('Decision surfaces', renderRelatedList(surfs, 'No decision surfaces under this service')));
-
-    // 7. AI systems — id + name + vendor / system_type / status + version +
-    //    binding count.
-    const ais = (payload.ai_systems || []).map(ai => {
-      const ver = ai.active_version && ai.active_version.version != null ? 'v' + ai.active_version.version : '';
-      const bcount = (ai.bindings || []).length;
-      const meta = [ai.vendor, ai.system_type, ai.status, ver, bcount + ' binding' + (bcount === 1 ? '' : 's')]
-        .filter(Boolean).join(' · ');
-      return { id: ai.id, name: ai.name || ai.id, meta };
-    });
-    sections.push(renderRecordSection('AI systems', renderRelatedList(ais, 'No AI systems linked')));
-
-    // 8. Governance summary — chip strip pulling from authority_summary +
-    //    coverage. Always rendered for BS records (PR 4 always returns
-    //    these fields, even for empty services).
-    const auth = payload.authority_summary || {};
-    const cov  = payload.coverage || {};
-    const chips = [
-      { label: 'Surfaces',        value: auth.surface_count || 0 },
-      { label: 'Active profiles', value: auth.active_profile_count || 0 },
-      { label: 'Active grants',   value: auth.active_grant_count || 0 },
-      { label: 'Active agents',   value: auth.active_agent_count || 0 },
-      { label: 'AI-bound',        value: cov.surfaces_with_direct_ai_binding || 0 },
-      { label: 'Coverage gaps',   value: cov.surfaces_with_no_ai_binding || 0, gap: (cov.surfaces_with_no_ai_binding || 0) > 0 },
-    ];
-    const chipHtml = '<div class="services-record-chips">' +
-      chips.map(c =>
-        '<div class="services-record-chip' + (c.gap ? ' gap' : '') + '">' +
-          '<div class="label">' + escHtml(c.label) + '</div>' +
-          '<div class="value">' + escHtml(String(c.value)) + '</div>' +
-        '</div>'
-      ).join('') +
-    '</div>';
-    sections.push(renderRecordSection('Governance summary', chipHtml));
-
-    body.innerHTML = sections.filter(Boolean).join('');
+    return MIDASExplorerServices.renderRecord(payload);
   }
 
   // ── Wire sub-view transitions + search input ─────────────────────────────
-  // The catalogue search input remains the only persistent input across
-  // the catalogue sub-view. The back-affordances and the Open-Map button
-  // live inside the sub-view markup and are wired here once at load.
-  (function wireServicesSubViewControls() {
-    const search = document.getElementById('services-bs-search');
-    if (search) search.addEventListener('input', e => renderServicesCatalogue(e.target.value));
-    const backToCat = document.getElementById('services-record-back-btn');
-    if (backToCat) backToCat.addEventListener('click', showServicesCatalogue);
-    const openMap = document.getElementById('services-record-open-map-btn');
-    if (openMap) openMap.addEventListener('click', () => showBusinessServiceMap(currentSelectedService));
-    const backToRec = document.getElementById('services-map-back-btn');
-    if (backToRec) backToRec.addEventListener('click', () => showBusinessServiceRecord(currentSelectedService));
-    // Drift-2b — entry / back affordances for the Drift Overview sub-view.
-    const openDrift = document.getElementById('services-drift-open-btn');
-    if (openDrift) openDrift.addEventListener('click', showServicesDriftOverview);
-    const backFromDrift = document.getElementById('services-drift-back-btn');
-    if (backFromDrift) backFromDrift.addEventListener('click', showServicesCatalogue);
-  })();
+  // D32a-impl-5 — Services view sub-view controls are wired by
+  // MIDASExplorerServices.init below, called once the inline IIFE
+  // finishes defining its hook bundle (resetGraphState / gmapHistoryClear /
+  // updateBackButton / setGmapMode / refreshGovernanceMap /
+  // resetGmapLastBSId). The wiring formerly here is now inside the
+  // module; keeping a placeholder here so the source location is
+  // clearly documented for future readers.
+  if (typeof MIDASExplorerServices !== 'undefined' && typeof MIDASExplorerServices.init === 'function') {
+    MIDASExplorerServices.init({
+      hooks: {
+        resetGraphState: function (view, id) {
+          currentGraphView = view || 'service';
+          currentGraphRootId = id || '';
+        },
+        gmapHistoryClear: function () {
+          if (typeof gmapHistory !== 'undefined' && gmapHistory) gmapHistory.length = 0;
+        },
+        updateBackButton: function () {
+          if (typeof updateGmapBackButtonState === 'function') updateGmapBackButtonState();
+        },
+        setGmapMode: function (mode) {
+          if (typeof gmapMode !== 'undefined') gmapMode = mode;
+        },
+        refreshGovernanceMap: function () {
+          if (typeof refreshGovernanceMap === 'function') refreshGovernanceMap();
+        },
+        resetGmapLastBSId: function () {
+          if (typeof gmapLastBSId !== 'undefined') gmapLastBSId = null;
+        },
+      },
+    });
+  }
 
   // updateServicesCoverageSummary is retained so refreshCoverage()'s
   // hook continues to type-check. The DOM nodes it targeted (the old
   // right-column cards) have been removed; the function now no-ops via
   // its existing null-guards. Keeping it avoids a code change to
   // refreshCoverage in another module of this file.
+  // D32a-impl-5 — Thin shim. Production updateServicesCoverageSummary lives in services-view.js / capabilities-view.js.
   function updateServicesCoverageSummary(records) {
-    // The previous Services-view right-column coverage card was retired
-    // when the three-column layout was removed; the DOM nodes this
-    // function targeted (services-coverage-pct / -bar-fill / -note) no
-    // longer exist. The null-guard makes the call a safe no-op. Kept
-    // so refreshCoverage()'s `if (typeof updateServicesCoverageSummary
-    // === 'function')` hook in another module continues to type-check.
-    const pctEl  = document.getElementById('services-coverage-pct');
-    const barEl  = document.getElementById('services-coverage-bar-fill');
-    const noteEl = document.getElementById('services-coverage-note');
-    if (!pctEl || !barEl || !noteEl) return;
-    const count = Array.isArray(records) ? records.length : 0;
-    pctEl.textContent = String(count);
-    barEl.style.width = count > 0 ? '100%' : '0%';
-    noteEl.textContent = count === 0
-      ? 'No coverage records yet — run an evaluation to populate.'
-      : 'Records visible in the Records view.';
+    return MIDASExplorerServices.updateCoverageSummary(records);
   }
 
   // The five render functions that powered the previous three-column
@@ -2327,24 +2161,20 @@
   const capabilityAIBindingsLoading = {};
   const capabilityAIBindingsError = {};
 
+  // D32a-impl-5 — Thin shim. Production setCapabilitiesSubView lives in services-view.js / capabilities-view.js.
   function setCapabilitiesSubView(view) {
-    capabilitiesSubView = view === 'detail' ? 'detail' : 'catalogue';
-    const cat = document.getElementById('capabilities-catalogue-view');
-    const rec = document.getElementById('capabilities-record-view');
-    if (cat) cat.classList.toggle('active', capabilitiesSubView === 'catalogue');
-    if (rec) rec.classList.toggle('active', capabilitiesSubView === 'detail');
+    return MIDASExplorerCapabilities.setSubView(view);
   }
 
+  // D32a-impl-5 — Thin shim. Production showCapabilitiesCatalogue lives in services-view.js / capabilities-view.js.
   function showCapabilitiesCatalogue() {
-    setCapabilitiesSubView('catalogue');
-    renderCapabilitiesCatalogue();
+    return MIDASExplorerCapabilities.showCatalogue();
   }
 
+  // D32a-impl-5 — Thin shim. Production showCapabilityRecord lives in services-view.js / capabilities-view.js.
   function showCapabilityRecord(capId) {
-    if (!capId) { showCapabilitiesCatalogue(); return; }
-    currentSelectedCapability = capId;
-    setCapabilitiesSubView('detail');
-    loadCapabilityRecord(capId);
+    currentSelectedCapability = capId || null;
+    return MIDASExplorerCapabilities.showRecord(capId);
   }
 
   // loadCapabilitiesList fetches GET /v1/capabilities and populates
@@ -2353,111 +2183,14 @@
   // envelope migration is a separate scope. No fallback to
   // STRUCTURAL_CONTEXT on error: showing the operator a visible error
   // is preferable to showing demo data that doesn't reflect the store.
+  // D32a-impl-5 — Thin shim. Production loadCapabilitiesList lives in services-view.js / capabilities-view.js.
   function loadCapabilitiesList() {
-    if (liveCapabilityLoading) return;
-    liveCapabilityLoading = true;
-    liveCapabilityError = null;
-    renderCapabilitiesCatalogue();
-    fetch('/v1/capabilities', {
-      credentials: 'same-origin',
-      headers: { 'Accept': 'application/json' },
-    })
-      .then(resp => {
-        if (!resp.ok) {
-          return resp.text().then(t => ({ __status: resp.status, __text: t }));
-        }
-        return resp.json();
-      })
-      .then(payload => {
-        liveCapabilityLoading = false;
-        if (payload && payload.__status) {
-          liveCapabilityError = { status: payload.__status, message: 'HTTP ' + payload.__status };
-          liveCapabilityList = null;
-          renderCapabilitiesCatalogue();
-          return;
-        }
-        // Bare-array shape: payload is the array itself. Guard with
-        // Array.isArray so a future envelope migration that returns
-        // {capabilities: [...]} doesn't silently render nothing.
-        liveCapabilityList = Array.isArray(payload) ? payload : [];
-        liveCapabilityError = null;
-        renderCapabilitiesCatalogue();
-      })
-      .catch(err => {
-        liveCapabilityLoading = false;
-        liveCapabilityError = { status: 0, message: (err && err.message) || 'fetch failed' };
-        liveCapabilityList = null;
-        renderCapabilitiesCatalogue();
-      });
+    return MIDASExplorerCapabilities.loadCatalogue();
   }
 
+  // D32a-impl-5 — Thin shim. Production renderCapabilitiesCatalogue lives in services-view.js / capabilities-view.js.
   function renderCapabilitiesCatalogue(filter) {
-    const list = document.getElementById('capabilities-list');
-    if (!list) return;
-    const q = (filter || '').toLowerCase().trim();
-
-    if (liveCapabilityLoading) {
-      list.innerHTML = '<div class="capabilities-loading">Loading capabilities…</div>';
-      return;
-    }
-    if (liveCapabilityError) {
-      const status = liveCapabilityError.status ? ('HTTP ' + liveCapabilityError.status) : 'Network error';
-      list.innerHTML =
-        '<div class="capabilities-error">' +
-          '<div><strong>Could not load capabilities</strong></div>' +
-          '<div>' + escHtml(status) + (liveCapabilityError.message ? ' — ' + escHtml(liveCapabilityError.message) : '') + '</div>' +
-        '</div>';
-      return;
-    }
-    if (!Array.isArray(liveCapabilityList)) {
-      list.innerHTML = '<div class="capabilities-loading">Loading capabilities…</div>';
-      return;
-    }
-    if (liveCapabilityList.length === 0) {
-      list.innerHTML =
-        '<div class="capabilities-empty">' +
-          '<div><strong>No capabilities found</strong></div>' +
-          '<div>Apply a Capability bundle to populate this list.</div>' +
-        '</div>';
-      return;
-    }
-
-    const filtered = liveCapabilityList.filter(c =>
-      !q ||
-      (c.name || '').toLowerCase().includes(q) ||
-      (c.id || '').toLowerCase().includes(q) ||
-      (c.owner || '').toLowerCase().includes(q) ||
-      (c.description || '').toLowerCase().includes(q)
-    );
-    if (filtered.length === 0) {
-      list.innerHTML = '<div class="capabilities-no-match">No capabilities match “' + escHtml(q) + '”</div>';
-      return;
-    }
-
-    list.innerHTML = filtered.map(c => {
-      const id = c.id;
-      const status = c.status ? '<span class="capabilities-card-status">' + escHtml(c.status) + '</span>' : '';
-      const desc = c.description ? '<div class="capabilities-card-desc">' + escHtml(c.description) + '</div>' : '';
-      const ownerPill = c.owner ? '<span class="capabilities-card-owner">owner: ' + escHtml(c.owner) + '</span>' : '';
-      const meta = ownerPill ? '<div class="capabilities-card-meta">' + ownerPill + '</div>' : '';
-      return (
-        '<button type="button" class="capabilities-card" data-capability-id="' + escHtml(id) + '">' +
-          '<div class="capabilities-card-header">' +
-            '<span class="capabilities-card-id">' + escHtml(id) + '</span>' +
-            status +
-          '</div>' +
-          '<div class="capabilities-card-name">' + escHtml(c.name || id) + '</div>' +
-          desc +
-          meta +
-        '</button>'
-      );
-    }).join('');
-
-    list.querySelectorAll('.capabilities-card').forEach(btn => {
-      btn.addEventListener('click', () => {
-        showCapabilityRecord(btn.dataset.capabilityId);
-      });
-    });
+    return MIDASExplorerCapabilities.renderCatalogue(filter);
   }
 
   // loadCapabilityRecord fetches GET /v1/capabilities/{id} and renders
@@ -2467,46 +2200,9 @@
   // After the parent record resolves the three sub-resource loaders
   // are kicked off in parallel; each settles independently into its
   // own section.
+  // D32a-impl-5 — Thin shim. Production loadCapabilityRecord lives in services-view.js / capabilities-view.js.
   function loadCapabilityRecord(capId) {
-    const cached = capabilityRecordCache[capId];
-    if (cached) {
-      capabilityRecordLoading = false;
-      capabilityRecordError = null;
-      renderCapabilityRecord(cached);
-      loadCapabilityChildren(capId);
-      loadCapabilityBusinessServices(capId);
-      loadCapabilityAIBindings(capId);
-      return;
-    }
-    capabilityRecordLoading = true;
-    capabilityRecordError = null;
-    renderCapabilityRecord(null);
-    const url = '/v1/capabilities/' + encodeURIComponent(capId);
-    fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
-      .then(resp => {
-        if (!resp.ok) return resp.text().then(t => ({ __status: resp.status, __text: t }));
-        return resp.json();
-      })
-      .then(payload => {
-        capabilityRecordLoading = false;
-        if (payload && payload.__status) {
-          capabilityRecordError = { status: payload.__status, message: 'HTTP ' + payload.__status };
-          renderCapabilityRecord(null);
-          return;
-        }
-        if (capId !== currentSelectedCapability) return;
-        capabilityRecordCache[capId] = payload;
-        capabilityRecordError = null;
-        renderCapabilityRecord(payload);
-        loadCapabilityChildren(capId);
-        loadCapabilityBusinessServices(capId);
-        loadCapabilityAIBindings(capId);
-      })
-      .catch(err => {
-        capabilityRecordLoading = false;
-        capabilityRecordError = { status: 0, message: (err && err.message) || 'fetch failed' };
-        renderCapabilityRecord(null);
-      });
+    return MIDASExplorerCapabilities.loadRecord(capId);
   }
 
   // loadCapabilityChildren fetches GET /v1/capabilities/{id}/children
@@ -2516,73 +2212,17 @@
   // guard) and ignore the echoed capability_id since the caller already
   // knows it. On error the section's error strip is rendered without
   // disturbing the parent record or the other two sub-sections.
+  // D32a-impl-5 — Thin shim. Production loadCapabilityChildren lives in services-view.js / capabilities-view.js.
   function loadCapabilityChildren(capId) {
-    if (capabilityChildrenCache[capId]) {
-      renderCapabilityChildrenSection(capId);
-      return;
-    }
-    if (capabilityChildrenLoading[capId]) return;
-    capabilityChildrenLoading[capId] = true;
-    capabilityChildrenError[capId] = null;
-    renderCapabilityChildrenSection(capId);
-    const url = '/v1/capabilities/' + encodeURIComponent(capId) + '/children';
-    fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
-      .then(resp => {
-        if (!resp.ok) return resp.text().then(t => ({ __status: resp.status, __text: t }));
-        return resp.json();
-      })
-      .then(payload => {
-        capabilityChildrenLoading[capId] = false;
-        if (payload && payload.__status) {
-          capabilityChildrenError[capId] = { status: payload.__status, message: 'HTTP ' + payload.__status };
-          if (capId === currentSelectedCapability) renderCapabilityChildrenSection(capId);
-          return;
-        }
-        capabilityChildrenCache[capId] = (payload && Array.isArray(payload.capabilities)) ? payload.capabilities : [];
-        capabilityChildrenError[capId] = null;
-        if (capId === currentSelectedCapability) renderCapabilityChildrenSection(capId);
-      })
-      .catch(err => {
-        capabilityChildrenLoading[capId] = false;
-        capabilityChildrenError[capId] = { status: 0, message: (err && err.message) || 'fetch failed' };
-        if (capId === currentSelectedCapability) renderCapabilityChildrenSection(capId);
-      });
+    return MIDASExplorerCapabilities.loadRecord && (typeof MIDASExplorerCapabilities.loadChildren === 'function' ? MIDASExplorerCapabilities.loadChildren(capId) : null);
   }
 
   // loadCapabilityBusinessServices fetches GET /v1/capabilities/{id}/businessservices
   // and stores the envelope's `business_services` array. Mirror of
   // loadCapabilityChildren.
+  // D32a-impl-5 — Thin shim. Production loadCapabilityBusinessServices lives in services-view.js / capabilities-view.js.
   function loadCapabilityBusinessServices(capId) {
-    if (capabilityBusinessServicesCache[capId]) {
-      renderCapabilityBusinessServicesSection(capId);
-      return;
-    }
-    if (capabilityBusinessServicesLoading[capId]) return;
-    capabilityBusinessServicesLoading[capId] = true;
-    capabilityBusinessServicesError[capId] = null;
-    renderCapabilityBusinessServicesSection(capId);
-    const url = '/v1/capabilities/' + encodeURIComponent(capId) + '/businessservices';
-    fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
-      .then(resp => {
-        if (!resp.ok) return resp.text().then(t => ({ __status: resp.status, __text: t }));
-        return resp.json();
-      })
-      .then(payload => {
-        capabilityBusinessServicesLoading[capId] = false;
-        if (payload && payload.__status) {
-          capabilityBusinessServicesError[capId] = { status: payload.__status, message: 'HTTP ' + payload.__status };
-          if (capId === currentSelectedCapability) renderCapabilityBusinessServicesSection(capId);
-          return;
-        }
-        capabilityBusinessServicesCache[capId] = (payload && Array.isArray(payload.business_services)) ? payload.business_services : [];
-        capabilityBusinessServicesError[capId] = null;
-        if (capId === currentSelectedCapability) renderCapabilityBusinessServicesSection(capId);
-      })
-      .catch(err => {
-        capabilityBusinessServicesLoading[capId] = false;
-        capabilityBusinessServicesError[capId] = { status: 0, message: (err && err.message) || 'fetch failed' };
-        if (capId === currentSelectedCapability) renderCapabilityBusinessServicesSection(capId);
-      });
+    return (typeof MIDASExplorerCapabilities.loadBusinessServices === 'function') ? MIDASExplorerCapabilities.loadBusinessServices(capId) : null;
   }
 
   // loadCapabilityAIBindings fetches GET /v1/capabilities/{id}/ai-bindings
@@ -2590,37 +2230,9 @@
   // direct Capability-scope only (Phase 3C contract); the section is
   // intentionally non-clickable — there is no per-binding record page
   // to navigate to today.
+  // D32a-impl-5 — Thin shim. Production loadCapabilityAIBindings lives in services-view.js / capabilities-view.js.
   function loadCapabilityAIBindings(capId) {
-    if (capabilityAIBindingsCache[capId]) {
-      renderCapabilityAIBindingsSection(capId);
-      return;
-    }
-    if (capabilityAIBindingsLoading[capId]) return;
-    capabilityAIBindingsLoading[capId] = true;
-    capabilityAIBindingsError[capId] = null;
-    renderCapabilityAIBindingsSection(capId);
-    const url = '/v1/capabilities/' + encodeURIComponent(capId) + '/ai-bindings';
-    fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
-      .then(resp => {
-        if (!resp.ok) return resp.text().then(t => ({ __status: resp.status, __text: t }));
-        return resp.json();
-      })
-      .then(payload => {
-        capabilityAIBindingsLoading[capId] = false;
-        if (payload && payload.__status) {
-          capabilityAIBindingsError[capId] = { status: payload.__status, message: 'HTTP ' + payload.__status };
-          if (capId === currentSelectedCapability) renderCapabilityAIBindingsSection(capId);
-          return;
-        }
-        capabilityAIBindingsCache[capId] = (payload && Array.isArray(payload.bindings)) ? payload.bindings : [];
-        capabilityAIBindingsError[capId] = null;
-        if (capId === currentSelectedCapability) renderCapabilityAIBindingsSection(capId);
-      })
-      .catch(err => {
-        capabilityAIBindingsLoading[capId] = false;
-        capabilityAIBindingsError[capId] = { status: 0, message: (err && err.message) || 'fetch failed' };
-        if (capId === currentSelectedCapability) renderCapabilityAIBindingsSection(capId);
-      });
+    return (typeof MIDASExplorerCapabilities.loadAIBindings === 'function') ? MIDASExplorerCapabilities.loadAIBindings(capId) : null;
   }
 
   // Defensive renderer: tolerates null payload, missing optional fields,
@@ -2632,284 +2244,47 @@
   // bindings). Sub-section containers are rendered as empty placeholders
   // here; their contents are filled in by the per-section renderers
   // when the matching loader settles.
+  // D32a-impl-5 — Thin shim. Production renderCapabilityRecord lives in services-view.js / capabilities-view.js.
   function renderCapabilityRecord(payload) {
-    const body = document.getElementById('capabilities-record-body');
-    const nameEl = document.getElementById('capabilities-record-name');
-    const idEl = document.getElementById('capabilities-record-id');
-    const statusEl = document.getElementById('capabilities-record-status');
-    if (!body || !nameEl || !idEl || !statusEl) return;
-
-    if (capabilityRecordLoading) {
-      body.innerHTML = '<div class="capabilities-record-loading">Loading record…</div>';
-      nameEl.textContent = currentSelectedCapability || '—';
-      idEl.textContent = currentSelectedCapability || '';
-      statusEl.textContent = '';
-      return;
-    }
-    if (capabilityRecordError) {
-      const status = capabilityRecordError.status ? ('HTTP ' + capabilityRecordError.status) : 'Network error';
-      body.innerHTML =
-        '<div class="capabilities-record-error">' +
-          '<div><strong>Could not load capability</strong></div>' +
-          '<div>' + escHtml(status) + (capabilityRecordError.message ? ' — ' + escHtml(capabilityRecordError.message) : '') + '</div>' +
-        '</div>';
-      nameEl.textContent = currentSelectedCapability || '—';
-      idEl.textContent = currentSelectedCapability || '';
-      statusEl.textContent = '';
-      return;
-    }
-    if (!payload || typeof payload !== 'object') {
-      body.innerHTML = '<div class="capabilities-record-empty">No record loaded.</div>';
-      nameEl.textContent = currentSelectedCapability || '—';
-      idEl.textContent = currentSelectedCapability || '';
-      statusEl.textContent = '';
-      return;
-    }
-
-    nameEl.textContent = payload.name || payload.id || '—';
-    idEl.textContent = payload.id || '';
-    statusEl.textContent = payload.status || '';
-
-    const sections = [];
-
-    // 1. Identity strip — pills along the top of the body. Each pill
-    // surfaces a single Phase-1 wire field; the EXT-REF marker mirrors
-    // the BS record page convention (presence-only, value rendered in
-    // the Core details grid).
-    const identityPills = [];
-    if (payload.status)               identityPills.push({ key: 'status',   val: payload.status });
-    if (payload.owner)                identityPills.push({ key: 'owner',    val: payload.owner });
-    if (payload.parent_capability_id) identityPills.push({ key: 'parent',   val: payload.parent_capability_id });
-    if (payload.origin)               identityPills.push({ key: 'origin',   val: payload.origin });
-    if (payload.managed != null)      identityPills.push({ key: 'managed',  val: String(payload.managed) });
-    if (payload.replaces)             identityPills.push({ key: 'replaces', val: payload.replaces });
-    if (payload.external_ref)         identityPills.push({ key: 'ext',      val: 'EXT-REF' });
-    if (identityPills.length) {
-      const pills = identityPills.map(p =>
-        '<span class="capabilities-record-identity-pill"><span class="key">' + escHtml(p.key) + '</span>' + escHtml(p.val) + '</span>'
-      ).join('');
-      sections.push(
-        '<section class="capabilities-record-section">' +
-          '<div class="capabilities-record-section-title">Identity</div>' +
-          '<div class="capabilities-record-identity">' + pills + '</div>' +
-        '</section>'
-      );
-    }
-
-    // 2. Core details — field grid. Every Phase-1 wire field gets a
-    // row; missing optional values render as "—". external_ref renders
-    // via formatExternalRef so the row matches the BS record page
-    // treatment exactly.
-    const managedVal = payload.managed == null ? '' : String(payload.managed);
-    const cells = [
-      ['id',                   payload.id],
-      ['name',                 payload.name],
-      ['description',          payload.description],
-      ['status',               payload.status],
-      ['owner',                payload.owner],
-      ['parent_capability_id', payload.parent_capability_id],
-      ['origin',               payload.origin],
-      ['managed',              managedVal],
-      ['replaces',             payload.replaces],
-      ['created_by',           payload.created_by],
-      ['created_at',           payload.created_at],
-      ['updated_at',           payload.updated_at],
-      ['external_ref',         payload.external_ref ? formatExternalRef(payload.external_ref) : ''],
-    ].map(([k, v]) =>
-      '<div class="capabilities-record-field-key">' + escHtml(k) + '</div>' +
-      (v == null || v === ''
-        ? '<span class="capabilities-record-field-val muted">—</span>'
-        : '<span class="capabilities-record-field-val">' + escHtml(String(v)) + '</span>')
-    ).join('');
-    sections.push(
-      '<section class="capabilities-record-section">' +
-        '<div class="capabilities-record-section-title">Core details</div>' +
-        '<div class="capabilities-record-field-grid">' + cells + '</div>' +
-      '</section>'
-    );
-
-    // 3. Child capabilities — populated by renderCapabilityChildrenSection
-    //    once GET /v1/capabilities/{id}/children settles. Click-through
-    //    on a row navigates to that child's record page.
-    sections.push(
-      '<section class="capabilities-record-section">' +
-        '<div class="capabilities-record-section-title">Child capabilities</div>' +
-        '<div id="capabilities-record-children"></div>' +
-      '</section>'
-    );
-
-    // 4. Business Services using this Capability — populated by
-    //    renderCapabilityBusinessServicesSection once
-    //    GET /v1/capabilities/{id}/businessservices settles. Click-through
-    //    on a row navigates to that BS's record page.
-    sections.push(
-      '<section class="capabilities-record-section">' +
-        '<div class="capabilities-record-section-title">Business Services using this Capability</div>' +
-        '<div id="capabilities-record-business-services"></div>' +
-      '</section>'
-    );
-
-    // 5. AI System bindings at Capability scope — populated by
-    //    renderCapabilityAIBindingsSection once
-    //    GET /v1/capabilities/{id}/ai-bindings settles. NO click-through
-    //    is wired: there is no per-binding record page today, so the
-    //    rows render purely informationally (action area absent rather
-    //    than a disabled button).
-    sections.push(
-      '<section class="capabilities-record-section">' +
-        '<div class="capabilities-record-section-title">AI System bindings</div>' +
-        '<div id="capabilities-record-ai-bindings"></div>' +
-      '</section>'
-    );
-
-    body.innerHTML = sections.join('');
-
-    // Render whatever sub-resource state already exists on each cap
-    // (cache hit → list, in-flight → loading strip, error → error
-    // strip). The matching loaders fire from loadCapabilityRecord and
-    // re-call these renderers when their fetches settle.
-    const capId = payload.id || currentSelectedCapability;
-    if (capId) {
-      renderCapabilityChildrenSection(capId);
-      renderCapabilityBusinessServicesSection(capId);
-      renderCapabilityAIBindingsSection(capId);
-    }
+    return MIDASExplorerCapabilities.renderRecord(payload);
   }
 
   // Per-section renderer for the child-capabilities section. Reads the
   // per-cap state maps and writes loading / error / empty / list to
   // the section container. Click-through wires showCapabilityRecord on
   // each row so the operator can drill into a child's own record page.
+  // D32a-impl-5 — Thin shim. Production renderCapabilityChildrenSection lives in services-view.js / capabilities-view.js.
   function renderCapabilityChildrenSection(capId) {
-    const el = document.getElementById('capabilities-record-children');
-    if (!el) return;
-    if (capabilityChildrenLoading[capId]) {
-      el.innerHTML = '<div class="capabilities-record-loading">Loading child capabilities…</div>';
-      return;
-    }
-    const err = capabilityChildrenError[capId];
-    if (err) {
-      const status = err.status ? ('HTTP ' + err.status) : 'Network error';
-      el.innerHTML =
-        '<div class="capabilities-record-error">' +
-          '<div><strong>Could not load child capabilities</strong></div>' +
-          '<div>' + escHtml(status) + (err.message ? ' — ' + escHtml(err.message) : '') + '</div>' +
-        '</div>';
-      return;
-    }
-    const children = capabilityChildrenCache[capId];
-    if (!Array.isArray(children)) {
-      el.innerHTML = '<div class="capabilities-record-loading">Loading child capabilities…</div>';
-      return;
-    }
-    const rows = children.map(c => ({
-      id: c.id,
-      name: c.name || c.id,
-      meta: c.status || '',
-    }));
-    el.innerHTML = renderRelatedList(rows, 'No child capabilities');
-    el.querySelectorAll('.services-related-row').forEach((row, idx) => {
-      const child = children[idx];
-      if (child && child.id) {
-        row.style.cursor = 'pointer';
-        row.addEventListener('click', () => showCapabilityRecord(child.id));
-      }
-    });
+    return MIDASExplorerCapabilities.renderChildrenSection(capId);
   }
 
   // Per-section renderer for the BS-using-this-Capability section.
   // Click-through wires showBusinessServiceRecord on each row.
+  // D32a-impl-5 — Thin shim. Production renderCapabilityBusinessServicesSection lives in services-view.js / capabilities-view.js.
   function renderCapabilityBusinessServicesSection(capId) {
-    const el = document.getElementById('capabilities-record-business-services');
-    if (!el) return;
-    if (capabilityBusinessServicesLoading[capId]) {
-      el.innerHTML = '<div class="capabilities-record-loading">Loading business services…</div>';
-      return;
-    }
-    const err = capabilityBusinessServicesError[capId];
-    if (err) {
-      const status = err.status ? ('HTTP ' + err.status) : 'Network error';
-      el.innerHTML =
-        '<div class="capabilities-record-error">' +
-          '<div><strong>Could not load business services</strong></div>' +
-          '<div>' + escHtml(status) + (err.message ? ' — ' + escHtml(err.message) : '') + '</div>' +
-        '</div>';
-      return;
-    }
-    const services = capabilityBusinessServicesCache[capId];
-    if (!Array.isArray(services)) {
-      el.innerHTML = '<div class="capabilities-record-loading">Loading business services…</div>';
-      return;
-    }
-    const rows = services.map(bs => ({
-      id: bs.id,
-      name: bs.name || bs.id,
-      meta: [bs.service_type, bs.status].filter(Boolean).join(' · '),
-    }));
-    el.innerHTML = renderRelatedList(rows, 'No business services use this capability');
-    el.querySelectorAll('.services-related-row').forEach((row, idx) => {
-      const bs = services[idx];
-      if (bs && bs.id) {
-        row.style.cursor = 'pointer';
-        row.addEventListener('click', () => showBusinessServiceRecord(bs.id));
-      }
-    });
+    return MIDASExplorerCapabilities.renderBusinessServicesSection(capId);
   }
 
   // Per-section renderer for the Capability-scoped AI bindings section.
   // Intentionally NO click-through: there is no per-binding record
   // page today, so the rows render informationally only. The action
   // area is absent rather than a disabled button.
+  // D32a-impl-5 — Thin shim. Production renderCapabilityAIBindingsSection lives in services-view.js / capabilities-view.js.
   function renderCapabilityAIBindingsSection(capId) {
-    const el = document.getElementById('capabilities-record-ai-bindings');
-    if (!el) return;
-    if (capabilityAIBindingsLoading[capId]) {
-      el.innerHTML = '<div class="capabilities-record-loading">Loading AI bindings…</div>';
-      return;
-    }
-    const err = capabilityAIBindingsError[capId];
-    if (err) {
-      const status = err.status ? ('HTTP ' + err.status) : 'Network error';
-      el.innerHTML =
-        '<div class="capabilities-record-error">' +
-          '<div><strong>Could not load AI bindings</strong></div>' +
-          '<div>' + escHtml(status) + (err.message ? ' — ' + escHtml(err.message) : '') + '</div>' +
-        '</div>';
-      return;
-    }
-    const bindings = capabilityAIBindingsCache[capId];
-    if (!Array.isArray(bindings)) {
-      el.innerHTML = '<div class="capabilities-record-loading">Loading AI bindings…</div>';
-      return;
-    }
-    const rows = bindings.map(b => {
-      const verSuffix = b.ai_system_version != null ? '·v' + b.ai_system_version : '';
-      const meta = [b.role, b.ai_system_id ? 'system=' + b.ai_system_id + verSuffix : ''].filter(Boolean).join(' · ');
-      return {
-        id: b.id,
-        name: b.role || b.id,
-        meta,
-      };
-    });
-    el.innerHTML = renderRelatedList(rows, 'No AI bindings at this capability scope');
-    // No click-through wiring — see comment above.
+    return MIDASExplorerCapabilities.renderAIBindingsSection(capId);
   }
 
-  // Wire the catalogue search input + back-to-catalogue affordance.
-  // The catalogue list itself wires its per-card click handlers from
-  // inside renderCapabilitiesCatalogue (one wire per render).
-  (function wireCapabilitiesSubViewControls() {
-    const search = document.getElementById('capabilities-search');
-    if (search) search.addEventListener('input', e => renderCapabilitiesCatalogue(e.target.value));
-    const back = document.getElementById('capabilities-record-back-btn');
-    if (back) back.addEventListener('click', showCapabilitiesCatalogue);
-  })();
+  // D32a-impl-5 — Capabilities view sub-view controls wired by
+  // MIDASExplorerCapabilities.init.
+  if (typeof MIDASExplorerCapabilities !== 'undefined' && typeof MIDASExplorerCapabilities.init === 'function') {
+    MIDASExplorerCapabilities.init({});
+  }
 
   // ── Governance Map (Epic 1, PR 5) ──────────────────────────────────────────
   // Renders a ServiceNow-style node-link map for the currently-selected
-  // business service. Data comes from GET /v1/authority-graph?view=service
+  // business service. Data comes from GET /v1/graphs/context?view=service
   // and is adapted to the historical governance-map wire shape via
-  // mapAuthorityGraphToGovernanceMapShape() before render. Layout is
+  // mapContextGraphToCardLayout() before render. Layout is
   // static / slot-based so connectors are deterministic.
   // The connector SVG layer sits behind absolute-positioned HTML node cards
   // and is drawn from precomputed coordinates — no force-directed physics,
@@ -2923,37 +2298,38 @@
   let gmapMode = 'overview';     // 'overview' | 'map'
   let gmapLastBSId = null;       // last id we fetched for, to avoid duplicate work
   let gmapData = null;           // last successful payload
-  let gmapPositions = {};        // node id → {x, y} (top-left of card)
+  // D32a-impl-3 — bound to window.MIDASExplorerGraph.state.positions so
+  // the module renderer (graph-renderer.js) and the still-inline
+  // orchestration mutate the same object. The local const preserves
+  // identity through every existing `gmapPositions[id] = …` site.
+  const gmapPositions = _ExplorerGraphState.positions;
+  // gmapSelectedId stays inline (it is reassigned, not mutated). The
+  // renderer module reads/clears it via the _rendererHooks below.
   let gmapSelectedId = null;
   let gmapInFlight = 0;          // monotonic counter to discard stale fetches
 
-  // ── Map zoom state ────────────────────────────────────────────────────────
-  // Multiplicative zoom: in-button multiplies by STEP, out-button divides
-  // by STEP. Range is clamped to [MIN, MAX]. The current value is preserved
-  // across re-renders so switching Business Services keeps the zoom level.
-  let gmapZoom = 1.0;
-  // GMAP_ZOOM and ROOT_VIEWPORT_OFFSET_RATIO are extracted to
-  // /explorer/assets/js/governance-map/constants.js
-  // (D27j-ui-foundation-5); local consts at the top of this IIFE bind
-  // to the namespace values.
-
-  // Phase 2B Step 37 (D24i-fix) — transform-based camera pan offset.
-  //
-  // gmapPanX / gmapPanY hold the operator's pan offset in CSS pixels,
-  // applied to the scene transform as `translate(<pan>) scale(<zoom>)`.
-  // This decouples manual pan from scrollLeft/scrollTop, so dragging
-  // empty canvas visibly moves the graph even when canvas-scroll has
-  // no scrollable overflow (the post-D24h-fix true-fit state).
-  //
-  // Auto-camera operations (fit, focus root, focus node) reset pan to
-  // (0, 0) so their reframing math stays anchored at the safe-area
-  // origin. Manual zoom does NOT reset pan — the operator's pan
-  // intent survives a zoom-in/out gesture, matching common analytical-
-  // canvas behaviour. Pan starts at zero on every renderGovernanceMap
-  // because clearGovernanceMapCanvas drops every transient camera
-  // state via the implicit re-fit at end of render.
-  let gmapPanX = 0;
-  let gmapPanY = 0;
+  // ── Map zoom + pan state ──────────────────────────────────────────────────
+  // D32a-impl-4 — camera state moved to
+  // window.MIDASExplorerGraph.state.{zoom,panX,panY} and managed by
+  // graph-camera.js. The inline `gmapZoom` / `gmapPanX` / `gmapPanY`
+  // names remain as `let` bindings for inline call-sites (~6
+  // reassignment sites + ~15 read sites); their values are kept in
+  // sync with the namespace state through _syncCameraToState (before
+  // a module call) and _syncCameraFromState (after a module call).
+  // The camera-module shims below call both as bookends.
+  let gmapZoom = _ExplorerGraphState.zoom;
+  let gmapPanX = _ExplorerGraphState.panX;
+  let gmapPanY = _ExplorerGraphState.panY;
+  function _syncCameraToState() {
+    _ExplorerGraphState.zoom = gmapZoom;
+    _ExplorerGraphState.panX = gmapPanX;
+    _ExplorerGraphState.panY = gmapPanY;
+  }
+  function _syncCameraFromState() {
+    gmapZoom = _ExplorerGraphState.zoom;
+    gmapPanX = _ExplorerGraphState.panX;
+    gmapPanY = _ExplorerGraphState.panY;
+  }
 
   // Phase 2B Step 39 (D24i-fix3) — Pan / Select interaction mode.
   //
@@ -3017,11 +2393,9 @@
     };
   }
 
+  // D32a-impl-4 — Thin shim. Production clampGmapZoom lives in graph-camera.js (clampZoom).
   function clampGmapZoom(z) {
-    if (!Number.isFinite(z)) return GMAP_ZOOM.DEFAULT;
-    if (z < GMAP_ZOOM.MIN) return GMAP_ZOOM.MIN;
-    if (z > GMAP_ZOOM.MAX) return GMAP_ZOOM.MAX;
-    return z;
+    return ExplorerGraph.camera.clampZoom(z);
   }
 
   // computeGmapRenderedExtent returns the actual rendered graph extent
@@ -3039,32 +2413,9 @@
   // / GMAP.CANVAS_H) when gmapPositions is empty — this happens during
   // the initial load between renderGovernanceMap calls. The fallback
   // preserves the pre-fix shape so render-pipeline ordering is unaffected.
+  // D32a-impl-4 — Thin shim. Production computeGmapRenderedExtent lives in graph-camera.js (computeRenderedExtent).
   function computeGmapRenderedExtent(canvas) {
-    let maxX = 0;
-    let maxY = 0;
-    let found = false;
-
-    for (const id in gmapPositions) {
-      const pos = gmapPositions[id];
-      if (!pos || typeof pos.x !== 'number' || typeof pos.y !== 'number') continue;
-      found = true;
-      maxX = Math.max(maxX, pos.x + GMAP.NODE_W);
-      maxY = Math.max(maxY, pos.y + GMAP.NODE_H);
-    }
-
-    if (found) {
-      return {
-        width: Math.max(1, maxX),
-        height: Math.max(1, maxY),
-      };
-    }
-
-    const baseW = Number((canvas && canvas.dataset && canvas.dataset.baseWidth) || GMAP.MIN_CANVAS_W);
-    const baseH = GMAP.CANVAS_H;
-    return {
-      width:  Math.max(1, baseW),
-      height: Math.max(1, baseH),
-    };
+    return ExplorerGraph.camera.computeRenderedExtent(canvas);
   }
 
   // applyGmapZoom synchronises the DOM with the current gmapZoom value:
@@ -3082,50 +2433,18 @@
   //     when bounds × zoom fits inside the canvas-scroll wrapper.
   // (3) the percentage indicator updates and the in/out buttons toggle
   //     their disabled state at the manual MIN/MAX boundaries.
+  // D32a-impl-4 — Thin shim. Production applyGmapZoom lives in graph-camera.js (applyZoom).
   function applyGmapZoom() {
-    const canvas = document.getElementById('gmap-canvas');
-    const scene = document.getElementById('gmap-scene');
-    if (!canvas || !scene) return;
-    const baseW = parseFloat(canvas.dataset.baseWidth) || GMAP.MIN_CANVAS_W;
-    const baseH = GMAP.CANVAS_H;
-    scene.style.width = baseW + 'px';
-    scene.style.height = baseH + 'px';
-    // Phase 2B Step 37 (D24i-fix) — transform-based camera pan. The
-    // scene transform is `translate(<pan>) scale(<zoom>)` with
-    // transform-origin: 0 0 (CSS). translate is applied BEFORE scale
-    // so pan units are intuitive screen-pixel deltas (a pointer move
-    // of 50px maps directly to 50px of pan, regardless of zoom).
-    // Translate-then-scale is the order CSS evaluates right-to-left
-    // (scale first, then translate the scaled result), so the pan
-    // offset moves the already-scaled scene by literal pixel amounts.
-    scene.style.transform = 'translate(' + gmapPanX + 'px, ' + gmapPanY + 'px) scale(' + gmapZoom + ')';
-
-    // Phase 2B Step 34 (D24h-fix) — canvas dimensions reflect rendered
-    // graph extent × zoom, not the renderer's padded envelope × zoom.
-    const extent = computeGmapRenderedExtent(canvas);
-    const scaledW = extent.width  * gmapZoom;
-    const scaledH = extent.height * gmapZoom;
-    canvas.style.width    = scaledW + 'px';
-    canvas.style.minWidth = scaledW + 'px';
-    canvas.style.height   = scaledH + 'px';
-
-    const lvl = document.getElementById('gmap-zoom-level');
-    if (lvl) lvl.textContent = Math.round(gmapZoom * 100) + '%';
-    const inBtn = document.getElementById('gmap-zoom-in');
-    const outBtn = document.getElementById('gmap-zoom-out');
-    // Use a small epsilon so floating-point drift in repeated multiply/
-    // divide steps doesn't leave a button enabled at the actual boundary.
-    // Note: button-zoom uses GMAP_ZOOM.MIN (the manual readability floor),
-    // not GMAP_ZOOM.FIT_MIN. When Fit pushes gmapZoom below MIN, the
-    // zoom-out button is disabled and zoom-in remains enabled — clicking
-    // zoom-in restores readable scale via the normal STEP multiplier.
-    if (inBtn) inBtn.disabled = gmapZoom >= GMAP_ZOOM.MAX - 1e-6;
-    if (outBtn) outBtn.disabled = gmapZoom <= GMAP_ZOOM.MIN + 1e-6;
+    _syncCameraToState();
+    ExplorerGraph.camera.applyZoom();
+    _syncCameraFromState();
   }
 
+  // D32a-impl-4 — Thin shim. Production setGmapZoom lives in graph-camera.js (setZoom).
   function setGmapZoom(z) {
-    gmapZoom = clampGmapZoom(z);
-    applyGmapZoom();
+    _syncCameraToState();
+    ExplorerGraph.camera.setZoom(z);
+    _syncCameraFromState();
   }
 
   // Phase 2B Step 17 — root-focused initial viewport framing.
@@ -3146,44 +2465,11 @@
   // root near the top of the canvas do not produce negative scroll
   // values (scrollTop < 0 silently no-ops in some browsers but renders
   // garbage in others).
+  // D32a-impl-4 — Thin shim. Production focusGmapOnRoot lives in graph-camera.js (focusRoot).
   function focusGmapOnRoot(rootCardId) {
-    if (!rootCardId) return;
-    const scrollEl = document.getElementsByClassName('governance-map-canvas-scroll')[0];
-    if (!scrollEl) return;
-    const pos = gmapPositions[rootCardId];
-    if (!pos) return;
-    // Phase 2B Step 37 (D24i-fix) — auto-camera operations reset
-    // the manual pan offset so the framing math anchors at the
-    // safe-area origin. Applies the cleared transform via
-    // applyGmapZoom before computing the scroll-position centring
-    // below, so the scrollEl bounds reflect the post-reset extent.
-    gmapPanX = 0;
-    gmapPanY = 0;
-    applyGmapZoom();
-    // gmapPositions stores unscaled scene coordinates; multiply by
-    // gmapZoom to translate to scaled canvas-space (the same space the
-    // scrollEl operates in after applyGmapZoom).
-    const rootCenterX = (pos.x + GMAP.NODE_W / 2) * gmapZoom;
-    const rootTopY = pos.y * gmapZoom;
-    // Phase 2B Step 32 (D24g) — anchor inside the safe area, not the
-    // raw viewport. The horizontal centre is shifted right by the
-    // left-edge inset (camera bar) so the root sits in the visible
-    // graph area rather than partially behind the camera bar. The
-    // vertical 25%-from-top is computed from the safe area's top
-    // edge so the root also clears the top-left / top-right overlays.
-    const safe = gmapSafeArea(scrollEl);
-    const safeCenterX = safe.left + safe.width / 2;
-    const targetLeft = rootCenterX - safeCenterX;
-    const targetTop = rootTopY - (safe.top + safe.height * ROOT_VIEWPORT_OFFSET_RATIO);
-    // Two-sided clamp: lower bound 0 (no negative scroll); upper bound
-    // (scrollWidth - clientWidth) / (scrollHeight - clientHeight). When
-    // the canvas is smaller than the viewport the upper bound is
-    // negative, which Math.max(0, …) collapses to 0 — both axes settle
-    // at scrollLeft=0 / scrollTop=0 cleanly.
-    const maxLeft = Math.max(0, scrollEl.scrollWidth - scrollEl.clientWidth);
-    const maxTop = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
-    scrollEl.scrollLeft = Math.max(0, Math.min(targetLeft, maxLeft));
-    scrollEl.scrollTop = Math.max(0, Math.min(targetTop, maxTop));
+    _syncCameraToState();
+    ExplorerGraph.camera.focusRoot(rootCardId);
+    _syncCameraFromState();
   }
 
   // Wire zoom controls once at script load (idempotent — same pattern as
@@ -3294,116 +2580,11 @@
   // fit-to-bounds produces a graph that's actually visible inside
   // the usable rectangle rather than partially behind the camera
   // bar.
+  // D32a-impl-4 — Thin shim. Production fitGmapToBounds lives in graph-camera.js (fitToBounds).
   function fitGmapToBounds() {
-    const scrollEl = document.getElementsByClassName('governance-map-canvas-scroll')[0];
-    if (!scrollEl) return;
-    // Phase 2B Step 37 (D24i-fix) — fit resets the manual pan offset
-    // so the framing math anchors at the safe-area origin. The
-    // gmapZoom + scrollLeft/Top writes below produce a clean fit
-    // regardless of the operator's prior pan state.
-    gmapPanX = 0;
-    gmapPanY = 0;
-
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    let included = 0;
-    for (const id in gmapPositions) {
-      const pos = gmapPositions[id];
-      if (!pos || typeof pos.x !== 'number' || typeof pos.y !== 'number') continue;
-      if (pos.x < minX) minX = pos.x;
-      if (pos.y < minY) minY = pos.y;
-      if (pos.x + GMAP.NODE_W > maxX) maxX = pos.x + GMAP.NODE_W;
-      if (pos.y + GMAP.NODE_H > maxY) maxY = pos.y + GMAP.NODE_H;
-      included++;
-    }
-    if (included === 0) return;
-
-    const boundsW = maxX - minX;
-    const boundsH = maxY - minY;
-    if (boundsW <= 0 || boundsH <= 0) return;
-
-    // Available viewport = the safe area between the canvas-edge
-    // overlays. Non-positive area => viewport is too small to host
-    // the graph (e.g. all overlays add up to more than clientWidth);
-    // return rather than producing a degenerate zoom.
-    const safe = gmapSafeArea(scrollEl);
-    const availW = safe.width;
-    const availH = safe.height;
-    if (availW <= 0 || availH <= 0) return;
-
-    // Pick the smaller of fitX/fitY so the bounds fit inside the
-    // safe area on both axes. Phase 2B Step 34 (D24h-fix) — fit
-    // clamps to [GMAP_ZOOM.FIT_MIN, GMAP_ZOOM.MAX] rather than the
-    // manual readability floor [GMAP_ZOOM.MIN, MAX]. Dense graphs on
-    // narrow viewports may need to shrink below the manual minimum
-    // to honour the no-scrollbar guarantee; manual zoom-in restores
-    // readable scale immediately. setGmapZoom (used by manual paths)
-    // is bypassed here so its MIN-flooring clamp does not engage.
-    // gmapZoom is written directly + applyGmapZoom is invoked to
-    // update canvas dimensions and the +/- button enabled states.
-    const fitScaleX = availW / boundsW;
-    const fitScaleY = availH / boundsH;
-    const targetZoom = Math.min(fitScaleX, fitScaleY);
-    const fitZoom = Math.max(GMAP_ZOOM.FIT_MIN, Math.min(GMAP_ZOOM.MAX, targetZoom));
-    gmapZoom = fitZoom;
-    applyGmapZoom();
-
-    // After applyGmapZoom, the canvas dimensions reflect rendered-
-    // extent × fitZoom (D24h-fix). Position the fitted graph inside
-    // the safe area:
-    //   - When the scaled bounds FIT on an axis (bounds × z <= safe.{w,h}),
-    //     anchor the rendered minimum (left/top edge of the graph) at the
-    //     safe-area origin (safe.left / safe.top). This prevents the
-    //     pre-D24h-fix left-clip behaviour where centring + the lower
-    //     scrollLeft clamp pushed leftmost content under the camera bar
-    //     at fit zoom < 1.
-    //   - When bounds OVERFLOW the safe area on an axis (only possible
-    //     when the FIT_MIN floor binds), keep the centring shape so
-    //     overflow is visible on both edges symmetrically.
-    const z = gmapZoom;
-    const scaledBoundsW = boundsW * z;
-    const scaledBoundsH = boundsH * z;
-    const minXScaled = minX * z;
-    const minYScaled = minY * z;
-
-    let targetLeft;
-    if (scaledBoundsW <= safe.width) {
-      // Anchor leftmost rendered content at safe.left.
-      targetLeft = minXScaled - safe.left;
-    } else {
-      // Bounds overflow safe area horizontally — centre on safe area.
-      const boundsCenterX = (minX + boundsW / 2) * z;
-      const safeCenterX   = safe.left + safe.width / 2;
-      targetLeft = boundsCenterX - safeCenterX;
-    }
-
-    let targetTop;
-    if (scaledBoundsH <= safe.height) {
-      targetTop = minYScaled - safe.top;
-    } else {
-      const boundsCenterY = (minY + boundsH / 2) * z;
-      const safeCenterY   = safe.top + safe.height / 2;
-      targetTop = boundsCenterY - safeCenterY;
-    }
-
-    // Two-sided clamp — when the scaled graph is smaller than the
-    // viewport on either axis, max-* collapses to 0 and the graph
-    // anchors at scrollLeft=0 / scrollTop=0. With D24h-fix's canvas
-    // dimensions (= rendered-extent × z, no empty padding), the upper
-    // bound only engages when fit zoom is at FIT_MIN and content
-    // overflows — same case the symmetric centring above handles.
-    const maxLeft = Math.max(0, scrollEl.scrollWidth  - scrollEl.clientWidth);
-    const maxTop  = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
-    scrollEl.scrollLeft = Math.max(0, Math.min(targetLeft, maxLeft));
-    scrollEl.scrollTop  = Math.max(0, Math.min(targetTop,  maxTop));
-
-    // Phase 2B Step 35 (D24i) — enter fit-mode. CSS suppresses the
-    // canvas-scroll wrapper's scrollbars until the operator's first
-    // manual pan or zoom. The scrollbars at this point would expose
-    // only empty left/top canvas padding (extent.width includes the
-    // EDGE_PAD-wide left margin, but the rendered content sits at
-    // scene-x = EDGE_PAD), so hiding them honours the no-scrollbar-
-    // after-Fit invariant without losing manual navigation later.
-    applyGmapFitMode(true);
+    _syncCameraToState();
+    ExplorerGraph.camera.fitToBounds();
+    _syncCameraFromState();
   }
 
   // D26h-fix — scheduleGmapFitToView() defers fitGmapToBounds() into
@@ -3429,29 +2610,11 @@
   //     already triggers its own fit via setTimeout)
   //   - focus-mode entry (applyGmapFocusMode has its own dedicated
   //     two-frame fit sequence)
+  // D32a-impl-4 — Thin shim. Production scheduleGmapFitToView lives in graph-camera.js (scheduleFitToView).
   function scheduleGmapFitToView() {
-    if (typeof window.requestAnimationFrame !== 'function') {
-      // Test / no-DOM fallback — call synchronously.
-      if (typeof fitGmapToBounds === 'function') fitGmapToBounds();
-      return;
-    }
-    // Two-frame sequence: outer rAF guarantees the body class /
-    // markup mutation has been applied; inner rAF guarantees the
-    // browser has resolved the resulting layout (workbench card
-    // height, canvas-scroll clientWidth/Height, scrollbar
-    // visibility, tray-expanded height if applicable). Only then
-    // does fitGmapToBounds read stable dimensions.
-    window.requestAnimationFrame(function () {
-      window.requestAnimationFrame(function () {
-        // Defensive: if the canvas was torn down between schedule
-        // and fire (e.g. operator switched to a different sub-view
-        // mid-render), fitGmapToBounds is a no-op when scrollEl is
-        // missing — but bailing here saves the helper call.
-        const scrollEl = document.getElementsByClassName('governance-map-canvas-scroll')[0];
-        if (!scrollEl) return;
-        if (typeof fitGmapToBounds === 'function') fitGmapToBounds();
-      });
-    });
+    _syncCameraToState();
+    ExplorerGraph.camera.scheduleFitToView();
+    _syncCameraFromState();
   }
 
   // Wire the Fit button. Same IIFE pattern as wireGmapCentreButton.
@@ -3870,15 +3033,10 @@
   //
   // Persistence: session-local only. No localStorage, no URL sync,
   // no backend persistence — the brief explicitly forbids them.
-  const gmapVisibilityFilters = {
-    business:   true,
-    capability: true,
-    process:    true,
-    surface:    true,
-    ai:         true,
-    bindings:   true,
-    synthetic:  true,
-  };
+  // D32a-impl-3 — bound to window.MIDASExplorerGraph.state.visibilityFilters
+  // so the renderer-module applyVisibilityFilters and the inline chip
+  // handlers mutate the same object. Initial values are preserved.
+  const gmapVisibilityFilters = _ExplorerGraphState.visibilityFilters;
 
   // gmapNodeCategoryFromKind maps a node card's dataset.nodeKind to
   // one of the chip categories. Two kinds collapse:
@@ -3907,46 +3065,14 @@
   //   3. If currently-selected node became hidden, selection is
   //      cleared and inspector cleared (invisible "selected" is a
   //      UI bug; clearing reuses the existing inspector helpers).
+  // D32a-impl-3 — Thin compatibility shim. Production
+  // applyGmapVisibilityFilters lives in graph-renderer.js as
+  // applyVisibilityFilters. The renderer module reads the live
+  // selectedId via the getSelectedId hook and clears it through
+  // clearSelection (defined below) so the inspector reset path
+  // remains in this IIFE.
   function applyGmapVisibilityFilters() {
-    // Single DOM walk: toggle node hidden class AND collect hidden
-    // ids so the connector pass can reference them without re-querying.
-    const hiddenIds = new Set();
-    const nodes = document.querySelectorAll('.gmap-node');
-    nodes.forEach(n => {
-      const cat = gmapNodeCategoryFromKind(n.dataset.nodeKind);
-      const hide = cat !== '' && !gmapVisibilityFilters[cat];
-      n.classList.toggle('gmap-node-hidden', hide);
-      if (hide && n.dataset.nodeId) hiddenIds.add(n.dataset.nodeId);
-    });
-    // Connector pass — Option A (endpoint-derived) + Bindings class
-    // filter. The 'bindings' chip is the only category whose filter
-    // works on connectors directly because there are no binding NODES
-    // in this renderer; its connector class (connector-ai-binding) is
-    // the explicit handle.
-    for (const c of gmapConnectors) {
-      if (!c || !c.pathEl) continue;
-      let hide = hiddenIds.has(c.srcId) || hiddenIds.has(c.dstId);
-      if (!gmapVisibilityFilters.bindings &&
-          c.pathEl.classList.contains('connector-ai-binding')) {
-        hide = true;
-      }
-      c.pathEl.classList.toggle('gmap-connector-hidden', hide);
-    }
-    // Selection-clear: if the selected node's id is in hiddenIds,
-    // strip .selected from it and clear the inspector. We deliberately
-    // do not call selectGovernanceMapNode(null) here because that
-    // function expects a real id (and would re-walk the whole node
-    // set); instead we mutate exactly the affected node + reset the
-    // inspector via the existing low-level helpers.
-    if (gmapSelectedId && hiddenIds.has(gmapSelectedId)) {
-      nodes.forEach(n => {
-        if (n.dataset.nodeId === gmapSelectedId) n.classList.remove('selected');
-      });
-      gmapSelectedId = null;
-      if (typeof setGovernanceMapDetailsName   === 'function') setGovernanceMapDetailsName('');
-      if (typeof setGovernanceMapDetailsFields === 'function') setGovernanceMapDetailsFields([]);
-      if (typeof setGovernanceMapDetailsActions === 'function') setGovernanceMapDetailsActions([]);
-    }
+    return ExplorerGraph.renderer.applyVisibilityFilters();
   }
 
   // Phase 2B Step 21 — focusGmapOnNode (D18 helper).
@@ -5635,8 +4761,8 @@
   })();
 
   // refreshGovernanceMap() and loadBusinessServiceRecord() both
-  // consume /v1/authority-graph?view=service&id={id}&depth=5 and run
-  // the response through mapAuthorityGraphToGovernanceMapShape() so
+  // consume /v1/graphs/context?view=service&id={id}&depth=5 and run
+  // the response through mapContextGraphToCardLayout() so
   // the existing renderGovernanceMap() / renderBusinessServiceRecord()
   // continue to operate on the historical governance-map wire shape.
   // The previous /v1/businessservices/{id}/governance-map path was
@@ -5647,7 +4773,7 @@
   // active" diagnostic message to a single emission per session.
   let _authorityGraphAdapterLogged = false;
 
-  // mapAuthorityGraphToGovernanceMapShape(projection, view) adapts an
+  // mapContextGraphToCardLayout(projection, view) adapts an
   // authority-graph projection into the governance-map response shape
   // that renderGovernanceMap() already understands. The transformation
   // is pure (no DOM, no fetch), so it is safe to unit-test or replay.
@@ -5729,8 +4855,24 @@
   // Defensive against missing projection / nodes / typed-data slots:
   // returns a shape with empty arrays and null scalars rather than
   // throwing.
-  function mapAuthorityGraphToGovernanceMapShape(projection, view) {
-    const empty = {
+  // D32a-impl-2 — Compatibility shim. The production implementation
+  // of mapContextGraphToCardLayout was moved into the Context Graph
+  // adapter module (graph/context/context-graph-adapter.js) so the
+  // Context-specific projection-to-card-shape mapping is owned by
+  // the adapter, not the inline IIFE. The inline function name and
+  // two-argument call shape are preserved as a thin delegating
+  // wrapper because existing test pins assert call-shape
+  // `mapContextGraphToCardLayout(payload, view)` (explorer_test.go
+  // lines 5274–5285). All call-sites are unchanged.
+  function mapContextGraphToCardLayout(projection, view) {
+    var adapter = window.MIDASExplorerGraph && window.MIDASExplorerGraph.contextAdapter;
+    if (adapter && typeof adapter.mapToCardLayout === 'function') {
+      return adapter.mapToCardLayout(projection, view);
+    }
+    // Defensive empty shape; adapter module is loaded by index.html
+    // before this IIFE runs, so the fallback only fires in atypical
+    // load-failure scenarios.
+    return {
       business_service: null,
       ai_systems: [],
       coverage: null,
@@ -5739,227 +4881,6 @@
       processes: [],
       surfaces: [],
       relationships: { outgoing: [], incoming: [] },
-    };
-    if (!projection || !Array.isArray(projection.nodes)) return empty;
-    const rootId = projection.root && projection.root.id;
-    const rootKind = projection.root && projection.root.kind;
-    // Phase 2B Step 14 — the adapter is view-agnostic: it produces a
-    // shape with the entities the projection contains; the renderer
-    // now branches on currentGraphView to place the projection root
-    // correctly. The pre-Step-14 isAIView branch / fake BS synthesis
-    // are gone.
-
-    let businessService = null;
-    let coverage = null;
-    let authoritySummary = null;
-    const aiSystemMap = {}; // id → { …, bindings: [] }
-    const collectedBindings = [];
-    const outgoing = [];
-    const incoming = [];
-    const capabilities = [];
-    const processes = [];
-    const surfaces = [];
-
-    for (const n of projection.nodes) {
-      if (!n || !n.kind) continue;
-      switch (n.kind) {
-        case 'business_service': {
-          // Only the root BS is folded into business_service; related
-          // BS nodes are handled under kind=related_business_service.
-          if (rootId && n.id === rootId && n.business_service) {
-            const bs = n.business_service;
-            // D27j-ui-2a — fail_mode_policy_id is carried through as
-            // data only. No badge, no node, no edge, no inspector
-            // section is rendered in this tranche; later UI tranches
-            // consume the field. Empty-string fallback matches the
-            // existing convention for other optional string fields.
-            businessService = {
-              id: bs.id,
-              name: bs.name,
-              description: bs.description || '',
-              status: bs.status,
-              owner_id: bs.owner || '',
-              service_type: bs.service_type || '',
-              regulatory_scope: bs.regulatory_scope || '',
-              fail_mode_policy_id: bs.fail_mode_policy_id || '',
-              external_ref: bs.external_ref || null,
-            };
-          }
-          break;
-        }
-        case 'related_business_service': {
-          if (!n.related_business_service) break;
-          const r = n.related_business_service;
-          // Phase 2B Step 6: typed data carries up to two sub-rows
-          // (outgoing + incoming) for the same related-BS id. Each
-          // populated sub-row maps to one gmap-shape row in the
-          // matching direction array. The relationship_id is now
-          // surfaced by typed data, so the adapted row's `id` field
-          // is the real BSR row id (was the target BS id pre-Step 6).
-          if (r.outgoing) {
-            outgoing.push({
-              id: r.outgoing.relationship_id || r.id,
-              source_business_service_id: rootId || '',
-              target_business_service_id: r.id,
-              other_name: r.name || '',
-              relationship_type: r.outgoing.relationship_type || '',
-              description: r.outgoing.description || '',
-            });
-          }
-          if (r.incoming) {
-            incoming.push({
-              id: r.incoming.relationship_id || r.id,
-              source_business_service_id: r.id,
-              target_business_service_id: rootId || '',
-              other_name: r.name || '',
-              relationship_type: r.incoming.relationship_type || '',
-              description: r.incoming.description || '',
-            });
-          }
-          break;
-        }
-        case 'capability': {
-          if (!n.capability) break;
-          const c = n.capability;
-          capabilities.push({
-            id: c.id,
-            name: c.name,
-            description: c.description || '',
-            status: c.status,
-          });
-          break;
-        }
-        case 'process': {
-          if (!n.process) break;
-          const p = n.process;
-          processes.push({
-            id: p.id,
-            name: p.name,
-            business_service_id: p.business_service_id || '',
-            status: p.status,
-          });
-          break;
-        }
-        case 'decision_surface': {
-          if (!n.decision_surface) break;
-          const d = n.decision_surface;
-          // ai_binding_ids → ai_bindings: gmap wire and renderer
-          // (e.g. line 6668: `(s.ai_bindings || []).length > 0`)
-          // both expect the array under `ai_bindings`. The projection
-          // exposes the same data under `ai_binding_ids` — pure
-          // rename, defensive non-nil copy so the renderer never
-          // sees null.
-          // D27j-ui-2a — fail_mode_policy_id is carried through as
-          // data only. Same convention as the business_service case
-          // above: no rendering, later UI tranches consume the field.
-          surfaces.push({
-            id: d.id,
-            version: d.version,
-            name: d.name,
-            process_id: d.process_id || '',
-            fail_mode_policy_id: d.fail_mode_policy_id || '',
-            status: d.status,
-            ai_bindings: Array.isArray(d.ai_binding_ids) ? d.ai_binding_ids.slice() : [],
-            profile_count: d.profile_count || 0,
-            grant_count: d.grant_count || 0,
-            agent_count: d.agent_count || 0,
-          });
-          break;
-        }
-        case 'ai_system': {
-          if (!n.ai_system) break;
-          const a = n.ai_system;
-          let activeVersion = null;
-          // The projection emits active_version as a bare int
-          // (omitted when no active version exists); reshape into
-          // the gmap object form the renderer expects.
-          if (a.active_version != null) {
-            activeVersion = {
-              version: a.active_version,
-              release_label: a.active_version_label || '',
-              status: a.active_version_status || '',
-            };
-          }
-          aiSystemMap[a.id] = {
-            id: a.id,
-            name: a.name,
-            vendor: a.vendor || '',
-            system_type: a.system_type || '',
-            status: a.status,
-            active_version: activeVersion,
-            external_ref: a.external_ref || null,
-            bindings: [],
-          };
-          break;
-        }
-        case 'ai_system_binding': {
-          if (!n.ai_system_binding) break;
-          const b = n.ai_system_binding;
-          // Preserve the four scope-id pointers verbatim — null
-          // when the projection emitted null. The renderer's
-          // connector-resolution code branches on these values.
-          collectedBindings.push({
-            id: b.id,
-            ai_system_id: b.ai_system_id,
-            business_service_id: b.business_service_id,
-            capability_id: b.capability_id,
-            process_id: b.process_id,
-            surface_id: b.surface_id,
-            role: b.role || '',
-            description: b.description || '',
-          });
-          break;
-        }
-        case 'coverage': {
-          if (!n.coverage) break;
-          coverage = {
-            surface_count: n.coverage.surface_count,
-            surfaces_with_direct_ai_binding: n.coverage.surfaces_with_direct_ai_binding,
-            surfaces_with_scoped_ai_binding: n.coverage.surfaces_with_scoped_ai_binding,
-            surfaces_with_no_ai_binding: n.coverage.surfaces_with_no_ai_binding,
-          };
-          break;
-        }
-        case 'authority_summary': {
-          if (!n.authority_summary) break;
-          authoritySummary = {
-            surface_count: n.authority_summary.surface_count,
-            active_profile_count: n.authority_summary.active_profile_count,
-            active_grant_count: n.authority_summary.active_grant_count,
-            active_agent_count: n.authority_summary.active_agent_count,
-          };
-          break;
-        }
-      }
-    }
-
-    // Group collected bindings under their AI system. Bindings whose
-    // ai_system_id has no matching system node are dropped (the
-    // projection emits both kinds atomically, so this should not
-    // happen in practice).
-    for (const b of collectedBindings) {
-      const sys = aiSystemMap[b.ai_system_id];
-      if (sys) sys.bindings.push(b);
-    }
-
-    // Phase 2B Step 14: the prior BS-slot synthesis shim has been
-    // removed. The renderer is now root-kind-aware (branches on
-    // currentGraphView) and renders the AI system as its own root
-    // card with an AI SYSTEM label, so the adapter no longer needs
-    // to fake a business_service entry for ai_system view. For
-    // service view the BS slot remains populated above; for
-    // ai_system view the slot stays null and the renderer reads
-    // data.ai_systems[] to find the root.
-
-    return {
-      business_service: businessService,
-      relationships: { outgoing: outgoing, incoming: incoming },
-      capabilities: capabilities,
-      processes: processes,
-      surfaces: surfaces,
-      ai_systems: Object.values(aiSystemMap),
-      coverage: coverage,
-      authority_summary: authoritySummary,
     };
   }
 
@@ -5987,32 +4908,44 @@
     // regardless of layer. The renderer derives connectors from
     // the adapted shape itself; projection edges are discarded.
     const fetchView = currentGraphView;
-    const url = '/v1/authority-graph?view=' + encodeURIComponent(fetchView) +
-      '&id=' + encodeURIComponent(rootId) + '&depth=5';
-    fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
-      .then(resp => {
-        if (resp.status === 404) return { __status: 404 };
-        if (resp.status === 501) return { __status: 501 };
-        if (!resp.ok)            return resp.text().then(t => ({ __status: resp.status, __text: t }));
-        return resp.json();
-      })
-      .then(payload => {
+    // D32a-impl-2 — Route fetch + Context-shape mapping through the
+    // graph shell. shell.refresh() invokes the Context adapter's
+    // fetch (which wraps ExplorerAPI.graphs.context) and
+    // mapToCardLayout (which produces the card-shape this renderer
+    // consumes), then updates store.loadingByKey / errorByKey /
+    // graphDataByLens.context. The shell+adapter form the formal
+    // production fetch path; the inline rendering primitives
+    // (renderGovernanceMap, renderGovernanceMapEmpty,
+    // renderGovernanceMapError) remain as the rendering
+    // implementation and are dispatched through the bridge by the
+    // shell's render() — or, here, directly from the local
+    // orchestration so the cancel-token + dedup semantics specific
+    // to this workbench loop are preserved.
+    ExplorerGraph.shell.refresh({
+      lens:  'context',
+      view:  fetchView,
+      id:    rootId,
+      depth: 5,
+    })
+      .then(payloadOrLayout => {
         if (fetchToken !== gmapInFlight) return; // a newer fetch superseded this
-        if (payload && payload.__status === 404) {
-          renderGovernanceMapEmpty('No governance map for this service yet.', rootId);
+        if (payloadOrLayout && payloadOrLayout.__status === 404) {
+          renderGovernanceMapEmpty('No Context Graph for this service yet.', rootId);
           return;
         }
-        if (payload && payload.__status === 501) {
+        if (payloadOrLayout && payloadOrLayout.__status === 501) {
           renderGovernanceMapEmpty('Governance map is not configured on this server.', rootId);
           return;
         }
-        if (payload && payload.__status) {
-          renderGovernanceMapError('Governance map fetch failed (HTTP ' + payload.__status + ').');
+        if (payloadOrLayout && payloadOrLayout.__status) {
+          renderGovernanceMapError('Governance map fetch failed (HTTP ' + payloadOrLayout.__status + ').');
           return;
         }
-        const adapted = mapAuthorityGraphToGovernanceMapShape(payload, fetchView);
-        gmapData = adapted;
-        renderGovernanceMap(adapted);
+        // shell.refresh resolves to the already-mapped card layout
+        // when fetch succeeded, so no second call into the adapter
+        // is needed here.
+        gmapData = payloadOrLayout;
+        renderGovernanceMap(payloadOrLayout);
       })
       .catch(err => {
         if (fetchToken !== gmapInFlight) return;
@@ -6203,71 +5136,28 @@
     if (btn) btn.addEventListener('click', () => goBackOrToOwningService());
   })();
 
+  // D32a-impl-3 — Thin compatibility shim. The production canvas
+  // tear-down lives in graph-renderer.js (clearCanvas); this inline
+  // declaration retains the legacy name for any caller still
+  // referencing it by the inline binding.
   function clearGovernanceMapCanvas() {
-    // D26h-impl — tear down any active connector tooltip BEFORE the
-    // SVG paths it references are removed below. Without this, a
-    // pointer-out that fires after the path is detached would not
-    // clean up the tooltip (the delegated handler can't find the
-    // path), leaving stale hover state across renders.
-    if (typeof hideGmapConnectorTooltip === 'function') hideGmapConnectorTooltip();
-    const canvas = document.getElementById('gmap-canvas');
-    const scene = document.getElementById('gmap-scene');
-    const svg = document.getElementById('gmap-svg');
-    if (!canvas || !scene || !svg) return;
-    // Remove canvas-level children that aren't the scene wrapper itself.
-    // This drops empty/error overlays from previous renders. The scene
-    // wrapper is preserved so its CSS transform survives across renders.
-    Array.from(canvas.children).forEach(child => {
-      if (child !== scene) canvas.removeChild(child);
-    });
-    // Remove scene-level children that aren't the SVG layer (i.e. node
-    // buttons from previous renders).
-    Array.from(scene.children).forEach(child => {
-      if (child !== svg) scene.removeChild(child);
-    });
-    while (svg.firstChild) svg.removeChild(svg.firstChild);
-    gmapPositions = {};
-    // Drop tracked connectors so the next render starts with a fresh
-    // list — otherwise the array accumulates stale path-element refs
-    // across BS switches.
-    gmapConnectors = [];
-    // Drop dragged-position overrides so each new map render starts
-    // from layout positions. Overrides are session-local in-memory
-    // only; this clear is the only resetter (no persisted store to
-    // wipe). A future "reset layout" affordance is intentionally
-    // deferred — Phase 6 ships drag without a reset button.
-    gmapDragOverrides = {};
+    return ExplorerGraph.renderer.clearCanvas();
   }
 
+  // D32a-impl-3 — Thin compatibility shims. The production empty/error
+  // renderers live in graph/context/context-graph-view.js
+  // (renderContextGraphEmpty / renderContextGraphError); these inline
+  // declarations route through them and pass the live orchestration
+  // context so the still-inline setGovernanceMapStatus /
+  // setGovernanceMapCurrentRoot / setGovernanceMapDetailsName /
+  // setGovernanceMapDetailsFields / setGovernanceMapSummary helpers
+  // are invoked through the ctx hooks.
   function renderGovernanceMapEmpty(message, bsId) {
-    clearGovernanceMapCanvas();
-    setGovernanceMapStatus('');
-    setGovernanceMapCurrentRoot(null, null, null);
-    const canvas = document.getElementById('gmap-canvas');
-    if (!canvas) return;
-    const div = document.createElement('div');
-    div.className = 'governance-map-empty';
-    div.innerHTML =
-      '<div class="gmap-empty-title">' + escHtml(message) + '</div>' +
-      '<div>Service id: <code>' + escHtml(bsId || '') + '</code></div>';
-    canvas.appendChild(div);
-    setGovernanceMapDetailsName('No node selected');
-    setGovernanceMapDetailsFields([]);
-    setGovernanceMapSummary([]);
+    return ExplorerGraph.contextView.renderContextGraphEmpty(message, bsId, _gmapRenderCtx);
   }
 
   function renderGovernanceMapError(message) {
-    clearGovernanceMapCanvas();
-    setGovernanceMapStatus('error');
-    setGovernanceMapCurrentRoot(null, null, null);
-    const canvas = document.getElementById('gmap-canvas');
-    if (!canvas) return;
-    const div = document.createElement('div');
-    div.className = 'governance-map-error';
-    div.innerHTML =
-      '<div class="gmap-empty-title">Governance map unavailable</div>' +
-      '<div>' + escHtml(message) + '</div>';
-    canvas.appendChild(div);
+    return ExplorerGraph.contextView.renderContextGraphError(message, _gmapRenderCtx);
   }
 
   // ── Layout helpers ────────────────────────────────────────────────────────
@@ -6299,7 +5189,10 @@
   // over fetch. A page reload returns every node to its layout position.
   // (sessionStorage appears elsewhere in this file for auth + simulator
   // state — that is unrelated; the drag code path never touches it.)
-  let gmapDragOverrides = {};
+  // D32a-impl-3 — bound to window.MIDASExplorerGraph.state.dragOverrides
+  // so renderer-module effectiveGmapPosition and inline drag handlers
+  // mutate the same map.
+  const gmapDragOverrides = _ExplorerGraphState.dragOverrides;
 
   // effectiveGmapPosition is the single source of truth for "where is
   // node X right now" used by both the node-card transform AND the
@@ -6307,11 +5200,10 @@
   // otherwise the layout position. Both endpoints of every connector
   // resolve through this lookup, so a connector between a dragged node
   // and a non-dragged node remains attached at both ends.
+  // D32a-impl-3 — Thin compatibility shim. Production
+  // effectiveGmapPosition lives in graph-renderer.js.
   function effectiveGmapPosition(id) {
-    if (Object.prototype.hasOwnProperty.call(gmapDragOverrides, id)) {
-      return gmapDragOverrides[id];
-    }
-    return gmapPositions[id] || null;
+    return ExplorerGraph.renderer.effectiveGmapPosition(id);
   }
 
   // GMAP_ANCHORS is extracted to
@@ -6326,7 +5218,10 @@
   // the moved node (every entry recomputes both endpoints — cheap and
   // robust to multi-end drags). Reset to [] in clearGovernanceMapCanvas
   // so successive renders don't accumulate stale paths.
-  let gmapConnectors = [];
+  // D32a-impl-3 — bound to window.MIDASExplorerGraph.state.connectors
+  // so renderer-module addLiveConnector and inline repaint code share
+  // the same array. mutates by .push / .length = 0.
+  const gmapConnectors = _ExplorerGraphState.connectors;
 
   // addLiveConnector adds a connector by node ids + anchor names. The
   // drawn path is registered in gmapConnectors so it can be repainted
@@ -6344,55 +5239,12 @@
   //                           short "<kind label> from <source> to
   //                           <target>" string built at add-time from
   //                           the rendered card labels.
+  // D32a-impl-3 — Thin compatibility shim. The production live
+  // connector builder (with hover metadata + hit-target twin) lives in
+  // graph-renderer.js. The renderer module reads source/target endpoint
+  // labels via the connectorEndpointLabel hook below.
   function addLiveConnector(srcId, srcAnchor, dstId, dstAnchor, cls) {
-    const sp = effectiveGmapPosition(srcId);
-    const dp = effectiveGmapPosition(dstId);
-    if (!sp || !dp) return null;
-    const sFn = GMAP_ANCHORS[srcAnchor];
-    const dFn = GMAP_ANCHORS[dstAnchor];
-    if (!sFn || !dFn) return null;
-    const pathEl = addConnector(sFn(sp), dFn(dp), cls);
-    if (!pathEl) return null;
-    // Promote to a hoverable connector. The base class .gmap-connector
-    // exists alongside the kind class; the hover handler delegates
-    // against .gmap-connector so adding/removing kinds does not need
-    // to touch the handler.
-    pathEl.classList.add('gmap-connector');
-    const kindInfo = gmapConnectorKindFromCls(cls);
-    pathEl.setAttribute('data-connector-kind', kindInfo.kind);
-    pathEl.setAttribute('data-source-node-id', srcId);
-    pathEl.setAttribute('data-target-node-id', dstId);
-    pathEl.setAttribute('role', 'img');
-    const srcLabel = gmapConnectorEndpointLabel(srcId);
-    const dstLabel = gmapConnectorEndpointLabel(dstId);
-    pathEl.setAttribute(
-      'aria-label',
-      kindInfo.label + ' from ' + srcLabel + ' to ' + dstLabel
-    );
-    // D26h-fix — Add a wider invisible twin path that captures hover
-    // events the thin visible stroke is too narrow to register.
-    // Issued AFTER the visible path so it sits above in stacking order
-    // (SVG paint order = source order). Both paths share the same `d`
-    // and the same metadata; the hit target's data-visible-connector-
-    // id pointer lets the delegated handler resolve to the visible
-    // path for class manipulation. The hit target carries no visual
-    // styling beyond a transparent stroke; pointer-events: stroke
-    // means only the wider stroke region (not the bounding box)
-    // captures pointer events.
-    const hitEl = addConnectorHitTarget(sFn(sp), dFn(dp), kindInfo, srcId, dstId, srcLabel, dstLabel);
-    if (hitEl) {
-      // Cross-link the visible path and the hit target so the hover
-      // handler can resolve one from the other and so repaint can
-      // update both `d` attributes in lockstep.
-      hitEl.gmapVisibleConnector = pathEl;
-      pathEl.gmapHitTarget = hitEl;
-    }
-    gmapConnectors.push({
-      srcId: srcId, srcAnchor: srcAnchor,
-      dstId: dstId, dstAnchor: dstAnchor,
-      pathEl: pathEl, hitEl: hitEl,
-    });
-    return pathEl;
+    return ExplorerGraph.renderer.addLiveConnector(srcId, srcAnchor, dstId, dstAnchor, cls);
   }
 
   // addConnectorHitTarget creates the wider invisible twin path. Same
@@ -6402,20 +5254,10 @@
   // metadata + an aria-hidden="true" attribute so screen readers do
   // not re-announce the relationship (the visible path already
   // carries an aria-label).
+  // D32a-impl-3 — Thin compatibility shim. The production wide-stroke
+  // hit-target builder lives in graph-renderer.js.
   function addConnectorHitTarget(p1, p2, kindInfo, srcId, dstId, srcLabel, dstLabel) {
-    const svg = document.getElementById('gmap-svg');
-    if (!svg) return null;
-    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    path.setAttribute('class', 'gmap-connector-hit-target');
-    path.setAttribute('d', curvePath(p1[0], p1[1], p2[0], p2[1]));
-    path.setAttribute('data-connector-kind', kindInfo.kind);
-    path.setAttribute('data-source-node-id', srcId);
-    path.setAttribute('data-target-node-id', dstId);
-    path.setAttribute('aria-hidden', 'true');
-    // Aria-label is stored only on the visible path (which has
-    // role="img"); the hit target is decorative chrome.
-    svg.appendChild(path);
-    return path;
+    return ExplorerGraph.renderer.addConnectorHitTarget(p1, p2, kindInfo, srcId, dstId, srcLabel, dstLabel);
   }
 
   // gmapVisibleConnectorForHoverTarget resolves a pointer target to
@@ -6704,7 +5546,10 @@
   // drops nodes from the DOM does not leave stale selections (ids that
   // are no longer in gmapPositions are pruned). No persistence —
   // selection is in-memory only, scoped to the current graph view.
-  const gmapSelectedNodeIds = new Set();
+  // D32a-impl-3 — bound to window.MIDASExplorerGraph.state.selectedNodeIds
+  // so renderer-module addNode and inline applyGmapMultiSelection
+  // mutate the same Set.
+  const gmapSelectedNodeIds = _ExplorerGraphState.selectedNodeIds;
 
   // Phase 2B Step 35 (D24i) — transient fit-mode scrollbar suppression.
   //
@@ -6718,8 +5563,9 @@
   //
   // Idempotent: re-entering fit twice in a row produces the same
   // class state. Exit when fit-mode is already off is a no-op.
+  // D32a-impl-4 — Thin shim. Production applyGmapFitMode lives in graph-camera.js (applyFitMode).
   function applyGmapFitMode(active) {
-    document.body.classList.toggle('gmap-fit-mode', !!active);
+    ExplorerGraph.camera.applyFitMode(active);
   }
 
   // Phase 2B Step 35 (D24i) — applyGmapMultiSelection synchronises the
@@ -6727,21 +5573,9 @@
   // current gmapSelectedNodeIds set. Pruning: ids that are no longer
   // in gmapPositions (e.g. after a re-render that filtered the layer)
   // are dropped from the set so stale ids don't accumulate.
+  // D32a-impl-4 — Thin shim. Production applyGmapMultiSelection lives in graph-selection.js (applyMultiSelection).
   function applyGmapMultiSelection() {
-    const canvas = document.getElementById('gmap-canvas');
-    if (!canvas) return;
-    // Prune ids that no longer exist in the current graph.
-    const stale = [];
-    gmapSelectedNodeIds.forEach((id) => {
-      if (!gmapPositions[id]) stale.push(id);
-    });
-    stale.forEach((id) => gmapSelectedNodeIds.delete(id));
-    // Apply / clear the visual class.
-    const nodes = canvas.querySelectorAll('.gmap-node');
-    nodes.forEach((n) => {
-      const id = n.dataset.nodeId;
-      n.classList.toggle('gmap-multi-selected', gmapSelectedNodeIds.has(id));
-    });
+    return ExplorerGraph.selection.applyMultiSelection();
   }
 
   // Phase 2B Step 35 (D24i) — clearGmapMultiSelection drops every
@@ -6749,10 +5583,9 @@
   // by click-on-empty-canvas (when the gesture is not a pan). Does
   // NOT touch the primary gmapSelectedId (the inspector target stays
   // intact). Idempotent.
+  // D32a-impl-4 — Thin shim. Production clearGmapMultiSelection lives in graph-selection.js (clearMulti).
   function clearGmapMultiSelection() {
-    if (gmapSelectedNodeIds.size === 0) return;
-    gmapSelectedNodeIds.clear();
-    applyGmapMultiSelection();
+    return ExplorerGraph.selection.clearMulti();
   }
 
   // Smooth cubic curve between two points — vertical-biased control points
@@ -6795,924 +5628,36 @@
   // total, omitted) accounting plus a short note explaining why hidden
   // items are not enumerated. Returns silently when omitted == 0 so the
   // caller can call this unconditionally.
+  // D32a-impl-3 — Thin compatibility shim. Production addMoreNode
+  // lives in graph-renderer.js.
   function addMoreNode(layerKey, layerLabel, total, rendered, pos) {
-    const info = getTruncationInfo(total, rendered);
-    if (info.omitted <= 0) return;
-    addNode({
-      id: 'more:' + layerKey,
-      kind: 'more',
-      cls: 'gmap-more-node',
-      label: 'MORE',
-      name: '+' + info.omitted + ' more',
-      meta: [String(info.total) + ' total', String(info.rendered) + ' shown'],
-      details: {
-        layer: layerLabel,
-        rendered: String(info.rendered),
-        total: String(info.total),
-        omitted: String(info.omitted),
-        note: 'Additional items are hidden to preserve map readability.',
-      },
-    }, pos);
+    return ExplorerGraph.renderer.addMoreNode(layerKey, layerLabel, total, rendered, pos);
   }
 
+  // D32a-impl-3 — Thin compatibility shim. The production Context
+  // Graph renderer (~819 lines of node card + connector + summary
+  // emission) lives in graph/context/context-graph-view.js
+  // (renderContextGraph). This inline declaration retains the legacy
+  // name for inline callers (refreshGovernanceMap below) while the
+  // implementation is module-owned. The ctx hook bundle below carries
+  // the still-inline orchestration helpers the view module dispatches
+  // through.
   function renderGovernanceMap(data) {
-    clearGovernanceMapCanvas();
-    setGovernanceMapStatus('');
-    const canvas = document.getElementById('gmap-canvas');
-    const svg = document.getElementById('gmap-svg');
-    if (!canvas || !svg) return;
-    if (!data) {
-      renderGovernanceMapError('Empty governance map response.');
-      return;
-    }
-
-    // Phase 2B Step 14 + decision_surface root: root-kind awareness.
-    //
-    // The renderer branches explicitly on currentGraphView so the
-    // projection root is rendered as its actual kind, not as a
-    // synthesised business_service. Three views are wired today:
-    //
-    //   - 'service'          : the BS slot at data.business_service
-    //                          is the root. Empty BS slot is an error.
-    //   - 'ai_system'        : the root AI lives in data.ai_systems[]
-    //                          and is identified by currentGraphRootId.
-    //                          A missing root is an error.
-    //   - 'decision_surface' : the root surface lives in data.surfaces[]
-    //                          and is identified by currentGraphRootId.
-    //                          A missing root is an error. The surface
-    //                          row duplicate-suppresses this entry so
-    //                          it appears only at the root row.
-    //
-    // The same root card slot at GMAP.LAYERS.BUSINESS.y hosts every
-    // root kind — only the card's class/label/details/actions change.
-    // rootCardId is the position-key the connector blocks reference.
-    const isAIRootView = currentGraphView === 'ai_system';
-    const isSurfRootView = currentGraphView === 'decision_surface';
-    let rootAISystemEntry = null;
-    let rootSurfaceEntry = null;
-
-    // D27j-ui-2b — FMP badge helper. Returns the FailModePolicy
-    // reference badge for a surface. A surface override beats an
-    // inherited BS default; if neither is present, no badge is
-    // returned (preferred default — no clutter). The helper reads no
-    // global state beyond the closure-bound `data` and is pure.
-    //
-    // The "inherited" badge is gated on `data.business_service`
-    // being populated, which the adapter only fills for the
-    // service-rooted view. In ai_system / decision_surface views the
-    // BS slot is null, so the inherited badge naturally does not
-    // appear there — matching "current/root BusinessService"
-    // semantics without an extra branch.
-    function failModePolicyBadgesForSurface(surf) {
-      if (surf && surf.fail_mode_policy_id) {
-        return [{ cls: 'fmp-override', text: 'FMP override' }];
-      }
-      if (data.business_service && data.business_service.fail_mode_policy_id) {
-        return [{ cls: 'fmp-inherited', text: 'FMP inherited' }];
-      }
-      return [];
-    }
-    if (isAIRootView) {
-      rootAISystemEntry = (data.ai_systems || []).find(s => s && s.id === currentGraphRootId) || null;
-      if (!rootAISystemEntry) {
-        renderGovernanceMapError('AI system root not found in projection.');
-        return;
-      }
-    } else if (isSurfRootView) {
-      rootSurfaceEntry = (data.surfaces || []).find(s => s && s.id === currentGraphRootId) || null;
-      if (!rootSurfaceEntry) {
-        renderGovernanceMapError('Decision surface root not found in projection.');
-        return;
-      }
-    } else if (!data.business_service) {
-      renderGovernanceMapError('Empty governance map response.');
-      return;
-    }
-    const rootCardId = isAIRootView
-      ? 'ai:' + rootAISystemEntry.id
-      : isSurfRootView
-        ? 'surf:' + rootSurfaceEntry.id
-        : 'bs:' + data.business_service.id;
-
-    const positions = {};
-
-    // ── Sizing pass — compute per-row required widths first, then size the
-    //    main strip and the canvas BEFORE placing any node. This is what
-    //    makes the no-overlap invariant strict: distributeRow always gets
-    //    a range that either fits the row (even spread) or causes a known,
-    //    accounted-for overflow that the canvas grows to absorb.
-    //    Required width for a row of n cards =
-    //      n * NODE_W + (n - 1) * NODE_GAP
-    const reqRow = (n) => n <= 0 ? 0 : n * GMAP.NODE_W + (n - 1) * GMAP.NODE_GAP;
-
-    // Capture the FULL response arrays first so the omitted-count math
-    // works against the unsliced length. The sliced arrays preserve
-    // their original names so all downstream renderer code (forEach
-    // loops, connector resolution, summary panel) keeps working.
-    const fullRels       = (data.relationships && data.relationships.outgoing) || [];
-    const fullCaps       = data.capabilities || [];
-    const fullProcs      = data.processes || [];
-    const fullSurfaces   = data.surfaces || [];
-    const fullAISystems  = data.ai_systems || [];
-
-    const rels       = fullRels;          // alias kept for the existing connector blocks
-    const relSlice   = fullRels.slice(0, GMAP.MAX_PER_LAYER);
-    const caps       = fullCaps.slice(0, GMAP.MAX_PER_LAYER);
-    const procs      = fullProcs.slice(0, GMAP.MAX_PER_LAYER);
-    const surfaces   = fullSurfaces.slice(0, GMAP.MAX_PER_LAYER);
-    const aiSystems  = fullAISystems.slice(0, GMAP.MAX_PER_LAYER);
-
-    // Truncation: how many were hidden by the cap, and the layout-only
-    // count (visible + 1 extra slot for the more-node when truncated).
-    // Layout counts are used for reqRow + distributeRow only; connector
-    // iteration and details-panel logic still see the visible slices.
-    const relOmitted  = fullRels.length      - relSlice.length;
-    const capOmitted  = fullCaps.length      - caps.length;
-    const procOmitted = fullProcs.length     - procs.length;
-    const surfOmitted = fullSurfaces.length  - surfaces.length;
-    const aiOmitted   = fullAISystems.length - aiSystems.length;
-    const relLayoutN  = relSlice.length  + (relOmitted  > 0 ? 1 : 0);
-    const capLayoutN  = caps.length      + (capOmitted  > 0 ? 1 : 0);
-    const procLayoutN = procs.length     + (procOmitted > 0 ? 1 : 0);
-    const surfLayoutN = surfaces.length  + (surfOmitted > 0 ? 1 : 0);
-    const aiLayoutN   = aiSystems.length + (aiOmitted   > 0 ? 1 : 0);
-
-    const relReqW   = reqRow(relLayoutN);
-    const surfReqW  = reqRow(surfLayoutN);
-    const aiReqW    = reqRow(aiLayoutN);
-    // Cap+proc share a row split into two sub-strips with a midGap
-    // between them. midGap is only added when both sides are populated.
-    // The layout counts already include the optional more-node slot.
-    const capsReqW  = reqRow(capLayoutN);
-    const procsReqW = reqRow(procLayoutN);
-    const midGap    = (capLayoutN && procLayoutN) ? GMAP.NODE_GAP : 0;
-    const capProcReqW = capsReqW + midGap + procsReqW;
-
-    const EDGE = GMAP.EDGE_PAD;
-    // Main strip floor: at least the room the original 1180-canvas left
-    // for main rows after reserving the governance column on the right.
-    const mainStripFloor = GMAP.MIN_CANVAS_W - EDGE - GMAP.GOV_GAP - GMAP.NODE_W - EDGE;
-    const mainStripW = Math.max(
-      mainStripFloor,
-      relReqW, capProcReqW, surfReqW, aiReqW, GMAP.NODE_W /* BS */
-    );
-    const mainX0 = EDGE;
-    const mainX1 = mainX0 + mainStripW;
-    const govX   = mainX1 + GMAP.GOV_GAP;
-    const canvasW = Math.max(GMAP.MIN_CANVAS_W, govX + GMAP.NODE_W + EDGE);
-
-    // Stash the unscaled base width on the canvas dataset so applyGmapZoom
-    // can recompute scaled dimensions on every zoom change without
-    // re-running the row-sizing pass. The SVG viewBox uses the unscaled
-    // dimensions — the SVG fills the scene at 100%, so the zoom transform
-    // applied to the scene scales the SVG paint output uniformly with
-    // the HTML node cards.
-    canvas.dataset.baseWidth = canvasW;
-    svg.setAttribute('viewBox', '0 0 ' + canvasW + ' ' + GMAP.CANVAS_H);
-
-    // ── Layer 1: Related Services (top row) ─────────────────────────────
-    // distributeRow gets the LAYOUT count (visible + 1 if truncated) so
-    // the more-node has a reserved slot at the row's right end.
-    const relX = distributeRow(relLayoutN, mainX0, mainX1);
-    relSlice.forEach((rel, i) => {
-      const id = 'rel:' + rel.id;
-      positions[id] = { x: relX[i], y: GMAP.LAYERS.RELATED.y, kind: 'related' };
-      // Drill-down: actions only attach when the related-service node
-      // carries a real target BS id. Without it the action area stays
-      // empty (no disabled placeholder button).
-      //
-      // D26j — Related Service nodes now expose TWO actions when the
-      // target id is known:
-      //   1. `reframe-around-this` (target_view: 'service') — opens
-      //      the related Business Service's graph in-place. This is
-      //      the primary navigation affordance: graph-to-graph,
-      //      preserves Back via the existing pushGmapHistory path
-      //      (handleGovernanceMapAction), and reuses the existing
-      //      /v1/authority-graph?view=service&id=… endpoint via
-      //      refreshGovernanceMap. Inline-rendered as a graph-primary
-      //      action (.gmap-action-reframe-inline) on the selected
-      //      card by setGovernanceMapInlineActions.
-      //   2. `view-business-service-record` — opens the related BS's
-      //      record page. Preserves the existing drill-down
-      //      capability for operators who want metadata rather than
-      //      another graph view. Bottom-panel only (record-navigation
-      //      kind).
-      // Action ORDER matters for the inline render: the primary
-      // graph-navigation action is listed first so the renderer
-      // picks it as the inline button.
-      const relActions = rel.target_business_service_id
-        ? [
-            { kind: 'reframe-around-this', target_view: 'service', target_id: rel.target_business_service_id, label: 'Open service graph' },
-            { kind: 'view-business-service-record', target_id: rel.target_business_service_id, label: 'View record' },
-          ]
-        : [];
-      addNode({
-        id, kind: 'related', cls: 'related-service-node',
-        label: 'RELATED SERVICE',
-        name: rel.other_name || rel.target_business_service_id,
-        meta: rel.relationship_type ? [rel.relationship_type] : [],
-        details: { 'relationship': rel.relationship_type || '—', 'target_id': rel.target_business_service_id, 'edge_id': rel.id },
-        actions: relActions,
-      }, positions[id]);
-    });
-    if (relOmitted > 0) {
-      const moreX = relX[relX.length - 1];
-      const morePos = { x: moreX, y: GMAP.LAYERS.RELATED.y, kind: 'more' };
-      positions['more:relationships'] = morePos;
-      addMoreNode('relationships', 'Related services', fullRels.length, relSlice.length, morePos);
-    }
-
-    // ── Layer 2: Root card (centred in the main strip) ─────────────────
-    // Phase 2B Step 14: this slot now hosts the projection root
-    // regardless of kind. In view=service it is a BUSINESS SERVICE
-    // card; in view=ai_system it is an AI SYSTEM card. The rendered
-    // class, label, and details switch on currentGraphView; the
-    // position key (rootCardId) is computed at the top of this
-    // function and is the anchor every connector block uses.
-    const rootX = mainX0 + (mainStripW - GMAP.NODE_W) / 2;
-    positions[rootCardId] = {
-      x: rootX,
-      y: GMAP.LAYERS.BUSINESS.y,
-      kind: isAIRootView ? 'ai' : isSurfRootView ? 'surface' : 'business',
-    };
-    if (isAIRootView) {
-      // Render the AI system as the root card. Build the same
-      // details payload the AI row block uses so the inspector
-      // experience is identical when the AI is the root.
-      const ai = rootAISystemEntry;
-      const aiMeta = [];
-      if (ai.status) aiMeta.push(ai.status);
-      if (ai.active_version) aiMeta.push('v' + ai.active_version.version);
-      if (ai.external_ref) aiMeta.push('EXT-REF');
-      const aiDetails = {
-        id: ai.id,
-        vendor: ai.vendor || '—',
-        system_type: ai.system_type || '—',
-        status: ai.status || '—',
-        active_version: ai.active_version ? ai.active_version.version : 'none',
-      };
-      if (ai.active_version) {
-        if (ai.active_version.release_label) aiDetails.active_release = ai.active_version.release_label;
-        if (ai.active_version.status) aiDetails.active_version_status = ai.active_version.status;
-      }
-      if (ai.external_ref) aiDetails.external_ref = formatExternalRef(ai.external_ref);
-      const aiBindings = ai.bindings || [];
-      aiDetails.bindings = aiBindings.length;
-      aiBindings.forEach((b, idx) => {
-        aiDetails['binding_' + (idx + 1)] = formatAIBindingDetail(b);
-      });
-      addNode({
-        id: rootCardId, kind: 'ai', cls: 'ai-system-node selected gmap-root-node',
-        label: 'AI SYSTEM',
-        name: ai.name || ai.id,
-        meta: aiMeta,
-        details: aiDetails,
-        // No reframe action on the root — the operator is already
-        // viewing this AI system. Reframing would be a no-op.
-        actions: [],
-      }, positions[rootCardId]);
-    } else if (isSurfRootView) {
-      // Render the decision surface as the root card. Mirrors the
-      // surface-row card emitted at SURFACE.y for non-root surfaces
-      // (same class prefix, same details payload, same badge logic),
-      // with `selected gmap-root-node` appended so the root markers
-      // and inspector behaviour are identical to the AI / BS roots.
-      const surf = rootSurfaceEntry;
-      const hasBinding = (surf.ai_bindings || []).length > 0;
-      const surfMeta = [surf.status || ''];
-      if (hasBinding) surfMeta.push('AI BOUND'); else surfMeta.push('NO AI');
-      addNode({
-        id: rootCardId, kind: 'surface', cls: 'decision-surface-node selected gmap-root-node',
-        label: 'DECISION SURFACE',
-        name: surf.name || surf.id,
-        meta: surfMeta,
-        badges: (hasBinding ? [{ cls: 'bind', text: 'AI binding' }] : [{ cls: 'warn', text: 'no AI binding' }])
-          .concat(failModePolicyBadgesForSurface(surf)),
-        details: {
-          'id': surf.id,
-          'version': surf.version,
-          'process_id': surf.process_id || '—',
-          'status': surf.status || '—',
-          'ai_bindings': hasBinding ? (surf.ai_bindings || []).join(', ') : 'none',
-          'profile_count': surf.profile_count,
-          'grant_count': surf.grant_count,
-          'agent_count': surf.agent_count,
-          // D27j-ui-3b — propagate the surface's FailModePolicy
-          // reference into the inspector dataset. The inspector helper
-          // reads this from selectedNode.dataset.nodeDetails JSON and
-          // filters it out of the generic fields render so it does not
-          // appear as a raw row.
-          'fail_mode_policy_id': surf.fail_mode_policy_id || '',
-        },
-        // No reframe action on the root — already viewing this surface.
-        actions: [],
-      }, positions[rootCardId]);
-    } else {
-      const bs = data.business_service;
-      const bsBadges = [];
-      if (bs.status) bsBadges.push(bs.status);
-      if (bs.external_ref) bsBadges.push('EXT-REF');
-      // D27j-ui-2b — FMP default badge. Compact reference indicator
-      // when the BS has a service-level FailModePolicy. Badge text is
-      // intentionally non-specific: it does not name the policy id,
-      // status, version, owner, or effective date — those require a
-      // policy fetch which is out of scope for this tranche.
-      const bsFmpBadges = [];
-      if (bs.fail_mode_policy_id) {
-        bsFmpBadges.push({ cls: 'fmp-default', text: 'FMP default' });
-      }
-      addNode({
-        id: rootCardId, kind: 'business', cls: 'business-service-node selected gmap-root-node',
-        label: 'BUSINESS SERVICE',
-        name: bs.name || bs.id,
-        meta: bsBadges,
-        badges: bsFmpBadges,
-        details: {
-          'id': bs.id,
-          'service_type': bs.service_type || '—',
-          'status': bs.status || '—',
-          'owner': bs.owner_id || '—',
-          'external_ref': bs.external_ref ? (bs.external_ref.source_system + ':' + bs.external_ref.source_id) : 'none',
-          // D27j-ui-3b — propagate the BS-level FailModePolicy
-          // reference. Filtered out of the generic fields panel by
-          // selectGovernanceMapNode and consumed by the Governance
-          // section helper.
-          'fail_mode_policy_id': bs.fail_mode_policy_id || '',
-        },
-        // Drill-down: the BS node always has a navigable record because
-        // the map only renders for an existing BS. target_id is the bare
-        // id (no `bs:` prefix) so showBusinessServiceRecord receives the
-        // catalogue/record cache key directly.
-        actions: bs.id
-          ? [{ kind: 'view-business-service-record', target_id: bs.id, label: 'View record' }]
-          : [],
-      }, positions[rootCardId]);
-    }
-    gmapSelectedId = rootCardId;
-
-    // ── Layer 3: Capabilities (left sub-strip) + Processes (right) ─────
-    // Split the main strip with midGap between the two halves so the
-    // groups are visually distinct AND each side has a range wide enough
-    // for its row to fit without overlap.
-    //
-    // Even-splitting (mainStripW - midGap) / 2 fails when the cap+proc
-    // row is asymmetric: the larger side's required width exceeds the
-    // half it gets, distributeRow's pack-from-x0 overflow path then
-    // runs that row past its strip boundary, and the trailing cards
-    // overlap the other half's leading cards. Fix: compute each
-    // half's width using max(halfNominal, ownReqRow); when one side
-    // overflows the nominal half, the other side's width is reduced
-    // accordingly so the two halves still sum to (mainStripW - midGap).
-    // mainStripW already accounts for capProcReqW = capsReqW + midGap +
-    // procsReqW (set in the sizing pass above), so the reduced side is
-    // always still ≥ its own reqRow — no overlap, no canvas resize.
-    const halfNominal = (mainStripW - midGap) / 2;
-    let capStripW;
-    let procStripW;
-    if (capsReqW > halfNominal) {
-      capStripW  = capsReqW;
-      procStripW = (mainStripW - midGap) - capStripW;
-    } else if (procsReqW > halfNominal) {
-      procStripW = procsReqW;
-      capStripW  = (mainStripW - midGap) - procStripW;
-    } else {
-      capStripW  = halfNominal;
-      procStripW = halfNominal;
-    }
-    const capSubX0  = mainX0;
-    const capSubX1  = capSubX0 + capStripW;
-    const procSubX0 = capSubX1 + midGap;
-    const procSubX1 = procSubX0 + procStripW;
-    // Each half-strip uses its own layout count so a truncated cap row
-    // and a non-truncated proc row (or vice versa) each pack their own
-    // sub-strip correctly.
-    const capX  = distributeRow(capLayoutN,  capSubX0,  capSubX1);
-    const procX = distributeRow(procLayoutN, procSubX0, procSubX1);
-    caps.forEach((c, i) => {
-      const id = 'cap:' + c.id;
-      positions[id] = { x: capX[i], y: GMAP.LAYERS.CAP_PROC.y, kind: 'cap' };
-      addNode({
-        id, kind: 'cap', cls: 'capability-node',
-        label: 'CAPABILITY', name: c.name || c.id,
-        meta: c.status ? [c.status] : [],
-        details: { 'id': c.id, 'status': c.status || '—' },
-        // Drill-down: the capability id (no `cap:` prefix) is the
-        // catalogue/record cache key, so showCapabilityRecord receives
-        // it directly.
-        actions: c.id
-          ? [{ kind: 'view-capability-record', target_id: c.id, label: 'View record' }]
-          : [],
-      }, positions[id]);
-    });
-    if (capOmitted > 0) {
-      const moreX = capX[capX.length - 1];
-      const morePos = { x: moreX, y: GMAP.LAYERS.CAP_PROC.y, kind: 'more' };
-      positions['more:capabilities'] = morePos;
-      addMoreNode('capabilities', 'Capabilities', fullCaps.length, caps.length, morePos);
-    }
-    procs.forEach((p, i) => {
-      const id = 'proc:' + p.id;
-      positions[id] = { x: procX[i], y: GMAP.LAYERS.CAP_PROC.y, kind: 'proc' };
-      addNode({
-        id, kind: 'proc', cls: 'process-node',
-        label: 'PROCESS', name: p.name || p.id,
-        meta: p.status ? [p.status] : [],
-        details: { 'id': p.id, 'business_service_id': p.business_service_id || '—', 'status': p.status || '—' },
-      }, positions[id]);
-    });
-    if (procOmitted > 0) {
-      const moreX = procX[procX.length - 1];
-      const morePos = { x: moreX, y: GMAP.LAYERS.CAP_PROC.y, kind: 'more' };
-      positions['more:processes'] = morePos;
-      addMoreNode('processes', 'Processes', fullProcs.length, procs.length, morePos);
-    }
-
-    // ── Layer 4: Decision Surfaces ─────────────────────────────────────
-    // Decision_surface root: skip the duplicated root surface in this
-    // row — the root card already occupies the BUSINESS row above.
-    // Mirrors the AI-system view's duplicate-AI suppression at the
-    // ai_system row.
-    const surfX = distributeRow(surfLayoutN, mainX0, mainX1);
-    surfaces.forEach((s, i) => {
-      if (isSurfRootView && rootSurfaceEntry && s.id === rootSurfaceEntry.id) return;
-      const id = 'surf:' + s.id;
-      positions[id] = { x: surfX[i], y: GMAP.LAYERS.SURFACE.y, kind: 'surface', surface: s };
-      const hasBinding = (s.ai_bindings || []).length > 0;
-      const meta = [s.status || ''];
-      if (hasBinding)  meta.push('AI BOUND');
-      else             meta.push('NO AI');
-      addNode({
-        id, kind: 'surface', cls: 'decision-surface-node',
-        label: 'DECISION SURFACE',
-        name: s.name || s.id,
-        meta,
-        badges: (hasBinding ? [{ cls: 'bind', text: 'AI binding' }] : [{ cls: 'warn', text: 'no AI binding' }])
-          .concat(failModePolicyBadgesForSurface(s)),
-        details: {
-          'id': s.id, 'version': s.version, 'process_id': s.process_id || '—', 'status': s.status || '—',
-          'ai_bindings': hasBinding ? (s.ai_bindings || []).join(', ') : 'none',
-          'profile_count': s.profile_count, 'grant_count': s.grant_count, 'agent_count': s.agent_count,
-          // D27j-ui-3b — surface-row FailModePolicy reference (matches
-          // surface-root and BS-root details propagation).
-          'fail_mode_policy_id': s.fail_mode_policy_id || '',
-        },
-        // Reframe action: clicking "Reframe around this" on a surface
-        // re-roots the graph at that surface. Reuses the same dispatch
-        // path as the AI-system reframe action (handleGovernanceMapAction
-        // pushes onto graph history and triggers a workbench refetch).
-        // Surface ids are stable logical ids — no version composite.
-        actions: s.id
-          ? [{ kind: 'reframe-around-this', target_view: 'decision_surface', target_id: s.id, label: 'Reframe around this' }]
-          : [],
-      }, positions[id]);
-    });
-    if (surfOmitted > 0) {
-      const moreX = surfX[surfX.length - 1];
-      const morePos = { x: moreX, y: GMAP.LAYERS.SURFACE.y, kind: 'more' };
-      positions['more:surfaces'] = morePos;
-      addMoreNode('surfaces', 'Decision surfaces', fullSurfaces.length, surfaces.length, morePos);
-    }
-
-    // ── Layer 5: AI Systems ─────────────────────────────────────────────
-    // Phase 2B Step 14: in ai_system view the projection root has
-    // already been placed at the BUSINESS row above; skip it here so
-    // it does not also render at the AI row. Sibling AI systems
-    // (which the current backend projector does not emit, but which
-    // are defensively skipped) would still render here.
-    const aiX = distributeRow(aiLayoutN, mainX0, mainX1);
-    aiSystems.forEach((ai, i) => {
-      if (isAIRootView && rootAISystemEntry && ai.id === rootAISystemEntry.id) return;
-      const id = 'ai:' + ai.id;
-      positions[id] = { x: aiX[i], y: GMAP.LAYERS.AI.y, kind: 'ai', ai };
-      // Card meta line: status, active version, and an EXT-REF marker
-      // when external_ref is present. The EXT-REF treatment matches the
-      // Business Service node's existing meta-line convention.
-      const meta = [];
-      if (ai.status) meta.push(ai.status);
-      if (ai.active_version) meta.push('v' + ai.active_version.version);
-      if (ai.external_ref) meta.push('EXT-REF');
-
-      // Build the details payload up front. The panel renders one row
-      // per (key, value) pair, so each scalar field gets its own key.
-      // Bindings are unfolded into binding_1, binding_2, ... rows so
-      // the operator sees role + scope per binding rather than only a
-      // count.
-      const aiDetails = {
-        id: ai.id,
-        vendor: ai.vendor || '—',
-        system_type: ai.system_type || '—',
-        status: ai.status || '—',
-        active_version: ai.active_version ? ai.active_version.version : 'none',
-      };
-      if (ai.active_version) {
-        if (ai.active_version.release_label) {
-          aiDetails.active_release = ai.active_version.release_label;
-        }
-        if (ai.active_version.status) {
-          aiDetails.active_version_status = ai.active_version.status;
-        }
-      }
-      if (ai.external_ref) {
-        aiDetails.external_ref = formatExternalRef(ai.external_ref);
-      }
-      const aiBindings = ai.bindings || [];
-      aiDetails.bindings = aiBindings.length;
-      aiBindings.forEach((b, idx) => {
-        aiDetails['binding_' + (idx + 1)] = formatAIBindingDetail(b);
-      });
-
-      addNode({
-        id, kind: 'ai', cls: 'ai-system-node',
-        label: 'AI SYSTEM', name: ai.name || ai.id,
-        meta,
-        details: aiDetails,
-        // Reframe action: clicking "Reframe around this" on an AI
-        // system node re-roots the graph at that AI system. The
-        // dispatcher (handleGovernanceMapAction) updates
-        // currentGraphView / currentGraphRootId and triggers a
-        // workbench-internal refetch — no sub-view switch, no
-        // record-page navigation. AI system nodes are the only
-        // node kind exposing reframe in this deliverable.
-        actions: ai.id
-          ? [{ kind: 'reframe-around-this', target_view: 'ai_system', target_id: ai.id, label: 'Reframe around this' }]
-          : [],
-      }, positions[id]);
-    });
-    if (aiOmitted > 0) {
-      const moreX = aiX[aiX.length - 1];
-      const morePos = { x: moreX, y: GMAP.LAYERS.AI.y, kind: 'more' };
-      positions['more:ai-systems'] = morePos;
-      addMoreNode('ai-systems', 'AI systems', fullAISystems.length, aiSystems.length, morePos);
-    }
-
-    // ── Right-side governance column: Authority + Coverage ─────────────
-    // govX was computed in the sizing pass so it always sits NODE_GAP-or-
-    // more clear of the rightmost main-row node.
-    //
-    // Phase 2B Step 14: only render these synthetic cards in service
-    // view. The ai_system projection emits no authority_summary /
-    // coverage nodes, so the data is null and rendering would show
-    // misleading zeros.
-    const auth = data.authority_summary || {};
-    const cov = data.coverage || {};
-    if (!isAIRootView && !isSurfRootView) {
-      positions['authority'] = { x: govX, y: GMAP.LAYERS.BUSINESS.y, kind: 'authority' };
-      addNode({
-        id: 'authority', kind: 'authority', cls: 'authority-node',
-        label: 'AUTHORITY',
-        name: 'Profiles ' + (auth.active_profile_count || 0) + ' · Grants ' + (auth.active_grant_count || 0),
-        meta: ['agents ' + (auth.active_agent_count || 0)],
-        details: {
-          'surface_count': auth.surface_count || 0,
-          'active_profile_count': auth.active_profile_count || 0,
-          'active_grant_count': auth.active_grant_count || 0,
-          'active_agent_count': auth.active_agent_count || 0,
-        },
-      }, positions['authority']);
-    }
-
-    if (!isAIRootView && !isSurfRootView) {
-      positions['coverage'] = { x: govX, y: GMAP.LAYERS.SURFACE.y, kind: 'coverage' };
-      const covDirect = (cov.surfaces_with_direct_ai_binding || 0);
-      const covScoped = (cov.surfaces_with_scoped_ai_binding || 0);
-      const covGap    = (cov.surfaces_with_no_ai_binding || 0);
-      addNode({
-        id: 'coverage', kind: 'coverage', cls: 'coverage-node',
-        label: 'COVERAGE',
-        name: covDirect + ' bound · ' + covGap + ' unbound',
-        meta: ['surfaces ' + (cov.surface_count || 0)],
-        badges: covGap > 0 ? [{ cls: 'warn', text: 'gap' }] : [{ cls: 'ok', text: 'covered' }],
-        details: {
-          'surface_count': cov.surface_count || 0,
-          'surfaces_with_direct_ai_binding': covDirect,
-          'surfaces_with_scoped_ai_binding': covScoped,
-          'surfaces_with_no_ai_binding':     covGap,
-        },
-      }, positions['coverage']);
-    }
-
-    gmapPositions = positions;
-
-    // ── Connectors ─────────────────────────────────────────────────────
-    // Every callsite here uses addLiveConnector, which routes both
-    // endpoints through effectiveGmapPosition so a dragged node moves
-    // its connectors with it.
-    //
-    // Phase 2B Step 14: connector blocks split into "service-only"
-    // (semantically BS-owned) and "shared" (apply in both views).
-    // The AI-binding connector loop also branches: in service view,
-    // scope→AI upward (existing); in ai_system view, root→scope
-    // downward (so the curve direction stays natural).
-
-    if (!isAIRootView && !isSurfRootView) {
-      // Service-only: BS → related services (Layer 2 → Layer 1,
-      // drawn upward via top anchor). Skipped for ai_system and
-      // decision_surface roots — those views have no related-BS row
-      // semantics rooted at the BUSINESS slot.
-      relSlice.forEach(rel => {
-        const targetId = 'rel:' + rel.id;
-        if (positions[targetId] && positions[rootCardId]) {
-          addLiveConnector(rootCardId, 'top', targetId, 'bottom', 'connector-service');
-        }
-      });
-
-      // Service-only: BS → capabilities, BS → processes
-      // (Layer 2 → Layer 3). In ai_system view these are scope
-      // targets of the root AI's bindings, not BS-owned children;
-      // the AI-binding loop below emits the correct edges.
-      caps.forEach(c => {
-        const targetId = 'cap:' + c.id;
-        if (positions[targetId] && positions[rootCardId]) {
-          addLiveConnector(rootCardId, 'bottom', targetId, 'top', 'connector-service');
-        }
-      });
-      procs.forEach(p => {
-        const targetId = 'proc:' + p.id;
-        if (positions[targetId] && positions[rootCardId]) {
-          addLiveConnector(rootCardId, 'bottom', targetId, 'top', 'connector-service');
-        }
-      });
-    }
-
-    // Shared: process → decision surface (match by surface.process_id).
-    // Hierarchy works the same way in both views — when a surface's
-    // parent process is on screen, anchor to the process; otherwise
-    // fall back to the root card (which is the AI root in ai_system
-    // view and the BS root in service view).
-    surfaces.forEach(s => {
-      const targetId = 'surf:' + s.id;
-      if (!positions[targetId]) return;
-      const procId = 'proc:' + s.process_id;
-      if (positions[procId]) {
-        addLiveConnector(procId, 'bottom', targetId, 'top', 'connector-service');
-      } else if (positions[rootCardId]) {
-        addLiveConnector(rootCardId, 'bottom', targetId, 'top', 'connector-service');
-      }
-    });
-
-    if (isAIRootView) {
-      // AI-binding connectors in ai_system view: walk the root AI's
-      // bindings and connect ROOT.bottom → scope-target.top. The
-      // root sits at GMAP.LAYERS.BUSINESS.y (above scope-targets),
-      // so the natural curve direction is downward — opposite of the
-      // service-view loop, which connects scope→AI upward.
-      const ai = rootAISystemEntry;
-      (ai.bindings || []).forEach(b => {
-        if (b.surface_id) {
-          const sId = 'surf:' + b.surface_id;
-          if (positions[sId]) addLiveConnector(rootCardId, 'bottom', sId, 'top', 'connector-ai-binding');
-        } else if (b.process_id) {
-          const pId = 'proc:' + b.process_id;
-          if (positions[pId]) addLiveConnector(rootCardId, 'bottom', pId, 'top', 'connector-ai-binding');
-        } else if (b.capability_id) {
-          const cId = 'cap:' + b.capability_id;
-          if (positions[cId]) addLiveConnector(rootCardId, 'bottom', cId, 'top', 'connector-ai-binding');
-        }
-        // BS-scoped bindings: scope-target BSes are not rendered as
-        // standalone cards in this minimal ai_system layout; the
-        // binding still appears in the root AI's details panel.
-        // Rendering scope-target BSes is a follow-up deliverable.
-      });
-    } else {
-      // Service-view AI binding loop: for each AI system, walk its
-      // bindings and connect scope-target → ai-system (upward).
-      aiSystems.forEach(ai => {
-        const targetId = 'ai:' + ai.id;
-        if (!positions[targetId]) return;
-        let drewBindingEdge = false;
-        (ai.bindings || []).forEach(b => {
-          if (b.surface_id) {
-            const sId = 'surf:' + b.surface_id;
-            if (positions[sId]) { addLiveConnector(sId, 'bottom', targetId, 'top', 'connector-ai-binding'); drewBindingEdge = true; }
-          } else if (b.process_id) {
-            const pId = 'proc:' + b.process_id;
-            if (positions[pId]) { addLiveConnector(pId, 'bottom', targetId, 'top', 'connector-ai-binding'); drewBindingEdge = true; }
-          } else if (b.capability_id) {
-            const cId = 'cap:' + b.capability_id;
-            if (positions[cId]) { addLiveConnector(cId, 'bottom', targetId, 'top', 'connector-ai-binding'); drewBindingEdge = true; }
-          } else if (b.business_service_id) {
-            if (positions[rootCardId]) { addLiveConnector(rootCardId, 'bottom', targetId, 'top', 'connector-ai-binding'); drewBindingEdge = true; }
-          }
-        });
-        // Fallback: if we couldn't resolve any binding edge, link
-        // from the root card so the AI node never floats disconnected.
-        if (!drewBindingEdge && positions[rootCardId]) {
-          addLiveConnector(rootCardId, 'bottom', targetId, 'top', 'connector-ai-binding');
-        }
-      });
-    }
-
-    // Authority + Coverage edges only render in service view —
-    // ai_system and decision_surface projections emit no synthetic
-    // authority_summary / coverage nodes, and the right-column cards
-    // are skipped above for both views too. Keeping these edge blocks
-    // gated avoids drawing connectors to absent nodes.
-    if (!isAIRootView && !isSurfRootView) {
-      // Surface → Authority (dashed) when the surface has any active profile.
-      surfaces.forEach(s => {
-        const sId = 'surf:' + s.id;
-        if (!positions[sId]) return;
-        if ((s.profile_count || 0) > 0 && positions['authority']) {
-          addLiveConnector(sId, 'right', 'authority', 'left', 'connector-authority');
-        }
-      });
-
-      // Surface → Coverage gap (amber dashed) when surface has no AI binding;
-      // Surface → Evidence (green) when surface has bindings (treated as
-      // governance evidence available signal until /evidence/ ships).
-      surfaces.forEach(s => {
-        const sId = 'surf:' + s.id;
-        if (!positions[sId] || !positions['coverage']) return;
-        const hasBinding = (s.ai_bindings || []).length > 0;
-        const cls = hasBinding ? 'connector-evidence' : 'connector-gap';
-        addLiveConnector(sId, 'right', 'coverage', 'left', cls);
-      });
-    }
-
-    // Compute the root display name from whichever entity is the
-    // projection root in this view — used by the toolbar label and
-    // the map summary panel.
-    const rootDisplayName = isAIRootView
-      ? (rootAISystemEntry.name || rootAISystemEntry.id)
-      : isSurfRootView
-        ? (rootSurfaceEntry.name || rootSurfaceEntry.id)
-        : (data.business_service.name || data.business_service.id);
-
-    // Phase 2B Step 28 (D24d) — stats-line render call removed.
-    // The "X caps · Y procs · Z surfaces · N AI systems" string
-    // was redundant with the visible graph (operators count by
-    // looking) and the orientation-context overlay carries the
-    // current view + root identity. setGovernanceMapStatus is
-    // retained as a null-safe helper for the Loading / empty /
-    // error state paths; with the #gmap-status DOM node removed
-    // those callers no-op via the helper's `if (el)` guard.
-    // setGovernanceMapStatus call here was removed.
-    if (isAIRootView) {
-      setGovernanceMapSummary([
-        ['Root AI system',       rootDisplayName],
-        ['Capabilities',         String((data.capabilities || []).length)],
-        ['Processes',            String((data.processes || []).length)],
-        ['Surfaces',             String((data.surfaces || []).length)],
-        ['Bindings',             String((rootAISystemEntry.bindings || []).length)],
-      ]);
-    } else if (isSurfRootView) {
-      // decision_surface view: emphasise parent process + AI binding
-      // counts on the root surface itself. No coverage / authority /
-      // related counts (this view doesn't aggregate them).
-      const surfBindings = (rootSurfaceEntry.ai_bindings || []).length;
-      setGovernanceMapSummary([
-        ['Root decision surface', rootDisplayName],
-        ['Parent process',        rootSurfaceEntry.process_id || '—'],
-        ['Surface version',       String(rootSurfaceEntry.version || '—')],
-        ['AI bindings (direct)',  String(surfBindings)],
-        ['AI systems',            String((data.ai_systems || []).length)],
-      ]);
-    } else {
-      setGovernanceMapSummary([
-        ['Business service',     rootDisplayName],
-        ['Outgoing relationships', String(rels.length)],
-        ['Capabilities',         String((data.capabilities || []).length)],
-        ['Processes',            String((data.processes || []).length)],
-        ['Surfaces (active)',    String((data.surfaces || []).length)],
-        ['AI systems',           String((data.ai_systems || []).length)],
-        ['Authority profiles',   String(auth.active_profile_count || 0)],
-        ['Coverage gaps',        String(cov.surfaces_with_no_ai_binding || 0)],
-      ]);
-    }
-    // Refresh the toolbar's current view + root label. Step 14 makes
-    // the root display name semantically correct: it is now the real
-    // entity's name (BS in service view, AI system in ai_system view),
-    // never a synthesised value.
-    setGovernanceMapCurrentRoot(currentGraphView, currentGraphRootId, rootDisplayName);
-    selectGovernanceMapNode(rootCardId);
-
-    // Apply the current zoom level. Carries the operator's zoom choice
-    // across BS-switch re-renders (renderGovernanceMap runs again on
-    // each refresh; gmapZoom state is module-level so it survives).
-    // Also sizes the canvas to the scaled dimensions so the scroll
-    // wrapper has the right bounds for both axes.
-    applyGmapZoom();
-
-    // Phase 2B Step 17 — frame the root in the visible viewport.
-    // applyGmapZoom() must run first because it writes the scaled
-    // canvas dimensions the scroll-wrapper uses to compute scrollWidth
-    // / scrollHeight; focusGmapOnRoot reads those bounds when clamping.
-    // D26h-fix — call focusGmapOnRoot synchronously for an immediate
-    // approximate framing (so the operator never sees an unframed
-    // first paint), then schedule a real Fit-to-View on the next
-    // settled frame. fitGmapToBounds re-runs the camera math against
-    // the final canvas-scroll clientWidth/Height the browser commits
-    // after CSS reflow, producing a clean "the whole graph is
-    // visible" first impression on initial render and on every
-    // reframe. Manual pan / zoom paths exit fit-mode and are not
-    // affected.
-    focusGmapOnRoot(rootCardId);
-    // D26h-fix2 — enter fit-mode SYNCHRONOUSLY at render-end so the
-    // body.gmap-fit-mode CSS rule (overflow-x: hidden; overflow-y:
-    // hidden on .governance-map-canvas-scroll) suppresses scrollbars
-    // from the very first paint after render. Without this, the two-
-    // frame deferred fit leaves a ~32ms window where:
-    //   - canvas.style.width = extent.width × gmapZoom is wider than
-    //     scrollEl.clientWidth (because extent includes EDGE_PAD-wide
-    //     empty space to the left of the leftmost node — minX × zoom
-    //     of empty canvas before content starts);
-    //   - fit-mode is not yet active, so the canvas-scroll wrapper
-    //     paints scrollbars over that empty padding.
-    // Result: a horizontal scrollbar flashes on every initial render
-    // / reframe, even when the scheduled fit will subsequently snap
-    // the graph to its safe-area frame and hide the scrollbar.
-    // Setting fit-mode synchronously closes the window. The deferred
-    // fit's own applyGmapFitMode(true) is idempotent — it stays on,
-    // and the canvas-scroll's overflow stays hidden until the
-    // operator's first manual pan / zoom / drag.
-    applyGmapFitMode(true);
-    scheduleGmapFitToView();
-
-    // Phase 2B Step 35 (D24i) — re-apply multi-selection visuals to
-    // the freshly-rendered nodes. Stale ids that no longer exist in
-    // the new gmapPositions are pruned by the helper itself, so a
-    // graph view-switch (service → AI System → ...) doesn't carry a
-    // selection across views in a confused state.
-    applyGmapMultiSelection();
+    return ExplorerGraph.contextView.renderContextGraph(data, _gmapRenderCtx);
   }
 
   // addNode positions an HTML node card and registers click + keyboard
   // handlers for selection. Each card carries its own details payload as
   // a JSON-encoded data attribute so the details panel can read it on
   // click without re-querying the API response.
+  // D32a-impl-3 — Thin compatibility shim. Production addNode (node
+  // card builder + click + keyboard + drag wiring) lives in
+  // graph-renderer.js. The renderer module fires
+  // _rendererHooks.attachDragHandlers / .selectNode /
+  // .applyMultiSelection (defined below) so the still-inline drag /
+  // multi-select / inspector orchestration runs unchanged.
   function addNode(spec, pos) {
-    // Append into the scene wrapper so the node card transforms together
-    // with the SVG connector layer — relative coordinates between any
-    // node and any connector path are preserved across all zoom levels.
-    const scene = document.getElementById('gmap-scene');
-    if (!scene) return;
-    const node = document.createElement('button');
-    node.type = 'button';
-    node.className = 'gmap-node ' + (spec.cls || '');
-    node.style.left = pos.x + 'px';
-    node.style.top  = pos.y + 'px';
-    node.dataset.nodeId = spec.id;
-    node.dataset.nodeKind = spec.kind || '';
-    node.dataset.nodeName = spec.name || '';
-    node.setAttribute('aria-label', spec.label + ': ' + (spec.name || spec.id));
-    const badgesHtml = (spec.badges || []).map(b =>
-      '<span class="gmap-badge ' + escHtml(b.cls || '') + '">' + escHtml(b.text || '') + '</span>'
-    ).join('');
-    const metaHtml = (spec.meta || []).filter(Boolean).map(m =>
-      '<span>' + escHtml(String(m)) + '</span>'
-    ).join('');
-    node.innerHTML =
-      '<span class="gmap-node-label">' + escHtml(spec.label) + '</span>' +
-      '<span class="gmap-node-name">' + escHtml(spec.name || spec.id) + '</span>' +
-      ((metaHtml || badgesHtml) ? '<div class="gmap-node-meta">' + metaHtml + badgesHtml + '</div>' : '') +
-      // Phase 2B Step 13: empty inline-actions slot. Populated by
-      // selectGovernanceMapNode for graph-primary action kinds when
-      // this node is selected; otherwise stays hidden so it consumes
-      // no vertical space.
-      '<div class="gmap-node-inline-actions" hidden></div>';
-    try {
-      node.dataset.nodeDetails = JSON.stringify(spec.details || {});
-    } catch { /* details optional */ }
-    // Drill-down actions metadata. Stored as data-only JSON — never as
-    // executable strings or callbacks — so the click handler cannot be
-    // hijacked through dataset injection. The dispatcher
-    // (handleGovernanceMapAction) only honours kinds in its whitelist.
-    try {
-      node.dataset.nodeActions = JSON.stringify(spec.actions || []);
-    } catch { /* actions optional */ }
-    // Click = selection only. Navigation is gated behind the explicit
-    // "View record" button rendered into #gmap-details-actions on
-    // selection; clicking the node itself NEVER navigates.
-    // Phase 2B Step 35 (D24i) — multi-selection integration:
-    //   - plain click  → primary inspector selection (existing) AND
-    //                    replace multi-set with [this id]
-    //   - Ctrl/Cmd-click → toggle this id in the multi-set (without
-    //                    changing primary inspector selection)
-    node.addEventListener('click', (e) => {
-      if (e && (e.ctrlKey || e.metaKey)) {
-        if (gmapSelectedNodeIds.has(spec.id)) {
-          gmapSelectedNodeIds.delete(spec.id);
-        } else {
-          gmapSelectedNodeIds.add(spec.id);
-        }
-        applyGmapMultiSelection();
-        return;
-      }
-      gmapSelectedNodeIds.clear();
-      gmapSelectedNodeIds.add(spec.id);
-      applyGmapMultiSelection();
-      selectGovernanceMapNode(spec.id);
-    });
-    node.addEventListener('keydown', e => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectGovernanceMapNode(spec.id); }
-    });
-    // Drag interaction. Pointer events cover both mouse and touch in a
-    // single handler set; setPointerCapture keeps the gesture flowing
-    // even when the cursor leaves the node card. The threshold +
-    // click-suppression logic ensures click/select still fires for
-    // gestures that don't move past 4 CSS px.
-    attachGmapDragHandlers(node, spec.id);
-    scene.appendChild(node);
+    return ExplorerGraph.renderer.addNode(spec, pos);
   }
 
   // attachGmapDragHandlers wires pointer events on a node so the user
@@ -7736,204 +5681,21 @@
   // No data leaves this function: positions go to gmapDragOverrides
   // (in-memory), no fetch/XHR, no localStorage / sessionStorage /
   // cookie / IndexedDB.
+  // D32a-impl-4 — Thin shim. Production node-drag handler (~125 lines) lives in graph-interactions.js (attachNodeDragHandlers).
   function attachGmapDragHandlers(node, nodeId) {
-    node.addEventListener('pointerdown', function (e) {
-      // Only primary button (mouse left / touch / pen). Ignore
-      // middle/right so context-menu and middle-scroll don't start a
-      // drag.
-      if (e.button !== undefined && e.button !== 0) return;
-      const startPos = effectiveGmapPosition(nodeId);
-      if (!startPos) return;
-      // Phase 2B Step 35 (D24i) — group drag. When the pointer-down
-      // node is part of the multi-selection (gmapSelectedNodeIds), the
-      // drag moves EVERY selected node by the same delta. Captured
-      // start positions for each member so we can apply the delta in
-      // pointermove without accumulating rounding errors. When the
-      // pointer-down node is NOT in the multi-selection (or nothing
-      // is multi-selected), individual-drag semantics from D17/D18
-      // apply unchanged.
-      const isGroupDrag = gmapSelectedNodeIds.has(nodeId) && gmapSelectedNodeIds.size > 1;
-      let groupStartPositions = null;
-      if (isGroupDrag) {
-        groupStartPositions = {};
-        gmapSelectedNodeIds.forEach((id) => {
-          const p = effectiveGmapPosition(id);
-          if (p) groupStartPositions[id] = { x: p.x, y: p.y };
-        });
-      }
-      gmapDragState = {
-        nodeId: nodeId,
-        node: node,
-        pointerId: e.pointerId,
-        startClientX: e.clientX,
-        startClientY: e.clientY,
-        startNodeX: startPos.x,
-        startNodeY: startPos.y,
-        hasDragged: false,
-        isGroupDrag: isGroupDrag,
-        groupStartPositions: groupStartPositions,
-      };
-      try { node.setPointerCapture(e.pointerId); } catch (_) { /* unsupported, ignore */ }
-    });
-
-    node.addEventListener('pointermove', function (e) {
-      if (!gmapDragState || gmapDragState.pointerId !== e.pointerId) return;
-      const dx = e.clientX - gmapDragState.startClientX;
-      const dy = e.clientY - gmapDragState.startClientY;
-      if (!gmapDragState.hasDragged) {
-        // 4 CSS-pixel click-vs-drag threshold (max of |dx|, |dy|).
-        // Movement at or below the threshold stays a click; movement
-        // above it commits the gesture to a drag.
-        if (Math.max(Math.abs(dx), Math.abs(dy)) <= GMAP_DRAG_THRESHOLD_PX) return;
-        gmapDragState.hasDragged = true;
-        // Phase 2B Step 35 (D24i) — node drag (individual or group)
-        // is a manual interaction; exit transient fit-mode so the
-        // operator's subsequent free-pan/zoom can scroll normally.
-        applyGmapFitMode(false);
-        // D26h-impl — tear down any active connector tooltip the
-        // operator may have triggered before grabbing the node.
-        if (typeof hideGmapConnectorTooltip === 'function') hideGmapConnectorTooltip();
-      }
-      // Pointer-space delta → scene-space delta. Dividing by the
-      // current zoom factor keeps the node under the cursor at any
-      // zoom level (the scene is CSS-scaled by gmapZoom; node x/y
-      // values live in unscaled scene coordinates).
-      const z = gmapZoom || 1;
-      const sceneDx = dx / z;
-      const sceneDy = dy / z;
-      if (gmapDragState.isGroupDrag && gmapDragState.groupStartPositions) {
-        // Group drag — apply identical scene-space delta to every
-        // member of gmapSelectedNodeIds. Each member's start position
-        // was captured at pointerdown so relative spacing is preserved.
-        // Iterate every .gmap-node once and match dataset.nodeId
-        // directly (cheap; the node count is bounded by MAX_PER_LAYER
-        // × LAYERS) to avoid CSS attribute-selector escaping.
-        const starts = gmapDragState.groupStartPositions;
-        for (const id in starts) {
-          if (!Object.prototype.hasOwnProperty.call(starts, id)) continue;
-          const start = starts[id];
-          gmapDragOverrides[id] = { x: start.x + sceneDx, y: start.y + sceneDy };
-        }
-        const canvas = document.getElementById('gmap-canvas');
-        if (canvas) {
-          const nodeEls = canvas.querySelectorAll('.gmap-node');
-          nodeEls.forEach((el) => {
-            const id = el.dataset.nodeId;
-            if (!id || !Object.prototype.hasOwnProperty.call(starts, id)) return;
-            const pos = gmapDragOverrides[id];
-            if (!pos) return;
-            el.style.left = pos.x + 'px';
-            el.style.top  = pos.y + 'px';
-          });
-        }
-      } else {
-        const newX = gmapDragState.startNodeX + sceneDx;
-        const newY = gmapDragState.startNodeY + sceneDy;
-        gmapDragOverrides[nodeId] = { x: newX, y: newY };
-        gmapDragState.node.style.left = newX + 'px';
-        gmapDragState.node.style.top  = newY + 'px';
-      }
-      // Re-route every connector through effectiveGmapPosition so the
-      // dragged node's edges follow it AND every other node's edges
-      // remain anchored at their layout/dragged positions.
-      repaintGmapConnectors();
-    });
-
-    function endGmapDrag(e) {
-      if (!gmapDragState || gmapDragState.pointerId !== e.pointerId) return;
-      try { node.releasePointerCapture(e.pointerId); } catch (_) { /* ignore */ }
-      const wasDrag = gmapDragState.hasDragged;
-      gmapDragState = null;
-      if (wasDrag) {
-        // Suppress the synthetic click that follows pointerup for the
-        // gesture that just ended. A capture-phase one-shot listener
-        // catches the click before the per-node click handler installed
-        // in addNode (which calls selectGovernanceMapNode), so a
-        // dragged drop does NOT change selection or fire drill-down.
-        const swallow = function (ev) {
-          ev.stopPropagation();
-          ev.preventDefault();
-          node.removeEventListener('click', swallow, true);
-        };
-        node.addEventListener('click', swallow, true);
-      }
-    }
-    node.addEventListener('pointerup', endGmapDrag);
-    node.addEventListener('pointercancel', endGmapDrag);
+    return ExplorerGraph.interactions.attachNodeDragHandlers(node, nodeId);
   }
 
+  // D32a-impl-3 — Thin compatibility shim. Production addConnector
+  // lives in graph-renderer.js.
   function addConnector(p1, p2, cls) {
-    const svg = document.getElementById('gmap-svg');
-    if (!svg) return null;
-    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    path.setAttribute('class', cls);
-    path.setAttribute('d', curvePath(p1[0], p1[1], p2[0], p2[1]));
-    svg.appendChild(path);
-    return path;
+    return ExplorerGraph.renderer.addConnector(p1, p2, cls);
   }
 
+  // D32a-impl-4 — Thin shim. Production selectGovernanceMapNode lives in graph/context/context-graph-inspector.js (selectNode). The inline gmapSelectedId binding is kept in sync via the selection module.
   function selectGovernanceMapNode(nodeId) {
     gmapSelectedId = nodeId;
-    // Phase 2B Step 36 (D25b) — notify the bottom evidence tray of
-    // the selection change. The helper updates the tray header
-    // unconditionally and (when the tray is expanded) re-renders the
-    // tiles + chart. It tolerates missing-node ids by reading from
-    // gmapPositions, so it is safe to call before the canvas DOM
-    // walk below confirms the node exists.
-    if (typeof notifyGmapEvidenceTraySelectionChanged === 'function') {
-      notifyGmapEvidenceTraySelectionChanged();
-    }
-    const canvas = document.getElementById('gmap-canvas');
-    if (!canvas) return;
-    const nodes = canvas.querySelectorAll('.gmap-node');
-    let selectedNode = null;
-    nodes.forEach(n => {
-      const isSel = n.dataset.nodeId === nodeId;
-      n.classList.toggle('selected', isSel);
-      if (isSel) selectedNode = n;
-      // Phase 2B Step 13: clear inline-action containers on every
-      // non-selected node. The selected node's container is repopulated
-      // below; the others are cleared so a stale button from a
-      // previously-selected node never lingers.
-      if (!isSel) {
-        const stale = n.querySelector('.gmap-node-inline-actions');
-        if (stale) {
-          stale.innerHTML = '';
-          stale.setAttribute('hidden', '');
-        }
-      }
-    });
-    if (!selectedNode) return;
-    setGovernanceMapDetailsName(selectedNode.dataset.nodeName || nodeId);
-    let details = {};
-    try { details = JSON.parse(selectedNode.dataset.nodeDetails || '{}'); } catch { /* ignore */ }
-    // D27j-ui-3b — surface fail_mode_policy_id (and any future
-    // governance-only keys) is filtered out of the generic field
-    // panel so it does not render as a raw row; the dedicated
-    // Governance section consumes it instead.
-    const GOVERNANCE_KEYS = ['fail_mode_policy_id'];
-    setGovernanceMapDetailsFields(
-      Object.keys(details)
-        .filter(k => GOVERNANCE_KEYS.indexOf(k) < 0)
-        .map(k => [k, details[k]])
-    );
-    setGovernanceMapDetailsGovernance(
-      buildFailModePolicyInspectorSection(selectedNode.dataset.nodeKind || '', details, gmapData)
-    );
-    // Read the node's action metadata and (re-)render the action area.
-    // An empty/absent list collapses the wrapper to zero height — no
-    // disabled buttons appear for unsupported node types.
-    let actions = [];
-    try { actions = JSON.parse(selectedNode.dataset.nodeActions || '[]'); } catch { /* ignore */ }
-    setGovernanceMapDetailsActions(Array.isArray(actions) ? actions : []);
-    // Phase 2B Step 13: render graph-primary actions inline on the
-    // selected node card itself. Currently the only graph-primary
-    // action kind is `reframe-around-this`; record-navigation kinds
-    // (view-business-service-record, view-capability-record) stay in
-    // the bottom panel via setGovernanceMapDetailsActions. The bottom
-    // panel still receives the FULL action list — the inline render
-    // is additive and does not replace the panel button.
-    setGovernanceMapInlineActions(selectedNode, Array.isArray(actions) ? actions : []);
+    return ExplorerGraph.contextInspector.selectNode(nodeId);
   }
 
   // setGovernanceMapInlineActions populates the selected node's
@@ -7942,75 +5704,16 @@
   // Click handlers stop propagation so they do not re-trigger node
   // selection or start a drag gesture; pointerdown also stops so the
   // pointer-down listener that owns drag does not see the gesture.
-  function setGovernanceMapInlineActions(node, actions) {
-    const el = node && node.querySelector ? node.querySelector('.gmap-node-inline-actions') : null;
-    if (!el) return;
-    el.innerHTML = '';
-    if (!Array.isArray(actions) || actions.length === 0) {
-      el.setAttribute('hidden', '');
-      return;
-    }
-    actions.forEach(action => {
-      if (!action || typeof action !== 'object') return;
-      // Whitelist: only graph-primary action kinds get inline rendering.
-      // Record-navigation kinds remain bottom-panel only.
-      if (action.kind !== 'reframe-around-this') return;
-      if (!action.target_id || !action.target_view) return;
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'gmap-action-reframe-inline';
-      btn.textContent = action.label || 'Reframe around this';
-      btn.setAttribute('aria-label', (action.label || 'Reframe around this') + ' for ' + String(action.target_id));
-      btn.addEventListener('pointerdown', e => { e.stopPropagation(); });
-      btn.addEventListener('click', e => {
-        e.stopPropagation();
-        handleGovernanceMapAction(action);
-      });
-      el.appendChild(btn);
-    });
-    if (el.children.length === 0) {
-      el.setAttribute('hidden', '');
-    } else {
-      el.removeAttribute('hidden');
-    }
-  }
+  // D32a-impl-4 — Thin shim. Production setGovernanceMapInlineActions lives in graph-inspector.js (setInlineActions).
+  function setGovernanceMapInlineActions(node, actions) { return ExplorerGraph.inspector.setInlineActions(node, actions); }
 
   // setGovernanceMapDetailsActions renders the per-selection action area.
   // Only known action kinds (see handleGovernanceMapAction) produce a
   // button; any unknown kind is silently dropped. The wrapper is left
   // empty when no valid actions remain — the CSS rule
   // `.gmap-details-actions:empty { display: none; }` collapses it.
-  function setGovernanceMapDetailsActions(actions) {
-    const el = document.getElementById('gmap-details-actions');
-    if (!el) return;
-    el.innerHTML = '';
-    if (!Array.isArray(actions) || actions.length === 0) return;
-    actions.forEach(action => {
-      if (!action || typeof action !== 'object') return;
-      if (action.kind === 'view-business-service-record' ||
-          action.kind === 'view-capability-record') {
-        if (!action.target_id) return;
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'btn btn-secondary gmap-action-view-record';
-        btn.textContent = action.label || 'View record';
-        btn.setAttribute('aria-label', (action.label || 'View record') + ' for ' + String(action.target_id));
-        btn.addEventListener('click', () => handleGovernanceMapAction(action));
-        el.appendChild(btn);
-      } else if (action.kind === 'reframe-around-this') {
-        if (!action.target_id || !action.target_view) return;
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'btn btn-secondary gmap-action-reframe';
-        btn.textContent = action.label || 'Reframe around this';
-        btn.setAttribute('aria-label', (action.label || 'Reframe around this') + ' for ' + String(action.target_id));
-        btn.addEventListener('click', () => handleGovernanceMapAction(action));
-        el.appendChild(btn);
-      }
-      // Unknown kinds are intentionally dropped here; the dispatcher
-      // also enforces this on click as a defence-in-depth check.
-    });
-  }
+  // D32a-impl-4 — Thin shim. Production setGovernanceMapDetailsActions lives in graph-inspector.js (setActions).
+  function setGovernanceMapDetailsActions(actions) { return ExplorerGraph.inspector.setActions(actions); }
 
   // handleGovernanceMapAction is the single dispatcher for governance-map
   // actions. It accepts ONLY whitelisted action kinds and routes them to
@@ -8060,30 +5763,12 @@
     }
   }
 
-  function setGovernanceMapDetailsName(name) {
-    const el = document.getElementById('gmap-details-name');
-    if (el) el.textContent = name;
-  }
-  function setGovernanceMapDetailsFields(rows) {
-    const el = document.getElementById('gmap-details-fields');
-    if (!el) return;
-    el.innerHTML = rows.map(([k, v]) =>
-      '<div class="gmap-details-row">' +
-        '<span class="gmap-details-key">' + escHtml(String(k)) + '</span>' +
-        '<span class="gmap-details-val">' + escHtml(v == null ? '—' : String(v)) + '</span>' +
-      '</div>'
-    ).join('');
-  }
-  function setGovernanceMapSummary(rows) {
-    const el = document.getElementById('gmap-details-summary');
-    if (!el) return;
-    el.innerHTML = rows.map(([k, v]) =>
-      '<div class="gmap-details-row">' +
-        '<span class="gmap-details-key">' + escHtml(String(k)) + '</span>' +
-        '<span class="gmap-details-val">' + escHtml(String(v)) + '</span>' +
-      '</div>'
-    ).join('');
-  }
+  // D32a-impl-4 — Thin shim. Production setGovernanceMapDetailsName lives in graph-inspector.js (setName).
+  function setGovernanceMapDetailsName(name) { return ExplorerGraph.inspector.setName(name); }
+  // D32a-impl-4 — Thin shim. Production setGovernanceMapDetailsFields lives in graph-inspector.js (setFields).
+  function setGovernanceMapDetailsFields(rows) { return ExplorerGraph.inspector.setFields(rows); }
+  // D32a-impl-4 — Thin shim. Production setGovernanceMapSummary lives in graph-inspector.js (setSummary).
+  function setGovernanceMapSummary(rows) { return ExplorerGraph.inspector.setSummary(rows); }
 
   // D27j-ui-3b — Inspector Governance section.
   //
@@ -8091,11 +5776,8 @@
   // #gmap-details-governance. An empty input collapses the section
   // (the inspector keeps the empty container in the DOM so a future
   // selection can populate it without re-querying the rail).
-  function setGovernanceMapDetailsGovernance(html) {
-    const el = document.getElementById('gmap-details-governance');
-    if (!el) return;
-    el.innerHTML = html || '';
-  }
+  // D32a-impl-4 — Thin shim. Production setGovernanceMapDetailsGovernance lives in graph-inspector.js (setGovernance).
+  function setGovernanceMapDetailsGovernance(html) { return ExplorerGraph.inspector.setGovernance(html); }
 
   // buildFailModePolicyInspectorSection returns reference-level
   // governance content for the selected node, derived purely from
@@ -8111,57 +5793,10 @@
   // vocabulary: Default policy / Surface override / Inherited
   // default / Effective source / Business service default / Evidence
   // only / Soft/open / Not enabled / None configured.
+  // D32a-impl-4 — Thin shim. Production buildFailModePolicyInspectorSection
+  // lives in graph/context/context-graph-inspector.js (buildFailModePolicySection).
   function buildFailModePolicyInspectorSection(nodeKind, details, data) {
-    if (!details || typeof details !== 'object') return '';
-    const ownPolicy = String(details.fail_mode_policy_id || '');
-    const bsPolicy = (data && data.business_service && data.business_service.fail_mode_policy_id)
-      ? String(data.business_service.fail_mode_policy_id) : '';
-    const rows = [];
-
-    if (nodeKind === 'business') {
-      if (ownPolicy) {
-        rows.push(['Default policy', '<code class="gmap-fmp-reference-code">' + escHtml(ownPolicy) + '</code>']);
-        rows.push(['Source', 'Business service default']);
-      } else {
-        rows.push(['Default policy', 'None configured']);
-      }
-    } else if (nodeKind === 'surface') {
-      if (ownPolicy) {
-        rows.push(['Surface override', '<code class="gmap-fmp-reference-code">' + escHtml(ownPolicy) + '</code>']);
-        rows.push(['Effective source', 'Surface override']);
-      } else if (bsPolicy) {
-        rows.push(['Surface override', 'None']);
-        rows.push(['Inherited default', '<code class="gmap-fmp-reference-code">' + escHtml(bsPolicy) + '</code>']);
-        rows.push(['Effective source', 'Business service default']);
-      } else {
-        rows.push(['Surface override', 'None']);
-        rows.push(['Inherited default', 'None configured']);
-      }
-    } else {
-      // Other node kinds (related, cap, proc, ai, authority, coverage,
-      // more) get no governance section — keeps the Inspector compact.
-      return '';
-    }
-
-    // Always-present runtime-effect notes for the supported kinds.
-    // These two rows are reference-level claims about MIDAS today and
-    // do not assert anything about a fetched policy resource.
-    rows.push(['Runtime effect', 'Evidence only']);
-    rows.push(['Soft/open', 'Not enabled']);
-
-    const rowsHtml = rows.map(([k, v]) =>
-      '<div class="gmap-fmp-reference-row">' +
-        '<span class="gmap-fmp-reference-key">' + escHtml(String(k)) + '</span>' +
-        '<span class="gmap-fmp-reference-val">' + v + '</span>' +
-      '</div>'
-    ).join('');
-
-    return (
-      '<div class="gmap-details-section">' +
-        '<div class="gmap-details-title">Fail Mode Policy</div>' +
-        '<div class="gmap-fmp-reference">' + rowsHtml + '</div>' +
-      '</div>'
-    );
+    return ExplorerGraph.contextInspector.buildFailModePolicySection(nodeKind, details, data);
   }
 
   // ── Records view ───────────────────────────────────────────────────────────
@@ -10703,6 +8338,23 @@
     card.innerHTML = rows.join('');
     section.style.display = 'block';
   }
+
+  // D32a-impl-3 — MIDASExplorerGovernanceMapBridge is now a
+  // compatibility alias. The production rendering primitives moved
+  // out of the inline IIFE into graph-renderer.js +
+  // graph/context/context-graph-view.js (D32a-impl-3); this bridge no
+  // longer OWNS rendering — it forwards legacy names to the inline
+  // thin shims, which in turn delegate to the modules. The bridge
+  // remains so any consumer that historically read these properties
+  // (no known external consumer at this time) continues to resolve.
+  // Future tranche may delete the bridge once we are confident no
+  // external listener relies on it.
+  window.MIDASExplorerGovernanceMapBridge = window.MIDASExplorerGovernanceMapBridge || {};
+  window.MIDASExplorerGovernanceMapBridge.renderGovernanceMap        = renderGovernanceMap;
+  window.MIDASExplorerGovernanceMapBridge.renderGovernanceMapEmpty   = renderGovernanceMapEmpty;
+  window.MIDASExplorerGovernanceMapBridge.renderGovernanceMapError   = renderGovernanceMapError;
+  window.MIDASExplorerGovernanceMapBridge.refreshGovernanceMap       = refreshGovernanceMap;
+  window.MIDASExplorerGovernanceMapBridge.setGovernanceMapStatus     = setGovernanceMapStatus;
 
 })();
 </script>

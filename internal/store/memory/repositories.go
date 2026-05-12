@@ -15,6 +15,7 @@ import (
 	"github.com/accept-io/midas/internal/capability"
 	"github.com/accept-io/midas/internal/drift"
 	"github.com/accept-io/midas/internal/envelope"
+	"github.com/accept-io/midas/internal/escalation"
 	"github.com/accept-io/midas/internal/failmode"
 	"github.com/accept-io/midas/internal/governanceexpectation"
 	"github.com/accept-io/midas/internal/outbox"
@@ -476,8 +477,31 @@ func (r *GrantRepo) ListByProfile(ctx context.Context, profileID string) ([]*aut
 }
 
 func (r *GrantRepo) Create(ctx context.Context, g *authority.AuthorityGrant) error {
-	r.items[g.ID] = g
+	r.items[g.ID] = cloneGrant(g)
 	return nil
+}
+
+// cloneGrant returns a deep copy of g so the in-memory repo cannot
+// alias caller-owned Capabilities / Constraints slices. Mutating a
+// returned grant must not mutate the stored one (and vice versa);
+// without the slice copy the memory and Postgres repos would diverge
+// in observable behaviour, breaking the parity tests.
+func cloneGrant(g *authority.AuthorityGrant) *authority.AuthorityGrant {
+	if g == nil {
+		return nil
+	}
+	cp := *g
+	if len(g.Capabilities) > 0 {
+		cp.Capabilities = append([]authority.Capability(nil), g.Capabilities...)
+	} else {
+		cp.Capabilities = nil
+	}
+	if len(g.Constraints) > 0 {
+		cp.Constraints = append([]authority.Constraint(nil), g.Constraints...)
+	} else {
+		cp.Constraints = nil
+	}
+	return &cp
 }
 
 // Revoke sets status='revoked' and records revocation metadata (schema v2.1)
@@ -513,8 +537,7 @@ func (r *GrantRepo) Update(_ context.Context, g *authority.AuthorityGrant) error
 	if _, ok := r.items[g.ID]; !ok {
 		return errors.New("grant not found")
 	}
-	cp := *g
-	r.items[g.ID] = &cp
+	r.items[g.ID] = cloneGrant(g)
 	return nil
 }
 
@@ -632,6 +655,7 @@ func NewRepositories() *store.Repositories {
 		AISystemVersions:             aiVersionRepo,
 		AISystemBindings:             aiBindingRepo,
 		FailModePolicies:             NewFailModePolicyRepo(),
+		EscalationTargets:            NewEscalationTargetRepo(),
 		DriftDefinitions:             NewDriftDefinitionRepo(),
 		DriftSeries:                  NewDriftSeriesRepo(),
 		DriftSeriesPoints:            NewDriftSeriesPointRepo(),
@@ -654,6 +678,7 @@ var _ aisystem.SystemRepository = (*AISystemRepo)(nil)
 var _ aisystem.VersionRepository = (*AISystemVersionRepo)(nil)
 var _ aisystem.BindingRepository = (*AISystemBindingRepo)(nil)
 var _ failmode.PolicyRepository = (*FailModePolicyRepo)(nil)
+var _ escalation.Repository = (*EscalationTargetRepo)(nil)
 var _ drift.DriftDefinitionRepository = (*DriftDefinitionRepo)(nil)
 var _ drift.DriftSeriesRepository = (*DriftSeriesRepo)(nil)
 var _ drift.DriftSeriesPointRepository = (*DriftSeriesPointRepo)(nil)

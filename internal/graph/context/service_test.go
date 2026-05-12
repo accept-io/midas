@@ -1,4 +1,4 @@
-package authoritygraph
+package contextgraph
 
 import (
 	"context"
@@ -10,19 +10,18 @@ import (
 	"github.com/accept-io/midas/internal/aisystem"
 	"github.com/accept-io/midas/internal/businessservice"
 	"github.com/accept-io/midas/internal/capability"
-	"github.com/accept-io/midas/internal/governancemap"
 	"github.com/accept-io/midas/internal/process"
 	"github.com/accept-io/midas/internal/surface"
 )
 
-// stubReader satisfies GovernanceMapReader for unit tests. The map is
+// stubReader satisfies MapReader for unit tests. The map is
 // keyed by id; missing ids return (nil, nil), which Service.Project
 // converts to ErrNotFound.
 type stubReader struct {
-	items map[string]*governancemap.Map
+	items map[string]*Map
 }
 
-func (r *stubReader) GetGovernanceMap(_ context.Context, id string) (*governancemap.Map, error) {
+func (r *stubReader) GetGovernanceMap(_ context.Context, id string) (*Map, error) {
 	return r.items[id], nil
 }
 
@@ -130,30 +129,30 @@ func (s *aiViewStubs) readers() Readers {
 }
 
 // readersWithGovMap returns Readers with both views configured.
-func (s *aiViewStubs) readersWithGovMap(gmap GovernanceMapReader) Readers {
+func (s *aiViewStubs) readersWithGovMap(gmap MapReader) Readers {
 	r := s.readers()
 	r.GovernanceMap = gmap
 	return r
 }
 
-// makeBSMap builds a minimal *governancemap.Map with non-nil collection
+// makeBSMap builds a minimal *Map with non-nil collection
 // fields and a labelled root BS. Tests append to its slices to add
 // entities without re-stating the boilerplate.
-func makeBSMap(bsID, name string) *governancemap.Map {
-	return &governancemap.Map{
-		BusinessService: &governancemap.BusinessServiceNode{
+func makeBSMap(bsID, name string) *Map {
+	return &Map{
+		BusinessService: &BusinessServiceNode{
 			BusinessService: &businessservice.BusinessService{ID: bsID, Name: name},
 		},
-		Relationships: governancemap.Relationships{
-			Outgoing: []*governancemap.RelationshipNode{},
-			Incoming: []*governancemap.RelationshipNode{},
+		Relationships: Relationships{
+			Outgoing: []*RelationshipNode{},
+			Incoming: []*RelationshipNode{},
 		},
-		Capabilities:     []*governancemap.CapabilityNode{},
-		Processes:        []*governancemap.ProcessNode{},
-		Surfaces:         []*governancemap.SurfaceNode{},
-		AISystems:        []*governancemap.AISystemNode{},
-		AuthoritySummary: &governancemap.AuthoritySummary{},
-		Coverage:         &governancemap.Coverage{},
+		Capabilities:     []*CapabilityNode{},
+		Processes:        []*ProcessNode{},
+		Surfaces:         []*SurfaceNode{},
+		AISystems:        []*AISystemNode{},
+		AuthoritySummary: &AuthoritySummary{},
+		Coverage:         &Coverage{},
 	}
 }
 
@@ -162,7 +161,7 @@ func makeBSMap(bsID, name string) *governancemap.Map {
 // source data is present. Phase 2A also exercises typed-data fields
 // — every entity here carries a non-zero value for fields the typed
 // data should propagate (Status, Description, Owner, etc.).
-func makeFullDemoMap() *governancemap.Map {
+func makeFullDemoMap() *Map {
 	m := makeBSMap("bs-1", "BS One")
 	// Enrich the root BS so typed-data assertions can read non-zero
 	// status / owner / description / service_type / regulatory_scope.
@@ -171,7 +170,7 @@ func makeFullDemoMap() *governancemap.Map {
 	m.BusinessService.BusinessService.OwnerID = "owner-bs"
 	m.BusinessService.BusinessService.ServiceType = businessservice.ServiceTypeCustomerFacing
 	m.BusinessService.BusinessService.RegulatoryScope = "GDPR,SOX"
-	m.Relationships.Outgoing = []*governancemap.RelationshipNode{
+	m.Relationships.Outgoing = []*RelationshipNode{
 		{
 			Relationship: &businessservice.BusinessServiceRelationship{
 				ID: "rel-1", SourceBusinessService: "bs-1", TargetBusinessService: "bs-2",
@@ -180,21 +179,21 @@ func makeFullDemoMap() *governancemap.Map {
 			OtherName: "BS Two",
 		},
 	}
-	m.Capabilities = []*governancemap.CapabilityNode{
+	m.Capabilities = []*CapabilityNode{
 		{Capability: &capability.Capability{
 			ID: "cap-1", Name: "Capability One",
 			Description: "Cap desc", Status: "active", Owner: "owner-cap",
 			ParentCapabilityID: "cap-parent",
 		}},
 	}
-	m.Processes = []*governancemap.ProcessNode{
+	m.Processes = []*ProcessNode{
 		{Process: &process.Process{
 			ID: "proc-1", Name: "Process One",
 			BusinessServiceID: "bs-1",
 			Description:       "Proc desc", Status: "active", Owner: "owner-proc",
 		}},
 	}
-	m.Surfaces = []*governancemap.SurfaceNode{
+	m.Surfaces = []*SurfaceNode{
 		{
 			Surface: &surface.DecisionSurface{
 				ID: "surf-1", Name: "Surface One", ProcessID: "proc-1",
@@ -209,7 +208,7 @@ func makeFullDemoMap() *governancemap.Map {
 		},
 	}
 	v := 7
-	m.AISystems = []*governancemap.AISystemNode{
+	m.AISystems = []*AISystemNode{
 		{
 			System: &aisystem.AISystem{
 				ID: "ai-1", Name: "AI One",
@@ -231,13 +230,13 @@ func makeFullDemoMap() *governancemap.Map {
 			},
 		},
 	}
-	m.AuthoritySummary = &governancemap.AuthoritySummary{
+	m.AuthoritySummary = &AuthoritySummary{
 		SurfaceCount:       1,
 		ActiveProfileCount: 3,
 		ActiveGrantCount:   2,
 		ActiveAgentCount:   1,
 	}
-	m.Coverage = &governancemap.Coverage{
+	m.Coverage = &Coverage{
 		SurfaceCount:                1,
 		SurfacesWithDirectAIBinding: 1,
 		SurfacesWithScopedAIBinding: 0,
@@ -283,7 +282,7 @@ func TestService_NegativeDepth_ReturnsErrInvalidDepth(t *testing.T) {
 }
 
 func TestService_NotFoundID_ReturnsErrNotFound(t *testing.T) {
-	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*governancemap.Map{}}})
+	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*Map{}}})
 	_, err := svc.Project(context.Background(), ViewService, "bs-missing", 3)
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("want ErrNotFound, got %v", err)
@@ -299,7 +298,7 @@ func TestService_NotFoundID_ReturnsErrNotFound(t *testing.T) {
 // is.
 func TestService_DepthZero_RootOnly(t *testing.T) {
 	m := makeFullDemoMap()
-	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*governancemap.Map{"bs-1": m}}})
+	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*Map{"bs-1": m}}})
 	p, err := svc.Project(context.Background(), ViewService, "bs-1", 0)
 	if err != nil {
 		t.Fatalf("project: %v", err)
@@ -324,7 +323,7 @@ func TestService_DepthZero_RootOnly(t *testing.T) {
 // scope), no AI systems (which are 3-hop via binding).
 func TestService_DepthOne_DirectNeighboursOfRoot(t *testing.T) {
 	m := makeFullDemoMap()
-	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*governancemap.Map{"bs-1": m}}})
+	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*Map{"bs-1": m}}})
 	p, err := svc.Project(context.Background(), ViewService, "bs-1", 1)
 	if err != nil {
 		t.Fatalf("project: %v", err)
@@ -362,7 +361,7 @@ func TestService_DepthOne_DirectNeighboursOfRoot(t *testing.T) {
 // projection's reported Depth field is the clamped value.
 func TestService_DepthClamp_LargeIsSameAsMax(t *testing.T) {
 	m := makeFullDemoMap()
-	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*governancemap.Map{"bs-1": m}}})
+	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*Map{"bs-1": m}}})
 	pBig, err := svc.Project(context.Background(), ViewService, "bs-1", 999)
 	if err != nil {
 		t.Fatalf("big depth: %v", err)
@@ -392,7 +391,7 @@ func TestService_DepthClamp_LargeIsSameAsMax(t *testing.T) {
 // no forbidden kinds appear.
 func TestService_FullDemo_AllKindsAndEdges(t *testing.T) {
 	m := makeFullDemoMap()
-	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*governancemap.Map{"bs-1": m}}})
+	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*Map{"bs-1": m}}})
 	p, err := svc.Project(context.Background(), ViewService, "bs-1", MaxDepth)
 	if err != nil {
 		t.Fatalf("project: %v", err)
@@ -567,7 +566,7 @@ func TestService_FullDemo_AllKindsAndEdges(t *testing.T) {
 //     count fields the governance-map DTOs surface
 func TestService_FullDemo_TypedDataPopulated(t *testing.T) {
 	m := makeFullDemoMap()
-	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*governancemap.Map{"bs-1": m}}})
+	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*Map{"bs-1": m}}})
 	p, err := svc.Project(context.Background(), ViewService, "bs-1", MaxDepth)
 	if err != nil {
 		t.Fatalf("project: %v", err)
@@ -804,7 +803,7 @@ func TestService_FullDemo_TypedDataPopulated(t *testing.T) {
 // Outgoing sub-row only.
 func TestService_RelatedBusinessService_OutgoingOnly(t *testing.T) {
 	m := makeBSMap("bs-root", "Root")
-	m.Relationships.Outgoing = []*governancemap.RelationshipNode{
+	m.Relationships.Outgoing = []*RelationshipNode{
 		{
 			Relationship: &businessservice.BusinessServiceRelationship{
 				ID: "rel-out", SourceBusinessService: "bs-root", TargetBusinessService: "bs-other",
@@ -813,7 +812,7 @@ func TestService_RelatedBusinessService_OutgoingOnly(t *testing.T) {
 			OtherName: "Other BS",
 		},
 	}
-	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*governancemap.Map{"bs-root": m}}})
+	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*Map{"bs-root": m}}})
 	p, err := svc.Project(context.Background(), ViewService, "bs-root", MaxDepth)
 	if err != nil {
 		t.Fatalf("project: %v", err)
@@ -859,7 +858,7 @@ func TestService_RelatedBusinessService_OutgoingOnly(t *testing.T) {
 // Incoming sub-row only.
 func TestService_RelatedBusinessService_IncomingOnly(t *testing.T) {
 	m := makeBSMap("bs-root", "Root")
-	m.Relationships.Incoming = []*governancemap.RelationshipNode{
+	m.Relationships.Incoming = []*RelationshipNode{
 		{
 			Relationship: &businessservice.BusinessServiceRelationship{
 				ID: "rel-in", SourceBusinessService: "bs-other", TargetBusinessService: "bs-root",
@@ -868,7 +867,7 @@ func TestService_RelatedBusinessService_IncomingOnly(t *testing.T) {
 			OtherName: "Other BS",
 		},
 	}
-	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*governancemap.Map{"bs-root": m}}})
+	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*Map{"bs-root": m}}})
 	p, err := svc.Project(context.Background(), ViewService, "bs-root", MaxDepth)
 	if err != nil {
 		t.Fatalf("project: %v", err)
@@ -916,7 +915,7 @@ func TestService_RelatedBusinessService_IncomingOnly(t *testing.T) {
 // invariant exists to handle losslessly.
 func TestService_RelatedBusinessService_BothDirections(t *testing.T) {
 	m := makeBSMap("bs-root", "Root")
-	m.Relationships.Outgoing = []*governancemap.RelationshipNode{
+	m.Relationships.Outgoing = []*RelationshipNode{
 		{
 			Relationship: &businessservice.BusinessServiceRelationship{
 				ID: "rel-out", SourceBusinessService: "bs-root", TargetBusinessService: "bs-other",
@@ -925,7 +924,7 @@ func TestService_RelatedBusinessService_BothDirections(t *testing.T) {
 			OtherName: "Other BS",
 		},
 	}
-	m.Relationships.Incoming = []*governancemap.RelationshipNode{
+	m.Relationships.Incoming = []*RelationshipNode{
 		{
 			Relationship: &businessservice.BusinessServiceRelationship{
 				ID: "rel-in", SourceBusinessService: "bs-other", TargetBusinessService: "bs-root",
@@ -934,7 +933,7 @@ func TestService_RelatedBusinessService_BothDirections(t *testing.T) {
 			OtherName: "Other BS",
 		},
 	}
-	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*governancemap.Map{"bs-root": m}}})
+	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*Map{"bs-root": m}}})
 	p, err := svc.Project(context.Background(), ViewService, "bs-root", MaxDepth)
 	if err != nil {
 		t.Fatalf("project: %v", err)
@@ -999,7 +998,7 @@ func TestService_RelatedBusinessService_BothDirections(t *testing.T) {
 // edges, regardless of how empty the rest of the Map is.
 func TestService_AuthoritySummaryAndCoverage_AppearOnceEachAtDepth1(t *testing.T) {
 	m := makeBSMap("bs-1", "BS One")
-	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*governancemap.Map{"bs-1": m}}})
+	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*Map{"bs-1": m}}})
 	p, err := svc.Project(context.Background(), ViewService, "bs-1", 1)
 	if err != nil {
 		t.Fatalf("project: %v", err)
@@ -1147,7 +1146,7 @@ func TestService_Dispatch_AIViewRegisteredWithFullReaders(t *testing.T) {
 func TestService_Dispatch_ServiceViewStillWorksAfterRefactor(t *testing.T) {
 	m := makeFullDemoMap()
 	svc := NewServiceWithReaders(Readers{
-		GovernanceMap: &stubReader{items: map[string]*governancemap.Map{"bs-1": m}},
+		GovernanceMap: &stubReader{items: map[string]*Map{"bs-1": m}},
 	})
 	p, err := svc.Project(context.Background(), ViewService, "bs-1", MaxDepth)
 	if err != nil {
@@ -2217,7 +2216,7 @@ func TestService_SurfView_NoSyntheticSummaryOrCoverage(t *testing.T) {
 func TestService_ServiceView_BusinessServiceData_CarriesFailModePolicyID(t *testing.T) {
 	m := makeFullDemoMap()
 	m.BusinessService.BusinessService.FailModePolicyID = "policy-bs-default"
-	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*governancemap.Map{"bs-1": m}}})
+	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*Map{"bs-1": m}}})
 	p, err := svc.Project(context.Background(), ViewService, "bs-1", MaxDepth)
 	if err != nil {
 		t.Fatalf("project: %v", err)
@@ -2242,7 +2241,7 @@ func TestService_ServiceView_BusinessServiceData_OmitsEmptyFailModePolicyID(t *t
 	// branch is the default. Marshal the projection and assert the key
 	// does not appear on the BS root node.
 	m := makeFullDemoMap()
-	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*governancemap.Map{"bs-1": m}}})
+	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*Map{"bs-1": m}}})
 	p, err := svc.Project(context.Background(), ViewService, "bs-1", MaxDepth)
 	if err != nil {
 		t.Fatalf("project: %v", err)
@@ -2266,7 +2265,7 @@ func TestService_ServiceView_BusinessServiceData_OmitsEmptyFailModePolicyID(t *t
 func TestService_ServiceView_DecisionSurfaceData_CarriesFailModePolicyID(t *testing.T) {
 	m := makeFullDemoMap()
 	m.Surfaces[0].Surface.FailModePolicyID = "policy-surface-override"
-	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*governancemap.Map{"bs-1": m}}})
+	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*Map{"bs-1": m}}})
 	p, err := svc.Project(context.Background(), ViewService, "bs-1", MaxDepth)
 	if err != nil {
 		t.Fatalf("project: %v", err)
@@ -2348,7 +2347,7 @@ func TestService_ServiceView_NoFailModePolicyNodeOrEdgeIntroduced(t *testing.T) 
 	m := makeFullDemoMap()
 	m.BusinessService.BusinessService.FailModePolicyID = "policy-bs-default"
 	m.Surfaces[0].Surface.FailModePolicyID = "policy-surface-override"
-	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*governancemap.Map{"bs-1": m}}})
+	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*Map{"bs-1": m}}})
 	p, err := svc.Project(context.Background(), ViewService, "bs-1", MaxDepth)
 	if err != nil {
 		t.Fatalf("project: %v", err)

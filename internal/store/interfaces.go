@@ -12,6 +12,7 @@ import (
 	"github.com/accept-io/midas/internal/controlaudit"
 	"github.com/accept-io/midas/internal/drift"
 	"github.com/accept-io/midas/internal/envelope"
+	"github.com/accept-io/midas/internal/escalation"
 	"github.com/accept-io/midas/internal/failmode"
 	"github.com/accept-io/midas/internal/governanceexpectation"
 	"github.com/accept-io/midas/internal/localiam"
@@ -72,6 +73,16 @@ type Repositories struct {
 	// FailModePolicy at evaluation time will be required to nil-check at
 	// each call site.
 	FailModePolicies failmode.PolicyRepository
+
+	// EscalationTargets is the repository for the EscalationTarget
+	// governed-configuration entity introduced in D31k-impl-1.
+	// Nil-safe: the orchestrator's escalation-target resolver nil-
+	// checks before use, so memory-mode tests that build a partial
+	// Repositories may leave it nil and observe the empty-target
+	// pass-through path. The HTTP read endpoints return 501 when the
+	// repository is unwired (mirrors the FailModePolicy read-service
+	// posture).
+	EscalationTargets escalation.Repository
 
 	// Drift repositories introduced in Drift-1a. All five are nil-safe:
 	// no runtime path consults them in Drift-1a (the foundation tranche

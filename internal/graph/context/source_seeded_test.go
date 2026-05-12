@@ -1,8 +1,9 @@
-package governancemap
+package contextgraph
 
-// read_service_seeded_test.go — full-stack regression tests that
-// exercise the ReadService against the actual memory repositories
-// after bootstrap.SeedDemo has run. This complements the stub-reader
+// source_seeded_test.go (folded from
+// internal/governancemap/read_service_seeded_test.go in D31d) —
+// full-stack regression tests that exercise the ReadService against
+// the actual memory repositories after bootstrap.SeedDemo has run. This complements the stub-reader
 // tests in read_service_test.go: those isolate aggregation rules,
 // these isolate the seed → read pipeline so a regression in either
 // surfaces here.

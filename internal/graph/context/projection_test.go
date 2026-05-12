@@ -1,4 +1,4 @@
-package authoritygraph
+package contextgraph
 
 import (
 	"encoding/json"

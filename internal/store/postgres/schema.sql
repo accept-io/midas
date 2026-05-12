@@ -525,6 +525,23 @@ CREATE TABLE IF NOT EXISTS authority_grants (
     grant_reason TEXT,
     status TEXT NOT NULL,
 
+    -- D31i: discrete capabilities this grant authorises, drawn from the
+    -- canonical five (recommend, approve, reject, escalate, stop). Stored
+    -- as a JSONB array of strings; the application layer enforces SET
+    -- semantics (no duplicates) and the canonical-value set. Default to
+    -- the empty array for backfill of rows created before this column
+    -- existed; the orchestrator treats an empty capabilities set as a
+    -- grant that authorises no action.
+    capabilities JSONB NOT NULL DEFAULT '[]',
+
+    -- D31i: typed constraints that narrow the grant at runtime. Stored
+    -- as a JSONB array; each element carries a "kind" discriminator
+    -- (confidence_threshold_min / consequence_threshold_max / human_only /
+    -- ai_only / time_window) and the per-kind payload. The application
+    -- layer enforces shape, per-kind uniqueness, and the
+    -- {human_only, ai_only} mutual-exclusion invariant.
+    constraints JSONB NOT NULL DEFAULT '[]',
+
     effective_date TIMESTAMPTZ NOT NULL,
     expires_at TIMESTAMPTZ,
 
@@ -561,7 +578,18 @@ CREATE TABLE IF NOT EXISTS authority_grants (
             (status = 'revoked' AND revoked_at IS NOT NULL)
             OR
             (status IN ('active', 'suspended'))
-        )
+        ),
+
+    -- D31i: both capabilities and constraints are arrays at the JSON
+    -- schema level. Validity at the entry level (canonical enum values,
+    -- per-kind shape) is enforced in the application layer rather than
+    -- at the SQL boundary because expressing the union-style constraint
+    -- payloads is not natural in a single CHECK expression.
+    CONSTRAINT chk_grants_capabilities_array
+        CHECK (jsonb_typeof(capabilities) = 'array'),
+
+    CONSTRAINT chk_grants_constraints_array
+        CHECK (jsonb_typeof(constraints) = 'array')
 );
 
 CREATE INDEX IF NOT EXISTS idx_authority_grants_agent_id
@@ -2456,3 +2484,114 @@ CREATE INDEX IF NOT EXISTS idx_drift_annotations_author
 CREATE INDEX IF NOT EXISTS idx_drift_annotations_suppression_until
     ON drift_annotations (suppression_until)
     WHERE suppression_until IS NOT NULL;
+
+
+-- =============================================================================
+-- D31i: AUTHORITY GRANT CAPABILITIES + CONSTRAINTS
+-- =============================================================================
+-- Idempotent column additions for databases created before schema v2.4 (D31i).
+-- Adds capabilities and constraints JSONB columns to authority_grants. Existing
+-- rows backfill via the DEFAULT '[]' clause; the application layer enforces
+-- canonical values and per-kind constraint uniqueness in code rather than at
+-- the SQL boundary (constraint payloads are union-shaped; expressing each
+-- variant in a single CHECK is not natural).
+
+ALTER TABLE authority_grants ADD COLUMN IF NOT EXISTS capabilities JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE authority_grants ADD COLUMN IF NOT EXISTS constraints  JSONB NOT NULL DEFAULT '[]';
+
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_grants_capabilities_array') THEN
+        ALTER TABLE authority_grants
+            ADD CONSTRAINT chk_grants_capabilities_array
+            CHECK (jsonb_typeof(capabilities) = 'array');
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_grants_constraints_array') THEN
+        ALTER TABLE authority_grants
+            ADD CONSTRAINT chk_grants_constraints_array
+            CHECK (jsonb_typeof(constraints) = 'array');
+    END IF;
+END $$;
+
+-- =============================================================================
+-- ESCALATION TARGETS (D31k)
+-- =============================================================================
+-- Governed, versioned escalation target. Mirrors the lifecycle posture of
+-- authority_profiles, decision_surfaces, and fail_mode_policies: composite
+-- (id, version) primary key, lifecycle status enum, effective window,
+-- ownership + approval metadata. The runtime resolver picks the highest
+-- active version whose effective window covers the moment of escalation.
+--
+-- Cross-context existence (an "agent" target whose handle is an agent id;
+-- a "surface" target whose handle is a surface id) is NOT enforced at the
+-- SQL layer — the repository must not create cross-context dependencies.
+-- The Authority Graph projection of escalation targets is deferred to a
+-- later tranche (D31l) and is intentionally absent from this schema.
+
+CREATE TABLE IF NOT EXISTS escalation_targets (
+    id              TEXT        NOT NULL,
+    version         INTEGER     NOT NULL,
+    name            TEXT        NOT NULL,
+    description     TEXT        NOT NULL DEFAULT '',
+    kind            TEXT        NOT NULL,
+    handle          TEXT        NOT NULL,
+    status          TEXT        NOT NULL,
+    effective_date  TIMESTAMPTZ NOT NULL,
+    effective_until TIMESTAMPTZ,
+    business_owner  TEXT        NOT NULL DEFAULT '',
+    technical_owner TEXT        NOT NULL DEFAULT '',
+    created_at      TIMESTAMPTZ NOT NULL,
+    updated_at      TIMESTAMPTZ NOT NULL,
+    created_by      TEXT        NOT NULL DEFAULT '',
+    approved_by     TEXT        NOT NULL DEFAULT '',
+    approved_at     TIMESTAMPTZ,
+
+    PRIMARY KEY (id, version),
+
+    CONSTRAINT chk_escalation_targets_status
+        CHECK (status IN ('draft', 'review', 'active', 'deprecated', 'retired')),
+
+    CONSTRAINT chk_escalation_targets_kind
+        CHECK (kind IN ('role', 'agent', 'surface', 'external')),
+
+    CONSTRAINT chk_escalation_targets_handle
+        CHECK (handle <> ''),
+
+    CONSTRAINT chk_escalation_targets_effective_dates
+        CHECK (effective_until IS NULL OR effective_until > effective_date),
+
+    CONSTRAINT chk_escalation_targets_approval_fields
+        CHECK (
+            (status IN ('draft', 'review') AND approved_at IS NULL)
+            OR (status IN ('active', 'deprecated', 'retired'))
+        )
+);
+
+CREATE INDEX IF NOT EXISTS idx_escalation_targets_id_version_desc
+    ON escalation_targets (id, version DESC);
+
+CREATE INDEX IF NOT EXISTS idx_escalation_targets_status
+    ON escalation_targets (status);
+
+CREATE INDEX IF NOT EXISTS idx_escalation_targets_active
+    ON escalation_targets (id, effective_date, effective_until)
+    WHERE status = 'active';
+
+-- =============================================================================
+-- D31k: AuthorityProfile → EscalationTarget link
+-- =============================================================================
+-- Idempotent column addition for databases created before schema v2.5 (D31k).
+-- AuthorityProfile gains an optional escalation_target_id pointing to a
+-- LOGICAL escalation target. The runtime resolver picks the active version
+-- at evaluation time — mirroring how authority_profiles references logical
+-- ids for surfaces and fail-mode policies. No FK is declared: escalation
+-- target ids are referenced cross-context and the integrity is enforced at
+-- the application layer.
+--
+-- escalation_mode (auto / manual) is preserved as an additive complement
+-- and is not deprecated; it describes the behaviour at escalation time
+-- while escalation_target_id describes the destination.
+
+ALTER TABLE authority_profiles ADD COLUMN IF NOT EXISTS escalation_target_id TEXT;

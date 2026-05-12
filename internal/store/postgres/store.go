@@ -244,6 +244,11 @@ func newRepositories(db sqltx.DBTX) (*store.Repositories, error) {
 		return nil, err
 	}
 
+	escalationTargets, err := NewEscalationTargetRepo(db)
+	if err != nil {
+		return nil, err
+	}
+
 	driftDefinitions, err := NewDriftDefinitionRepo(db)
 	if err != nil {
 		return nil, err
@@ -291,6 +296,7 @@ func newRepositories(db sqltx.DBTX) (*store.Repositories, error) {
 		AISystemVersions:             aiSystemVersions,
 		AISystemBindings:             aiSystemBindings,
 		FailModePolicies:             failModePolicies,
+		EscalationTargets:            escalationTargets,
 		DriftDefinitions:             driftDefinitions,
 		DriftSeries:                  driftSeries,
 		DriftSeriesPoints:            driftSeriesPoints,

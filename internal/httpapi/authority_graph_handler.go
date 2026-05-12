@@ -5,24 +5,25 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/accept-io/midas/internal/authoritygraph"
+	authoritygraph "github.com/accept-io/midas/internal/graph/authority"
 )
 
 // authorityGraphService is the narrow interface the handler depends
 // on. *authoritygraph.Service satisfies it. Defined here (not in the
 // authoritygraph package) so tests can swap a stub double without
-// dragging the full package surface — same pattern as
-// governanceMapReadService in governance_map_handler.go.
+// dragging the full package surface.
 type authorityGraphService interface {
 	Project(ctx context.Context, view, id string, depth int) (*authoritygraph.Projection, error)
 }
 
-// WithAuthorityGraph attaches the authority-graph projection service
+// WithAuthorityGraph attaches the Authority Graph projection service
 // to this Server. Returns the receiver for chaining. Pass nil to
-// disable the endpoint, which then returns 501 with
-// "authority graph projection service not configured".
+// disable the endpoint, which then returns 501 with "authority graph
+// projection service not configured".
 //
-// Mirrors the WithGovernanceMap builder pattern.
+// The Authority Graph is a separate projection from the Context
+// Graph. Both endpoints can be wired independently — wiring one does
+// not enable the other.
 func (s *Server) WithAuthorityGraph(svc authorityGraphService) *Server {
 	s.authorityGraph = svc
 	return s
@@ -30,9 +31,9 @@ func (s *Server) WithAuthorityGraph(svc authorityGraphService) *Server {
 
 // handleGetAuthorityGraph serves
 //
-//	GET /v1/authority-graph?view={view}&id={id}&depth={n}
+//	GET /v1/graphs/authority?view=service&id={business_service_id}&depth={n}
 //
-// Phase 1 supports view=service only. The handler is intentionally
+// MVP supports view=service only. The handler is intentionally
 // thin: parse the query, delegate to the projection service, marshal
 // the resulting *authoritygraph.Projection (which already carries
 // JSON tags matching the wire schema in api/openapi/v1.yaml).
@@ -48,7 +49,15 @@ func (s *Server) WithAuthorityGraph(svc authorityGraphService) *Server {
 //
 // Auth is enforced upstream at route registration via requireAuth +
 // requireRole(viewer | operator | admin) — the same gate as every
-// other /v1/* read endpoint.
+// other /v1/* read endpoint and as the sibling /v1/graphs/context.
+//
+// The Authority Graph is distinct from the Context Graph: it
+// projects business_service, decision_surface, authority_profile,
+// authority_grant, agent, and fail_mode_policy nodes. The Context
+// Graph projects a different node set (capabilities, processes,
+// AI systems, AI system bindings, plus rollups). The two endpoints
+// answer different operator questions and have separate wire
+// schemas.
 func (s *Server) handleGetAuthorityGraph(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		methodNotAllowed(w, http.MethodGet)

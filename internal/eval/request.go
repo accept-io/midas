@@ -62,4 +62,19 @@ type DecisionRequest struct {
 	Runtime    *AgentRuntime
 	Delegation *Delegation
 	Subject    *Subject
+
+	// RequestedCapability names the authority Capability the agent
+	// intends to exercise on this surface (recommend, approve, reject,
+	// escalate, stop). Optional: when empty, the orchestrator does NOT
+	// enforce a capability check (the request is treated as
+	// capability-agnostic, preserving backward-compatible behaviour
+	// for callers that have not yet been updated). When set, the
+	// value MUST be one of the canonical five — non-canonical values
+	// are rejected deterministically with INVALID_CAPABILITY.
+	//
+	// The capability check runs after authority chain resolution and
+	// after constraint evaluation; if the grant's Capabilities slice
+	// does not contain the requested capability, the request is
+	// rejected with CAPABILITY_NOT_GRANTED.
+	RequestedCapability string
 }

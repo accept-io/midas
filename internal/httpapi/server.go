@@ -247,10 +247,11 @@ type Server struct {
 	explicitValidator    explicitModeValidator       // nil when explicit-mode validation is not wired
 	adminAudit           adminaudit.Repository       // nil when admin-audit is not wired (Issue #41)
 	coverageRead         coverageReadService         // nil when coverage read service is not wired (Issue #56)
-	governanceMap        governanceMapReadService    // nil when governance map read service is not wired (Epic 1, PR 4)
-	authorityGraph       authorityGraphService       // nil when authority-graph projection service is not wired (Phase 1)
+	contextGraph         contextGraphService         // nil when context graph projection service is not wired (D31d)
+	authorityGraph       authorityGraphService       // nil when authority graph projection service is not wired (D31f)
 	driftRead            driftReadService            // nil when the Drift-1d read service is not wired
 	failModePolicyRead   failModePolicyReadService   // nil when the D29d FailModePolicy read service is not wired
+	escalationTargetRead escalationTargetReadService // nil when the D31k escalation target read service is not wired
 	evidenceRead         evidenceReadService         // nil when the D30b runtime evidence read service is not wired
 	metricsHandler       http.Handler                // nil when metrics are disabled; registered at metricsPath when set
 	metricsPath          string                      // configured path for the metrics endpoint (e.g. "/metrics")
@@ -625,16 +626,41 @@ type agentResponse struct {
 }
 
 // grantResponse is one item in the GET /v1/grants list.
+//
+// D31i adds capabilities + constraints — the runtime-effective fields
+// the orchestrator now enforces. Both use omitempty so grants with
+// neither still produce a compact wire shape.
 type grantResponse struct {
-	ID            string     `json:"id"`
-	AgentID       string     `json:"agent_id"`
-	ProfileID     string     `json:"profile_id"`
-	Status        string     `json:"status"`
-	GrantedBy     string     `json:"granted_by"`
-	EffectiveDate time.Time  `json:"effective_from"`
-	ExpiresAt     *time.Time `json:"effective_until,omitempty"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
+	ID            string                `json:"id"`
+	AgentID       string                `json:"agent_id"`
+	ProfileID     string                `json:"profile_id"`
+	Status        string                `json:"status"`
+	GrantedBy     string                `json:"granted_by"`
+	EffectiveDate time.Time             `json:"effective_from"`
+	ExpiresAt     *time.Time            `json:"effective_until,omitempty"`
+	CreatedAt     time.Time             `json:"created_at"`
+	UpdatedAt     time.Time             `json:"updated_at"`
+	Capabilities  []string              `json:"capabilities,omitempty"`
+	Constraints   []grantConstraintWire `json:"constraints,omitempty"`
+}
+
+// grantConstraintWire is the wire shape for an AuthorityGrant
+// constraint on the /v1/grants endpoints. Mirrors authoritygraph's
+// ConstraintData shape but kept local so the httpapi grant
+// endpoints remain self-contained.
+type grantConstraintWire struct {
+	Kind           string                     `json:"kind"`
+	MinConfidence  *float64                   `json:"min_confidence,omitempty"`
+	MaxConsequence *grantConsequenceWire      `json:"max_consequence,omitempty"`
+	StartTime      *time.Time                 `json:"start_time,omitempty"`
+	EndTime        *time.Time                 `json:"end_time,omitempty"`
+}
+
+type grantConsequenceWire struct {
+	Type       string  `json:"type"`
+	Amount     float64 `json:"amount,omitempty"`
+	Currency   string  `json:"currency,omitempty"`
+	RiskRating string  `json:"risk_rating,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -1440,6 +1466,18 @@ func (s *Server) WithEvidenceReadService(svc evidenceReadService) *Server {
 	return s
 }
 
+// WithEscalationTargetReadService attaches the read-only
+// EscalationTarget service that backs /v1/escalation_targets and
+// /v1/escalation_targets/{id} routes (D31k-impl-1). When nil — or
+// when constructed with a nil reader — every route returns 501 Not
+// Implemented. The orchestrator's runtime escalation-target resolver
+// uses repos.EscalationTargets directly and is not affected by this
+// HTTP wiring.
+func (s *Server) WithEscalationTargetReadService(svc escalationTargetReadService) *Server {
+	s.escalationTargetRead = svc
+	return s
+}
+
 // WithStructuralMode sets the structural enforcement mode. In permissive mode
 // (the default when not called), process_id is optional on /v1/evaluate.
 // In enforced mode, process_id is required.
@@ -1633,10 +1671,24 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/v1/aisystems/", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleGetAISystemOrSubpath)))
 	s.mux.HandleFunc("/v1/aisystems", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleListAISystems)))
 
-	// Authority Graph projection (Phase 1). Generic node/edge graph
-	// rooted at a single business service (view=service); reuses the
-	// governance-map read service rather than re-querying repositories.
-	s.mux.HandleFunc("/v1/authority-graph", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleGetAuthorityGraph)))
+	// Context Graph projection (D31d — Context/Authority/Knowledge
+	// taxonomy realignment). Replaces the prior /v1/authority-graph
+	// endpoint (whose payload was always a context projection) and the
+	// /v1/businessservices/{id}/governance-map endpoint (a functional
+	// duplicate). Generic node/edge graph rooted by view + id + depth;
+	// supports view=service | ai_system | decision_surface. Sibling
+	// /v1/graphs/authority and /v1/graphs/knowledge are reserved (see
+	// api/openapi/v1.yaml) but not implemented in this tranche.
+	s.mux.HandleFunc("/v1/graphs/context", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleGetContextGraph)))
+
+	// Authority Graph projection (D31f). Generic node/edge graph
+	// rooted at a single business service. Projects the authority
+	// spine (BS → Surface → Profile → Grant → Agent) plus fail-mode
+	// policy edges. Distinct from /v1/graphs/context; see
+	// internal/graph/authority/projection.go for the full node + edge
+	// kind inventory. Future sibling /v1/graphs/knowledge remains
+	// reserved (see api/openapi/v1.yaml) but not implemented.
+	s.mux.HandleFunc("/v1/graphs/authority", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleGetAuthorityGraph)))
 
 	// Drift read endpoints (Drift-1d). Six prefix dispatchers cover the
 	// 13 GET routes that back the upcoming Explorer drift workbench.
@@ -1656,6 +1708,14 @@ func (s *Server) routes() {
 	// /v1/controlplane/fail_mode_policies/ is unaffected — Go's
 	// ServeMux picks the longest matching prefix.
 	s.mux.HandleFunc("/v1/fail_mode_policies/", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleFailModePoliciesPrefix)))
+	// D31k-impl-1 — read-only escalation target endpoints. The
+	// list route is registered separately from the prefix because
+	// /v1/escalation_targets (no trailing slash) must dispatch to
+	// the list handler whereas /v1/escalation_targets/{id} is
+	// served by the prefix dispatcher (which sees the trailing
+	// slash thanks to net/http ServeMux's longest-prefix match).
+	s.mux.HandleFunc("/v1/escalation_targets", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleListEscalationTargetsRoot)))
+	s.mux.HandleFunc("/v1/escalation_targets/", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleEscalationTargetsPrefix)))
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -3115,7 +3175,7 @@ func toSurfaceImpactResponse(r *SurfaceImpactResult) surfaceImpactResponse {
 
 // toGrantResponse maps an AuthorityGrant to its wire format.
 func toGrantResponse(g *authority.AuthorityGrant) grantResponse {
-	return grantResponse{
+	out := grantResponse{
 		ID:            g.ID,
 		AgentID:       g.AgentID,
 		ProfileID:     g.ProfileID,
@@ -3126,6 +3186,39 @@ func toGrantResponse(g *authority.AuthorityGrant) grantResponse {
 		CreatedAt:     g.CreatedAt,
 		UpdatedAt:     g.UpdatedAt,
 	}
+	if len(g.Capabilities) > 0 {
+		out.Capabilities = make([]string, 0, len(g.Capabilities))
+		for _, c := range g.Capabilities {
+			out.Capabilities = append(out.Capabilities, string(c))
+		}
+	}
+	if len(g.Constraints) > 0 {
+		out.Constraints = make([]grantConstraintWire, 0, len(g.Constraints))
+		for _, c := range g.Constraints {
+			cw := grantConstraintWire{Kind: string(c.Kind)}
+			switch c.Kind {
+			case authority.ConstraintKindConfidenceThresholdMin:
+				m := c.MinConfidence
+				cw.MinConfidence = &m
+			case authority.ConstraintKindConsequenceThresholdMax:
+				cw.MaxConsequence = &grantConsequenceWire{
+					Type:       string(c.MaxConsequence.Type),
+					Amount:     c.MaxConsequence.Amount,
+					Currency:   c.MaxConsequence.Currency,
+					RiskRating: string(c.MaxConsequence.RiskRating),
+				}
+			case authority.ConstraintKindTimeWindow:
+				st := c.StartTime
+				et := c.EndTime
+				cw.StartTime = &st
+				cw.EndTime = &et
+			case authority.ConstraintKindHumanOnly, authority.ConstraintKindAIOnly:
+				// no payload
+			}
+			out.Constraints = append(out.Constraints, cw)
+		}
+	}
+	return out
 }
 
 // toCapabilityResponse maps a Capability to its wire format.
@@ -3751,10 +3844,9 @@ func (s *Server) handleGetBusinessService(w http.ResponseWriter, r *http.Request
 		s.handleGetBusinessServiceRelationships(w, r, id)
 		return
 	}
-	if len(parts) == 2 && parts[1] == "governance-map" {
-		s.handleGetBusinessServiceGovernanceMap(w, r, id)
-		return
-	}
+	// D31d removed the /v1/businessservices/{id}/governance-map
+	// sub-path. Use GET /v1/graphs/context?view=service&id={id}
+	// instead.
 	if len(parts) > 1 {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 		return

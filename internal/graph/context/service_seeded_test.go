@@ -1,29 +1,26 @@
-package authoritygraph
+package contextgraph
 
 // service_seeded_test.go — seeded full-stack regression for the
-// authoritygraph projection. Mirrors
-// internal/governancemap/read_service_seeded_test.go: instead of
-// stubbing, this test runs bootstrap.SeedDemo against the in-memory
-// repos, builds a real *governancemap.ReadService, wires it into a
-// real Service, and asserts the typed Phase 2A node data is populated
-// from the seed.
+// Context Graph projection. Instead of stubbing, this test runs
+// bootstrap.SeedDemo against the in-memory repos, builds a real
+// *ReadService (the underlying context-map composer in source.go),
+// wires it into a real Service, and asserts the typed node data is
+// populated from the seed.
 //
 // The pipeline exercised is:
 //
-//   bootstrap.SeedDemo → memory repos → governancemap.ReadService.GetGovernanceMap
-//                                     → authoritygraph.Service.Project
+//   bootstrap.SeedDemo → memory repos → ReadService.GetGovernanceMap
+//                                     → Service.Project
 //                                     → typed-data assertions
 //
-// This closes the Phase 1 review's "no seeded e2e for authoritygraph"
-// risk: a bug in projectServiceView interacting with a real seeded
-// shape would surface here loudly.
+// A bug in projectServiceView interacting with a real seeded shape
+// would surface here loudly.
 
 import (
 	"context"
 	"testing"
 
 	"github.com/accept-io/midas/internal/bootstrap"
-	"github.com/accept-io/midas/internal/governancemap"
 	"github.com/accept-io/midas/internal/store/memory"
 )
 
@@ -40,7 +37,7 @@ func newSeededService(t *testing.T) *Service {
 		t.Fatalf("bootstrap.SeedDemo: %v", err)
 	}
 	return NewServiceWithReaders(Readers{
-		GovernanceMap: governancemap.NewReadService(
+		GovernanceMap: NewReadService(
 			repos.BusinessServices,
 			repos.BusinessServiceRelationships,
 			repos.BusinessServiceCapabilities,

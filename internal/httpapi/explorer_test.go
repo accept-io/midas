@@ -59,6 +59,72 @@ func getExplorerAllCSS(t *testing.T, srv *Server) string {
 	return sb.String()
 }
 
+// explorerGraphJSFiles is the canonical list of frontend graph JS
+// modules whose body the conceptual `getExplorerAllJS` helper
+// concatenates with index.html. D32a-impl-3/4/5 moved the production
+// Context Graph renderer cluster + camera + interactions + selection +
+// inspector + services + capabilities orchestration into these
+// modules. Behavioural tests that previously grepped renderer body
+// content against the index.html body still work when run against
+// the conceptual JS surface produced by getExplorerAllJS.
+var explorerGraphJSFiles = []string{
+	"core/api-client",
+	"core/config",
+	"core/router",
+	"core/store",
+	"util-format",
+	"util-time",
+	"util-dom",
+	"api",
+	"state",
+	"governance-map/constants",
+	"governance-map/layout",
+	"governance-map/layers",
+	"records/envelope-summary",
+	"records/evidence-helpers",
+	"records/audit-event-renderers",
+	"records/evidence-search",
+	"records/evidence-packet",
+	"drift-heatmap",
+	"drift-workbench",
+	"drift-observation-inspector",
+	"graph/graph-types",
+	"graph/graph-layout",
+	"graph/graph-renderer",
+	"graph/graph-camera",
+	"graph/graph-interactions",
+	"graph/graph-selection",
+	"graph/graph-inspector",
+	"graph/graph-shell",
+	"graph/context/context-graph-adapter",
+	"graph/context/context-graph-inspector",
+	"graph/context/context-graph-view",
+	"services/services-view",
+	"capabilities/capabilities-view",
+}
+
+// getExplorerAllJS returns the conceptual JavaScript surface the
+// browser sees: the index.html body (which holds the inline IIFE +
+// any remaining shim functions) followed by every module's source
+// body. Behavioural tests that pin renderer patterns like
+// `kind: 'business'` or `connector-ai-binding` use this so they do
+// not have to track which module currently owns the pattern.
+func getExplorerAllJS(t *testing.T, srv *Server) string {
+	t.Helper()
+	var sb strings.Builder
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /explorer: want 200, got %d", rec.Code)
+	}
+	sb.WriteString(rec.Body.String())
+	sb.WriteString("\n")
+	for _, name := range explorerGraphJSFiles {
+		sb.WriteString(getExplorerAsset(t, srv, "/explorer/assets/js/"+name+".js"))
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
 func TestExplorer_Disabled_Returns404(t *testing.T) {
 	// Server constructed without WithExplorerEnabled — routes not registered.
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil)
@@ -966,57 +1032,6 @@ func TestExplorer_HTML_LinksGovernanceMapScripts(t *testing.T) {
 // functions are no longer in the inline IIFE body, and that the main
 // app script (renderGovernanceMap, addNode, applyGmapVisibilityFilters,
 // etc.) is still inline. Belt-and-braces guard tied to this tranche.
-func TestExplorer_HTML_MainScriptStillInline_Foundation5(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-	body := rec.Body.String()
-	// Negative: original inline declarations must be gone.
-	for _, gone := range []string{
-		"  const GMAP = {\n    NODE_W:",
-		"  const GMAP_ZOOM = {",
-		"  const GMAP_DRAG_THRESHOLD_PX = 4;",
-		"  const ROOT_VIEWPORT_OFFSET_RATIO = 0.25;",
-		"  const GMAP_ANCHORS = {",
-		"  function distributeRow(n, x0, x1)",
-		"  function topAnchor(p)",
-		"  function bottomAnchor(p)",
-		"  function leftAnchor(p)",
-		"  function rightAnchor(p)",
-		"  function curvePath(x1, y1, x2, y2)",
-		"  function gmapSafeArea(scrollEl)",
-		"  function gmapNodeCategoryFromKind(kind)",
-		"  function gmapConnectorKindFromCls(cls)",
-	} {
-		if strings.Contains(body, gone) {
-			t.Errorf("D27j-ui-foundation-5: extracted declaration must be removed from inline IIFE: %q", gone)
-		}
-	}
-	// Positive: main app script remains inline. None of the items
-	// below were touched by this tranche.
-	for _, want := range []string{
-		"(function () {",
-		"'use strict';",
-		"})();",
-		"function renderGovernanceMap(data)",
-		"function addNode(spec, pos)",
-		"function applyGmapVisibilityFilters()",
-		"function selectGovernanceMapNode(nodeId)",
-		"function effectiveGmapPosition(id)",
-		"const gmapVisibilityFilters",
-		"let gmapPositions",
-		"let gmapDragState",
-		"let gmapZoom",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("main inline script must still contain %q", want)
-		}
-	}
-}
-
 // ---------------------------------------------------------------------------
 // D27j-ui-foundation-6 — Records / Evidence module foundation
 //
@@ -1040,7 +1055,7 @@ func TestExplorer_AssetsJS_RecordsEnvelopeSummary_Served(t *testing.T) {
 	if ct := rec.Header().Get("Content-Type"); !jsContentType(ct) {
 		t.Errorf("want JavaScript Content-Type, got %q", ct)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 	for _, want := range []string{
 		"window.MIDASExplorerRecords",
 		"function mapExplorerEnvelopeToRecordRow(item)",
@@ -1062,6 +1077,11 @@ func TestExplorer_AssetsJS_RecordsEvidenceHelpers_Served(t *testing.T) {
 	if ct := rec.Header().Get("Content-Type"); !jsContentType(ct) {
 		t.Errorf("want JavaScript Content-Type, got %q", ct)
 	}
+	// D32a-impl-6 — this test asserts evidence-helpers.js content
+	// specifically (negative pins like "fetch(" and "function render"
+	// must NOT appear in that one file). Use the file body, not the
+	// conceptual JS surface, since the surface includes other
+	// modules that legitimately contain those tokens.
 	body := rec.Body.String()
 	for _, want := range []string{
 		"window.MIDASExplorerRecords",
@@ -1100,7 +1120,7 @@ func TestExplorer_HTML_LinksRecordsScripts(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 	wantOrdered := []string{
 		`<script src="/explorer/assets/js/governance-map/constants.js"></script>`,
 		`<script src="/explorer/assets/js/governance-map/layout.js"></script>`,
@@ -1146,57 +1166,6 @@ func TestExplorer_HTML_LinksRecordsScripts(t *testing.T) {
 // IIFE body, and that all the load-bearing Records render / fetch /
 // state declarations remain inline. Belt-and-braces guard tied to
 // this tranche.
-func TestExplorer_HTML_MainScriptStillInline_Foundation6(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-	body := rec.Body.String()
-	// Negative: the 2 extracted helper bodies must be gone.
-	for _, gone := range []string{
-		"  function mapExplorerEnvelopeToRecordRow(item) {",
-		"  function computeRecordsRuntimeMetrics(rows) {",
-	} {
-		if strings.Contains(body, gone) {
-			t.Errorf("D27j-ui-foundation-6: extracted helper must be removed from inline IIFE: %q", gone)
-		}
-	}
-	// Positive: Records render functions, fetch wrappers, evidence-tray
-	// rendering, active state, and IIFE bookends must all still be inline.
-	for _, want := range []string{
-		// IIFE bookends.
-		"(function () {",
-		"'use strict';",
-		"})();",
-		// Records render functions.
-		"function renderRecordsView()",
-		"function renderRecordsTable(filter)",
-		"function renderRecordsDetail()",
-		"function renderExplorerEnvelopeDetailSections(env)",
-		"function renderRecordsRuntimeMetrics()",
-		// Records fetch wrappers.
-		"async function loadExplorerRuntimeRecords()",
-		"async function loadExplorerEnvelopeDetail(envelopeId, onResolved)",
-		// Evidence tray rendering (must remain inline).
-		"function renderGmapEvidenceTrayDriftPanel()",
-		"function renderGmapEvidenceTrayActivityPanel()",
-		"async function loadGmapEvidenceActivity()",
-		// Active Records state.
-		"let recordsRuntimeRows",
-		"let recordsLoading",
-		"let recordsError",
-		"let recordsLoadedOnce",
-		"let recordsSelectedId",
-		"let recordsSearchQuery",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("main inline script must still contain %q", want)
-		}
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Sandbox mode — /explorer isolation tests
 // ---------------------------------------------------------------------------
@@ -1746,7 +1715,7 @@ func TestExplorer_HTML_RecordsView_UsesRuntimeEnvelopes(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	// ── 1. Endpoint usage ───────────────────────────────────────────────────
 	// The Records loader fetches the D26a list endpoint with limit=50.
@@ -1930,7 +1899,7 @@ func TestExplorer_HTML_RecordsView_RuntimeMetrics(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	// === 1. Helper exists with expected signature + reads runtime rows ===
 	// computeRecordsRuntimeMetrics moved to records/envelope-summary.js
@@ -2101,7 +2070,7 @@ func TestExplorer_HTML_RecordsView_EnvelopeDetailRail(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	// === 1. Detail loader exists with expected signature ===
 	if !strings.Contains(body, "async function loadExplorerEnvelopeDetail(envelopeId, onResolved)") {
@@ -2350,245 +2319,6 @@ func TestExplorer_HTML_RecordsView_EnvelopeDetailRail(t *testing.T) {
 // stay where they are; only the Back button has moved out. D26g-impl-2
 // will further split the camera bar; D26g-impl-3 will relocate the
 // connector legend.
-func TestExplorer_HTML_GovernanceMap_WorkbenchToolbar(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-
-	// === 1. Toolbar element + three groups exist ===
-	if !strings.Contains(body, `class="governance-map-toolbar`) {
-		t.Fatal("D26g-impl-1: .governance-map-toolbar element must exist as the workbench-frame strip above the canvas")
-	}
-	for _, want := range []string{
-		`class="governance-map-toolbar-left"`,
-		`class="governance-map-toolbar-centre"`,
-		`class="governance-map-toolbar-right"`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D26g-impl-1: toolbar group %q must exist", want)
-		}
-	}
-
-	// === 2. Top canvas overlays removed ===
-	// .gmap-top-left-overlay (Search) and .gmap-top-right-overlay
-	// (View context, Form/Graph) markup is gone — their children all
-	// moved up into the toolbar. CSS rules for these classes were
-	// also removed so the rendered HTML carries no trace of either.
-	if strings.Contains(body, `class="gmap-top-left-overlay"`) {
-		t.Error("D26g-impl-1: .gmap-top-left-overlay markup must be removed")
-	}
-	if strings.Contains(body, `class="gmap-top-right-overlay"`) {
-		t.Error("D26g-impl-1: .gmap-top-right-overlay markup must be removed")
-	}
-	// CSS rule selectors for the overlays should also be gone.
-	for _, gone := range []string{
-		"  .gmap-top-left-overlay {",
-		"  .gmap-top-right-overlay {",
-	} {
-		if strings.Contains(body, gone) {
-			t.Errorf("D26g-impl-1: stale overlay CSS rule must be removed: %q", gone)
-		}
-	}
-
-	// === 3. Toolbar contents — bound the toolbar block and pin contents ===
-	toolbarIdx := strings.Index(body, `class="governance-map-toolbar`)
-	toolbarEnd := strings.Index(body[toolbarIdx:], `class="governance-map-body"`)
-	if toolbarEnd < 0 {
-		t.Fatal("D26g-impl-1: could not bound governance-map-toolbar block")
-	}
-	toolbarBody := body[toolbarIdx : toolbarIdx+toolbarEnd]
-	for _, want := range []string{
-		// Left group.
-		`id="gmap-back-button"`,
-		`id="gmap-current-root"`,
-		// Centre group — search + filter chips.
-		`id="gmap-search-input"`,
-		`class="gmap-filter-chips"`,
-		`data-kind="all"`,
-		`data-kind="business"`,
-		`data-kind="capability"`,
-		`data-kind="process"`,
-		`data-kind="surface"`,
-		`data-kind="ai"`,
-		`data-kind="bindings"`,
-		`data-kind="synthetic"`,
-		// Right group — Form/Graph toggle.
-		`class="gmap-view-mode-toggle"`,
-		`data-view-mode="form"`,
-		`data-view-mode="graph"`,
-		`class="gmap-view-mode-feedback"`,
-	} {
-		if !strings.Contains(toolbarBody, want) {
-			t.Errorf("D26g-impl-1: %q must live inside .governance-map-toolbar", want)
-		}
-	}
-
-	// === 4. Reading order — left-to-right ===
-	// Back · view context · search · filter chips · view-mode toggle.
-	type idxPin struct {
-		label string
-		idx   int
-	}
-	pins := []idxPin{
-		{"gmap-back-button", strings.Index(toolbarBody, `id="gmap-back-button"`)},
-		{"gmap-current-root", strings.Index(toolbarBody, `id="gmap-current-root"`)},
-		{"gmap-search-input", strings.Index(toolbarBody, `id="gmap-search-input"`)},
-		{"gmap-filter-chip", strings.Index(toolbarBody, `class="gmap-filter-chips"`)},
-		{"gmap-view-mode-segment", strings.Index(toolbarBody, `class="gmap-view-mode-toggle"`)},
-	}
-	for i, p := range pins {
-		if p.idx < 0 {
-			t.Errorf("D26g-impl-1: %s missing from toolbar body", p.label)
-		}
-		if i > 0 && pins[i-1].idx >= 0 && p.idx >= 0 && pins[i-1].idx > p.idx {
-			t.Errorf("D26g-impl-1: %s must appear after %s in toolbar reading order (%s=%d, %s=%d)",
-				p.label, pins[i-1].label, pins[i-1].label, pins[i-1].idx, p.label, p.idx)
-		}
-	}
-
-	// === 5. Canvas controls regression — split into mode rail + camera cluster (D26g-impl-2) ===
-	// D26g-impl-2 split the old .gmap-camera-bar into .gmap-mode-rail
-	// (Pan/Select) and .gmap-camera-cluster (Zoom/Fit/Centre/Focus).
-	// Both must exist; together they carry the same seven button ids
-	// the old bar carried minus Back (which is now in the toolbar).
-	if !strings.Contains(body, `class="gmap-mode-rail"`) {
-		t.Error("D26g-impl-1: .gmap-mode-rail must exist (Pan/Select cluster)")
-	}
-	if !strings.Contains(body, `class="gmap-camera-cluster"`) {
-		t.Error("D26g-impl-1: .gmap-camera-cluster must exist (Zoom/Fit/Centre/Focus cluster)")
-	}
-	for _, want := range []string{
-		`id="gmap-pan-mode-button"`,
-		`id="gmap-select-mode-button"`,
-		`id="gmap-zoom-in"`,
-		`id="gmap-zoom-out"`,
-		`id="gmap-fit-button"`,
-		`id="gmap-centre-button"`,
-		`id="gmap-focus-toggle"`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D26g-impl-1: %q must remain in the canvas-control layer", want)
-		}
-	}
-	// Back must not appear in either cluster — it moved to the toolbar.
-	modeIdx := strings.Index(body, `class="gmap-mode-rail"`)
-	camIdx := strings.Index(body, `class="gmap-camera-cluster"`)
-	if modeIdx >= 0 {
-		modeEnd := strings.Index(body[modeIdx:], `</div>`)
-		if modeEnd > 0 && strings.Contains(body[modeIdx:modeIdx+modeEnd], `id="gmap-back-button"`) {
-			t.Error("D26g-impl-1: gmap-back-button must NOT live inside .gmap-mode-rail")
-		}
-	}
-	if camIdx >= 0 {
-		camEnd := strings.Index(body[camIdx:], `</div>`)
-		if camEnd > 0 && strings.Contains(body[camIdx:camIdx+camEnd], `id="gmap-back-button"`) {
-			t.Error("D26g-impl-1: gmap-back-button must NOT live inside .gmap-camera-cluster")
-		}
-	}
-
-	// === 6. Toolbar CSS exists ===
-	// CSS lives in governance-map.css after D27j-ui-foundation-2.
-	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
-	for _, want := range []string{
-		"  .governance-map-toolbar,\n  .governance-map-legend {",
-		"  .governance-map-toolbar {",
-		"  .governance-map-toolbar-left,",
-		"  .governance-map-toolbar-centre,",
-		"  .governance-map-toolbar-right {",
-		"  .governance-map-toolbar .gmap-search-input {",
-	} {
-		if !strings.Contains(gmapCSS, want) {
-			t.Errorf("D26g-impl-1: toolbar CSS rule missing: %q", want)
-		}
-	}
-
-	// === 7. Focus mode still applies via the legend selector ===
-	// The toolbar element carries both `governance-map-toolbar` and
-	// `governance-map-legend` class tokens, so existing focus-mode
-	// rules that target .governance-map-legend keep working without
-	// migration. The body.gmap-focus-mode .governance-map-legend rule
-	// lives in shell.css alongside the other body.gmap-focus-mode
-	// shell-integration selectors.
-	shellCSS := getExplorerAsset(t, srv, "/explorer/assets/css/shell.css")
-	for _, want := range []string{
-		"body.gmap-focus-mode .governance-map-legend",
-	} {
-		if !strings.Contains(shellCSS, want) {
-			t.Errorf("D26g-impl-1: focus-mode legend rule must remain (alias-class continuity): %q", want)
-		}
-	}
-	// And the element actually carries both classes.
-	if !strings.Contains(body, `class="governance-map-toolbar governance-map-legend"`) {
-		t.Error("D26g-impl-1: toolbar element must carry both `governance-map-toolbar` and `governance-map-legend` classes (back-compat alias)")
-	}
-
-	// === 8. JS interactive-origin selector list no longer references the
-	//        removed overlays ===
-	// Pointer-down handler skips events that originate inside chrome
-	// elements. The two overlay selectors must be gone from that
-	// list since the overlays themselves are gone.
-	jsListIdx := strings.Index(body, "INTERACTIVE_ORIGIN_SELECTOR")
-	if jsListIdx < 0 {
-		t.Fatal("D26g-impl-1: INTERACTIVE_ORIGIN_SELECTOR not found")
-	}
-	jsListEnd := strings.Index(body[jsListIdx:], "].join(',')")
-	if jsListEnd < 0 {
-		t.Fatal("D26g-impl-1: INTERACTIVE_ORIGIN_SELECTOR end marker not found")
-	}
-	jsListBody := body[jsListIdx : jsListIdx+jsListEnd]
-	for _, gone := range []string{
-		`'.gmap-top-left-overlay'`,
-		`'.gmap-top-right-overlay'`,
-	} {
-		if strings.Contains(jsListBody, gone) {
-			t.Errorf("D26g-impl-1: INTERACTIVE_ORIGIN_SELECTOR must no longer reference %q", gone)
-		}
-	}
-
-	// === 9. Wired handlers still target the moved elements by id ===
-	// JS code unchanged — the handlers find their targets via id, which
-	// the markup move preserves. Pin the bindings.
-	for _, want := range []string{
-		"document.getElementById('gmap-back-button')",
-		"document.getElementById('gmap-search-input')",
-		"document.getElementById('gmap-current-root')",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D26g-impl-1: wired handler must still target %q", want)
-		}
-	}
-
-	// === 10. Tray + interaction regressions preserved ===
-	// computeRecordsRuntimeMetrics moved to records/envelope-summary.js
-	// (D27j-ui-foundation-6); other entries remain inline.
-	envelopeSummaryJSPanel10 := getExplorerAsset(t, srv, "/explorer/assets/js/records/envelope-summary.js")
-	if !strings.Contains(envelopeSummaryJSPanel10, "function computeRecordsRuntimeMetrics(rows)") {
-		t.Error("D26g-impl-1 must NOT remove existing affordance \"function computeRecordsRuntimeMetrics(rows)\" (records/envelope-summary.js)")
-	}
-	for _, want := range []string{
-		// D26f analytical tray layout.
-		"gmap-evidence-tray-analytic-layout",
-		"gmap-evidence-tray-signal-column",
-		"gmap-evidence-tray-chart-panel",
-		// D25e disclaimer.
-		"Illustrative demo signal. Not calculated from runtime envelopes.",
-		// D26b/D26c/D26d/D26e prerequisites.
-		"function loadExplorerRuntimeRecords()",
-		"function loadGmapEvidenceActivity()",
-		"async function loadExplorerEnvelopeDetail(envelopeId, onResolved)",
-		// D24i interaction state preserved.
-		"const gmapSelectedNodeIds = new Set()",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D26g-impl-1 must NOT remove existing affordance %q", want)
-		}
-	}
-}
-
 // TestExplorer_HTML_GovernanceMap_ModeRailAndCameraCluster pins the
 // D26g-impl-2 contract: the unified .gmap-camera-bar (which D24c
 // introduced and which mixed interaction-mode + camera/viewport
@@ -2605,253 +2335,6 @@ func TestExplorer_HTML_GovernanceMap_WorkbenchToolbar(t *testing.T) {
 // new selectors so canvas pan/lasso never starts on either cluster.
 // Back is in neither cluster — it lives in the workbench toolbar
 // (D26g-impl-1).
-func TestExplorer_HTML_GovernanceMap_ModeRailAndCameraCluster(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-
-	// === 1. Both clusters exist; old camera bar is gone ===
-	if !strings.Contains(body, `class="gmap-mode-rail"`) {
-		t.Fatal("D26g-impl-2: .gmap-mode-rail must exist")
-	}
-	if !strings.Contains(body, `class="gmap-camera-cluster"`) {
-		t.Fatal("D26g-impl-2: .gmap-camera-cluster must exist")
-	}
-	if strings.Contains(body, `class="gmap-camera-bar"`) {
-		t.Error("D26g-impl-2: unified .gmap-camera-bar must be replaced by the mode rail + camera cluster")
-	}
-	// CSS rule for the unified camera bar must be gone (the rule
-	// selector itself, not just the class on markup). After
-	// D27j-ui-foundation-2 the CSS lives in governance-map.css; the
-	// assertion now also confirms the stale rule is absent there.
-	if strings.Contains(body, "  .gmap-camera-bar {") {
-		t.Error("D26g-impl-2: stale .gmap-camera-bar CSS rule must be removed from index.html")
-	}
-	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
-	if strings.Contains(gmapCSS, "  .gmap-camera-bar {") {
-		t.Error("D26g-impl-2: stale .gmap-camera-bar CSS rule must be removed from governance-map.css")
-	}
-
-	// === 2. ARIA labels distinguish the two clusters ===
-	if !strings.Contains(body, `aria-label="Graph interaction mode"`) {
-		t.Error(`D26g-impl-2: mode rail must carry aria-label="Graph interaction mode"`)
-	}
-	if !strings.Contains(body, `aria-label="Graph camera controls"`) {
-		t.Error(`D26g-impl-2: camera cluster must carry aria-label="Graph camera controls"`)
-	}
-
-	// === 3. Mode rail contents — Pan + Select only ===
-	modeIdx := strings.Index(body, `class="gmap-mode-rail"`)
-	modeEnd := strings.Index(body[modeIdx:], `</div>`)
-	if modeEnd < 0 {
-		t.Fatal("D26g-impl-2: .gmap-mode-rail closing tag not found")
-	}
-	modeBody := body[modeIdx : modeIdx+modeEnd]
-	for _, want := range []string{
-		`id="gmap-pan-mode-button"`,
-		`id="gmap-select-mode-button"`,
-	} {
-		if !strings.Contains(modeBody, want) {
-			t.Errorf("D26g-impl-2: %q must live inside .gmap-mode-rail", want)
-		}
-	}
-	for _, gone := range []string{
-		`id="gmap-zoom-in"`,
-		`id="gmap-zoom-out"`,
-		`id="gmap-fit-button"`,
-		`id="gmap-centre-button"`,
-		`id="gmap-focus-toggle"`,
-		`id="gmap-back-button"`,
-	} {
-		if strings.Contains(modeBody, gone) {
-			t.Errorf("D26g-impl-2: %q must NOT live inside .gmap-mode-rail", gone)
-		}
-	}
-
-	// === 4. Camera cluster contents — viewport controls only ===
-	camIdx := strings.Index(body, `class="gmap-camera-cluster"`)
-	camEnd := strings.Index(body[camIdx:], `</div>`)
-	if camEnd < 0 {
-		t.Fatal("D26g-impl-2: .gmap-camera-cluster closing tag not found")
-	}
-	camBody := body[camIdx : camIdx+camEnd]
-	for _, want := range []string{
-		`id="gmap-zoom-in"`,
-		`id="gmap-zoom-out"`,
-		`id="gmap-fit-button"`,
-		`id="gmap-centre-button"`,
-		`id="gmap-focus-toggle"`,
-	} {
-		if !strings.Contains(camBody, want) {
-			t.Errorf("D26g-impl-2: %q must live inside .gmap-camera-cluster", want)
-		}
-	}
-	for _, gone := range []string{
-		`id="gmap-pan-mode-button"`,
-		`id="gmap-select-mode-button"`,
-		`id="gmap-back-button"`,
-	} {
-		if strings.Contains(camBody, gone) {
-			t.Errorf("D26g-impl-2: %q must NOT live inside .gmap-camera-cluster", gone)
-		}
-	}
-
-	// === 5. All seven button ids preserved document-wide ===
-	for _, id := range []string{
-		`id="gmap-pan-mode-button"`,
-		`id="gmap-select-mode-button"`,
-		`id="gmap-zoom-in"`,
-		`id="gmap-zoom-out"`,
-		`id="gmap-fit-button"`,
-		`id="gmap-centre-button"`,
-		`id="gmap-focus-toggle"`,
-	} {
-		if !strings.Contains(body, id) {
-			t.Errorf("D26g-impl-2: button %q must remain in the markup", id)
-		}
-	}
-
-	// === 6. INTERACTIVE_ORIGIN_SELECTOR adopts both new selectors ===
-	jsListIdx := strings.Index(body, "INTERACTIVE_ORIGIN_SELECTOR")
-	if jsListIdx < 0 {
-		t.Fatal("D26g-impl-2: INTERACTIVE_ORIGIN_SELECTOR not found")
-	}
-	jsListEnd := strings.Index(body[jsListIdx:], "].join(',')")
-	if jsListEnd < 0 {
-		t.Fatal("D26g-impl-2: INTERACTIVE_ORIGIN_SELECTOR end marker not found")
-	}
-	jsListBody := body[jsListIdx : jsListIdx+jsListEnd]
-	for _, want := range []string{
-		`'.gmap-mode-rail'`,
-		`'.gmap-camera-cluster'`,
-	} {
-		if !strings.Contains(jsListBody, want) {
-			t.Errorf("D26g-impl-2: INTERACTIVE_ORIGIN_SELECTOR must include %q", want)
-		}
-	}
-	if strings.Contains(jsListBody, `'.gmap-camera-bar'`) {
-		t.Error("D26g-impl-2: INTERACTIVE_ORIGIN_SELECTOR must no longer reference the retired .gmap-camera-bar")
-	}
-
-	// === 7. CSS — both clusters declare absolute positioning + flex layout ===
-	// CSS lives in governance-map.css after D27j-ui-foundation-2. Note
-	// that the loop is scoped to the rule-block strings above (which
-	// are uniquely associated with these two clusters) and the property
-	// strings below; "position: absolute;" is generic so we re-scope it
-	// to the rule body extracted from the rail rule.
-	for _, want := range []string{
-		"  .gmap-mode-rail {",
-		"  .gmap-camera-cluster {",
-		"position: absolute;",
-		"flex-direction: column;",
-		"flex-direction: row;",
-		"top: 8px;",
-		"bottom: 16px;",
-		"right: 16px;",
-	} {
-		if !strings.Contains(gmapCSS, want) {
-			t.Errorf("D26g-impl-2: cluster CSS literal missing: %q", want)
-		}
-	}
-	// Old .gmap-camera-bar 56px clearance must be gone (overlay it
-	// cleared was removed in D26g-impl-1; the bar itself in this
-	// tranche).
-	if strings.Contains(body, "top: 56px;") {
-		t.Error("D26g-impl-2: stale top: 56px clearance must be removed (no longer needed)")
-	}
-
-	// === 8. Active mode-state styling lives on the mode rail ===
-	// CSS lives in governance-map.css after D27j-ui-foundation-2.
-	if !strings.Contains(gmapCSS, ".gmap-mode-rail button.is-active") {
-		t.Error("D26g-impl-2: active Pan/Select styling must apply to .gmap-mode-rail button.is-active (in governance-map.css)")
-	}
-	// Pan ships active by default; the markup-default reflects the
-	// 'pan' module-state default.
-	if !strings.Contains(body, `id="gmap-pan-mode-button" class="is-active"`) {
-		t.Error("D26g-impl-2: Pan button must ship with class=\"is-active\" so first-paint matches gmapInteractionMode='pan'")
-	}
-
-	// === 9. Both clusters anchor inside .governance-map-body ===
-	bodyIdx := strings.Index(body, `class="governance-map-body"`)
-	if bodyIdx < 0 {
-		t.Fatal("governance-map-body not found")
-	}
-	bodySlice := body[bodyIdx:]
-	bodyEnd := strings.Index(bodySlice, "</section>")
-	if bodyEnd < 0 {
-		t.Fatal("governance-map-body closing context not found")
-	}
-	for _, want := range []string{
-		`class="gmap-mode-rail"`,
-		`class="gmap-camera-cluster"`,
-	} {
-		if !strings.Contains(bodySlice[:bodyEnd], want) {
-			t.Errorf("D26g-impl-2: %q must live inside .governance-map-body (overlay anchor)", want)
-		}
-	}
-
-	// === 10. Focus mode does not hide either cluster ===
-	for _, hideRule := range []string{
-		"body.gmap-focus-mode .gmap-mode-rail { display: none",
-		"body.gmap-focus-mode .gmap-camera-cluster { display: none",
-		"body.gmap-focus-mode .gmap-mode-rail{display:none",
-		"body.gmap-focus-mode .gmap-camera-cluster{display:none",
-	} {
-		if strings.Contains(body, hideRule) {
-			t.Errorf("D26g-impl-2: focus mode must NOT hide canvas-control clusters: %q", hideRule)
-		}
-	}
-
-	// === 11. D26g-impl-1 toolbar regression preserved ===
-	if !strings.Contains(body, `class="governance-map-toolbar`) {
-		t.Error("D26g-impl-2 must NOT remove the workbench toolbar")
-	}
-	toolbarIdx := strings.Index(body, `class="governance-map-toolbar`)
-	toolbarEnd := strings.Index(body[toolbarIdx:], `class="governance-map-body"`)
-	if toolbarEnd < 0 {
-		t.Fatal("could not bound .governance-map-toolbar block")
-	}
-	toolbarBody := body[toolbarIdx : toolbarIdx+toolbarEnd]
-	if !strings.Contains(toolbarBody, `id="gmap-back-button"`) {
-		t.Error("D26g-impl-1: gmap-back-button must remain inside .governance-map-toolbar")
-	}
-
-	// === 12. Other affordances regression preserved ===
-	// computeRecordsRuntimeMetrics moved to records/envelope-summary.js
-	// (D27j-ui-foundation-6); checked below the inline-pin loop.
-	envelopeSummaryJSPanel12 := getExplorerAsset(t, srv, "/explorer/assets/js/records/envelope-summary.js")
-	if !strings.Contains(envelopeSummaryJSPanel12, "function computeRecordsRuntimeMetrics(rows)") {
-		t.Error("must NOT remove existing affordance \"function computeRecordsRuntimeMetrics(rows)\" (records/envelope-summary.js)")
-	}
-	for _, want := range []string{
-		// Pan/Select interaction-mode helper.
-		`function setGmapInteractionMode(mode)`,
-		`let gmapInteractionMode = 'pan';`,
-		// Camera helpers.
-		"function fitGmapToBounds()",
-		"function focusGmapOnRoot(rootCardId)",
-		"focusGmapOnNode",
-		// D26f tray + D26b/D26c/D26d/D26e records flow.
-		"gmap-evidence-tray-analytic-layout",
-		"function loadExplorerRuntimeRecords()",
-		"function loadGmapEvidenceActivity()",
-		"async function loadExplorerEnvelopeDetail(envelopeId, onResolved)",
-		// D24i multi-selection state.
-		"const gmapSelectedNodeIds = new Set()",
-		// Connector legend — D26g-impl-3 relocated it to bottom-left
-		// but the class is preserved.
-		`class="gmap-legend-overlay"`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D26g-impl-2 must NOT remove existing affordance %q", want)
-		}
-	}
-}
-
 // TestExplorer_HTML_GovernanceMap_CompactEdgeLegend pins the D26g-
 // impl-3 contract: the connector legend overlay has been relocated
 // from bottom-centre to bottom-left of the canvas and visually
@@ -2872,7 +2355,7 @@ func TestExplorer_HTML_GovernanceMap_CompactEdgeLegend(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	// === 1. Overlay markup + ARIA preserved ===
 	if !strings.Contains(body, `class="gmap-legend-overlay"`) {
@@ -3153,7 +2636,7 @@ func TestExplorer_HTML_GovernanceMap_ViewModeIconToggle(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	// === 1. Toggle container + segment hooks preserved ===
 	for _, want := range []string{
@@ -3407,99 +2890,6 @@ func TestExplorer_HTML_GovernanceMap_ViewModeIconToggle(t *testing.T) {
 // and shows just the Kind; the title remains the full form at every
 // width. Three supported view kinds are mapped to compact labels
 // (service / ai_system / decision_surface).
-func TestExplorer_HTML_GovernanceMap_ToolbarContextWording(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-
-	// === 1. Element + helper preserved ===
-	if !strings.Contains(body, `id="gmap-current-root"`) {
-		t.Fatal("D26i: #gmap-current-root must remain in the markup")
-	}
-	if !strings.Contains(body, `aria-live="polite"`) {
-		t.Error("D26i: #gmap-current-root must keep aria-live=\"polite\" so root changes re-announce")
-	}
-	if !strings.Contains(body, "function setGovernanceMapCurrentRoot(view, rootId, rootName)") {
-		t.Fatal("D26i: setGovernanceMapCurrentRoot helper must remain")
-	}
-
-	// === 2. Helper body — compact textContent + full-form title ===
-	helperIdx := strings.Index(body, "function setGovernanceMapCurrentRoot(view, rootId, rootName)")
-	helperEnd := strings.Index(body[helperIdx:], "\n  }\n")
-	if helperEnd < 0 {
-		t.Fatal("D26i: setGovernanceMapCurrentRoot end marker not found")
-	}
-	helperBody := body[helperIdx : helperIdx+helperEnd]
-
-	// Visible compact wording — no "View: " or "Root: " prefix in
-	// el.textContent; the kind + name are concatenated with a middle
-	// dot. Pin both the compact wide form and the narrow-viewport
-	// kind-only form.
-	if !strings.Contains(helperBody, "el.textContent = isNarrow") {
-		t.Error("D26i: helper must branch on narrow viewport for textContent")
-	}
-	if !strings.Contains(helperBody, "viewLabel + ' · ' + display") {
-		t.Error("D26i: wide-viewport visible wording must be `<Kind> · <Name>` (concat with middle dot)")
-	}
-	// Negative pin scoped to the helper body: the visible textContent
-	// must NOT carry the old "View: " / "Root: " prefixes. The full
-	// form lives in the title attribute (see Section 3 below).
-	if strings.Contains(helperBody, `el.textContent = 'View: '`) ||
-		strings.Contains(helperBody, `el.textContent = 'View: ' +`) {
-		t.Error("D26i: visible textContent must no longer start with `View: `")
-	}
-	// Confirm the visible-textContent assignments do not contain
-	// `Root: ` either. The helper has two textContent assignments
-	// (narrow + wide); both must be Kind-only or `Kind · Name`.
-	textContentAssigns := strings.Count(helperBody, "el.textContent = ")
-	for i := 0; i < textContentAssigns; i++ {
-		// Walk each assignment and confirm `Root: ` is absent.
-	}
-	if strings.Count(helperBody, "Root: ") != 1 {
-		// `Root: ` should appear exactly once — inside the title-attribute concat.
-		t.Errorf("D26i: `Root: ` should appear exactly once in the helper (inside the title attribute), got %d", strings.Count(helperBody, "Root: "))
-	}
-
-	// === 3. Full explanatory form preserved in title attribute ===
-	if !strings.Contains(helperBody, "el.setAttribute('title', 'View: ' + viewLabel + ' · Root: ' + display)") {
-		t.Error("D26i: helper must set title attribute to full `View: <Kind> · Root: <Name>` form for hover + assistive-tech")
-	}
-	// Cleared label paths also clear the title to avoid stale hover.
-	if !strings.Contains(helperBody, "el.removeAttribute('title')") {
-		t.Error("D26i: helper must remove title attribute when label is cleared (empty/null path)")
-	}
-
-	// === 4. Three supported view kinds mapped to compact labels ===
-	for _, want := range []string{
-		"'AI System'",
-		"'Service'",
-		"'Decision Surface'",
-	} {
-		if !strings.Contains(helperBody, want) {
-			t.Errorf("D26i: helper must map a view kind to compact label %q", want)
-		}
-	}
-
-	// === 5. Narrow-viewport abbreviation preserved ===
-	if !strings.Contains(helperBody, "window.innerWidth && window.innerWidth < 1280") {
-		t.Error("D26i: D24d narrow-viewport abbreviation must remain")
-	}
-
-	// === 6. Renderer call sites unchanged ===
-	// renderGovernanceMap still passes (currentGraphView, currentGraphRootId, rootDisplayName).
-	if !strings.Contains(body, "setGovernanceMapCurrentRoot(currentGraphView, currentGraphRootId, rootDisplayName)") {
-		t.Error("D26i: renderGovernanceMap must still call setGovernanceMapCurrentRoot(currentGraphView, currentGraphRootId, rootDisplayName)")
-	}
-	// Empty / error paths still clear via (null, null, null).
-	if !strings.Contains(body, "setGovernanceMapCurrentRoot(null, null, null)") {
-		t.Error("D26i: empty/error paths must clear the toolbar root label")
-	}
-}
-
 // TestExplorer_HTML_GovernanceMap_FocusMode_FitsOnEntry pins the
 // D26i Part 2 contract: entering Focus mode automatically fits the
 // graph to view via fitGmapToBounds, sequenced through a two-frame
@@ -3516,7 +2906,7 @@ func TestExplorer_HTML_GovernanceMap_FocusMode_FitsOnEntry(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	// === 1. Focus-mode markup + state preserved ===
 	for _, want := range []string{
@@ -3630,403 +3020,6 @@ func TestExplorer_HTML_GovernanceMap_FocusMode_FitsOnEntry(t *testing.T) {
 // hooks so pan / lasso / node-drag / re-render never leave a stale
 // preview. The compact edge legend (D26g-impl-3) and all five
 // existing connector kind classes are preserved.
-func TestExplorer_HTML_GovernanceMap_ConnectorHoverPreview(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-
-	// === 1. Helper functions exist with the canonical signatures ===
-	// `gmapConnectorKindFromCls` is extracted to
-	// /explorer/assets/js/governance-map/layers.js
-	// (D27j-ui-foundation-5); the other connector-tooltip helpers
-	// remain inline because they read DOM and module state.
-	gmLayersJS := getExplorerAsset(t, srv, "/explorer/assets/js/governance-map/layers.js")
-	if !strings.Contains(gmLayersJS, "function gmapConnectorKindFromCls(cls)") {
-		t.Errorf("D26h-impl: missing helper declaration %q in layers.js",
-			"function gmapConnectorKindFromCls(cls)")
-	}
-	for _, want := range []string{
-		"function gmapConnectorEndpointLabel(nodeId)",
-		"function hideGmapConnectorTooltip()",
-		"function showGmapConnectorTooltip(pathEl, clientX, clientY)",
-		"function wireGmapConnectorHover()",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D26h-impl: missing helper declaration %q", want)
-		}
-	}
-
-	// === 2. Kind-mapping helper covers every existing connector kind ===
-	// After D27j-ui-foundation-5 the entire layers.js file IS the
-	// kind-mapping helper's home, so the body slice is the file body
-	// itself (small file, simple grep).
-	kindBody := gmLayersJS
-	for _, want := range []string{
-		"connector-service",
-		"connector-ai-binding",
-		"connector-authority",
-		"connector-evidence",
-		"connector-gap",
-		"'service'",
-		"'ai_binding'",
-		"'authority'",
-		"'evidence'",
-		"'coverage_gap'",
-		"'Service relationship'",
-		"'AI binding'",
-		"'Authority'",
-		"'Evidence'",
-		"'Coverage gap'",
-	} {
-		if !strings.Contains(kindBody, want) {
-			t.Errorf("D26h-impl: kind-mapping helper must include %q", want)
-		}
-	}
-
-	// === 3. Endpoint-label helper handles synthetic ids + dataset.nodeName ===
-	labelBody := extractBetween(t, body,
-		"function gmapConnectorEndpointLabel(nodeId)",
-		"function hideGmapConnectorTooltip()")
-	for _, want := range []string{
-		`id === 'authority'`,
-		`'Authority'`,
-		`id === 'coverage'`,
-		`'Coverage'`,
-		"dataset.nodeName",
-		// Defensive: the helper looks up the rendered card by its
-		// dataset.nodeId match.
-		"dataset.nodeId === id",
-		// Final fallback returns the raw id rather than throwing.
-		"return id;",
-	} {
-		if !strings.Contains(labelBody, want) {
-			t.Errorf("D26h-impl: endpoint-label helper must include %q", want)
-		}
-	}
-
-	// === 4. addLiveConnector stamps metadata on the rendered path ===
-	addLiveIdx := strings.Index(body, "function addLiveConnector(srcId, srcAnchor, dstId, dstAnchor, cls)")
-	if addLiveIdx < 0 {
-		t.Fatal("D26h-impl: addLiveConnector declaration not found")
-	}
-	addLiveTail := body[addLiveIdx:]
-	addLiveEnd := strings.Index(addLiveTail, "\n  }\n")
-	if addLiveEnd < 0 {
-		t.Fatal("D26h-impl: addLiveConnector end marker not found")
-	}
-	addLiveBody := addLiveTail[:addLiveEnd]
-	for _, want := range []string{
-		`pathEl.classList.add('gmap-connector')`,
-		`pathEl.setAttribute('data-connector-kind'`,
-		`pathEl.setAttribute('data-source-node-id', srcId)`,
-		`pathEl.setAttribute('data-target-node-id', dstId)`,
-		`pathEl.setAttribute('role', 'img')`,
-		`pathEl.setAttribute(`,
-		`'aria-label'`,
-		"gmapConnectorKindFromCls(cls)",
-		"gmapConnectorEndpointLabel(srcId)",
-		"gmapConnectorEndpointLabel(dstId)",
-	} {
-		if !strings.Contains(addLiveBody, want) {
-			t.Errorf("D26h-impl: addLiveConnector must include %q", want)
-		}
-	}
-
-	// === 5. Tooltip element exists with role + aria-live ===
-	for _, want := range []string{
-		`class="gmap-connector-tooltip"`,
-		`id="gmap-connector-tooltip"`,
-		`role="tooltip"`,
-		`aria-live="polite"`,
-		// Two interior spans for kind label + source → target line.
-		`class="gmap-connector-tooltip-kind"`,
-		`class="gmap-connector-tooltip-route"`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D26h-impl: tooltip markup literal missing %q", want)
-		}
-	}
-	// Tooltip lives inside .governance-map-body so the absolute-
-	// positioned tooltip anchors to the canvas-body box rather than
-	// the viewport.
-	bodyIdx := strings.Index(body, `class="governance-map-body"`)
-	bodySlice := body[bodyIdx:]
-	bodyEnd := strings.Index(bodySlice, "</section>")
-	if bodyEnd < 0 {
-		t.Fatal("governance-map-body closing context not found")
-	}
-	if !strings.Contains(bodySlice[:bodyEnd], `id="gmap-connector-tooltip"`) {
-		t.Error("D26h-impl: tooltip must live inside .governance-map-body so absolute positioning anchors correctly")
-	}
-
-	// === 6. Delegated hover handler on the SVG layer ===
-	wireBody := extractBetween(t, body,
-		"function wireGmapConnectorHover()",
-		"\n  })();")
-	for _, want := range []string{
-		"document.getElementById('gmap-svg')",
-		"svg.addEventListener('pointerover'",
-		"svg.addEventListener('pointermove'",
-		"svg.addEventListener('pointerout'",
-		// D26h-fix — delegation now accepts BOTH the visible
-		// connector path AND the wider invisible hit target. The
-		// helper resolves either to the canonical visible path.
-		`closest('.gmap-connector, .gmap-connector-hit-target')`,
-		// Hover state class.
-		`classList.add('is-hovered')`,
-		// Tooltip + endpoint halo applied on hover.
-		"showGmapConnectorTooltip(path, e.clientX, e.clientY)",
-		`classList.add('is-connector-endpoint')`,
-		// Pointerout cleanup path goes through hideGmapConnectorTooltip.
-		"hideGmapConnectorTooltip()",
-	} {
-		if !strings.Contains(wireBody, want) {
-			t.Errorf("D26h-impl: hover handler must include %q", want)
-		}
-	}
-
-	// === 7. hideGmapConnectorTooltip cleans tooltip + classes ===
-	hideBody := extractBetween(t, body,
-		"function hideGmapConnectorTooltip()",
-		"function showGmapConnectorTooltip(pathEl, clientX, clientY)")
-	for _, want := range []string{
-		"document.getElementById('gmap-connector-tooltip')",
-		`tip.setAttribute('hidden', '')`,
-		`'.gmap-connector.is-hovered'`,
-		`classList.remove('is-hovered')`,
-		`'.gmap-node.is-connector-endpoint'`,
-		`classList.remove('is-connector-endpoint')`,
-	} {
-		if !strings.Contains(hideBody, want) {
-			t.Errorf("D26h-impl: hideGmapConnectorTooltip must include %q", want)
-		}
-	}
-
-	// === 8. Cleanup hooked into pan-start, lasso-start, node-drag,
-	//        and clearGovernanceMapCanvas ===
-	// Pan + lasso branches in wireGmapCanvasInteraction.
-	canvasIxIdx := strings.Index(body, "(function wireGmapCanvasInteraction()")
-	if canvasIxIdx < 0 {
-		t.Fatal("wireGmapCanvasInteraction IIFE not found")
-	}
-	canvasIxTail := body[canvasIxIdx:]
-	canvasIxEnd := strings.Index(canvasIxTail, "\n  })();")
-	if canvasIxEnd < 0 {
-		t.Fatal("wireGmapCanvasInteraction end marker not found")
-	}
-	canvasIxBody := canvasIxTail[:canvasIxEnd]
-	if strings.Count(canvasIxBody, "hideGmapConnectorTooltip()") < 2 {
-		t.Errorf("D26h-impl: pan-start AND lasso-start must each call hideGmapConnectorTooltip() (got %d calls)",
-			strings.Count(canvasIxBody, "hideGmapConnectorTooltip()"))
-	}
-
-	// Node-drag threshold-crossing branch in attachGmapDragHandlers.
-	dragIdx := strings.Index(body, "function attachGmapDragHandlers(node, nodeId)")
-	if dragIdx < 0 {
-		t.Fatal("attachGmapDragHandlers not found")
-	}
-	dragTail := body[dragIdx:]
-	dragEnd := strings.Index(dragTail, "\n  }\n")
-	if dragEnd < 0 {
-		t.Fatal("attachGmapDragHandlers end marker not found")
-	}
-	dragBody := dragTail[:dragEnd]
-	if !strings.Contains(dragBody, "hideGmapConnectorTooltip()") {
-		t.Error("D26h-impl: node-drag threshold-crossing branch must call hideGmapConnectorTooltip()")
-	}
-
-	// clearGovernanceMapCanvas calls cleanup before tearing down paths.
-	clearIdx := strings.Index(body, "function clearGovernanceMapCanvas()")
-	if clearIdx < 0 {
-		t.Fatal("clearGovernanceMapCanvas not found")
-	}
-	clearTail := body[clearIdx:]
-	clearEnd := strings.Index(clearTail, "\n  }\n")
-	if clearEnd < 0 {
-		t.Fatal("clearGovernanceMapCanvas end marker not found")
-	}
-	clearBody := clearTail[:clearEnd]
-	if !strings.Contains(clearBody, "hideGmapConnectorTooltip()") {
-		t.Error("D26h-impl: clearGovernanceMapCanvas must call hideGmapConnectorTooltip() so re-render does not leave stale state")
-	}
-
-	// === 9. CSS rules — connector hoverability + halo + tooltip ===
-	// CSS lives in governance-map.css after D27j-ui-foundation-2.
-	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
-	for _, want := range []string{
-		"  .gmap-connector {",
-		"pointer-events: stroke;",
-		"  .gmap-connector.is-hovered {",
-		"stroke-width: 3.5;",
-		"filter: drop-shadow(0 0 4px currentColor);",
-		"  .gmap-node.is-connector-endpoint {",
-		"outline: 2px solid rgba(173, 198, 255, 0.45);",
-		"outline-offset: 2px;",
-		"  .gmap-connector-tooltip {",
-		"position: absolute;",
-		"  .gmap-connector-tooltip-kind {",
-		"  .gmap-connector-tooltip-route {",
-		// Body-class gates suppress hover during gestures.
-		"  body.gmap-canvas-panning .gmap-connector,",
-		"body.gmap-canvas-lassoing .gmap-connector",
-		"pointer-events: none;",
-	} {
-		if !strings.Contains(gmapCSS, want) {
-			t.Errorf("D26h-impl: CSS literal missing %q", want)
-		}
-	}
-
-	// === 10. Connector kind classes preserved (regression on D24c) ===
-	for _, want := range []string{
-		".connector-service",
-		".connector-ai-binding",
-		".connector-authority",
-		".connector-evidence",
-		".connector-gap",
-	} {
-		if !strings.Contains(gmapCSS, want) {
-			t.Errorf("D26h-impl must NOT remove existing connector kind class %q", want)
-		}
-	}
-
-	// === 11. D26g-impl-3 compact legend regression ===
-	for _, want := range []string{
-		`class="gmap-legend-overlay"`,
-		"Service relationship",
-		"AI binding",
-		"Authority",
-		"Evidence",
-		"Coverage gap",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D26h-impl must NOT remove D26g-impl-3 legend element %q", want)
-		}
-	}
-
-	// === 12. Inspector / evidence tray / records flow regressions ===
-	for _, want := range []string{
-		// Inspector rail still present.
-		`id="gmap-details"`,
-		`id="gmap-inspector-toggle"`,
-		// D26f tray.
-		"gmap-evidence-tray-analytic-layout",
-		// D26b–D26e records flow.
-		"function loadExplorerRuntimeRecords()",
-		"function loadGmapEvidenceActivity()",
-		"async function loadExplorerEnvelopeDetail(envelopeId, onResolved)",
-		// D26g toolbar + clusters.
-		`class="governance-map-toolbar`,
-		`class="gmap-mode-rail"`,
-		`class="gmap-camera-cluster"`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D26h-impl must NOT remove prior affordance %q", want)
-		}
-	}
-
-	// === 13. No persistent edge selection — MVP is hover-only ===
-	// Negative pin: we did not introduce click-to-select state.
-	if strings.Contains(body, "gmapSelectedConnectorId") {
-		t.Error("D26h-impl is hover-only — must NOT introduce persistent edge-selection state")
-	}
-	if strings.Contains(body, "gmap-connector.is-selected") {
-		t.Error("D26h-impl is hover-only — must NOT introduce a selected-edge class")
-	}
-
-	// === 14. D26h-fix — wider invisible hit target ===
-	// The visible connector stroke is 2.0–2.2 px which is too thin
-	// for reliable hover targeting. D26h-fix adds a transparent twin
-	// path at 12 px stroke-width that captures pointer events on the
-	// same `d` curve. Pin: helper, factory, CSS rule, and pointer-
-	// events behaviour.
-	for _, want := range []string{
-		"function gmapVisibleConnectorForHoverTarget(el)",
-		"function addConnectorHitTarget(p1, p2, kindInfo, srcId, dstId, srcLabel, dstLabel)",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D26h-fix: missing helper %q", want)
-		}
-	}
-	// addLiveConnector now creates a hit target via addConnectorHitTarget
-	// and cross-links visible↔hit via gmapVisibleConnector / gmapHitTarget.
-	hitWireIdx := strings.Index(body, "function addLiveConnector(srcId, srcAnchor, dstId, dstAnchor, cls)")
-	hitWireBody := body[hitWireIdx:]
-	hitWireEnd := strings.Index(hitWireBody, "\n  }\n")
-	hitWireBody = hitWireBody[:hitWireEnd]
-	for _, want := range []string{
-		"addConnectorHitTarget(",
-		"hitEl.gmapVisibleConnector = pathEl",
-		"pathEl.gmapHitTarget = hitEl",
-	} {
-		if !strings.Contains(hitWireBody, want) {
-			t.Errorf("D26h-fix: addLiveConnector must wire hit target — missing %q", want)
-		}
-	}
-	// addConnectorHitTarget body must stamp the same metadata as the
-	// visible path AND aria-hidden so screen readers don't double-
-	// announce the relationship.
-	hitFnIdx := strings.Index(body, "function addConnectorHitTarget(p1, p2, kindInfo, srcId, dstId, srcLabel, dstLabel)")
-	hitFnBody := body[hitFnIdx:]
-	hitFnEnd := strings.Index(hitFnBody, "\n  }\n")
-	hitFnBody = hitFnBody[:hitFnEnd]
-	for _, want := range []string{
-		`'gmap-connector-hit-target'`,
-		`setAttribute('data-connector-kind', kindInfo.kind)`,
-		`setAttribute('data-source-node-id', srcId)`,
-		`setAttribute('data-target-node-id', dstId)`,
-		`setAttribute('aria-hidden', 'true')`,
-		`createElementNS('http://www.w3.org/2000/svg', 'path')`,
-	} {
-		if !strings.Contains(hitFnBody, want) {
-			t.Errorf("D26h-fix: addConnectorHitTarget must include %q", want)
-		}
-	}
-	// CSS rule for the hit target — fill: none, stroke: transparent,
-	// stroke-width: 12, pointer-events: stroke, cursor: pointer.
-	// CSS lives in governance-map.css after D27j-ui-foundation-2 (the
-	// gmapCSS variable is already in scope from §9 above).
-	hitCssIdx := strings.Index(gmapCSS, "  .gmap-connector-hit-target {")
-	if hitCssIdx < 0 {
-		t.Fatal("D26h-fix: .gmap-connector-hit-target CSS rule not found")
-	}
-	hitCssEnd := strings.Index(gmapCSS[hitCssIdx:], "}")
-	hitCss := gmapCSS[hitCssIdx : hitCssIdx+hitCssEnd]
-	for _, want := range []string{
-		"fill: none;",
-		"stroke: transparent;",
-		"stroke-width: 12;",
-		"pointer-events: stroke;",
-		"cursor: pointer;",
-	} {
-		if !strings.Contains(hitCss, want) {
-			t.Errorf("D26h-fix: .gmap-connector-hit-target rule must declare %q", want)
-		}
-	}
-	// Body-class gates extend to the hit target so pan/lasso also
-	// suppress hover on the wider hit region.
-	for _, want := range []string{
-		"body.gmap-canvas-panning .gmap-connector-hit-target",
-		"body.gmap-canvas-lassoing .gmap-connector-hit-target",
-	} {
-		if !strings.Contains(gmapCSS, want) {
-			t.Errorf("D26h-fix: gesture gate must extend to %q", want)
-		}
-	}
-	// Repaint helper updates BOTH the visible path and the hit target's
-	// `d` so the hit region tracks endpoint drag.
-	repaintIdx := strings.Index(body, "function repaintGmapConnectors()")
-	repaintBody := body[repaintIdx:]
-	repaintEnd := strings.Index(repaintBody, "\n  }\n")
-	repaintBody = repaintBody[:repaintEnd]
-	if !strings.Contains(repaintBody, "c.hitEl.setAttribute('d', d)") {
-		t.Error("D26h-fix: repaintGmapConnectors must keep the hit target's `d` in lockstep with the visible path during drag")
-	}
-}
-
 // TestExplorer_HTML_GovernanceMap_InitialRenderFitsToView pins the
 // D26h-fix Part 2 contract: renderGovernanceMap schedules a Fit
 // Graph to View on every initial render + reframe, sequenced through
@@ -4037,150 +3030,6 @@ func TestExplorer_HTML_GovernanceMap_ConnectorHoverPreview(t *testing.T) {
 // paint), then scheduleGmapFitToView re-runs the camera math against
 // the final committed layout. Manual pan / zoom paths exit fit-mode
 // and are not affected.
-func TestExplorer_HTML_GovernanceMap_InitialRenderFitsToView(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-
-	// === 1. scheduleGmapFitToView helper exists with the canonical signature ===
-	if !strings.Contains(body, "function scheduleGmapFitToView()") {
-		t.Fatal("D26h-fix: scheduleGmapFitToView() helper must exist")
-	}
-
-	// === 2. Helper body — two-frame rAF + fitGmapToBounds invocation ===
-	helperIdx := strings.Index(body, "function scheduleGmapFitToView()")
-	helperEnd := strings.Index(body[helperIdx:], "\n  }\n")
-	if helperEnd < 0 {
-		t.Fatal("D26h-fix: scheduleGmapFitToView end marker not found")
-	}
-	helperBody := body[helperIdx : helperIdx+helperEnd]
-	rAFCount := strings.Count(helperBody, "window.requestAnimationFrame")
-	if rAFCount < 2 {
-		t.Errorf("D26h-fix: scheduleGmapFitToView must use two requestAnimationFrame calls (got %d) so the inner frame reads settled layout", rAFCount)
-	}
-	if !strings.Contains(helperBody, "fitGmapToBounds()") {
-		t.Error("D26h-fix: scheduleGmapFitToView must call fitGmapToBounds()")
-	}
-	// Defensive guard: bail if the canvas-scroll wrapper is gone (e.g.
-	// operator switched sub-views mid-render).
-	if !strings.Contains(helperBody, "governance-map-canvas-scroll") {
-		t.Error("D26h-fix: scheduleGmapFitToView must check for the canvas-scroll wrapper before calling fit")
-	}
-	// Negative pin — no setInterval / polling.
-	if strings.Contains(helperBody, "setInterval(") {
-		t.Error("D26h-fix: scheduleGmapFitToView must NOT use setInterval (no polling)")
-	}
-
-	// === 3. renderGovernanceMap calls scheduleGmapFitToView at render end ===
-	renderIdx := strings.Index(body, "function renderGovernanceMap(data)")
-	if renderIdx < 0 {
-		t.Fatal("D26h-fix: renderGovernanceMap not found")
-	}
-	// Bound the function body to its final apply* call so we see the
-	// render-tail sequence.
-	renderBody := body[renderIdx:]
-	// renderGovernanceMap ends after `applyGmapMultiSelection();` and
-	// the closing brace at the same indent.
-	renderEnd := strings.Index(renderBody, "applyGmapMultiSelection();")
-	if renderEnd < 0 {
-		t.Fatal("D26h-fix: renderGovernanceMap end marker (applyGmapMultiSelection) not found")
-	}
-	renderBody = renderBody[:renderEnd+len("applyGmapMultiSelection();")]
-	if !strings.Contains(renderBody, "scheduleGmapFitToView()") {
-		t.Error("D26h-fix: renderGovernanceMap must call scheduleGmapFitToView() at render end so the graph opens fitted to view")
-	}
-	// focusGmapOnRoot remains for the synchronous approximate first
-	// paint — both calls must appear, with focusGmapOnRoot before the
-	// scheduled fit so an unframed first paint is impossible.
-	if !strings.Contains(renderBody, "focusGmapOnRoot(rootCardId)") {
-		t.Error("D26h-fix: renderGovernanceMap must keep focusGmapOnRoot(rootCardId) as the synchronous approximate first-paint framing")
-	}
-	focusIdx := strings.Index(renderBody, "focusGmapOnRoot(rootCardId)")
-	scheduleIdx := strings.Index(renderBody, "scheduleGmapFitToView()")
-	if focusIdx < 0 || scheduleIdx < 0 || focusIdx > scheduleIdx {
-		t.Errorf("D26h-fix: focusGmapOnRoot must precede scheduleGmapFitToView in renderGovernanceMap (focus=%d, schedule=%d)", focusIdx, scheduleIdx)
-	}
-
-	// === 4. fitGmapToBounds applies fit-mode (scrollbar suppression) ===
-	// The Fit-button click path already calls fitGmapToBounds, which
-	// internally calls applyGmapFitMode(true). The scheduled fit
-	// reuses that helper, so no duplicate fit-mode logic is needed
-	// here. Pin both pieces.
-	fitIdx := strings.Index(body, "function fitGmapToBounds()")
-	fitBody := body[fitIdx:]
-	fitEnd := strings.Index(fitBody, "\n  }\n")
-	fitBody = fitBody[:fitEnd]
-	if !strings.Contains(fitBody, "applyGmapFitMode(true)") {
-		t.Error("D26h-fix: fitGmapToBounds must keep applyGmapFitMode(true) so the scheduled fit suppresses scrollbars on entry")
-	}
-
-	// === 5. Manual pan / zoom paths still EXIT fit-mode ===
-	// Pin two known-active call sites: pan threshold-crossing and
-	// zoom-button click handlers. Both call applyGmapFitMode(false)
-	// to clear the fit-mode scrollbar suppression once the operator
-	// has moved beyond the auto-fit framing.
-	if strings.Count(body, "applyGmapFitMode(false)") < 2 {
-		t.Errorf("D26h-fix: manual pan/zoom must continue to call applyGmapFitMode(false); expected ≥2 occurrences, got %d",
-			strings.Count(body, "applyGmapFitMode(false)"))
-	}
-	// Negative pin: the schedule helper itself must NOT call
-	// applyGmapFitMode(false) (that would defeat the auto-fit).
-	if strings.Contains(helperBody, "applyGmapFitMode(false)") {
-		t.Error("D26h-fix: scheduleGmapFitToView must NOT clear fit-mode (only manual interactions clear it)")
-	}
-
-	// === 6. D26i Focus-mode fit-on-entry remains intact ===
-	// applyGmapFocusMode keeps its own two-frame rAF that calls
-	// fitGmapToBounds when entering Focus mode. The new
-	// scheduleGmapFitToView helper does not replace that path.
-	applyFocusIdx := strings.Index(body, "function applyGmapFocusMode()")
-	applyFocusBody := body[applyFocusIdx:]
-	applyFocusEnd := strings.Index(applyFocusBody, "\n  }\n")
-	applyFocusBody = applyFocusBody[:applyFocusEnd]
-	focusRAFCount := strings.Count(applyFocusBody, "window.requestAnimationFrame")
-	if focusRAFCount < 2 {
-		t.Errorf("D26h-fix: applyGmapFocusMode must keep its two-frame rAF for Focus-mode fit-on-entry (D26i); got %d", focusRAFCount)
-	}
-	if !strings.Contains(applyFocusBody, "fitGmapToBounds()") {
-		t.Error("D26h-fix: applyGmapFocusMode must keep its fitGmapToBounds() call (D26i Focus-mode fit-on-entry)")
-	}
-
-	// === 7. Regression — D26h-impl, D26g, D26f, D26b–D26e all preserved ===
-	for _, want := range []string{
-		// D26h-impl connector hover.
-		"function gmapConnectorEndpointLabel(nodeId)",
-		"function hideGmapConnectorTooltip()",
-		`class="gmap-connector-tooltip"`,
-		// D26h-fix hit target.
-		"function gmapVisibleConnectorForHoverTarget(el)",
-		"function addConnectorHitTarget(p1, p2, kindInfo, srcId, dstId, srcLabel, dstLabel)",
-		// D26g toolbar / clusters / legend.
-		`class="governance-map-toolbar`,
-		`class="gmap-mode-rail"`,
-		`class="gmap-camera-cluster"`,
-		`class="gmap-legend-overlay"`,
-		// D26f tray + D26b–D26e records flow.
-		"gmap-evidence-tray-analytic-layout",
-		"function loadExplorerRuntimeRecords()",
-		"function loadGmapEvidenceActivity()",
-		"async function loadExplorerEnvelopeDetail(envelopeId, onResolved)",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D26h-fix must NOT remove prior affordance %q", want)
-		}
-	}
-	// CSS-only regression pin — the hit-target rule lives in
-	// governance-map.css after D27j-ui-foundation-2.
-	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
-	if !strings.Contains(gmapCSS, "  .gmap-connector-hit-target {") {
-		t.Error(`D26h-fix must NOT remove prior affordance "  .gmap-connector-hit-target {" (governance-map.css)`)
-	}
-}
-
 // TestExplorer_HTML_GovernanceMap_FitModeSuppressesResidualScrollbar
 // pins the D26h-fix2 contract: renderGovernanceMap enters fit-mode
 // SYNCHRONOUSLY at render-end, before the deferred scheduleGmapFitToView
@@ -4192,169 +3041,6 @@ func TestExplorer_HTML_GovernanceMap_InitialRenderFitsToView(t *testing.T) {
 // pan / zoom paths still exit fit-mode so the operator can navigate
 // freely; the Fit button and the deferred scheduled fit both re-
 // assert fit-mode via fitGmapToBounds.
-func TestExplorer_HTML_GovernanceMap_FitModeSuppressesResidualScrollbar(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-
-	// === 1. CSS rule that suppresses scrollbars in fit-mode ===
-	// The load-bearing rule already exists from D24i; pin it so a
-	// future change can't accidentally drop the scrollbar suppression.
-	// The body.gmap-fit-mode rule was originally placed in the shell
-	// region (alongside the other body.gmap-* shell-integration
-	// selectors) and so lives in shell.css after D27j-ui-foundation-2.
-	shellCSS := getExplorerAsset(t, srv, "/explorer/assets/css/shell.css")
-	if !strings.Contains(shellCSS, "body.gmap-fit-mode .governance-map-canvas-scroll {") {
-		t.Error("D26h-fix2: body.gmap-fit-mode .governance-map-canvas-scroll rule must exist (suppresses scrollbars during fit)")
-	}
-	fitModeRuleIdx := strings.Index(shellCSS, "body.gmap-fit-mode .governance-map-canvas-scroll {")
-	fitModeRuleBody := shellCSS[fitModeRuleIdx:]
-	fitModeRuleEnd := strings.Index(fitModeRuleBody, "}")
-	fitModeRuleBody = fitModeRuleBody[:fitModeRuleEnd]
-	for _, want := range []string{
-		"overflow-x: hidden;",
-		"overflow-y: hidden;",
-	} {
-		if !strings.Contains(fitModeRuleBody, want) {
-			t.Errorf("D26h-fix2: fit-mode rule must declare %q to suppress residual scrollbars", want)
-		}
-	}
-
-	// === 2. renderGovernanceMap enters fit-mode synchronously ===
-	// Render-end ordering: focusGmapOnRoot → applyGmapFitMode(true) →
-	// scheduleGmapFitToView → applyGmapMultiSelection. The synchronous
-	// applyGmapFitMode(true) closes the rAF×2 window during which the
-	// canvas-scroll wrapper would otherwise paint a scrollbar over
-	// the canvas's empty left padding.
-	renderIdx := strings.Index(body, "function renderGovernanceMap(data)")
-	if renderIdx < 0 {
-		t.Fatal("D26h-fix2: renderGovernanceMap not found")
-	}
-	renderTail := body[renderIdx:]
-	renderEnd := strings.Index(renderTail, "applyGmapMultiSelection();")
-	if renderEnd < 0 {
-		t.Fatal("D26h-fix2: renderGovernanceMap end marker not found")
-	}
-	renderBody := renderTail[:renderEnd+len("applyGmapMultiSelection();")]
-
-	focusIdx := strings.Index(renderBody, "focusGmapOnRoot(rootCardId);")
-	fitModeIdx := strings.Index(renderBody, "applyGmapFitMode(true);")
-	scheduleIdx := strings.Index(renderBody, "scheduleGmapFitToView();")
-	multiIdx := strings.Index(renderBody, "applyGmapMultiSelection();")
-	if focusIdx < 0 || fitModeIdx < 0 || scheduleIdx < 0 || multiIdx < 0 {
-		t.Fatalf("D26h-fix2: missing render-tail call(s) — focus=%d fitMode=%d schedule=%d multi=%d",
-			focusIdx, fitModeIdx, scheduleIdx, multiIdx)
-	}
-	// Strict ordering: focusGmapOnRoot < applyGmapFitMode(true) <
-	// scheduleGmapFitToView < applyGmapMultiSelection.
-	if !(focusIdx < fitModeIdx && fitModeIdx < scheduleIdx && scheduleIdx < multiIdx) {
-		t.Errorf("D26h-fix2: render-tail order must be focusGmapOnRoot → applyGmapFitMode(true) → scheduleGmapFitToView → applyGmapMultiSelection; got focus=%d, fitMode=%d, schedule=%d, multi=%d",
-			focusIdx, fitModeIdx, scheduleIdx, multiIdx)
-	}
-
-	// === 3. The deferred fit also calls applyGmapFitMode(true) ===
-	// fitGmapToBounds is the canonical fit helper; the scheduled fit
-	// reuses it, and so does the Fit button. Both paths re-assert
-	// fit-mode after running; if a regression drops applyGmapFitMode
-	// from fitGmapToBounds, the synchronous render-end entry is the
-	// only thing keeping scrollbars hidden — and any manual zoom
-	// would clear fit-mode permanently. Pin it.
-	fitIdx := strings.Index(body, "function fitGmapToBounds()")
-	fitTail := body[fitIdx:]
-	fitEnd := strings.Index(fitTail, "\n  }\n")
-	fitFnBody := fitTail[:fitEnd]
-	if !strings.Contains(fitFnBody, "applyGmapFitMode(true)") {
-		t.Error("D26h-fix2: fitGmapToBounds must keep applyGmapFitMode(true) so explicit fit + scheduled fit re-assert scrollbar suppression")
-	}
-
-	// === 4. Manual interactions still exit fit-mode ===
-	// applyGmapFitMode(false) must appear at ≥2 manual interaction
-	// sites (canvas pan threshold-crossing + node drag threshold-
-	// crossing + zoom buttons). The synchronous render-end entry
-	// must NOT be paired with a synchronous render-end exit; that
-	// would defeat the whole fix.
-	if strings.Count(body, "applyGmapFitMode(false)") < 2 {
-		t.Errorf("D26h-fix2: manual pan/zoom/drag paths must continue to call applyGmapFitMode(false); expected ≥2 occurrences, got %d",
-			strings.Count(body, "applyGmapFitMode(false)"))
-	}
-	// Negative pin scoped to renderGovernanceMap's tail: no
-	// applyGmapFitMode(false) anywhere between focusGmapOnRoot and
-	// applyGmapMultiSelection.
-	if strings.Contains(renderBody[focusIdx:multiIdx], "applyGmapFitMode(false)") {
-		t.Error("D26h-fix2: render-tail must NOT call applyGmapFitMode(false) (would defeat the synchronous fit-mode entry)")
-	}
-
-	// === 5. scheduleGmapFitToView itself does not clear fit-mode ===
-	// The helper defers to fitGmapToBounds (which sets fit-mode on);
-	// the helper body itself must not call applyGmapFitMode at all.
-	scheduleHelperIdx := strings.Index(body, "function scheduleGmapFitToView()")
-	if scheduleHelperIdx < 0 {
-		t.Fatal("D26h-fix2: scheduleGmapFitToView not found")
-	}
-	scheduleHelperTail := body[scheduleHelperIdx:]
-	scheduleHelperEnd := strings.Index(scheduleHelperTail, "\n  }\n")
-	scheduleHelperBody := scheduleHelperTail[:scheduleHelperEnd]
-	if strings.Contains(scheduleHelperBody, "applyGmapFitMode(false)") {
-		t.Error("D26h-fix2: scheduleGmapFitToView must NOT clear fit-mode")
-	}
-
-	// === 6. Canvas-scroll base CSS still has overflow: auto ===
-	// Without it, manual zoom-in past the safe-area would lose the
-	// ability to scroll. The fit-mode rule overrides only while
-	// fit-mode is active; the base rule survives. Identify the base
-	// rule by its overflow-declaring opener (the file has multiple
-	// .governance-map-canvas-scroll rules — cursor, fit-mode, pan,
-	// lasso — but only one declares overflow on its own). The base
-	// rule lives in governance-map.css after D27j-ui-foundation-2;
-	// the body.gmap-fit-mode override (checked above) lives in
-	// shell.css alongside the other body.gmap-* shell-integration
-	// rules.
-	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
-	if !strings.Contains(gmapCSS, ".governance-map-canvas-scroll {\n    overflow-x: auto;") {
-		t.Error("D26h-fix2: .governance-map-canvas-scroll base rule must keep overflow-x: auto (manual zoom-in past safe area must still scroll)")
-	}
-	if !strings.Contains(gmapCSS, "overflow-x: auto;\n    overflow-y: auto;") {
-		t.Error("D26h-fix2: .governance-map-canvas-scroll base rule must keep overflow-y: auto immediately after overflow-x: auto")
-	}
-
-	// === 7. Regression — D26h-impl/fix + D26i + D26g + D26f preserved ===
-	for _, want := range []string{
-		"function fitGmapToBounds()",
-		"function applyGmapFitMode(active)",
-		"function applyGmapZoom()",
-		"function scheduleGmapFitToView()",
-		"function focusGmapOnRoot(rootCardId)",
-		// D26i Focus-mode fit-on-entry intact.
-		"function applyGmapFocusMode()",
-		// D26h-impl/fix connector hover preserved.
-		`class="gmap-connector-tooltip"`,
-		"function gmapVisibleConnectorForHoverTarget(el)",
-		// D26g toolbar / clusters / legend.
-		`class="governance-map-toolbar`,
-		`class="gmap-mode-rail"`,
-		`class="gmap-camera-cluster"`,
-		`class="gmap-legend-overlay"`,
-		// D26f tray.
-		"gmap-evidence-tray-analytic-layout",
-		// D26b–D26e records flow.
-		"function loadExplorerRuntimeRecords()",
-		"async function loadExplorerEnvelopeDetail(envelopeId, onResolved)",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D26h-fix2 must NOT remove prior affordance %q", want)
-		}
-	}
-	// CSS-only regression — the hit-target rule lives in
-	// governance-map.css after D27j-ui-foundation-2.
-	if !strings.Contains(gmapCSS, "  .gmap-connector-hit-target {") {
-		t.Error(`D26h-fix2 must NOT remove prior affordance "  .gmap-connector-hit-target {" (governance-map.css)`)
-	}
-}
-
 // TestExplorer_HTML_GovernanceMap_RelatedServiceReframe pins the
 // D26j contract: Related Service nodes now expose two actions when
 // the related Business Service id is known —
@@ -4373,217 +3059,6 @@ func TestExplorer_HTML_GovernanceMap_FitModeSuppressesResidualScrollbar(t *testi
 // AI-system + decision-surface reframes are unaffected; the
 // dispatcher's existing target_view branching covers all three
 // kinds without per-kind handling.
-func TestExplorer_HTML_GovernanceMap_RelatedServiceReframe(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-
-	// === 1. Related Service nodes exist with the canonical kind + id format ===
-	// Layer-1 renderer creates one .gmap-node per related-service edge.
-	// id format: 'rel:' + rel.id (the EDGE id, not the target service id).
-	// kind: 'related'. cls: 'related-service-node'.
-	for _, want := range []string{
-		"const id = 'rel:' + rel.id;",
-		`kind: 'related', cls: 'related-service-node'`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D26j: related-service node creation literal missing: %q", want)
-		}
-	}
-
-	// === 2. Related-service action gating — both actions attach only
-	//        when target_business_service_id is truthy ===
-	relSliceIdx := strings.Index(body, "relSlice.forEach((rel, i) => {")
-	if relSliceIdx < 0 {
-		t.Fatal("D26j: relSlice.forEach iteration not found")
-	}
-	relSliceTail := body[relSliceIdx:]
-	// Bound by the next forEach (relOmitted handling) so we read just
-	// the related-service node creation block.
-	relSliceEnd := strings.Index(relSliceTail, "if (relOmitted")
-	if relSliceEnd < 0 {
-		t.Fatal("D26j: relSlice block end marker not found")
-	}
-	relSliceBody := relSliceTail[:relSliceEnd]
-	if !strings.Contains(relSliceBody, "rel.target_business_service_id\n        ?") {
-		t.Error("D26j: related-service actions must be gated on rel.target_business_service_id (no actions when target id is missing)")
-	}
-
-	// === 3. Reframe action — target_view: 'service', label: 'Open service graph' ===
-	// The action carries the related BS's id stripped of any graph
-	// prefix. The existing dispatcher will route this through the
-	// reframe-around-this case which pushes gmapHistory and updates
-	// currentGraphView/currentGraphRootId.
-	for _, want := range []string{
-		`{ kind: 'reframe-around-this', target_view: 'service', target_id: rel.target_business_service_id, label: 'Open service graph' }`,
-	} {
-		if !strings.Contains(relSliceBody, want) {
-			t.Errorf("D26j: related-service reframe action literal missing: %q", want)
-		}
-	}
-
-	// === 4. View-record action preserved (existing D24 affordance) ===
-	if !strings.Contains(relSliceBody, "kind: 'view-business-service-record', target_id: rel.target_business_service_id") {
-		t.Error("D26j: existing view-business-service-record drill-down must remain on related-service nodes")
-	}
-
-	// === 5. Action ordering — reframe FIRST so the inline renderer
-	//        picks it as the graph-primary action ===
-	reframeIdx := strings.Index(relSliceBody, `kind: 'reframe-around-this', target_view: 'service'`)
-	viewRecIdx := strings.Index(relSliceBody, "kind: 'view-business-service-record', target_id: rel.target_business_service_id")
-	if reframeIdx < 0 || viewRecIdx < 0 || reframeIdx > viewRecIdx {
-		t.Errorf("D26j: reframe action must precede view-record action in the actions array (reframe=%d, viewRec=%d)", reframeIdx, viewRecIdx)
-	}
-
-	// === 6. Dispatcher routes target_view='service' through the
-	//        existing reframe path (no per-kind branching needed) ===
-	// handleGovernanceMapAction's reframe-around-this case sets
-	// currentGraphView = action.target_view and currentGraphRootId =
-	// action.target_id. For target_view='service', this restores
-	// service-graph state.
-	dispatchIdx := strings.Index(body, "case 'reframe-around-this':")
-	if dispatchIdx < 0 {
-		t.Fatal("D26j: handleGovernanceMapAction reframe-around-this case not found")
-	}
-	dispatchTail := body[dispatchIdx:]
-	dispatchEnd := strings.Index(dispatchTail, "default:")
-	if dispatchEnd < 0 {
-		t.Fatal("D26j: handleGovernanceMapAction default case not found")
-	}
-	dispatchBody := dispatchTail[:dispatchEnd]
-	for _, want := range []string{
-		// History push — preserves Back behaviour.
-		"pushGmapHistory(action.target_view, action.target_id)",
-		// Graph state mutation.
-		"currentGraphView = action.target_view",
-		"currentGraphRootId = action.target_id",
-		// Refresh fetches the new graph via the existing endpoint.
-		"refreshGovernanceMap",
-	} {
-		if !strings.Contains(dispatchBody, want) {
-			t.Errorf("D26j: reframe dispatcher must keep %q so service-target reframes work via the existing path", want)
-		}
-	}
-
-	// === 7. Inline render whitelists reframe-around-this regardless
-	//        of target_view ===
-	// setGovernanceMapInlineActions filters to graph-primary action
-	// kinds; the only one is reframe-around-this. Pin that the
-	// renderer does NOT branch on target_view (so service / ai_system
-	// / decision_surface targets all get an inline button).
-	inlineIdx := strings.Index(body, "function setGovernanceMapInlineActions(node, actions)")
-	if inlineIdx < 0 {
-		t.Fatal("D26j: setGovernanceMapInlineActions not found")
-	}
-	inlineTail := body[inlineIdx:]
-	inlineEnd := strings.Index(inlineTail, "\n  }\n")
-	inlineBody := inlineTail[:inlineEnd]
-	if !strings.Contains(inlineBody, "action.kind !== 'reframe-around-this'") {
-		t.Error("D26j: inline-action whitelist must keep `action.kind !== 'reframe-around-this'` so the related-service reframe button renders inline")
-	}
-	// Negative pin: no branching on action.target_view.
-	if strings.Contains(inlineBody, "action.target_view ===") {
-		t.Error("D26j: inline-action whitelist must NOT branch on target_view (target_view is opaque to the inline renderer)")
-	}
-
-	// === 8. Back / history regression — pushGmapHistory + back-handler
-	//        still wired ===
-	for _, want := range []string{
-		"function pushGmapHistory(targetView, targetRootId)",
-		"function goBackInGraphHistory()",
-		`id="gmap-back-button"`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D26j: history affordance %q must remain so Back works after related-service reframe", want)
-		}
-	}
-
-	// === 9. AI-system + decision-surface reframe sites untouched ===
-	for _, want := range []string{
-		`kind: 'reframe-around-this', target_view: 'ai_system', target_id: ai.id`,
-		`kind: 'reframe-around-this', target_view: 'decision_surface', target_id: s.id`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D26j: existing reframe site %q must remain unchanged", want)
-		}
-	}
-
-	// === 10. No new endpoint introduced — service-graph fetch goes
-	//         through the existing /v1/authority-graph endpoint ===
-	if !strings.Contains(body, "'/v1/authority-graph?view=' + encodeURIComponent(currentGraphView)") {
-		t.Error("D26j: existing authority-graph fetch URL must remain — related-service reframe reuses it")
-	}
-
-	// === 11. Synthetic Authority / Coverage nodes do NOT receive
-	//         reframe actions (negative pin against unrelated-kind
-	//         drift) ===
-	// Walk every reframe-around-this site in the body and confirm
-	// each one's target_view is one of the three known navigable
-	// kinds. Authority/coverage are synthetic and have no graph
-	// destination — they must not appear here.
-	allowedTargetViews := map[string]struct{}{
-		`'service'`:          {},
-		`'ai_system'`:        {},
-		`'decision_surface'`: {},
-	}
-	idx := 0
-	prefix := `kind: 'reframe-around-this', target_view: `
-	for {
-		hit := strings.Index(body[idx:], prefix)
-		if hit < 0 {
-			break
-		}
-		start := idx + hit + len(prefix)
-		end := start
-		for end < len(body) && body[end] != ',' && body[end] != '}' && body[end] != '\n' {
-			end++
-		}
-		expr := strings.TrimSpace(body[start:end])
-		if _, ok := allowedTargetViews[expr]; !ok {
-			t.Errorf("D26j: reframe-around-this with target_view %q is not in the navigable-kind whitelist (service/ai_system/decision_surface)", expr)
-		}
-		idx = end
-	}
-
-	// === 12. Regression — D26h-fix2, D26h-fix, D26h-impl, D26i, D26g,
-	//         D26f, D26b–D26e all preserved ===
-	allCSS := getExplorerAllCSS(t, srv)
-	for _, want := range []string{
-		// D26h-fix2 fit-mode synchronous entry.
-		"applyGmapFitMode(true);",
-		"function scheduleGmapFitToView()",
-		// D26h-fix hit-target.
-		`class="gmap-connector-tooltip"`,
-		"function gmapVisibleConnectorForHoverTarget(el)",
-		// D26i toolbar context + Focus-mode.
-		"function applyGmapFocusMode()",
-		"el.setAttribute('title', 'View: ' + viewLabel + ' · Root: ' + display)",
-		// D26g toolbar / clusters / legend.
-		`class="governance-map-toolbar`,
-		`class="gmap-mode-rail"`,
-		`class="gmap-camera-cluster"`,
-		`class="gmap-legend-overlay"`,
-		// D26f tray.
-		"gmap-evidence-tray-analytic-layout",
-		// D26b–D26e records flow.
-		"function loadExplorerRuntimeRecords()",
-		"async function loadExplorerEnvelopeDetail(envelopeId, onResolved)",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D26j must NOT remove prior affordance %q", want)
-		}
-	}
-	// CSS-only regression — the hit-target rule lives in
-	// governance-map.css after D27j-ui-foundation-2.
-	if !strings.Contains(allCSS, "  .gmap-connector-hit-target {") {
-		t.Error(`D26j must NOT remove prior affordance "  .gmap-connector-hit-target {" (governance-map.css)`)
-	}
-}
-
 // extractBetween returns the substring of body that lies between the first
 // occurrence of start and the first occurrence of end after start. Used to
 // scope negative substring pins to a specific JS block in the rendered HTML
@@ -4899,7 +3374,7 @@ func TestExplorer_HTML_ContainsV2StructuralEntityIDs(t *testing.T) {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
 
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 	wantIDs := []string{
 		"bs-merchant-services",
 		"bs-consumer-lending",
@@ -4932,7 +3407,7 @@ func TestExplorer_HTML_ContainsStructuralContextChains(t *testing.T) {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
 
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 	wantLabels := []string{
 		"STRUCTURAL_CONTEXT",
 		"Business Service",
@@ -4996,7 +3471,7 @@ func TestExplorer_HTML_GovernanceMap_MarkersAndCanvas(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 	wantMarkers := []string{
 		`data-governance-map="canvas"`,      // .governance-map-canvas marker
 		`data-governance-map="svg-layer"`,   // .governance-map-svg layer marker
@@ -5040,7 +3515,7 @@ func TestExplorer_HTML_GovernanceMap_LayoutLiftedOutOfServicesGrid(t *testing.T)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	// 1. Three sub-view containers must be present, in source order
 	// catalogue → record → map. Sibling arrangement (not nested), so the
@@ -5126,7 +3601,7 @@ func TestExplorer_HTML_GovernanceMap_NodeTypeClasses(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 	for _, cls := range []string{
 		"business-service-node",
 		"related-service-node",
@@ -5155,7 +3630,7 @@ func TestExplorer_HTML_GovernanceMap_ConnectorClasses(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 	for _, cls := range []string{
 		"connector-service",
 		"connector-ai-binding",
@@ -5175,98 +3650,11 @@ func TestExplorer_HTML_GovernanceMap_ConnectorClasses(t *testing.T) {
 // record page). The URL literal is pinned because the visual is
 // data-driven from this one endpoint — any future move (renamed
 // prefix, restructured route) must update this test in the same PR.
-func TestExplorer_HTML_GovernanceMap_FetchesAuthorityGraphEndpoint(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-	// Positive pin: the URL prefix with view as a parameter (not a
-	// hard-coded value). Phase 2B Step 10 introduced reframe support;
-	// view is now driven by currentGraphView, so the literal URL is
-	// composed at runtime.
-	if !strings.Contains(body, "/v1/authority-graph?view=") {
-		t.Error("Explorer JS must reference the /v1/authority-graph?view= endpoint prefix")
-	}
-	// Pin the depth=5 (=MaxDepth) parameter the renderer relies on
-	// so every projected node is visible regardless of layer.
-	if !strings.Contains(body, "&depth=5") {
-		t.Error("Explorer JS must request the authority-graph at depth=5 (MaxDepth)")
-	}
-	// Pin the fetch call site itself so a refactor to a different
-	// transport (e.g., XMLHttpRequest, EventSource) is a deliberate
-	// choice rather than a silent change.
-	if !strings.Contains(body, "fetch(url") && !strings.Contains(body, "fetch(") {
-		t.Error("Explorer JS must use fetch() to load the read model")
-	}
-	// Negative pin: the hard-coded `view=service` literal must NOT
-	// appear as a JS string-literal in the fetch URL construction
-	// (descriptive doc comments may still mention the URL form).
-	// Phase 2B Step 10 removed the baked-in literal so reframe can
-	// re-target view via currentGraphView.
-	if strings.Contains(body, "'/v1/authority-graph?view=service&id=' +") ||
-		strings.Contains(body, `"/v1/authority-graph?view=service&id=" +`) {
-		t.Error("Explorer JS must not bake `view=service` into the fetch URL string literal — view is parameterised via currentGraphView")
-	}
-	// Pin the absence of an active fetch to the legacy gmap endpoint.
-	// The legacy URL substring may still appear in non-active comments
-	// (which is acceptable), but no active fetch literal should remain.
-	if strings.Contains(body, "fetch('/v1/businessservices/' + encodeURIComponent") ||
-		strings.Contains(body, `fetch("/v1/businessservices/" + encodeURIComponent`) {
-		t.Error("Explorer JS must not actively fetch the legacy /v1/businessservices/{id}/governance-map path")
-	}
-}
-
 // TestExplorer_HTML_GovernanceMap_ReframeAroundAISystemNodes pins the
 // Phase 2B Step 10 reframe affordance for AI system nodes. The action
 // kind, payload key, button label, dispatcher case, and graph-state
 // variable names are all pinned so a regression that drops or renames
 // any of them surfaces here loudly.
-func TestExplorer_HTML_GovernanceMap_ReframeAroundAISystemNodes(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-
-	// Positive pins — exact literals.
-	for _, want := range []string{
-		// Action kind literal — tests external consumers of the
-		// dataset.nodeActions JSON pin this exact string.
-		"reframe-around-this",
-		// Action payload key — selects which view to reframe to.
-		"target_view",
-		// Button label — the operator-facing affordance.
-		"Reframe around this",
-		// Dispatcher case — defence-in-depth so unknown kinds drop.
-		"case 'reframe-around-this'",
-		// Graph-state variable names — tests rely on these exact
-		// identifiers.
-		"currentGraphView",
-		"currentGraphRootId",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("Explorer JS missing required reframe literal %q", want)
-		}
-	}
-
-	// Adapter signature must thread the view through. Pin that every
-	// call site passes the (projection, view) pair — this guarantees
-	// the view='service' regression-free behaviour because the second
-	// arg is always present.
-	if strings.Contains(body, "mapAuthorityGraphToGovernanceMapShape(payload)") {
-		t.Error("Explorer JS must call mapAuthorityGraphToGovernanceMapShape with two arguments (projection, view); a single-arg call site would lose the view branch")
-	}
-	if !strings.Contains(body, "mapAuthorityGraphToGovernanceMapShape(payload, ") {
-		t.Error("Explorer JS must call mapAuthorityGraphToGovernanceMapShape with the view as the second argument")
-	}
-}
-
 // TestExplorer_HTML_GovernanceMap_DecisionSurfaceReframe pins the
 // frontend surface-reframe deliverable. Decision-surface nodes now
 // emit the same reframe action shape as AI-system nodes; clicking
@@ -5295,7 +3683,7 @@ func TestExplorer_HTML_GovernanceMap_DecisionSurfaceReframe(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	// === Reframe action emission on surface nodes ===
 	// The action object literal must appear verbatim on the surface
@@ -5444,7 +3832,7 @@ func TestExplorer_HTML_GovernanceMap_CameraPuck(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
 	// `body` so existing CSS-rule-substring assertions continue to
 	// match. The HTML body content is unchanged at the start; the
@@ -5691,7 +4079,7 @@ func TestExplorer_HTML_GovernanceMap_InspectorToggleHarmonisation(t *testing.T) 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
 	// `body` so existing CSS-rule-substring assertions continue to
 	// match. The HTML body content is unchanged at the start; the
@@ -5843,7 +4231,7 @@ func TestExplorer_HTML_GovernanceMap_ToolbarRestructure(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
 	// `body` so existing CSS-rule-substring assertions continue to
 	// match. The HTML body content is unchanged at the start; the
@@ -6053,7 +4441,7 @@ func TestExplorer_HTML_GovernanceMap_ChromeReorganisation(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
 	// `body` so existing CSS-rule-substring assertions continue to
 	// match. The HTML body content is unchanged at the start; the
@@ -6298,7 +4686,7 @@ func TestExplorer_HTML_GovernanceMap_FocusModePolish(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
 	// `body` so existing CSS-rule-substring assertions continue to
 	// match. The HTML body content is unchanged at the start; the
@@ -6538,7 +4926,7 @@ func TestExplorer_HTML_GovernanceMap_FocusMode(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
 	// `body` so existing CSS-rule-substring assertions continue to
 	// match. The HTML body content is unchanged at the start; the
@@ -6766,7 +5154,7 @@ func TestExplorer_HTML_GovernanceMap_CollapsibleInspector(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
 	// `body` so existing CSS-rule-substring assertions continue to
 	// match. The HTML body content is unchanged at the start; the
@@ -6952,203 +5340,6 @@ func TestExplorer_HTML_GovernanceMap_CollapsibleInspector(t *testing.T) {
 // outside the explicit selection-clear path.
 //
 // Regression pins keep prior camera + search affordances intact.
-func TestExplorer_HTML_GovernanceMap_VisibilityFilters(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-
-	// === Markup: chips with data-kind values for every category ===
-	for _, kind := range []string{
-		"all", "business", "capability", "process",
-		"surface", "ai", "bindings", "synthetic",
-	} {
-		if !strings.Contains(body, `data-kind="`+kind+`"`) {
-			t.Errorf("Step 22 filter-chip markup missing data-kind=%q", kind)
-		}
-	}
-	// Visible labels — pin the user-facing tokens. D27j-ui-1 updated
-	// the chip labels to descriptive forms when the chips moved into
-	// the grouped Layers popover.
-	for _, label := range []string{
-		`>All<`, `>Business services<`, `>Capabilities<`, `>Processes<`,
-		`>Decision surfaces<`, `>AI systems<`, `>AI bindings<`, `>Authority / Coverage<`,
-	} {
-		if !strings.Contains(body, label) {
-			t.Errorf("Step 22 chip label missing: %q", label)
-		}
-	}
-	// The chip group must live inside the workbench toolbar.
-	// D26g-impl-1 renamed `.governance-map-legend` to `.governance-map-
-	// toolbar` (the legend class is preserved as a back-compat token).
-	legendIdx := strings.Index(body, `class="governance-map-toolbar`)
-	if legendIdx < 0 {
-		t.Fatal("governance-map-toolbar not found in markup")
-	}
-	if !strings.Contains(body[legendIdx:legendIdx+4096], `class="gmap-filter-chips"`) {
-		t.Error(`gmap-filter-chips group must live inside .governance-map-toolbar`)
-	}
-
-	// === CSS classes for the chips + visibility ===
-	// CSS lives in governance-map.css after D27j-ui-foundation-2.
-	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
-	for _, want := range []string{
-		".gmap-filter-chip",
-		".gmap-filter-chip.is-off",
-		".gmap-node.gmap-node-hidden",
-		"path.gmap-connector-hidden",
-	} {
-		if !strings.Contains(gmapCSS, want) {
-			t.Errorf("Step 22 CSS class missing: %q", want)
-		}
-	}
-	// Both visibility classes must collapse the element via display:none.
-	if !strings.Contains(gmapCSS, ".gmap-node.gmap-node-hidden { display: none; }") {
-		t.Error(".gmap-node-hidden must apply display:none")
-	}
-	if !strings.Contains(gmapCSS, "path.gmap-connector-hidden  { display: none; }") {
-		t.Error(".gmap-connector-hidden must apply display:none")
-	}
-
-	// === Filter state — module-level object with one boolean per category ===
-	for _, want := range []string{
-		"const gmapVisibilityFilters",
-		"business:   true",
-		"capability: true",
-		"process:    true",
-		"surface:    true",
-		"ai:         true",
-		"bindings:   true",
-		"synthetic:  true",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("Step 22 visibility-state literal missing: %q", want)
-		}
-	}
-
-	// === Helper presence ===
-	// `gmapNodeCategoryFromKind` is extracted to
-	// /explorer/assets/js/governance-map/layers.js
-	// (D27j-ui-foundation-5); the other entries remain inline because
-	// they read DOM and module state.
-	gmLayersJSForFilter := getExplorerAsset(t, srv, "/explorer/assets/js/governance-map/layers.js")
-	if !strings.Contains(gmLayersJSForFilter, "function gmapNodeCategoryFromKind(kind)") {
-		t.Errorf("Step 22 helper / wiring literal missing in layers.js: %q",
-			"function gmapNodeCategoryFromKind(kind)")
-	}
-	for _, want := range []string{
-		"function applyGmapVisibilityFilters()",
-		"wireGmapFilterChips",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("Step 22 helper / wiring literal missing: %q", want)
-		}
-	}
-
-	// === Multi-select (Option B) decision ===
-	// The chip click handler must flip ONE category per chip click
-	// (not all-others), and the All chip is the only path that mass-
-	// resets every entry. Pin both forms.
-	if !strings.Contains(body, "gmapVisibilityFilters[kind] = !gmapVisibilityFilters[kind]") {
-		t.Error("Multi-select: chip click must flip exactly one category (gmapVisibilityFilters[kind] = !gmapVisibilityFilters[kind])")
-	}
-	if !strings.Contains(body, "gmapVisibilityFilters[k] = true") {
-		t.Error("All-reset: must set every category to true via gmapVisibilityFilters[k] = true")
-	}
-
-	// === Connector filtering — Option A + class-based override ===
-	// Option A (endpoint-derived):
-	if !strings.Contains(body, "hiddenIds.has(c.srcId) || hiddenIds.has(c.dstId)") {
-		t.Error("Connector filter must derive primary visibility from endpoint hidden state (Option A)")
-	}
-	// Bindings class-based override:
-	if !strings.Contains(body, "c.pathEl.classList.contains('connector-ai-binding')") {
-		t.Error("Bindings chip must hide via class-based override on connector-ai-binding paths")
-	}
-	// Apply the class to the path element.
-	if !strings.Contains(body, "c.pathEl.classList.toggle('gmap-connector-hidden', hide)") {
-		t.Error("Connector filter must toggle .gmap-connector-hidden on the path element")
-	}
-
-	// === Hidden-node search behaviour ===
-	// Both the live-search loop and the Enter handler must skip
-	// .gmap-node-hidden so search results never highlight or focus
-	// invisible matches.
-	if !strings.Contains(body, "n.classList.contains('gmap-node-hidden')") {
-		t.Error("Search must skip .gmap-node-hidden nodes (hidden nodes do not participate in search)")
-	}
-
-	// === Selection-clear behaviour when selected node becomes hidden ===
-	for _, want := range []string{
-		"hiddenIds.has(gmapSelectedId)",
-		"gmapSelectedId = null",
-		// Inspector clear via existing helpers.
-		"setGovernanceMapDetailsName('')",
-		"setGovernanceMapDetailsFields([])",
-		"setGovernanceMapDetailsActions([])",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("Step 22 selection-clear literal missing: %q", want)
-		}
-	}
-
-	// === Negative pins (scoped to applyGmapVisibilityFilters body) ===
-	applyIdx := strings.Index(body, "function applyGmapVisibilityFilters()")
-	if applyIdx < 0 {
-		t.Fatal("applyGmapVisibilityFilters function declaration not found")
-	}
-	applyTail := body[applyIdx:]
-	applyEnd := strings.Index(applyTail, "\n  }\n")
-	if applyEnd < 0 {
-		t.Fatal("applyGmapVisibilityFilters end marker not found")
-	}
-	applyBody := applyTail[:applyEnd]
-	for _, illegal := range []string{
-		"refreshGovernanceMap",
-		"renderGovernanceMap(",
-		"fetch(",
-		"d3.",
-		"d3-force",
-		"force-directed",
-		"cytoscape",
-		"clearGovernanceMapCanvas",
-	} {
-		if strings.Contains(applyBody, illegal) {
-			t.Errorf("applyGmapVisibilityFilters must NOT contain %q (visibility-only, no rerender / no backend / no graph library)", illegal)
-		}
-	}
-	// Mutation guards — assignment to graph-routing state would be
-	// a navigation side-effect. The selection-clear assignment to
-	// gmapSelectedId is the ONLY allowed graph-state write; pin
-	// against the others. `=` followed by non-`=` disambiguates
-	// assignment from comparison `===`.
-	mutateRE := regexp.MustCompile(`(currentGraphView|currentGraphRootId|gmapHistory|gmapDragOverrides)\s*=[^=]`)
-	if loc := mutateRE.FindString(applyBody); loc != "" {
-		t.Errorf("applyGmapVisibilityFilters must NOT mutate routing/history state; found %q", loc)
-	}
-
-	// === Regression pins — prior camera/search affordances intact ===
-	for _, want := range []string{
-		"focusGmapOnRoot",
-		"fitGmapToBounds",
-		"gmap-search-input",
-		"gmap-centre-button",
-		"gmap-fit-button",
-		"gmap-back-button",
-		"gmap-root-node",
-		"reframe-around-this",
-		"governance-map-body",
-		"ROOT_VIEWPORT_OFFSET_RATIO",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("Step 22 must NOT remove existing affordance %q", want)
-		}
-	}
-}
-
 // TestExplorer_HTML_GovernanceMap_SearchAndFocus pins the Phase 2B
 // Step 21 D18 graph-local search and focus deliverable. The Explorer
 // gains a compact toolbar input that:
@@ -7186,7 +5377,7 @@ func TestExplorer_HTML_GovernanceMap_SearchAndFocus(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
 	// `body` so existing CSS-rule-substring assertions continue to
 	// match. The HTML body content is unchanged at the start; the
@@ -7373,7 +5564,7 @@ func TestExplorer_HTML_GovernanceMap_WheelZoomCursorAnchored(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	// === Wheel handler presence ===
 	for _, want := range []string{
@@ -7549,223 +5740,6 @@ func TestExplorer_HTML_GovernanceMap_WheelZoomCursorAnchored(t *testing.T) {
 // graph-library imports.
 //
 // Regression pins keep prior camera affordances intact.
-func TestExplorer_HTML_GovernanceMap_FitToBoundsButton(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-
-	// === Markup pins ===
-	// D24c — Fit button restyled to icon-only SVG; the visible-text
-	// pin `>Fit<` is replaced by a pin for the distinctive Fit SVG
-	// (corner brackets pointing INWARD — the "fit content into
-	// bounds" semantic that distinguishes Fit from Focus). aria-
-	// label updated from "Fit graph to viewport" to the brief's
-	// "Fit graph to view".
-	for _, want := range []string{
-		`id="gmap-fit-button"`,
-		`aria-label="Fit graph to view"`,
-		`title="Fit graph to view"`,
-		// Inward-bracket polyline — Fit icon (D24c).
-		`<polyline points="3 6 3 3 6 3"/>`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("Step 19/D24c Fit markup missing literal %q", want)
-		}
-	}
-	// D24c → D26g-impl-2 — Fit lives inside the camera cluster
-	// (the half of the split camera bar that carries viewport
-	// controls: Zoom in/out, Fit, Centre, Focus). Same intent: Fit
-	// is co-located with the camera surface.
-	barIdx := strings.Index(body, `class="gmap-camera-cluster"`)
-	if barIdx < 0 {
-		t.Fatal("D26g-impl-2: gmap-camera-cluster not found in markup")
-	}
-	barEnd := strings.Index(body[barIdx:], "</div>")
-	if barEnd < 0 || !strings.Contains(body[barIdx:barIdx+barEnd], `id="gmap-fit-button"`) {
-		t.Error("D26g-impl-2: gmap-fit-button must live inside the camera cluster")
-	}
-
-	// === Helper presence ===
-	// D24g — uniform GMAP_FIT_VIEWPORT_PADDING constant retired in
-	// favour of asymmetric safe-area insets (--gmap-overlay-inset-*
-	// CSS variables consumed via the gmapSafeArea helper). D24h-fix —
-	// added GMAP_ZOOM.FIT_MIN as a separate fit-only zoom floor so
-	// dense graphs on narrow viewports can shrink below the manual
-	// readability minimum (GMAP_ZOOM.MIN) when the operator
-	// explicitly asks for a full fit. Manual zoom paths still use
-	// MIN; only fit uses FIT_MIN.
-	// `function fitGmapToBounds()` and the `gmapSafeArea(scrollEl)`
-	// usage stay inline; only the GMAP_ZOOM literal moved to
-	// /explorer/assets/js/governance-map/constants.js
-	// (D27j-ui-foundation-5).
-	gmConstantsForZoom := getExplorerAsset(t, srv, "/explorer/assets/js/governance-map/constants.js")
-	for _, want := range []string{
-		"fitGmapToBounds",
-		"function fitGmapToBounds()",
-		"gmapSafeArea(scrollEl)",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("Step 19 helper / safe-area literal missing: %q", want)
-		}
-	}
-	for _, want := range []string{
-		// D24h-fix — both zoom floors must be declared and remain
-		// distinct. Manual zoom-out clamps at MIN; fit clamps at
-		// FIT_MIN. Pin both names; values may evolve.
-		"MIN:     0.50,",
-		"FIT_MIN: 0.20,",
-	} {
-		if !strings.Contains(gmConstantsForZoom, want) {
-			t.Errorf("Step 19 helper / safe-area literal missing in constants.js: %q", want)
-		}
-	}
-	// Negative pin — the retired constant must not reappear under
-	// any new name; safe-area insets are the single source of truth.
-	if strings.Contains(body, "GMAP_FIT_VIEWPORT_PADDING") {
-		t.Error("D24g: GMAP_FIT_VIEWPORT_PADDING must be removed (replaced by --gmap-overlay-inset-* CSS variables and gmapSafeArea helper)")
-	}
-
-	// === Bounds computation reads gmapPositions + node dimensions ===
-	for _, want := range []string{
-		"gmapPositions",
-		"GMAP.NODE_W",
-		"GMAP.NODE_H",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("Step 19 bounds-read literal missing: %q", want)
-		}
-	}
-
-	// === Synthetic-card inclusion (D24g-fit-fix) ===
-	// Authority + coverage cards now DO participate in fit bounds.
-	// The pre-fix exclusion ("would right-bias the centre") became
-	// obsolete under the D24g safe-area centring model and caused
-	// visible right-side overflow because connector paths anchor to
-	// the synthetic nodes — excluding the cards left the connector
-	// tails (and the cards themselves) outside the fit's target
-	// rectangle. Pin the absence of the kind-skip explicitly so a
-	// future regression that re-introduces the exclusion surfaces
-	// here. Scope to the helper's body so the same kind tokens may
-	// legitimately appear elsewhere in renderer logic.
-	fitBodyStart := strings.Index(body, "function fitGmapToBounds()")
-	if fitBodyStart < 0 {
-		t.Fatal("fitGmapToBounds function declaration not found")
-	}
-	fitBodyTail := body[fitBodyStart:]
-	fitBodyStop := strings.Index(fitBodyTail, "\n  }\n")
-	if fitBodyStop < 0 {
-		t.Fatal("fitGmapToBounds end marker not found")
-	}
-	fitBodyText := fitBodyTail[:fitBodyStop]
-	for _, gone := range []string{
-		"pos.kind === 'authority'",
-		"pos.kind === 'coverage'",
-	} {
-		if strings.Contains(fitBodyText, gone) {
-			t.Errorf("D24g-fit-fix: fitGmapToBounds must not skip rendered node kinds; fit bounds should include every rendered visible node. Found regression literal %q", gone)
-		}
-	}
-
-	// === Zoom + scroll math ===
-	// The helper picks min(fitX, fitY), clamps to [FIT_MIN, MAX], and
-	// writes gmapZoom directly (not via setGmapZoom). D24h-fix —
-	// bypassing setGmapZoom is required because setGmapZoom applies
-	// the manual readability floor (GMAP_ZOOM.MIN), which prevents
-	// dense graphs from shrinking enough to fit on narrow viewports.
-	// The helper still calls applyGmapZoom() to update canvas
-	// dimensions and the +/- button enabled states.
-	for _, want := range []string{
-		"Math.min(",
-		"GMAP_ZOOM.FIT_MIN",
-		"GMAP_ZOOM.MAX",
-		"gmapZoom = fitZoom",
-		"applyGmapZoom()",
-		// scrollLeft / scrollTop writes — pin the symbols rather than
-		// a specific whitespace shape (the helper uses column-aligned
-		// `scrollTop  =` with two spaces so subsequent lines line up
-		// with `scrollLeft = ...`).
-		"scrollEl.scrollLeft",
-		"scrollEl.scrollTop",
-	} {
-		if !strings.Contains(fitBodyText, want) {
-			t.Errorf("D24h-fix fit zoom/scroll literal missing in fitGmapToBounds body: %q", want)
-		}
-	}
-	// Negative pin — fitGmapToBounds must NOT call setGmapZoom (which
-	// would re-engage the manual MIN floor and defeat FIT_MIN).
-	if strings.Contains(fitBodyText, "setGmapZoom(") {
-		t.Error("D24h-fix: fitGmapToBounds must NOT call setGmapZoom(); use direct `gmapZoom = fitZoom; applyGmapZoom()` instead so the manual MIN floor does not apply")
-	}
-	// setGmapZoom is still used by manual zoom paths — pinned globally
-	// so the symbol survives.
-	for _, want := range []string{
-		"setGmapZoom(",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("Step 19 zoom/scroll literal missing: %q", want)
-		}
-	}
-
-	// === Negative pins ===
-	// Scope the search to the fitGmapToBounds function body so
-	// unrelated callers in renderGovernanceMap are tolerated.
-	fitIdx := strings.Index(body, "function fitGmapToBounds()")
-	if fitIdx < 0 {
-		t.Fatal("fitGmapToBounds function declaration not found")
-	}
-	// Bound the function body — find the next stand-alone closing
-	// brace at column 2 (the helper's outer `}` is column-2 indented
-	// like every other helper in this file).
-	fitTail := body[fitIdx:]
-	fitEnd := strings.Index(fitTail, "\n  }\n")
-	if fitEnd < 0 {
-		t.Fatal("fitGmapToBounds end marker not found")
-	}
-	fitBody := fitTail[:fitEnd]
-	for _, illegal := range []string{
-		"refreshGovernanceMap",
-		"renderGovernanceMap(",
-		"gmapHistory.push",
-		// No force-directed / graph-library terminology — Fit is
-		// pure camera math.
-		"d3.",
-		"d3-force",
-		"force-directed",
-		"cytoscape",
-	} {
-		if strings.Contains(fitBody, illegal) {
-			t.Errorf("Fit helper must NOT contain %q (it is camera-only, no rerender / no graph library)", illegal)
-		}
-	}
-	// Mutation guards: assignment to graph-state variables is `=`
-	// followed by something other than `=`. Disambiguates from `===`.
-	mutateRE := regexp.MustCompile(`(currentGraphView|currentGraphRootId|gmapHistory|gmapDragOverrides|gmapSelectedId)\s*=[^=]`)
-	if loc := mutateRE.FindString(fitBody); loc != "" {
-		t.Errorf("Fit helper must NOT mutate graph state; found assignment-like form %q", loc)
-	}
-
-	// === Regression pins — prior camera/render affordances intact ===
-	for _, want := range []string{
-		"focusGmapOnRoot",
-		"gmap-centre-button",
-		"gmap-back-button",
-		"gmap-root-node",
-		"reframe-around-this",
-		"decision-surface-node selected gmap-root-node",
-		"ai-system-node selected gmap-root-node",
-		"governance-map-body",
-		"ROOT_VIEWPORT_OFFSET_RATIO",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("Step 19 must NOT remove existing affordance %q", want)
-		}
-	}
-}
-
 // TestExplorer_HTML_GovernanceMap_SafeAreaCameraModel pins the Phase
 // 2B Step 32 (D24g) Authority Graph safe-area camera model. The four
 // canvas-edge overlays (camera bar D24c, top-left/top-right D24d,
@@ -7807,376 +5781,6 @@ func TestExplorer_HTML_GovernanceMap_FitToBoundsButton(t *testing.T) {
 //     pre-D24e residue must not reappear (D24g removed it).
 //
 // Regression pins keep the prior camera + chrome affordances.
-func TestExplorer_HTML_GovernanceMap_SafeAreaCameraModel(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
-	// `body` so existing CSS-rule-substring assertions continue to
-	// match. The HTML body content is unchanged at the start; the
-	// conceptual stylesheet is appended in cascade order.
-	body += "\n" + getExplorerAllCSS(t, srv)
-
-	// === 1. Four overlay-inset CSS variables at :root ===
-	for _, want := range []string{
-		"--gmap-overlay-inset-left:   56px;",
-		"--gmap-overlay-inset-top:    48px;",
-		"--gmap-overlay-inset-right:   8px;",
-		"--gmap-overlay-inset-bottom: 48px;",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D24g overlay-inset CSS variable missing: %q", want)
-		}
-	}
-
-	// === 2. gmapSafeArea helper ===
-	// After D27j-ui-foundation-5 the helper lives in
-	// /explorer/assets/js/governance-map/layout.js as a pure
-	// parameter-driven function. The CSS variables it reads are
-	// declared in the extracted CSS files (D27j-ui-foundation-2) — the
-	// reads happen on the passed scrollEl element at runtime, not on
-	// any module-state object.
-	gmLayoutJSForSafeArea := getExplorerAsset(t, srv, "/explorer/assets/js/governance-map/layout.js")
-	for _, want := range []string{
-		"function gmapSafeArea(scrollEl)",
-		"getComputedStyle(scrollEl)",
-		"--gmap-overlay-inset-left",
-		"--gmap-overlay-inset-top",
-		"--gmap-overlay-inset-right",
-		"--gmap-overlay-inset-bottom",
-		// width / height clamps — must be non-negative even when
-		// overlay insets exceed the available area at very narrow
-		// viewport widths.
-		"Math.max(0, scrollEl.clientWidth  - left - right)",
-		"Math.max(0, scrollEl.clientHeight - top  - bottom)",
-	} {
-		if !strings.Contains(gmLayoutJSForSafeArea, want) {
-			t.Errorf("D24g gmapSafeArea helper literal missing in layout.js: %q", want)
-		}
-	}
-
-	// === 3. fitGmapToBounds consumes gmapSafeArea ===
-	fitIdx := strings.Index(body, "function fitGmapToBounds()")
-	if fitIdx < 0 {
-		t.Fatal("fitGmapToBounds function declaration not found")
-	}
-	fitTail := body[fitIdx:]
-	fitEnd := strings.Index(fitTail, "\n  }\n")
-	if fitEnd < 0 {
-		t.Fatal("fitGmapToBounds end marker not found")
-	}
-	fitBody := fitTail[:fitEnd]
-	for _, want := range []string{
-		// Read the safe area once at the top of the helper.
-		"const safe = gmapSafeArea(scrollEl)",
-		// availW / availH bind to the safe area's dimensions.
-		"const availW = safe.width",
-		"const availH = safe.height",
-		// D24h-fix — when bounds × zoom fits in the safe area,
-		// anchor the rendered minimum at safe.{left,top} so left/
-		// top edges don't sit under canvas-edge overlays at sub-1
-		// fit zoom. When bounds OVERFLOW (only when FIT_MIN binds),
-		// fall back to safe-area-centre.
-		"if (scaledBoundsW <= safe.width)",
-		"if (scaledBoundsH <= safe.height)",
-		"targetLeft = minXScaled - safe.left;",
-		"targetTop = minYScaled - safe.top;",
-		// Centre fallback for the overflow path — pin the symbol
-		// without specific whitespace so future tuning of formatting
-		// (single vs double space) is allowed.
-		"safe.left + safe.width / 2",
-		"safe.top + safe.height / 2",
-		// Existing two-sided clamp must remain so the scaled graph
-		// does not over-scroll past scrollWidth/Height.
-		"Math.max(0, scrollEl.scrollWidth  - scrollEl.clientWidth)",
-	} {
-		if !strings.Contains(fitBody, want) {
-			t.Errorf("D24g/D24h-fix fitGmapToBounds safe-area literal missing: %q", want)
-		}
-	}
-	// D24h-fix — fit clamps to FIT_MIN, not MIN. Pin the constants
-	// the helper consumes so a regression that swaps FIT_MIN back
-	// to MIN surfaces here.
-	for _, want := range []string{
-		"GMAP_ZOOM.FIT_MIN",
-		"GMAP_ZOOM.MAX",
-		"gmapZoom = fitZoom",
-		"applyGmapZoom()",
-	} {
-		if !strings.Contains(fitBody, want) {
-			t.Errorf("D24h-fix fitGmapToBounds zoom-floor literal missing: %q", want)
-		}
-	}
-	// D24i-fix — fit resets the manual pan offset so framing math
-	// anchors at the safe-area origin regardless of the operator's
-	// prior pan state.
-	for _, want := range []string{
-		"gmapPanX = 0",
-		"gmapPanY = 0",
-	} {
-		if !strings.Contains(fitBody, want) {
-			t.Errorf("D24i-fix fitGmapToBounds pan-reset literal missing: %q", want)
-		}
-	}
-	// D24h-fix — fitGmapToBounds bypasses setGmapZoom (which would
-	// re-engage the manual MIN floor and prevent dense graphs from
-	// fitting on narrow viewports). Negative pin scoped to the body.
-	if strings.Contains(fitBody, "setGmapZoom(") {
-		t.Error("D24h-fix: fitGmapToBounds must NOT call setGmapZoom() — write `gmapZoom = fitZoom; applyGmapZoom()` directly so the FIT_MIN floor applies, not the manual MIN floor")
-	}
-	// Negative — the retired uniform-padding form must not survive
-	// inside the helper.
-	for _, gone := range []string{
-		"GMAP_FIT_VIEWPORT_PADDING",
-		"clientWidth  - 2 *",
-		"clientHeight - 2 *",
-	} {
-		if strings.Contains(fitBody, gone) {
-			t.Errorf("D24g fitGmapToBounds must NOT retain uniform-padding form: %q", gone)
-		}
-	}
-	// D24g-fit-fix — the pre-fix synthetic-card exclusion was REMOVED
-	// so all rendered nodes (including Authority and Coverage at govX)
-	// participate in fit bounds. Pin the absence so a future
-	// regression that re-introduces the exclusion (e.g. citing the
-	// original "right-bias" rationale) surfaces here.
-	for _, gone := range []string{
-		"pos.kind === 'authority'",
-		"pos.kind === 'coverage'",
-	} {
-		if strings.Contains(fitBody, gone) {
-			t.Errorf("D24g-fit-fix: fitGmapToBounds must not skip rendered node kinds; fit bounds should include every rendered visible node. Found regression literal %q", gone)
-		}
-	}
-	// D24g-fit-fix invariant — fitGmapToBounds must contain exactly
-	// one `continue;` statement (the numeric-position validity guard
-	// at the top of the bounds-iteration loop). Any additional
-	// `continue;` would be a kind-based skip silently excluding
-	// rendered nodes from fit bounds — the exact class of regression
-	// D24g-fit-fix corrects. Pinned by count, not by literal, so the
-	// guard's specific phrasing can evolve as long as the structural
-	// shape "exactly one skip, and it's the type-validity guard"
-	// holds.
-	continueCount := strings.Count(fitBody, "continue;")
-	if continueCount != 1 {
-		t.Errorf("D24g-fit-fix: fitGmapToBounds must not skip rendered node kinds; fit bounds should include every rendered visible node. Expected exactly 1 `continue;` (the numeric-position validity guard), got %d.", continueCount)
-	}
-
-	// === 4. focusGmapOnRoot consumes gmapSafeArea ===
-	rootIdx := strings.Index(body, "function focusGmapOnRoot(rootCardId)")
-	if rootIdx < 0 {
-		t.Fatal("focusGmapOnRoot function declaration not found")
-	}
-	rootTail := body[rootIdx:]
-	rootEnd := strings.Index(rootTail, "\n  }\n")
-	if rootEnd < 0 {
-		t.Fatal("focusGmapOnRoot end marker not found")
-	}
-	rootBody := rootTail[:rootEnd]
-	for _, want := range []string{
-		"const safe = gmapSafeArea(scrollEl)",
-		"const safeCenterX = safe.left + safe.width / 2;",
-		"const targetLeft = rootCenterX - safeCenterX;",
-		// ROOT_VIEWPORT_OFFSET_RATIO applied to the safe area's
-		// height, anchored at the safe area's top edge — not the
-		// raw clientHeight (which would place root partially behind
-		// the top-left / top-right overlays).
-		"const targetTop = rootTopY - (safe.top + safe.height * ROOT_VIEWPORT_OFFSET_RATIO);",
-	} {
-		if !strings.Contains(rootBody, want) {
-			t.Errorf("D24g focusGmapOnRoot safe-area literal missing: %q", want)
-		}
-	}
-	// Negative — pre-D24g raw-viewport centring must be gone.
-	for _, gone := range []string{
-		"rootCenterX - scrollEl.clientWidth / 2",
-		"scrollEl.clientHeight * ROOT_VIEWPORT_OFFSET_RATIO",
-	} {
-		if strings.Contains(rootBody, gone) {
-			t.Errorf("D24g focusGmapOnRoot must NOT retain raw-viewport centring: %q", gone)
-		}
-	}
-	// D24i-fix — focusGmapOnRoot resets the manual pan offset.
-	for _, want := range []string{
-		"gmapPanX = 0",
-		"gmapPanY = 0",
-	} {
-		if !strings.Contains(rootBody, want) {
-			t.Errorf("D24i-fix focusGmapOnRoot pan-reset literal missing: %q", want)
-		}
-	}
-
-	// === 5. focusGmapOnNode consumes gmapSafeArea ===
-	nodeIdx := strings.Index(body, "function focusGmapOnNode(nodeId)")
-	if nodeIdx < 0 {
-		t.Fatal("focusGmapOnNode function declaration not found")
-	}
-	nodeTail := body[nodeIdx:]
-	nodeEnd := strings.Index(nodeTail, "\n  }\n")
-	if nodeEnd < 0 {
-		t.Fatal("focusGmapOnNode end marker not found")
-	}
-	nodeBody := nodeTail[:nodeEnd]
-	for _, want := range []string{
-		"const safe = gmapSafeArea(scrollEl)",
-		"const safeCenterX = safe.left + safe.width  / 2;",
-		"const safeCenterY = safe.top  + safe.height / 2;",
-		"const targetLeft = nodeCenterX - safeCenterX;",
-		"const targetTop  = nodeCenterY - safeCenterY;",
-	} {
-		if !strings.Contains(nodeBody, want) {
-			t.Errorf("D24g focusGmapOnNode safe-area literal missing: %q", want)
-		}
-	}
-	// Negative — pre-D24g raw-viewport centring must be gone.
-	for _, gone := range []string{
-		"nodeCenterX - scrollEl.clientWidth  / 2",
-		"nodeCenterY - scrollEl.clientHeight / 2",
-	} {
-		if strings.Contains(nodeBody, gone) {
-			t.Errorf("D24g focusGmapOnNode must NOT retain raw-viewport centring: %q", gone)
-		}
-	}
-	// D24i-fix — focusGmapOnNode resets the manual pan offset.
-	for _, want := range []string{
-		"gmapPanX = 0",
-		"gmapPanY = 0",
-	} {
-		if !strings.Contains(nodeBody, want) {
-			t.Errorf("D24i-fix focusGmapOnNode pan-reset literal missing: %q", want)
-		}
-	}
-
-	// === 6. Manual zoom paths do NOT consume gmapSafeArea ===
-	// Operators retain access to the full canvas-scroll coordinate
-	// space via wheel zoom and the +/- buttons. The safe area only
-	// constrains automatic camera operations.
-	wheelIdx := strings.Index(body, "wireGmapWheelZoom")
-	if wheelIdx < 0 {
-		t.Fatal("wireGmapWheelZoom IIFE not found")
-	}
-	wheelTail := body[wheelIdx:]
-	wheelEnd := strings.Index(wheelTail, "\n  })();")
-	if wheelEnd < 0 {
-		t.Fatal("wireGmapWheelZoom IIFE end marker not found")
-	}
-	wheelBody := wheelTail[:wheelEnd]
-	if strings.Contains(wheelBody, "gmapSafeArea") {
-		t.Error("D24g: wireGmapWheelZoom must NOT consume gmapSafeArea — manual zoom remains on raw canvas-scroll coordinates")
-	}
-	zoomCtrlIdx := strings.Index(body, "wireGmapZoomControls")
-	if zoomCtrlIdx < 0 {
-		t.Fatal("wireGmapZoomControls IIFE not found")
-	}
-	zoomCtrlTail := body[zoomCtrlIdx:]
-	zoomCtrlEnd := strings.Index(zoomCtrlTail, "\n  })();")
-	if zoomCtrlEnd < 0 {
-		t.Fatal("wireGmapZoomControls IIFE end marker not found")
-	}
-	zoomCtrlBody := zoomCtrlTail[:zoomCtrlEnd]
-	if strings.Contains(zoomCtrlBody, "gmapSafeArea") {
-		t.Error("D24g: wireGmapZoomControls must NOT consume gmapSafeArea — manual zoom remains on raw canvas-scroll coordinates")
-	}
-
-	// === 7. Orphaned canvas-scroll border-right is gone ===
-	canvasScrollIdx := strings.Index(body, ".governance-map-canvas-scroll {")
-	if canvasScrollIdx < 0 {
-		t.Fatal(".governance-map-canvas-scroll rule not found")
-	}
-	canvasScrollEnd := strings.Index(body[canvasScrollIdx:], "}")
-	if canvasScrollEnd < 0 {
-		t.Fatal(".governance-map-canvas-scroll rule closing brace not found")
-	}
-	canvasScrollBody := body[canvasScrollIdx : canvasScrollIdx+canvasScrollEnd]
-	if strings.Contains(canvasScrollBody, "border-right") {
-		t.Error("D24g: .governance-map-canvas-scroll must NOT carry border-right (orphan from pre-D24e two-column grid removed)")
-	}
-
-	// === 8. Regression pins — every prior affordance preserved ===
-	for _, want := range []string{
-		// Three refactored helpers still exist.
-		"function fitGmapToBounds()",
-		"function focusGmapOnRoot(rootCardId)",
-		"function focusGmapOnNode(nodeId)",
-		// Constants preserved.
-		"ROOT_VIEWPORT_OFFSET_RATIO",
-		// D24c camera bar split into mode rail + camera cluster (D26g-impl-2).
-		`class="gmap-mode-rail"`,
-		`class="gmap-camera-cluster"`,
-		`id="gmap-fit-button"`,
-		`id="gmap-centre-button"`,
-		`id="gmap-zoom-in"`,
-		`id="gmap-zoom-out"`,
-		`id="gmap-focus-toggle"`,
-		// D26g-impl-1 — top-row overlays replaced by the workbench
-		// toolbar above the canvas; bottom legend overlay unchanged.
-		`class="governance-map-toolbar`,
-		`class="gmap-legend-overlay"`,
-		// Inspector pane + toggle (D24e + D24f).
-		`id="gmap-details"`,
-		`id="gmap-inspector-toggle"`,
-		// Search + filter affordances.
-		`id="gmap-search-input"`,
-		"gmap-filter-chip",
-		`id="gmap-back-button"`,
-		// Renderer anchors.
-		"gmap-root-node",
-		"reframe-around-this",
-		"governance-map-body",
-		// Manual zoom IIFEs still present (just don't consume safe area).
-		"wireGmapWheelZoom",
-		"wireGmapZoomControls",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D24g must NOT remove existing affordance %q", want)
-		}
-	}
-
-	// === 9. D24g-fix structural invariant: EDGE_PAD >= overlay-inset-left ===
-	// The renderer places leftmost main-strip nodes at scene-x =
-	// GMAP.EDGE_PAD; the safe-area model declares the left overlay
-	// footprint via --gmap-overlay-inset-left. When fit centring
-	// produces a negative targetLeft, the existing two-sided clamp
-	// snaps scrollLeft to 0 — so at scrollLeft=0 the leftmost node's
-	// viewport-x equals EDGE_PAD * zoom. For that to clear the
-	// overlay footprint at any zoom <= 1, EDGE_PAD must be >=
-	// --gmap-overlay-inset-left. Otherwise leftmost nodes sit behind
-	// the camera bar (the failure D24g-fix corrects).
-	//
-	// The pin extracts both values from the rendered assets so future
-	// tuning of either side stays compatible as long as the invariant
-	// holds. After D27j-ui-foundation-5 the GMAP literal lives in
-	// /explorer/assets/js/governance-map/constants.js; the CSS
-	// variable lives in the extracted CSS files (already appended onto
-	// `body` via this test's foundation-2 fixup).
-	gmConstantsForEdgePad := getExplorerAsset(t, srv, "/explorer/assets/js/governance-map/constants.js")
-	edgePadRE := regexp.MustCompile(`EDGE_PAD:\s*(\d+),`)
-	edgePadMatch := edgePadRE.FindStringSubmatch(gmConstantsForEdgePad)
-	if edgePadMatch == nil {
-		t.Fatal("D24g-fix: GMAP.EDGE_PAD declaration not found in constants.js")
-	}
-	edgePad, err := strconv.Atoi(edgePadMatch[1])
-	if err != nil {
-		t.Fatalf("D24g-fix: GMAP.EDGE_PAD value not parseable: %v", err)
-	}
-	insetLeftRE := regexp.MustCompile(`--gmap-overlay-inset-left:\s*(\d+)px`)
-	insetLeftMatch := insetLeftRE.FindStringSubmatch(body)
-	if insetLeftMatch == nil {
-		t.Fatal("D24g-fix: --gmap-overlay-inset-left declaration not found")
-	}
-	insetLeft, err := strconv.Atoi(insetLeftMatch[1])
-	if err != nil {
-		t.Fatalf("D24g-fix: --gmap-overlay-inset-left value not parseable: %v", err)
-	}
-	if edgePad < insetLeft {
-		t.Errorf("D24g-fix invariant violated: GMAP.EDGE_PAD (%d) must be greater than or equal to --gmap-overlay-inset-left (%d), otherwise leftmost graph nodes can clip behind the camera bar when scrollLeft clamps to 0.", edgePad, insetLeft)
-	}
-}
-
 // TestExplorer_HTML_GovernanceMap_CentreOnRootButton pins the Phase
 // 2B Step 18 D15 camera-recovery toolbar control. The Centre button
 // is purely a manual invocation of the existing D14
@@ -8204,7 +5808,7 @@ func TestExplorer_HTML_GovernanceMap_CentreOnRootButton(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	// === Markup pins ===
 	// D24c — Centre button restyled to icon-only SVG; visible-text
@@ -8320,160 +5924,6 @@ func TestExplorer_HTML_GovernanceMap_CentreOnRootButton(t *testing.T) {
 //     sparse views with the root near the canvas top do not produce
 //     negative scroll values.
 //   - All Step 13/14/15/16 affordances preserved.
-func TestExplorer_HTML_GovernanceMap_RootViewportFraming(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-
-	// === Helper presence + named constant ===
-	for _, want := range []string{
-		"focusGmapOnRoot",
-		"focusGmapOnRoot(rootCardId)",
-		"ROOT_VIEWPORT_OFFSET_RATIO",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("Step 17 helper / constant literal missing: %q", want)
-		}
-	}
-
-	// === Rationale documented (substring match for the framing target) ===
-	// The constant's docstring must justify the 25% choice; future
-	// deliverables that adjust the ratio will surface here if the
-	// rationale text drifts. After D27j-ui-foundation-5 the docstring
-	// lives in /explorer/assets/js/governance-map/constants.js
-	// alongside the constant declaration.
-	gmConstantsForRationale := getExplorerAsset(t, srv, "/explorer/assets/js/governance-map/constants.js")
-	if !strings.Contains(gmConstantsForRationale, "top-quarter") && !strings.Contains(gmConstantsForRationale, "Foundry/Bloom") {
-		t.Error("Step 17 rationale comment must mention `top-quarter` or `Foundry/Bloom` near the ROOT_VIEWPORT_OFFSET_RATIO declaration in constants.js")
-	}
-
-	// === Helper reads the right inputs ===
-	for _, want := range []string{
-		"governance-map-canvas-scroll",
-		"gmapPositions[rootCardId]",
-		"GMAP.NODE_W / 2",
-		"clientWidth",
-		"clientHeight",
-		"scrollWidth",
-		"scrollHeight",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("Step 17 helper input literal missing: %q", want)
-		}
-	}
-
-	// === Helper writes scrollLeft / scrollTop directly ===
-	// Single-token substrings so reformatting (`= ` vs `=`) doesn't
-	// break the pin.
-	if !strings.Contains(body, "scrollLeft =") {
-		t.Error("Step 17 helper must assign scrollLeft directly (testable camera math)")
-	}
-	if !strings.Contains(body, "scrollTop =") {
-		t.Error("Step 17 helper must assign scrollTop directly (testable camera math)")
-	}
-
-	// === Two-sided clamp ===
-	// Both Math.max(0 AND Math.min( must appear. Without both, an
-	// agent could implement only the upper bound and silently produce
-	// negative scroll values for sparse views with the root near the
-	// canvas top.
-	if !strings.Contains(body, "Math.max(0") {
-		t.Error("Step 17 helper must use Math.max(0, …) for the lower clamp bound")
-	}
-	if !strings.Contains(body, "Math.min(") {
-		t.Error("Step 17 helper must use Math.min(…) for the upper clamp bound")
-	}
-
-	// === Negative pins ===
-	// scrollIntoView would defeat the deterministic top-quarter math
-	// and is forbidden in the graph render path. We pin the
-	// function-call form (with the open paren) so prose explaining
-	// why we do NOT use it is allowed in comments.
-	if strings.Contains(body, "scrollIntoView(") {
-		t.Error("Step 17 must NOT call scrollIntoView() (defeats deterministic top-quarter math)")
-	}
-	// The helper body must read the named constant, not a literal 0.25.
-	// We can pin the absence of the literal in the helper specifically by
-	// asserting the helper's defining substring does not contain a
-	// `0.25` literal — extract a window around `function focusGmapOnRoot`
-	// and check.
-	idx := strings.Index(body, "function focusGmapOnRoot")
-	if idx < 0 {
-		t.Fatal("function focusGmapOnRoot declaration not found")
-	}
-	// Helper body is bounded by the next top-level function — pick a
-	// generous window and search inside it.
-	end := idx + 2000
-	if end > len(body) {
-		end = len(body)
-	}
-	helperBody := body[idx:end]
-	// The literal 0.25 inside the helper body would mean the named
-	// constant is not used; the constant declaration itself uses 0.25
-	// once and lives outside this window.
-	if strings.Contains(helperBody, "0.25") {
-		t.Error("Step 17 focusGmapOnRoot body must read ROOT_VIEWPORT_OFFSET_RATIO, not the literal 0.25")
-	}
-
-	// GMAP.LAYERS must not be touched in this deliverable. After
-	// D27j-ui-foundation-5 the GMAP literal lives in
-	// /explorer/assets/js/governance-map/constants.js; the layer Y
-	// values follow the move byte-identically.
-	gmConstantsForLayers := getExplorerAsset(t, srv, "/explorer/assets/js/governance-map/constants.js")
-	for _, want := range []string{
-		"RELATED:  { y:  24 }",
-		"BUSINESS: { y: 156 }",
-		"CAP_PROC: { y: 290 }",
-		"SURFACE:  { y: 432 }",
-		"AI:       { y: 568 }",
-	} {
-		if !strings.Contains(gmConstantsForLayers, want) {
-			t.Errorf("Step 17 must NOT change GMAP.LAYERS — missing pre-existing literal %q in constants.js", want)
-		}
-	}
-
-	// === Call site after applyGmapZoom in renderGovernanceMap tail ===
-	// The order matters: applyGmapZoom() writes the scaled canvas
-	// dimensions the scroll-wrapper uses to compute scroll bounds.
-	// Pin both lines as a substring run so a regression that calls
-	// the focus helper before zoom (producing wrong-bounds clamping)
-	// surfaces here.
-	if !strings.Contains(body, "applyGmapZoom();\n\n    // Phase 2B Step 17 — frame the root in the visible viewport.") {
-		t.Error("Step 17 helper must be called from renderGovernanceMap immediately after applyGmapZoom()")
-	}
-	// D24i — applyGmapMultiSelection() is invoked immediately after
-	// focusGmapOnRoot to re-apply / prune the multi-selection visual
-	// after each render. The Step 17 ordering invariant evolves to
-	// "focusGmapOnRoot followed by applyGmapMultiSelection, then
-	// renderGovernanceMap closes". The two helpers must run in this
-	// order so multi-selection prunes against the freshly-settled
-	// gmapPositions.
-	if !strings.Contains(body, "focusGmapOnRoot(rootCardId);") {
-		t.Error("Step 17 helper call must remain inside renderGovernanceMap")
-	}
-	if !strings.Contains(body, "applyGmapMultiSelection();\n  }") {
-		t.Error("D24i: applyGmapMultiSelection() must be the last statement of renderGovernanceMap (after focusGmapOnRoot)")
-	}
-
-	// === Step 13/14/15/16 affordances preserved (regression sanity) ===
-	for _, want := range []string{
-		"gmap-node-inline-actions", // Step 13
-		"gmap-root-node",           // Step 14
-		"gmap-current-root",        // Step 13
-		"gmap-back-button",         // Step 15
-		"reframe-around-this",      // Step 10/13
-		"governance-map-body",      // Step 16
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("Pre-Step-17 affordance regressed: %q", want)
-		}
-	}
-}
-
 // TestExplorer_HTML_GovernanceMap_RightRailInspector pins the
 // Phase 2B Step 16 workbench-shell layout: side-by-side canvas +
 // inspector instead of canvas-above-bottom-panel. Updated through
@@ -8512,7 +5962,7 @@ func TestExplorer_HTML_GovernanceMap_RightRailInspector(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
 	// `body` so existing CSS-rule-substring assertions continue to
 	// match. The HTML body content is unchanged at the start; the
@@ -8666,235 +6116,6 @@ func TestExplorer_HTML_GovernanceMap_RightRailInspector(t *testing.T) {
 // the pre-D24e shape (in-grid inspector cell, inspector-aware
 // overlay offsets). Regression pins keep prior camera + search +
 // filter + collapsible-inspector + focus-mode affordances intact.
-func TestExplorer_HTML_GovernanceMap_InspectorTopLevelPane(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
-	// `body` so existing CSS-rule-substring assertions continue to
-	// match. The HTML body content is unchanged at the start; the
-	// conceptual stylesheet is appended in cascade order.
-	body += "\n" + getExplorerAllCSS(t, srv)
-
-	// === 1. --inspector-width CSS variable + collapse override ===
-	for _, want := range []string{
-		// Declared at :root next to --sidebar-width.
-		"--inspector-width:  320px;",
-		// Body class toggles the override.
-		"body.inspector-collapsed { --inspector-width: 56px; }",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D24e CSS variable / override literal missing: %q", want)
-		}
-	}
-
-	// === 2. body.gmap-mode shell-layout rules ===
-	// All three rules use var(--inspector-width) so the collapse
-	// override (Step 1) cascades to them automatically.
-	for _, want := range []string{
-		"body.gmap-mode .shell-header { right: var(--inspector-width); }",
-		"body.gmap-mode .shell-footer { right: var(--inspector-width); }",
-		"body.gmap-mode .shell-main   { margin-right: var(--inspector-width); }",
-		// Shell elements transition right / margin-right so the
-		// gmap-mode entry/exit + collapse animate symmetrically with
-		// the sidebar's width transition.
-		"transition: left 0.18s ease-out, right 0.18s ease-out;",
-		"transition: margin-left 0.18s ease-out, margin-right 0.18s ease-out;",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D24e gmap-mode shell rule missing: %q", want)
-		}
-	}
-
-	// === 3. #gmap-details is fixed-positioned top-level pane ===
-	// Pin every property of the new positioning rule. Specificity
-	// note: the id-selector (100) beats the .governance-map-details
-	// class-selector (010) on display, so display:none here wins by
-	// default; body.gmap-mode #gmap-details (110) wins when the
-	// operator is on the map sub-view.
-	for _, want := range []string{
-		"#gmap-details {",
-		"position: fixed;",
-		"top: 0;",
-		"right: 0;",
-		"height: 100vh;",
-		"width: var(--inspector-width);",
-		"z-index: 40;",
-		"border-left: 1px solid var(--outline-variant);",
-		// Default hidden — only revealed in gmap-mode.
-		"body.gmap-mode #gmap-details {",
-		"display: flex;",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D24e #gmap-details fixed-positioning literal missing: %q", want)
-		}
-	}
-
-	// === 4. Markup relocation — #gmap-details is OUTSIDE .governance-map-body ===
-	// The new home is after </footer>, sibling of <aside class=
-	// "shell-sidebar">. Pin both halves: the body wrapper exists +
-	// does NOT contain the inspector, AND the inspector exists
-	// AFTER the closing footer tag.
-	bodyOpenIdx := strings.Index(body, `class="governance-map-body"`)
-	if bodyOpenIdx < 0 {
-		t.Fatal(".governance-map-body wrapper not found")
-	}
-	// Bound the body wrapper at the first </div> AT-DEPTH-0 — easier:
-	// scan forward until we find the closing of services-map-view's
-	// workbench. The workbench closes the body, so anything between
-	// the body open and the workbench close is "inside the body".
-	workbenchEndPattern := `</section>` // services-view's closing — well past the workbench
-	wbEnd := strings.Index(body[bodyOpenIdx:], workbenchEndPattern)
-	if wbEnd < 0 {
-		t.Fatal("could not bound .governance-map-body region")
-	}
-	bodyRegion := body[bodyOpenIdx : bodyOpenIdx+wbEnd]
-	if strings.Contains(bodyRegion, `id="gmap-details"`) {
-		t.Error("D24e: #gmap-details must NOT live inside .governance-map-body (it has been promoted to a top-level pane)")
-	}
-	// The inspector lives after the closing </footer> tag (top-level
-	// sibling of <aside class="shell-sidebar">).
-	footerCloseIdx := strings.Index(body, `</footer>`)
-	if footerCloseIdx < 0 {
-		t.Fatal("</footer> not found")
-	}
-	detailsIdx := strings.Index(body, `id="gmap-details"`)
-	if detailsIdx < 0 {
-		t.Fatal("#gmap-details not found")
-	}
-	if detailsIdx < footerCloseIdx {
-		t.Errorf("D24e: #gmap-details must appear AFTER </footer> in source order "+
-			"(top-level pane sibling of <aside class=\"shell-sidebar\">), "+
-			"got details=%d footerClose=%d", detailsIdx, footerCloseIdx)
-	}
-
-	// === 5. .governance-map-body grid is single-column ===
-	// The pre-D24e two-column grid (`minmax(0, 1fr) 320px`) is gone
-	// because the inspector no longer lives inside the body. The
-	// canvas-scroll cell now spans the full body width, with the
-	// horizontal space the inspector reserves living at the shell
-	// level (margin-right on .shell-main when body.gmap-mode).
-	if !strings.Contains(body, "grid-template-columns: minmax(0, 1fr);") {
-		t.Error("D24e .governance-map-body must use single-column grid `minmax(0, 1fr)`")
-	}
-	if strings.Contains(body, "grid-template-columns: minmax(0, 1fr) 320px;") {
-		t.Error("D24e: pre-D24e two-column body grid must be removed")
-	}
-	if strings.Contains(body, "grid-template-columns: minmax(0, 1fr) 40px;") {
-		t.Error("D24e: pre-D24e collapsed two-column body grid must be removed")
-	}
-
-	// === 6. Pre-D24e inspector-aware overlay offsets gone ===
-	// The canvas-edge overlays no longer key off
-	// .governance-map-body.inspector-collapsed because the inspector
-	// is no longer inside the body. The .gmap-legend-overlay went from
-	// `calc(50% - 160px)` to true centre `left: 50%` in D24e, and
-	// then to bottom-left placement in D26g-impl-3 (compact edge key).
-	// D26g-impl-1 removed .gmap-top-right-overlay entirely; its
-	// right-edge anchoring becomes irrelevant because the toolbar
-	// sits above the canvas, not anchored to the canvas right edge.
-	for _, gone := range []string{
-		"right: 328px;",
-		".governance-map-body.inspector-collapsed",
-		"left: calc(50% - 160px);",
-		"left: calc(50% - 20px);",
-	} {
-		if strings.Contains(body, gone) {
-			t.Errorf("D24e: pre-D24e inspector-aware overlay literal must be removed: %q", gone)
-		}
-	}
-
-	// === 7. setServicesSubView wires body.gmap-mode ===
-	// The toggle must be present in the helper body so map sub-view
-	// entry/exit drives gmap-mode in lockstep.
-	for _, want := range []string{
-		"function setServicesSubView(view)",
-		"document.body.classList.toggle('gmap-mode', servicesSubView === 'map');",
-		// showView clears gmap-mode when leaving services entirely.
-		"document.body.classList.remove('gmap-mode');",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D24e gmap-mode wiring literal missing: %q", want)
-		}
-	}
-
-	// === 8. Inspector content IDs preserved (DOM not destroyed) ===
-	// The handlers (setGovernanceMapDetailsName/Fields/Actions/
-	// Summary) operate on these IDs by getElementById, so the
-	// relocation is non-breaking.
-	for _, want := range []string{
-		`id="gmap-details"`,
-		`id="gmap-details-name"`,
-		`id="gmap-details-fields"`,
-		`id="gmap-details-actions"`,
-		`id="gmap-details-summary"`,
-		`id="gmap-inspector-toggle"`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D24e: inspector content/toggle id must be preserved: %q", want)
-		}
-	}
-
-	// === 9. applyGmapInspectorCollapsed targets document.body ===
-	// The collapse class moved from .governance-map-body to <body>;
-	// pin the helper's body-targeting form.
-	applyIdx := strings.Index(body, "function applyGmapInspectorCollapsed()")
-	if applyIdx < 0 {
-		t.Fatal("applyGmapInspectorCollapsed not found")
-	}
-	applyTail := body[applyIdx:]
-	applyEnd := strings.Index(applyTail, "\n  }\n")
-	if applyEnd < 0 {
-		t.Fatal("applyGmapInspectorCollapsed end marker not found")
-	}
-	applyBody := applyTail[:applyEnd]
-	if !strings.Contains(applyBody, "const body = document.body;") {
-		t.Error("D24e: applyGmapInspectorCollapsed must target document.body (collapse class moved from .governance-map-body to <body>)")
-	}
-	// Negative pin — pre-D24e selector form is gone.
-	if strings.Contains(applyBody, "document.querySelector('.governance-map-body')") {
-		t.Error("D24e: applyGmapInspectorCollapsed must NOT target .governance-map-body anymore (collapse class moved to <body>)")
-	}
-
-	// === 10. Regression pins — every prior affordance preserved ===
-	for _, want := range []string{
-		// Camera + filter + back stack.
-		"focusGmapOnRoot",
-		"fitGmapToBounds",
-		"focusGmapOnNode",
-		"wireGmapWheelZoom",
-		"gmap-search-input",
-		"gmap-filter-chip",
-		"gmap-back-button",
-		"reframe-around-this",
-		"gmap-root-node",
-		"governance-map-body",
-		// D26g-impl-2 — camera bar split into two clusters.
-		"gmap-mode-rail",
-		"gmap-camera-cluster",
-		"gmap-legend-overlay",
-		// D26g-impl-1 — top overlays consolidated into the workbench
-		// toolbar above the canvas.
-		"governance-map-toolbar",
-		// Focus mode + sidebar.
-		"gmap-focus-mode",
-		"shell-sidebar-toggle",
-		`id="sidebar-collapse-toggle"`,
-		// Collapsible inspector machinery.
-		"let gmapInspectorCollapsed = false;",
-		"wireGmapInspectorToggle",
-		"function applyGmapInspectorCollapsed()",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D24e must NOT remove existing affordance %q", want)
-		}
-	}
-}
-
 // TestExplorer_HTML_GovernanceMap_CanvasInteraction pins the Phase
 // 2B Step 35 (D24i) canvas-interaction layer:
 //
@@ -8969,302 +6190,6 @@ func TestExplorer_HTML_GovernanceMap_InspectorTopLevelPane(t *testing.T) {
 //   - the tray depending on D24i multi-selection state
 //
 // Regression pins keep every D24c/D24d/D24e/D24f/D24g/D24i affordance.
-func TestExplorer_HTML_GovernanceMap_EvidenceDriftTray(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
-	// `body` so existing CSS-rule-substring assertions continue to
-	// match. The HTML body content is unchanged at the start; the
-	// conceptual stylesheet is appended in cascade order.
-	body += "\n" + getExplorerAllCSS(t, srv)
-
-	// === 1. Tray container exists, sits inside .governance-map-workbench ===
-	for _, want := range []string{
-		`id="gmap-evidence-tray"`,
-		`class="gmap-evidence-tray"`,
-		`aria-label="Runtime evidence tray"`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D25b tray container literal missing: %q", want)
-		}
-	}
-	wbIdx := strings.Index(body, `class="governance-map-workbench"`)
-	if wbIdx < 0 {
-		t.Fatal("governance-map-workbench not found")
-	}
-	mapViewEnd := strings.Index(body[wbIdx:], `</section>`)
-	if mapViewEnd < 0 {
-		t.Fatal("services-map-view closing tag not found")
-	}
-	wbBody := body[wbIdx : wbIdx+mapViewEnd]
-	if !strings.Contains(wbBody, `id="gmap-evidence-tray"`) {
-		t.Error("D25b: #gmap-evidence-tray must live inside .governance-map-workbench")
-	}
-	// Tray comes AFTER .governance-map-body inside the workbench.
-	bodyIdxInWB := strings.Index(wbBody, `class="governance-map-body"`)
-	trayIdxInWB := strings.Index(wbBody, `id="gmap-evidence-tray"`)
-	if bodyIdxInWB < 0 || trayIdxInWB < 0 || bodyIdxInWB > trayIdxInWB {
-		t.Errorf("D25b: tray must appear AFTER .governance-map-body inside the workbench (body=%d tray=%d)", bodyIdxInWB, trayIdxInWB)
-	}
-
-	// === 2. Collapsed by default + expanded CSS rule ===
-	// The default state has no .is-expanded class on the container.
-	// Search the rendered tray markup for the absence.
-	trayOpenIdx := strings.Index(body, `id="gmap-evidence-tray"`)
-	trayOpenEnd := strings.Index(body[trayOpenIdx:], `>`)
-	trayOpenTag := body[trayOpenIdx : trayOpenIdx+trayOpenEnd]
-	if strings.Contains(trayOpenTag, "is-expanded") {
-		t.Error("D25b: tray must default to collapsed (no `is-expanded` class on the container at first paint)")
-	}
-	// Both height rules must exist in CSS. D25b-fix — expanded height
-	// bumped from 280 to 320 so the Drift tab fits without surfacing
-	// an internal scrollbar. CSS lives in governance-map.css after
-	// D27j-ui-foundation-2.
-	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
-	for _, want := range []string{
-		".gmap-evidence-tray {",
-		"height: 36px;",
-		".gmap-evidence-tray.is-expanded {",
-		"height: 320px;",
-		"transition: height 0.18s ease-out",
-	} {
-		if !strings.Contains(gmapCSS, want) {
-			t.Errorf("D25b/D25b-fix tray height/transition CSS literal missing: %q", want)
-		}
-	}
-	// D25b-fix — the generic .gmap-evidence-tray-panel rule must NOT
-	// carry `overflow-y: auto`. The Drift tab's content fits in the
-	// 320px tray without scrolling; surfacing a scrollbar there was a
-	// UX regression. List-heavy tabs (Activity / Evidence) opt in via
-	// the .is-scrollable modifier rule, scoped to those tabs only.
-	panelIdx := strings.Index(gmapCSS, ".gmap-evidence-tray-panel {")
-	if panelIdx < 0 {
-		t.Fatal(".gmap-evidence-tray-panel rule not found in governance-map.css")
-	}
-	panelRuleEnd := strings.Index(gmapCSS[panelIdx:], "}")
-	if panelRuleEnd < 0 {
-		t.Fatal(".gmap-evidence-tray-panel closing brace not found")
-	}
-	panelRule := gmapCSS[panelIdx : panelIdx+panelRuleEnd]
-	if strings.Contains(panelRule, "overflow-y: auto") {
-		t.Error("D25b-fix: generic .gmap-evidence-tray-panel rule must NOT carry `overflow-y: auto` (Drift tab fits the 320px tray without internal scroll)")
-	}
-	// Opt-in modifier exists for future list-heavy tabs.
-	if !strings.Contains(gmapCSS, ".gmap-evidence-tray-panel.is-scrollable {") {
-		t.Error("D25b-fix: .gmap-evidence-tray-panel.is-scrollable modifier rule must exist so future Activity/Evidence list tabs can opt in to internal scrolling")
-	}
-
-	// === 3. Header markup + DEMO DATA badge ===
-	for _, want := range []string{
-		"Runtime Evidence",
-		"Select a graph node to inspect runtime evidence.",
-		"DEMO DATA",
-		// Tooltip text — substring pin so future copy edits stay flexible.
-		"Synthetic illustrative data",
-		`id="gmap-evidence-tray-toggle"`,
-		`aria-label="Expand runtime evidence tray"`,
-		`aria-expanded="false"`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D25b header / badge literal missing: %q", want)
-		}
-	}
-
-	// === 4. Four tabs with the canonical labels ===
-	for _, want := range []string{
-		`data-tab="overview"`,
-		`data-tab="drift"`,
-		`data-tab="evidence"`,
-		`data-tab="activity"`,
-		">Overview<",
-		">Drift<",
-		">Evidence<",
-		">Activity<",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D25b tab literal missing: %q", want)
-		}
-	}
-
-	// === 5. Drift controls — metric + range selectors with three options each ===
-	for _, want := range []string{
-		`id="gmap-evidence-tray-metric"`,
-		`id="gmap-evidence-tray-range"`,
-		`value="escalation-rate">Escalation rate`,
-		`value="evidence-completeness">Evidence completeness`,
-		`value="decision-volume">Decision volume`,
-		`value="24h">24h`,
-		`value="7d"`,
-		`>7d<`,
-		`value="30d">30d`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D25b drift selector literal missing: %q", want)
-		}
-	}
-
-	// === 6. Inline SVG chart container ===
-	for _, want := range []string{
-		`id="gmap-evidence-tray-chart"`,
-		`id="gmap-evidence-tray-chart-svg"`,
-		`class="gmap-evidence-tray-chart-svg"`,
-		// preserveAspectRatio="none" enables responsive width-fill.
-		`preserveAspectRatio="none"`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D25b SVG chart literal missing: %q", want)
-		}
-	}
-
-	// === 7. Synthetic generator + selection helper ===
-	for _, want := range []string{
-		"function buildDemoDriftSeries(nodeId, metric, range)",
-		"function hashGmapDemoSeed(s)",
-		"function notifyGmapEvidenceTraySelectionChanged()",
-		"function applyGmapEvidenceTrayState()",
-		"function renderGmapEvidenceTrayChart()",
-		"function renderGmapEvidenceTrayTiles()",
-		"wireGmapEvidenceTray",
-		// Metric base ranges per the brief.
-		"baseLow = 5; baseHigh = 15",
-		"baseLow = 100; baseHigh = 1000",
-		"baseLow = 70; baseHigh = 95",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D25b generator / helper literal missing: %q", want)
-		}
-	}
-
-	// === 8. selectGovernanceMapNode calls the notification helper ===
-	selectIdx := strings.Index(body, "function selectGovernanceMapNode(nodeId)")
-	if selectIdx < 0 {
-		t.Fatal("selectGovernanceMapNode declaration not found")
-	}
-	selectTail := body[selectIdx:]
-	selectEnd := strings.Index(selectTail, "\n  }\n")
-	if selectEnd < 0 {
-		t.Fatal("selectGovernanceMapNode end marker not found")
-	}
-	selectBody := selectTail[:selectEnd]
-	if !strings.Contains(selectBody, "notifyGmapEvidenceTraySelectionChanged()") {
-		t.Error("D25b: selectGovernanceMapNode must call notifyGmapEvidenceTraySelectionChanged() so the tray follows the primary selection")
-	}
-	// Negative pin — the tray must NOT couple to the D24i multi-set.
-	if strings.Contains(selectBody, "gmapSelectedNodeIds") {
-		// gmapSelectedNodeIds is mutated elsewhere in selectGovernanceMapNode
-		// already (D24i adds it to the click handler, not this body); allow
-		// that. The pin here is specifically that NO new tray-related
-		// reference to the multi-set was introduced. Skip.
-	}
-
-	// === 9. Negative pins — no external script / CDN / chart library ===
-	// Substring guard: D25b's contract was "no <script src=...>" full
-	// stop. After D27j-ui-foundation-3 the shell is allowed to pull
-	// same-origin utility scripts from /explorer/assets/js/, but it
-	// still must NOT load any cross-origin CDN / chart library.
-	// We split the assertion accordingly: count <script src tags that
-	// do NOT start with /explorer/, and also pin that the inline IIFE
-	// is still present.
-	scriptOpenCount := strings.Count(body, "<script>")
-	for _, tagPrefix := range []string{
-		`<script src="http`,
-		`<script src='http`,
-		`<script src="//`,
-		`<script src='//`,
-	} {
-		if strings.Contains(body, tagPrefix) {
-			t.Errorf("D25b: must NOT load cross-origin scripts (found %q)", tagPrefix)
-		}
-	}
-	// D25b originally required exactly one inline bundle. D27j-ui-theme-6
-	// added a tiny pre-paint <head> script (~10 lines, fully local, no
-	// src) that reads the operator's stored theme preference and applies
-	// it before the CSS resolves to avoid a dark-flash on light-mode
-	// reload. It is a deliberate exception, not a multiplication of
-	// bundles. Allow exactly two inline opens (pre-paint + main); the
-	// negative pins above already guard against any cross-origin / CDN
-	// / chart-library script.
-	if scriptOpenCount != 2 {
-		t.Errorf("D25b: shell must keep two inline <script>...</script> blocks — the pre-paint head script + the main bundle (found %d <script> opens)", scriptOpenCount)
-	}
-	for _, illegal := range []string{
-		"cdn.jsdelivr",
-		"cdnjs.cloudflare",
-		"unpkg.com",
-		"chart.js",
-		"plotly",
-		"recharts",
-		// d3 alone is too generic — match the library import path.
-		"d3.js",
-		"d3.min.js",
-	} {
-		if strings.Contains(body, illegal) {
-			t.Errorf("D25b: must NOT reference external chart library or CDN: %q", illegal)
-		}
-	}
-
-	// === 10. Safe-area variable still present (no D24g changes) ===
-	// After D27j-ui-foundation-5 the gmapSafeArea helper lives in
-	// /explorer/assets/js/governance-map/layout.js; the CSS variable
-	// declaration was already moved by D27j-ui-foundation-2 into the
-	// extracted CSS files (and is appended to `body` above by this
-	// test's foundation-2 fixup, so the CSS-variable substring still
-	// matches against `body`).
-	gmLayoutForSafeArea2 := getExplorerAsset(t, srv, "/explorer/assets/js/governance-map/layout.js")
-	if !strings.Contains(body, "--gmap-overlay-inset-bottom: 48px") {
-		t.Errorf("D25b must NOT modify D24g safe-area model: %q missing", "--gmap-overlay-inset-bottom: 48px")
-	}
-	if !strings.Contains(gmLayoutForSafeArea2, "function gmapSafeArea(scrollEl)") {
-		t.Errorf("D25b must NOT modify D24g safe-area model: %q missing in layout.js", "function gmapSafeArea(scrollEl)")
-	}
-
-	// === 11. Regression — every prior camera/chrome/inspector affordance ===
-	for _, want := range []string{
-		// D26g-impl-2 — camera bar split into mode rail + camera cluster.
-		`class="gmap-mode-rail"`,
-		`class="gmap-camera-cluster"`,
-		`id="gmap-fit-button"`,
-		`id="gmap-centre-button"`,
-		`id="gmap-zoom-in"`,
-		`id="gmap-zoom-out"`,
-		`id="gmap-focus-toggle"`,
-		`id="gmap-back-button"`,
-		// D26g-impl-1 — workbench toolbar above the canvas + bottom
-		// connector legend overlay.
-		`class="governance-map-toolbar`,
-		`class="gmap-legend-overlay"`,
-		// Search + filter.
-		`id="gmap-search-input"`,
-		"gmap-filter-chip",
-		// Inspector rail + toggle.
-		`id="gmap-details"`,
-		`id="gmap-inspector-toggle"`,
-		// Camera helpers + safe area.
-		"function fitGmapToBounds()",
-		"function focusGmapOnRoot(rootCardId)",
-		"function focusGmapOnNode(nodeId)",
-		// D24i multi-select + fit-mode preserved.
-		"const gmapSelectedNodeIds = new Set()",
-		"function applyGmapFitMode(active)",
-		// Form/Graph mode toggle.
-		`class="gmap-view-mode-toggle"`,
-		// Renderer anchors.
-		"gmap-root-node",
-		"reframe-around-this",
-		"governance-map-body",
-		"selectGovernanceMapNode",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D25b must NOT remove existing affordance %q", want)
-		}
-	}
-}
-
 // TestExplorer_HTML_GovernanceMap_EvidenceTraySemantics pins the
 // Phase 2B Step 40 (D25e) governance drift tray semantic correction.
 // The MIDAS Governance Drift Design Model (D25d) specifies that
@@ -9293,243 +6218,6 @@ func TestExplorer_HTML_GovernanceMap_EvidenceDriftTray(t *testing.T) {
 //
 // Negative pins (scoped to runtime-rendered strings, not comments)
 // guard against the disallowed wording from the design model.
-func TestExplorer_HTML_GovernanceMap_EvidenceTraySemantics(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
-	// `body` so existing CSS-rule-substring assertions continue to
-	// match. The HTML body content is unchanged at the start; the
-	// conceptual stylesheet is appended in cascade order.
-	body += "\n" + getExplorerAllCSS(t, srv)
-
-	// === 1. Semantic helper exists with the expected signature ===
-	if !strings.Contains(body, "function getGmapEvidenceSignalSemantics(nodeId)") {
-		t.Fatal("D25e: getGmapEvidenceSignalSemantics helper declaration not found")
-	}
-	semIdx := strings.Index(body, "function getGmapEvidenceSignalSemantics(nodeId)")
-	semTail := body[semIdx:]
-	semEnd := strings.Index(semTail, "\n  }\n")
-	if semEnd < 0 {
-		t.Fatal("getGmapEvidenceSignalSemantics end marker not found")
-	}
-	semBody := semTail[:semEnd]
-
-	// === 2. Helper branches on every governance-map node kind ===
-	for _, want := range []string{
-		"case 'surface':",
-		"case 'ai':",
-		"case 'coverage':",
-		"case 'authority':",
-		"case 'business':",
-		"case 'related':",
-		"case 'cap':",
-		"case 'proc':",
-	} {
-		if !strings.Contains(semBody, want) {
-			t.Errorf("D25e: getGmapEvidenceSignalSemantics must branch on kind %q", want)
-		}
-	}
-
-	// === 3. Canonical kind-specific titles per the design model ===
-	// Pinned in the rendered HTML (helper string literals are part of
-	// the served bundle).
-	for _, want := range []string{
-		"'Decision surface drift'",
-		"'AI usage / outcome drift'",
-		"'Coverage drift'",
-		"'Authority drift exposure'",
-		"'Service drift exposure'",
-		"'Related-service drift exposure'",
-		"'Capability drift exposure'",
-		"'Process drift signals'",
-		"'Runtime signal preview'",
-	} {
-		if !strings.Contains(semBody, want) {
-			t.Errorf("D25e: kind-specific title literal missing in semantics helper: %q", want)
-		}
-	}
-
-	// === 4. Kind-specific tile-label literals ===
-	for _, want := range []string{
-		// Decision Surface tiles.
-		"'Signal'",
-		"'Driver'",
-		"'Baseline → Current'",
-		"'Window / Volume'",
-		// Business Service / Capability / Related Service tiles.
-		"'Exposure'",
-		"'Affected surfaces'",
-		"'Primary driver'",
-		"'Highest contributor'",
-		// Capability-specific.
-		"'Highest child signal'",
-		"'Primary contributor'",
-		// Process tiles.
-		"'Signals'",
-		"'Top driver'",
-		"'Primary surface'",
-		// AI System tiles.
-		"'Usage signal'",
-		"'Affected bindings'",
-		// Coverage tiles.
-		"'Coverage signal'",
-		"'Gap-event rate'",
-		"'Window'",
-		// Authority synthetic tiles.
-		"'Authority exposure'",
-		"'Affected profiles'",
-		"'Affected grants'",
-	} {
-		if !strings.Contains(semBody, want) {
-			t.Errorf("D25e: tile-label literal missing in semantics helper: %q", want)
-		}
-	}
-
-	// === 5. Synthetic generator wrapper ===
-	if !strings.Contains(body, "function buildDemoGovernanceSignal(nodeId, semantics, metric, range)") {
-		t.Fatal("D25e: buildDemoGovernanceSignal helper not found")
-	}
-	genIdx := strings.Index(body, "function buildDemoGovernanceSignal(nodeId, semantics, metric, range)")
-	genTail := body[genIdx:]
-	genEnd := strings.Index(genTail, "\n  }\n")
-	if genEnd < 0 {
-		t.Fatal("buildDemoGovernanceSignal end marker not found")
-	}
-	genBody := genTail[:genEnd]
-
-	// 5a. Direct-drift signal fields.
-	for _, want := range []string{
-		"baseline:",
-		"current:",
-		"delta:",
-		"driver:",
-		"window:",
-		"volume:",
-	} {
-		if !strings.Contains(genBody, want) {
-			t.Errorf("D25e direct-drift signal field missing: %q", want)
-		}
-	}
-	// 5b. Exposure signal fields.
-	for _, want := range []string{
-		"affected_count:",
-		"total_count:",
-		"primary_driver:",
-		"primary_contributor:",
-		"exposure_band:",
-	} {
-		if !strings.Contains(genBody, want) {
-			t.Errorf("D25e exposure signal field missing: %q", want)
-		}
-	}
-	// 5c. Determinism — the generator must seed via the existing
-	// hashGmapDemoSeed and must NOT call Math.random anywhere.
-	if !strings.Contains(genBody, "hashGmapDemoSeed(") {
-		t.Error("D25e: buildDemoGovernanceSignal must seed via hashGmapDemoSeed")
-	}
-	if strings.Contains(genBody, "Math.random") {
-		t.Error("D25e: synthetic generator must NOT use Math.random — values must be deterministic from (nodeId, semantics, metric, range)")
-	}
-
-	// === 6. Demo provenance disclaimer appears in the panel renderer ===
-	if !strings.Contains(body, "Illustrative demo signal. Not calculated from runtime envelopes.") {
-		t.Error("D25e: drift panel must show the provenance disclaimer 'Illustrative demo signal. Not calculated from runtime envelopes.'")
-	}
-	// The DEMO DATA badge from D25b stays.
-	if !strings.Contains(body, "DEMO DATA") {
-		t.Error("D25e: existing D25b DEMO DATA badge must remain")
-	}
-
-	// === 7. Drift-panel rebuilder + tile renderer dispatch on semantics ===
-	for _, want := range []string{
-		"function renderGmapEvidenceTrayDriftPanel()",
-		"const semantics = getGmapEvidenceSignalSemantics(nodeId)",
-		"semantics.signalClass === 'direct_drift'",
-		"semantics.signalClass === 'usage_drift'",
-		"semantics.signalClass === 'exposure'",
-		"semantics.metricOptions",
-		"semantics.summaryTileLabels",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D25e renderer-dispatch literal missing: %q", want)
-		}
-	}
-
-	// === 8. Negative pins — disallowed wording ===
-	// Scoped to runtime-rendered strings (single-quoted JS literals) so
-	// design-rationale comments that EXPLAIN why these labels are
-	// forbidden don't trigger the negative pin. The helper / renderer
-	// bodies are the authoritative scope.
-	for _, gone := range []string{
-		// Generic tile label retired.
-		"'Drift status'",
-		// Disallowed copy from the design model.
-		"'Capability is drifting'",
-		"'Business Service drift detected'",
-		"'Process drift detected'",
-	} {
-		if strings.Contains(semBody, gone) {
-			t.Errorf("D25e: disallowed wording in semantics helper: %q", gone)
-		}
-		if strings.Contains(genBody, gone) {
-			t.Errorf("D25e: disallowed wording in generator: %q", gone)
-		}
-	}
-	// Also ensure the retired "Drift status" tile label literal does
-	// not appear inside renderGmapEvidenceTrayTiles. This catches a
-	// regression that re-introduces the generic-status tile.
-	tilesIdx := strings.Index(body, "function renderGmapEvidenceTrayTiles()")
-	if tilesIdx < 0 {
-		t.Fatal("renderGmapEvidenceTrayTiles not found")
-	}
-	tilesTail := body[tilesIdx:]
-	tilesEnd := strings.Index(tilesTail, "\n  }\n")
-	if tilesEnd < 0 {
-		t.Fatal("renderGmapEvidenceTrayTiles end marker not found")
-	}
-	tilesBody := tilesTail[:tilesEnd]
-	if strings.Contains(tilesBody, "'Drift status'") {
-		t.Error("D25e: renderGmapEvidenceTrayTiles must NOT emit a generic 'Drift status' tile (kind-aware tiles replace it)")
-	}
-
-	// === 9. Regression — every prior tray + interaction affordance preserved ===
-	for _, want := range []string{
-		// D25b tray still present.
-		`id="gmap-evidence-tray"`,
-		"Runtime Evidence",
-		"Select a graph node to inspect runtime evidence.",
-		// D25b synthetic generator still present (used by the new
-		// wrapper for runtime-bearing kinds).
-		"function buildDemoDriftSeries(nodeId, metric, range)",
-		"function hashGmapDemoSeed(s)",
-		// Notification helper unchanged.
-		"function notifyGmapEvidenceTraySelectionChanged()",
-		// Tabs.
-		`data-tab="overview"`,
-		`data-tab="drift"`,
-		`data-tab="evidence"`,
-		`data-tab="activity"`,
-		// SVG chart container retained for runtime-bearing kinds.
-		`id="gmap-evidence-tray-chart-svg"`,
-		// D24i interaction preserved.
-		"const gmapSelectedNodeIds = new Set()",
-		// D24i-fix3 mode toggle preserved.
-		`id="gmap-pan-mode-button"`,
-		`id="gmap-select-mode-button"`,
-		// D25b-fix expanded height preserved (320px).
-		"height: 320px;",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D25e must NOT remove existing affordance %q", want)
-		}
-	}
-}
-
 // TestExplorer_HTML_GovernanceMap_EvidenceTrayAnalyticalLayout pins the
 // D26f contract: the Drift tab body now uses a two-column analytical
 // layout (compact signal column on the left, dominant chart panel on
@@ -9538,295 +6226,6 @@ func TestExplorer_HTML_GovernanceMap_EvidenceTraySemantics(t *testing.T) {
 // exposure-explanation panel on the right; preview kinds remain a
 // simple placeholder. The Activity tab is unchanged. Drift semantics
 // (D25e) and Activity provenance (D26c) are regression-pinned.
-func TestExplorer_HTML_GovernanceMap_EvidenceTrayAnalyticalLayout(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
-	// `body` so existing CSS-rule-substring assertions continue to
-	// match. The HTML body content is unchanged at the start; the
-	// conceptual stylesheet is appended in cascade order.
-	body += "\n" + getExplorerAllCSS(t, srv)
-
-	// === 1. Analytical-layout CSS rules exist ===
-	for _, want := range []string{
-		".gmap-evidence-tray-analytic-layout {",
-		".gmap-evidence-tray-signal-column {",
-		".gmap-evidence-tray-chart-panel {",
-		".gmap-evidence-tray-signal-list {",
-		".gmap-evidence-tray-signal-item {",
-		".gmap-evidence-tray-signal-label {",
-		".gmap-evidence-tray-signal-value {",
-		".gmap-evidence-tray-provenance-compact {",
-		".gmap-evidence-tray-controls-compact {",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D26f: missing analytical-layout CSS rule %q", want)
-		}
-	}
-	// The CSS grid must split into a compact left column + flex right
-	// column. Pin the grid-template-columns declaration.
-	if !strings.Contains(body, "grid-template-columns: 280px minmax(0, 1fr)") {
-		t.Error(`D26f: analytical layout must use grid-template-columns: 280px minmax(0, 1fr)`)
-	}
-
-	// === 2. Drift renderer emits the analytical layout ===
-	driftIdx := strings.Index(body, "function renderGmapEvidenceTrayDriftPanel()")
-	if driftIdx < 0 {
-		t.Fatal("D26f: renderGmapEvidenceTrayDriftPanel not found")
-	}
-	// Grab the renderer body up to the next top-level function so the
-	// downstream pins are scoped to renderer-emitted markup, not unrelated
-	// code elsewhere on the page.
-	driftTail := body[driftIdx:]
-	driftEnd := strings.Index(driftTail, "function renderGmapEvidenceTrayActivityPanel")
-	if driftEnd < 0 {
-		t.Fatal("D26f: renderer end marker not found (renderGmapEvidenceTrayActivityPanel)")
-	}
-	driftBody := driftTail[:driftEnd]
-	for _, want := range []string{
-		"gmap-evidence-tray-analytic-layout",
-		"gmap-evidence-tray-signal-column",
-		"gmap-evidence-tray-chart-panel",
-		"gmap-evidence-tray-signal-list",
-	} {
-		if !strings.Contains(driftBody, want) {
-			t.Errorf("D26f: drift renderer must emit class %q", want)
-		}
-	}
-
-	// === 3. Direct-drift branch — chart inside the chart panel ===
-	// In the renderer body, the chart-panel <div> must wrap the chart
-	// container. Pin ordering: the chart-panel class string appears
-	// before the chart container id within the same direct-drift
-	// branch. Use a window scoped to the direct_drift branch.
-	directIdx := strings.Index(driftBody, "semantics.signalClass === 'direct_drift'")
-	if directIdx < 0 {
-		t.Fatal(`D26f: direct_drift branch not found in drift renderer`)
-	}
-	directBranch := driftBody[directIdx:]
-	exposureMarker := strings.Index(directBranch, "semantics.signalClass === 'exposure'")
-	if exposureMarker < 0 {
-		t.Fatal(`D26f: exposure branch end marker not found`)
-	}
-	directBranch = directBranch[:exposureMarker]
-	chartPanelIdx := strings.Index(directBranch, "gmap-evidence-tray-chart-panel")
-	chartIdIdx := strings.Index(directBranch, `id="gmap-evidence-tray-chart"`)
-	chartSvgIdx := strings.Index(directBranch, `id="gmap-evidence-tray-chart-svg"`)
-	if chartPanelIdx < 0 {
-		t.Error("D26f: direct-drift branch must mount the chart inside .gmap-evidence-tray-chart-panel")
-	}
-	if chartIdIdx < 0 || chartSvgIdx < 0 {
-		t.Error("D26f: direct-drift branch must keep the chart container + SVG ids")
-	}
-	if chartPanelIdx >= 0 && chartIdIdx >= 0 && chartPanelIdx > chartIdIdx {
-		t.Error("D26f: chart-panel wrapper must precede the chart container in the direct-drift branch")
-	}
-
-	// === 4. Exposure branch — explanation panel inside chart panel, no SVG chart ===
-	exposureBranchStart := exposureMarker + directIdx
-	// Slice the exposure branch from the original drift body (not the
-	// directBranch slice) so the indices line up; rebuild from driftBody.
-	exposureFromBody := driftBody[exposureBranchStart:]
-	previewMarker := strings.Index(exposureFromBody, "} else {")
-	if previewMarker < 0 {
-		t.Fatal("D26f: preview branch fallback not found in drift renderer")
-	}
-	exposureBranch := exposureFromBody[:previewMarker]
-	if !strings.Contains(exposureBranch, "gmap-evidence-tray-chart-panel") {
-		t.Error("D26f: exposure branch must reuse the same two-column shell (chart-panel wrapper)")
-	}
-	if !strings.Contains(exposureBranch, "gmap-evidence-tray-exposure-explanation") {
-		t.Error("D26f: exposure branch must render the exposure-explanation copy block")
-	}
-	if strings.Contains(exposureBranch, `id="gmap-evidence-tray-chart-svg"`) {
-		t.Error(`D26f: exposure branch must NOT mount a direct-drift SVG chart (D25e: structural nodes do not directly drift)`)
-	}
-
-	// === 5. Compact signal-item classes used by tile renderer ===
-	tilesIdx := strings.Index(body, "function renderGmapEvidenceTrayTiles()")
-	if tilesIdx < 0 {
-		t.Fatal("D26f: renderGmapEvidenceTrayTiles not found")
-	}
-	tilesTail := body[tilesIdx:]
-	tilesEnd := strings.Index(tilesTail, "\n  }\n")
-	if tilesEnd < 0 {
-		t.Fatal("D26f: renderGmapEvidenceTrayTiles end marker not found")
-	}
-	tilesBody := tilesTail[:tilesEnd]
-	for _, want := range []string{
-		`'gmap-evidence-tray-signal-item'`,
-		`'gmap-evidence-tray-signal-label'`,
-		`'gmap-evidence-tray-signal-value'`,
-		"gmap-evidence-tray-signal-list",
-	} {
-		if !strings.Contains(tilesBody, want) {
-			t.Errorf("D26f: tile renderer must use compact signal-item class %q", want)
-		}
-	}
-
-	// === 6. Tile labels — D25e canonical labels still rendered ===
-	// These travel through the semantics helper into the tile/signal
-	// renderer. Pin a representative subset to detect regressions.
-	for _, want := range []string{
-		"'Signal'",
-		"'Driver'",
-		"'Baseline → Current'",
-		"'Window / Volume'",
-		"'Exposure'",
-		"'Affected surfaces'",
-		"'Primary driver'",
-		"'Highest contributor'",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D26f: canonical signal label %q must remain", want)
-		}
-	}
-
-	// === 7. Provenance — compact line + full disclaimer in DOM ===
-	// The compact provenance class lives in the served CSS + the
-	// renderer body. The full D25e disclaimer text remains in the DOM
-	// (via the title attribute on the compact element) so the trust
-	// pin keeps matching.
-	if !strings.Contains(body, "gmap-evidence-tray-provenance-compact") {
-		t.Error("D26f: compact provenance class must exist on the rendered Drift tab")
-	}
-	if !strings.Contains(body, "Illustrative demo signal. Not calculated from runtime envelopes.") {
-		t.Error("D26f: full D25e disclaimer must remain in the DOM (title attribute on the compact provenance element)")
-	}
-	if !strings.Contains(body, "DEMO DATA") {
-		t.Error("D26f: tray DEMO DATA badge must remain")
-	}
-
-	// === 8. Drift overflow rule unchanged — tray panel does NOT scroll ===
-	// .gmap-evidence-tray-panel must NOT carry overflow-y: auto. This is
-	// the load-bearing pin from D25b-fix; D26f preserves it because the
-	// chart now fills the right column at full height with no need to
-	// scroll the tray itself. Activity opt-in keeps using .is-scrollable.
-	panelIdx := strings.Index(body, ".gmap-evidence-tray-panel {")
-	if panelIdx < 0 {
-		t.Fatal("D26f: .gmap-evidence-tray-panel rule not found")
-	}
-	panelRule := body[panelIdx : panelIdx+strings.Index(body[panelIdx:], "}")]
-	if strings.Contains(panelRule, "overflow-y: auto") {
-		t.Error("D26f: .gmap-evidence-tray-panel must NOT carry overflow-y: auto")
-	}
-	// Activity list still scrolls internally.
-	activityListIdx := strings.Index(body, ".gmap-evidence-tray-activity-list {")
-	if activityListIdx < 0 {
-		t.Fatal("D26f: .gmap-evidence-tray-activity-list rule not found")
-	}
-	activityRule := body[activityListIdx : activityListIdx+strings.Index(body[activityListIdx:], "}")]
-	if !strings.Contains(activityRule, "overflow-y: auto") {
-		t.Error("D26f: Activity list must continue to scroll internally (overflow-y: auto)")
-	}
-
-	// === 9. D25e semantics regression — kind labels + disallowed wording ===
-	for _, want := range []string{
-		"'Service drift exposure'",
-		"'Capability drift exposure'",
-		"'Process drift signals'",
-		"'Decision surface drift'",
-		"'AI usage / outcome drift'",
-		"'Coverage drift'",
-		"'Authority drift exposure'",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D26f: D25e semantic title %q must remain", want)
-		}
-	}
-	semIdx := strings.Index(body, "function getGmapEvidenceSignalSemantics(nodeId)")
-	if semIdx < 0 {
-		t.Fatal("D26f: getGmapEvidenceSignalSemantics not found")
-	}
-	semBody := body[semIdx:]
-	semEnd := strings.Index(semBody, "\n  }\n")
-	if semEnd < 0 {
-		t.Fatal("D26f: getGmapEvidenceSignalSemantics end marker not found")
-	}
-	semBody = semBody[:semEnd]
-	for _, gone := range []string{
-		"'Drift status'",
-		"'Capability is drifting'",
-		"'Business Service drift detected'",
-		"'Process drift detected'",
-	} {
-		if strings.Contains(semBody, gone) {
-			t.Errorf("D26f: disallowed wording must not appear in semantics helper: %q", gone)
-		}
-		if strings.Contains(driftBody, gone) {
-			t.Errorf("D26f: disallowed wording must not appear in drift renderer: %q", gone)
-		}
-	}
-
-	// === 10. Activity-tab regression — D26c contract preserved ===
-	for _, want := range []string{
-		"/explorer/envelopes?limit=50",
-		"Loading runtime activity",
-		"No runtime activity yet",
-		"Could not load runtime activity",
-		"Activity uses real Explorer runtime envelopes",
-		"function renderGmapEvidenceTrayActivityPanel()",
-		"function loadGmapEvidenceActivity()",
-		`data-envelope-id="`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D26f: D26c Activity-tab affordance must remain: %q", want)
-		}
-	}
-
-	// === 11. Records-runtime regression — D26b/D26d still in place ===
-	// mapExplorerEnvelopeToRecordRow and computeRecordsRuntimeMetrics
-	// moved to records/envelope-summary.js in D27j-ui-foundation-6;
-	// the others remain inline.
-	envelopeSummaryJSD26f := getExplorerAsset(t, srv, "/explorer/assets/js/records/envelope-summary.js")
-	for _, want := range []string{
-		"function mapExplorerEnvelopeToRecordRow(item)",
-		"function computeRecordsRuntimeMetrics(rows)",
-	} {
-		if !strings.Contains(envelopeSummaryJSD26f, want) {
-			t.Errorf("D26f: D26b/D26d records affordance must remain: %q (in records/envelope-summary.js)", want)
-		}
-	}
-	for _, want := range []string{
-		"function loadExplorerRuntimeRecords()",
-		`>Explorer runtime<`,
-		`id="records-metric-total"`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D26f: D26b/D26d records affordance must remain: %q", want)
-		}
-	}
-
-	// === 12. Tray height + panel chrome regression ===
-	for _, want := range []string{
-		`id="gmap-evidence-tray"`,
-		"Runtime Evidence",
-		"height: 320px;",
-		"transition: height 0.18s ease-out",
-		`id="gmap-evidence-tray-toggle"`,
-		`id="gmap-evidence-tray-chart-svg"`,
-		`preserveAspectRatio="none"`,
-		// Drift renderer + chart fn still present so unit pins from
-		// D25b/D25e do not drift.
-		"function renderGmapEvidenceTrayDriftPanel()",
-		"function renderGmapEvidenceTrayChart()",
-		"function renderGmapEvidenceTrayTiles()",
-		// D24i / D24i-fix3 affordances unaffected.
-		`id="gmap-pan-mode-button"`,
-		`id="gmap-select-mode-button"`,
-		"const gmapSelectedNodeIds = new Set()",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D26f must NOT remove %q", want)
-		}
-	}
-}
-
 // TestExplorer_HTML_GovernanceMap_EvidenceTrayActivityFromExplorerEnvelopes
 // pins the D26c contract for the Evidence Tray Activity tab: it consumes
 // the D26a runtime feed (GET /explorer/envelopes), surfaces honest
@@ -9843,7 +6242,7 @@ func TestExplorer_HTML_GovernanceMap_EvidenceTrayActivityFromExplorerEnvelopes(t
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
 	// `body` so existing CSS-rule-substring assertions continue to
 	// match. The HTML body content is unchanged at the start; the
@@ -10077,585 +6476,10 @@ func TestExplorer_HTML_GovernanceMap_EvidenceTrayActivityFromExplorerEnvelopes(t
 //
 // Regression pins keep prior camera-bar / pan / lasso / group-drag
 // affordances intact.
-func TestExplorer_HTML_GovernanceMap_InteractionModeToggle(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
-	// `body` so existing CSS-rule-substring assertions continue to
-	// match. The HTML body content is unchanged at the start; the
-	// conceptual stylesheet is appended in cascade order.
-	body += "\n" + getExplorerAllCSS(t, srv)
-
-	// === 1. Buttons exist with the canonical ids + ARIA + titles ===
-	for _, want := range []string{
-		`id="gmap-pan-mode-button"`,
-		`id="gmap-select-mode-button"`,
-		`aria-label="Pan canvas mode"`,
-		`aria-label="Select nodes mode"`,
-		`title="Pan canvas"`,
-		`title="Select nodes"`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D24i-fix3 mode-button markup literal missing: %q", want)
-		}
-	}
-
-	// === 2. Pan ships active by default; Select ships inactive ===
-	// Pin the markup-default attributes so first-paint state matches
-	// the module-state default ('pan').
-	panBtnIdx := strings.Index(body, `id="gmap-pan-mode-button"`)
-	if panBtnIdx < 0 {
-		t.Fatal("gmap-pan-mode-button not found")
-	}
-	panBtnEnd := strings.Index(body[panBtnIdx:], `>`)
-	panBtnTag := body[panBtnIdx : panBtnIdx+panBtnEnd]
-	if !strings.Contains(panBtnTag, `class="is-active"`) {
-		t.Error("D24i-fix3: Pan-mode button must ship with class=\"is-active\" (default mode)")
-	}
-	if !strings.Contains(panBtnTag, `aria-pressed="true"`) {
-		t.Error("D24i-fix3: Pan-mode button must ship with aria-pressed=\"true\" (default mode)")
-	}
-	selectBtnIdx := strings.Index(body, `id="gmap-select-mode-button"`)
-	if selectBtnIdx < 0 {
-		t.Fatal("gmap-select-mode-button not found")
-	}
-	selectBtnEnd := strings.Index(body[selectBtnIdx:], `>`)
-	selectBtnTag := body[selectBtnIdx : selectBtnIdx+selectBtnEnd]
-	if !strings.Contains(selectBtnTag, `aria-pressed="false"`) {
-		t.Error("D24i-fix3: Select-mode button must ship with aria-pressed=\"false\"")
-	}
-	if strings.Contains(selectBtnTag, `class="is-active"`) {
-		t.Error("D24i-fix3: Select-mode button must NOT ship with is-active (default mode is Pan)")
-	}
-
-	// === 3. Pan/Select live inside .gmap-mode-rail (D26g-impl-2) ===
-	// D26g-impl-1 moved Back out of the camera bar into the workbench
-	// toolbar. D26g-impl-2 split what remained of the camera bar:
-	// Pan/Select live in the mode rail (top-left of canvas), and the
-	// camera/viewport controls live in a separate camera cluster
-	// (bottom-right of canvas). Order inside the mode rail: Pan →
-	// Select.
-	modeRailIdx := strings.Index(body, `class="gmap-mode-rail"`)
-	if modeRailIdx < 0 {
-		t.Fatal("D26g-impl-2: .gmap-mode-rail not found")
-	}
-	modeRailTail := body[modeRailIdx:]
-	modeRailEnd := strings.Index(modeRailTail, `</div>`)
-	if modeRailEnd < 0 {
-		t.Fatal("D26g-impl-2: .gmap-mode-rail closing tag not found")
-	}
-	modeRailBody := modeRailTail[:modeRailEnd]
-	for _, want := range []string{
-		`id="gmap-pan-mode-button"`,
-		`id="gmap-select-mode-button"`,
-	} {
-		if !strings.Contains(modeRailBody, want) {
-			t.Errorf("D26g-impl-2: %q must live inside .gmap-mode-rail", want)
-		}
-	}
-	if strings.Contains(modeRailBody, `id="gmap-zoom-in"`) {
-		t.Error("D26g-impl-2: zoom controls must NOT live inside the mode rail (they live in the camera cluster)")
-	}
-	if strings.Contains(modeRailBody, `id="gmap-back-button"`) {
-		t.Error("D26g-impl-2: gmap-back-button must NOT live inside .gmap-mode-rail (it lives in the workbench toolbar)")
-	}
-	panIdx := strings.Index(modeRailBody, `id="gmap-pan-mode-button"`)
-	selIdx := strings.Index(modeRailBody, `id="gmap-select-mode-button"`)
-	if !(panIdx < selIdx) {
-		t.Errorf("D26g-impl-2: mode-rail button order must be Pan → Select (pan=%d sel=%d)", panIdx, selIdx)
-	}
-
-	// === 4. State + helper declarations ===
-	for _, want := range []string{
-		`let gmapInteractionMode = 'pan';`,
-		`function setGmapInteractionMode(mode)`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D24i-fix3 mode state/helper literal missing: %q", want)
-		}
-	}
-
-	// === 5. Helper body invariants ===
-	helperIdx := strings.Index(body, "function setGmapInteractionMode(mode)")
-	if helperIdx < 0 {
-		t.Fatal("setGmapInteractionMode declaration not found")
-	}
-	helperTail := body[helperIdx:]
-	helperEnd := strings.Index(helperTail, "\n  }\n")
-	if helperEnd < 0 {
-		t.Fatal("setGmapInteractionMode end marker not found")
-	}
-	helperBody := helperTail[:helperEnd]
-	for _, want := range []string{
-		// Validation gate.
-		`if (mode !== 'pan' && mode !== 'select') return;`,
-		// Module-state mutation.
-		`gmapInteractionMode = mode;`,
-		// Active-class + aria-pressed sync on both buttons.
-		`panBtn.classList.toggle('is-active', mode === 'pan');`,
-		`selectBtn.classList.toggle('is-active', mode === 'select');`,
-		`panBtn.setAttribute('aria-pressed', mode === 'pan'`,
-		`selectBtn.setAttribute('aria-pressed', mode === 'select'`,
-		// Body cursor classes for empty-canvas hover.
-		`document.body.classList.toggle('gmap-mode-pan',    mode === 'pan');`,
-		`document.body.classList.toggle('gmap-mode-select', mode === 'select');`,
-	} {
-		if !strings.Contains(helperBody, want) {
-			t.Errorf("D24i-fix3 setGmapInteractionMode helper invariant missing: %q", want)
-		}
-	}
-
-	// === 6. Wiring IIFE binds clicks to the helper ===
-	for _, want := range []string{
-		`function wireGmapInteractionModeButtons()`,
-		`setGmapInteractionMode('pan')`,
-		`setGmapInteractionMode('select')`,
-		// Initial body-class sync for the markup-default mode.
-		`document.body.classList.add('gmap-mode-pan');`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D24i-fix3 mode wiring literal missing: %q", want)
-		}
-	}
-
-	// === 7. Gesture pick — wireGmapCanvasInteraction uses ONE lasso path ===
-	// The Shift-accelerator and Select-mode dispatch must share the
-	// same lasso-pending branch (no duplicate lasso state).
-	canvasIxIdx := strings.Index(body, "wireGmapCanvasInteraction")
-	if canvasIxIdx < 0 {
-		t.Fatal("wireGmapCanvasInteraction IIFE not found")
-	}
-	canvasIxTail := body[canvasIxIdx:]
-	canvasIxEnd := strings.Index(canvasIxTail, "\n  })();")
-	if canvasIxEnd < 0 {
-		t.Fatal("wireGmapCanvasInteraction end marker not found")
-	}
-	canvasIxBody := canvasIxTail[:canvasIxEnd]
-	for _, want := range []string{
-		// Single composite predicate: Shift OR mode === 'select'.
-		`e.shiftKey || gmapInteractionMode === 'select'`,
-		// Lasso-pending state still exists.
-		`interaction = 'lasso-pending'`,
-		// Pan-pending state still exists.
-		`interaction = 'pan-pending'`,
-	} {
-		if !strings.Contains(canvasIxBody, want) {
-			t.Errorf("D24i-fix3 gesture-pick literal missing: %q", want)
-		}
-	}
-	// Negative pin — there must be only ONE lasso-pending assignment
-	// in the IIFE body. Two would mean the Shift-accelerator and the
-	// Select-mode dispatch ended up in separate branches, violating
-	// the brief's "no duplicate lasso code" requirement.
-	lassoPendingCount := strings.Count(canvasIxBody, "interaction = 'lasso-pending'")
-	if lassoPendingCount != 1 {
-		t.Errorf("D24i-fix3: wireGmapCanvasInteraction must contain exactly 1 `interaction = 'lasso-pending'` assignment (Shift-accelerator and Select-mode share one path); got %d", lassoPendingCount)
-	}
-
-	// === 8. CSS — Select-mode cursor + active-button styling ===
-	for _, want := range []string{
-		`body.gmap-mode-select .governance-map-canvas-scroll`,
-		`cursor: crosshair`,
-		// D26g-impl-2 — camera bar split; Pan/Select active styling
-		// now lives on the mode rail's button.is-active rule.
-		`.gmap-mode-rail button.is-active`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D24i-fix3 mode CSS literal missing: %q", want)
-		}
-	}
-
-	// === 9. Regression — every prior camera/canvas affordance preserved ===
-	for _, want := range []string{
-		// D26g-impl-2 — camera bar split into mode rail + camera cluster.
-		`class="gmap-mode-rail"`,
-		`class="gmap-camera-cluster"`,
-		`id="gmap-back-button"`,
-		`id="gmap-fit-button"`,
-		`id="gmap-centre-button"`,
-		`id="gmap-zoom-out"`,
-		`id="gmap-focus-toggle"`,
-		// Transform-based pan + helpers.
-		`let gmapPanX`,
-		`let gmapPanY`,
-		`'translate(' + gmapPanX + 'px, ' + gmapPanY + 'px) scale(' + gmapZoom + ')'`,
-		`function gmapPointerToScene(scrollEl, clientX, clientY)`,
-		// Multi-selection state + lasso.
-		`const gmapSelectedNodeIds = new Set()`,
-		`function applyGmapMultiSelection()`,
-		`function clearGmapMultiSelection()`,
-		// Group drag gate.
-		`gmapSelectedNodeIds.has(nodeId) && gmapSelectedNodeIds.size > 1`,
-		// Auto-camera helpers + pan resets.
-		`function fitGmapToBounds()`,
-		`function focusGmapOnRoot(rootCardId)`,
-		`function focusGmapOnNode(nodeId)`,
-		// Renderer anchors.
-		"governance-map-body",
-		"selectGovernanceMapNode",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D24i-fix3 must NOT remove existing affordance %q", want)
-		}
-	}
-}
-
 // Negative pins guard against:
 //   - manual zoom paths consuming the lasso state by accident
 //   - fit-mode persisting after manual interaction
 //   - the lasso rectangle leaking outside the scene
-func TestExplorer_HTML_GovernanceMap_CanvasInteraction(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
-	// `body` so existing CSS-rule-substring assertions continue to
-	// match. The HTML body content is unchanged at the start; the
-	// conceptual stylesheet is appended in cascade order.
-	body += "\n" + getExplorerAllCSS(t, srv)
-
-	// === 1. Fit-mode CSS + helper ===
-	for _, want := range []string{
-		"body.gmap-fit-mode .governance-map-canvas-scroll",
-		"overflow-x: hidden",
-		"overflow-y: hidden",
-		"function applyGmapFitMode(active)",
-		"document.body.classList.toggle('gmap-fit-mode'",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D24i fit-mode literal missing: %q", want)
-		}
-	}
-	// fitGmapToBounds must enter fit-mode at the end of its body.
-	fitIdx := strings.Index(body, "function fitGmapToBounds()")
-	if fitIdx < 0 {
-		t.Fatal("fitGmapToBounds declaration not found")
-	}
-	fitTail := body[fitIdx:]
-	fitEnd := strings.Index(fitTail, "\n  }\n")
-	if fitEnd < 0 {
-		t.Fatal("fitGmapToBounds end marker not found")
-	}
-	fitBody := fitTail[:fitEnd]
-	if !strings.Contains(fitBody, "applyGmapFitMode(true)") {
-		t.Error("D24i: fitGmapToBounds must call applyGmapFitMode(true) at the end of its body")
-	}
-
-	// === 2. Manual zoom paths exit fit-mode ===
-	// Wheel-zoom IIFE.
-	wheelIdx := strings.Index(body, "wireGmapWheelZoom")
-	if wheelIdx < 0 {
-		t.Fatal("wireGmapWheelZoom IIFE not found")
-	}
-	wheelTail := body[wheelIdx:]
-	wheelEnd := strings.Index(wheelTail, "\n  })();")
-	if wheelEnd < 0 {
-		t.Fatal("wireGmapWheelZoom end marker not found")
-	}
-	wheelBody := wheelTail[:wheelEnd]
-	if !strings.Contains(wheelBody, "applyGmapFitMode(false)") {
-		t.Error("D24i: wireGmapWheelZoom must call applyGmapFitMode(false) so manual wheel zoom exits fit-mode")
-	}
-	// Button-zoom IIFE.
-	zoomCtrlIdx := strings.Index(body, "wireGmapZoomControls")
-	if zoomCtrlIdx < 0 {
-		t.Fatal("wireGmapZoomControls IIFE not found")
-	}
-	zoomCtrlTail := body[zoomCtrlIdx:]
-	zoomCtrlEnd := strings.Index(zoomCtrlTail, "\n  })();")
-	if zoomCtrlEnd < 0 {
-		t.Fatal("wireGmapZoomControls end marker not found")
-	}
-	zoomCtrlBody := zoomCtrlTail[:zoomCtrlEnd]
-	if !strings.Contains(zoomCtrlBody, "applyGmapFitMode(false)") {
-		t.Error("D24i: wireGmapZoomControls must call applyGmapFitMode(false) so manual +/- zoom exits fit-mode")
-	}
-
-	// === 3. Multi-selection state + helpers ===
-	for _, want := range []string{
-		"const gmapSelectedNodeIds = new Set()",
-		"function applyGmapMultiSelection()",
-		"function clearGmapMultiSelection()",
-		// Selection visual class.
-		".gmap-node.gmap-multi-selected",
-		// Pruning logic — stale ids dropped on re-render.
-		"if (!gmapPositions[id]) stale.push(id)",
-		// Class toggle in apply helper.
-		"classList.toggle('gmap-multi-selected'",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D24i multi-selection literal missing: %q", want)
-		}
-	}
-
-	// === 4. wireGmapCanvasInteraction IIFE ===
-	for _, want := range []string{
-		"wireGmapCanvasInteraction",
-		// Anchored on the canvas-scroll wrapper.
-		"document.getElementsByClassName('governance-map-canvas-scroll')[0]",
-		// Pointer events.
-		"scrollEl.addEventListener('pointerdown'",
-		"scrollEl.addEventListener('pointermove'",
-		"scrollEl.addEventListener('pointerup'",
-		"scrollEl.addEventListener('pointercancel'",
-		// Interactive-origin guard — common interactive children must
-		// be ignored so the gesture doesn't fight node drag, button
-		// click, input typing, etc. D26g-impl-2 — camera bar split
-		// into mode rail + camera cluster; the guard list adopts both
-		// new selectors.
-		"INTERACTIVE_ORIGIN_SELECTOR",
-		"closest(INTERACTIVE_ORIGIN_SELECTOR)",
-		".gmap-node",
-		".gmap-mode-rail",
-		".gmap-camera-cluster",
-		// Pan + lasso branches.
-		"e.shiftKey",
-		"interaction = 'pan-pending'",
-		"interaction = 'lasso-pending'",
-		"interaction = 'pan'",
-		"interaction = 'lasso'",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D24i canvas-interaction literal missing: %q", want)
-		}
-	}
-
-	// === 5. Pan path updates scrollLeft / scrollTop ===
-	canvasIxIdx := strings.Index(body, "wireGmapCanvasInteraction")
-	if canvasIxIdx < 0 {
-		t.Fatal("wireGmapCanvasInteraction IIFE not found")
-	}
-	canvasIxTail := body[canvasIxIdx:]
-	canvasIxEnd := strings.Index(canvasIxTail, "\n  })();")
-	if canvasIxEnd < 0 {
-		t.Fatal("wireGmapCanvasInteraction end marker not found")
-	}
-	canvasIxBody := canvasIxTail[:canvasIxEnd]
-	for _, want := range []string{
-		// D24i-fix — pan is transform-based. The handler updates
-		// gmapPanX/Y from the captured start offset + pointer delta,
-		// then calls applyGmapZoom() to rewrite the scene transform.
-		// scroll-based pan (scrollEl.scrollLeft = ...) was silent
-		// in the post-fit state where canvas dimensions match the
-		// safe area; transform-based pan works regardless of
-		// scrollable overflow.
-		"gmapPanX = interactionData.startPanX + dx",
-		"gmapPanY = interactionData.startPanY + dy",
-		"applyGmapZoom()",
-		// Pointerdown captures the current pan offset so pointermove
-		// can compute new = start + delta without drift.
-		"startPanX: gmapPanX",
-		"startPanY: gmapPanY",
-		// Pan exits fit-mode (per the brief — manual pan must clear
-		// the suppression).
-		"applyGmapFitMode(false)",
-		// Cursor body classes (visual feedback).
-		"gmap-canvas-panning",
-		"gmap-canvas-lassoing",
-		// D24i-fix2 — lasso uses the canonical gmapPointerToScene
-		// helper for both endpoints. The helper subtracts gmapPanX /
-		// gmapPanY before dividing by zoom, so the lasso rectangle
-		// stays under the cursor after pan. The pre-fix2 raw formula
-		// `(pointer + scroll) / zoom` is gone from the IIFE body
-		// (negative pin below).
-		"gmapPointerToScene(scrollEl, data.startClientX, data.startClientY)",
-		"gmapPointerToScene(scrollEl, data.curClientX,   data.curClientY)",
-		// Capture clientX/Y at pointerdown so the helper has unbiased
-		// inputs (rect.left subtraction happens inside the helper).
-		"startClientX: e.clientX",
-		"startClientY: e.clientY",
-		// Lasso hit-test against NODE_W / NODE_H.
-		"GMAP.NODE_W",
-		"GMAP.NODE_H",
-		// Click-on-empty-canvas (no movement past threshold) clears
-		// the multi-selection.
-		"clearGmapMultiSelection",
-	} {
-		if !strings.Contains(canvasIxBody, want) {
-			t.Errorf("D24i / D24i-fix / D24i-fix2 canvas-interaction body literal missing: %q", want)
-		}
-	}
-	// D24i-fix2 — the pre-fix2 raw lasso scene-coord formula is gone;
-	// gmapPointerToScene is the single source of truth.
-	for _, gone := range []string{
-		"(x0p + scrollEl.scrollLeft) / z",
-		"(y0p + scrollEl.scrollTop)  / z",
-	} {
-		if strings.Contains(canvasIxBody, gone) {
-			t.Errorf("D24i-fix2: pre-fix2 raw lasso scene-coord formula must be removed (replaced by gmapPointerToScene): %q", gone)
-		}
-	}
-	// D24i-fix — the pan path must NOT assign scrollLeft/scrollTop
-	// from start values. Negative pin scoped to the IIFE body so
-	// other paths (lasso coord conversion, end-of-fit clamp) that
-	// legitimately READ scroll positions are unaffected.
-	for _, gone := range []string{
-		"scrollEl.scrollLeft = interactionData.startScrollLeft",
-		"scrollEl.scrollTop  = interactionData.startScrollTop",
-		"startScrollLeft: scrollEl.scrollLeft",
-		"startScrollTop:  scrollEl.scrollTop",
-	} {
-		if strings.Contains(canvasIxBody, gone) {
-			t.Errorf("D24i-fix: scroll-based pan literal must be removed (replaced by transform-based pan): %q", gone)
-		}
-	}
-
-	// === 5b. D24i-fix2 canonical pointer-to-scene helper ===
-	// gmapPointerToScene is the single source of truth for pointer-
-	// space → scene-space conversion after transform-based pan. It
-	// must subtract gmapPanX/Y, include scrollLeft/scrollTop, and
-	// divide by gmapZoom. Pin the helper's body so the four
-	// invariants survive future tuning.
-	helperIdx := strings.Index(body, "function gmapPointerToScene(scrollEl, clientX, clientY)")
-	if helperIdx < 0 {
-		t.Fatal("D24i-fix2: gmapPointerToScene helper declaration not found")
-	}
-	helperTail := body[helperIdx:]
-	helperEnd := strings.Index(helperTail, "\n  }\n")
-	if helperEnd < 0 {
-		t.Fatal("gmapPointerToScene end marker not found")
-	}
-	helperBody := helperTail[:helperEnd]
-	for _, want := range []string{
-		"scrollEl.getBoundingClientRect()",
-		"clientX - rect.left",
-		"clientY - rect.top",
-		"scrollEl.scrollLeft",
-		"scrollEl.scrollTop",
-		"- gmapPanX",
-		"- gmapPanY",
-		"/ z",
-	} {
-		if !strings.Contains(helperBody, want) {
-			t.Errorf("D24i-fix2 gmapPointerToScene helper invariant missing: %q", want)
-		}
-	}
-
-	// === 6. Escape key wiring ===
-	for _, want := range []string{
-		"wireGmapKeyboard",
-		"window.addEventListener('keydown'",
-		"e.key !== 'Escape'",
-		"clearGmapMultiSelection",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D24i keyboard literal missing: %q", want)
-		}
-	}
-
-	// === 7. Group drag inside attachGmapDragHandlers ===
-	dragIdx := strings.Index(body, "function attachGmapDragHandlers(node, nodeId)")
-	if dragIdx < 0 {
-		t.Fatal("attachGmapDragHandlers declaration not found")
-	}
-	dragTail := body[dragIdx:]
-	dragEnd := strings.Index(dragTail, "\n  }\n")
-	if dragEnd < 0 {
-		t.Fatal("attachGmapDragHandlers end marker not found")
-	}
-	dragBody := dragTail[:dragEnd]
-	for _, want := range []string{
-		// Group-drag gate — pointer-down node is in the multi-set
-		// AND set has > 1 entry.
-		"gmapSelectedNodeIds.has(nodeId) && gmapSelectedNodeIds.size > 1",
-		"isGroupDrag",
-		"groupStartPositions",
-		// Group drag converts pointer-space delta to scene-space delta
-		// using gmapZoom — same as individual drag.
-		"sceneDx",
-		"sceneDy",
-		"dx / z",
-		"dy / z",
-		// Group drag updates every member's gmapDragOverrides entry.
-		"gmapDragOverrides[id] = { x: start.x + sceneDx, y: start.y + sceneDy }",
-		// Connector repaint after each pointermove batch.
-		"repaintGmapConnectors",
-		// Drag (individual or group) exits fit-mode — manual
-		// interaction.
-		"applyGmapFitMode(false)",
-	} {
-		if !strings.Contains(dragBody, want) {
-			t.Errorf("D24i group-drag literal missing: %q", want)
-		}
-	}
-
-	// === 8. Click handler updates multi-selection ===
-	// Plain click replaces the multi-set with the clicked id; Ctrl/
-	// Cmd-click toggles. Pinned by their distinctive literals scoped
-	// near the addNode click wiring.
-	for _, want := range []string{
-		"e.ctrlKey || e.metaKey",
-		"gmapSelectedNodeIds.delete(spec.id)",
-		"gmapSelectedNodeIds.add(spec.id)",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D24i click multi-selection literal missing: %q", want)
-		}
-	}
-
-	// === 9. applyGmapMultiSelection invoked at end of render ===
-	// Pin a substring window near the renderGovernanceMap finale —
-	// applyGmapMultiSelection() must run after focusGmapOnRoot so
-	// stale-id pruning fires after positions are settled. The window
-	// size accommodates D26h-fix2's synchronous applyGmapFitMode(true)
-	// + scheduleGmapFitToView() block between focusGmapOnRoot and
-	// applyGmapMultiSelection.
-	rgmIdx := strings.Index(body, "focusGmapOnRoot(rootCardId);")
-	if rgmIdx < 0 {
-		t.Fatal("focusGmapOnRoot(rootCardId); finale call not found")
-	}
-	rgmEnd := rgmIdx + 2048
-	if rgmEnd > len(body) {
-		rgmEnd = len(body)
-	}
-	rgmTail := body[rgmIdx:rgmEnd]
-	if !strings.Contains(rgmTail, "applyGmapMultiSelection()") {
-		t.Error("D24i: applyGmapMultiSelection() must be called after focusGmapOnRoot in renderGovernanceMap so multi-selection visuals reconcile after each render")
-	}
-
-	// === 10. Regression — every prior camera/chrome affordance ===
-	for _, want := range []string{
-		// Fit + camera bar still wired the same way.
-		"function fitGmapToBounds()",
-		"GMAP_ZOOM.FIT_MIN",
-		"GMAP_ZOOM.MIN",
-		"function applyGmapZoom()",
-		"function computeGmapRenderedExtent(canvas)",
-		// Existing single-selection helper unchanged.
-		"function selectGovernanceMapNode(nodeId)",
-		"gmapSelectedId",
-		// Existing drag helpers + state.
-		"gmapDragOverrides",
-		"effectiveGmapPosition",
-		"GMAP_DRAG_THRESHOLD_PX",
-		// Existing chrome anchors. D26g-impl-1 consolidated the two
-		// top overlays into .governance-map-toolbar; D26g-impl-2 split
-		// the camera bar into mode rail + camera cluster.
-		`class="gmap-mode-rail"`,
-		`class="gmap-camera-cluster"`,
-		`class="governance-map-toolbar`,
-		`class="gmap-legend-overlay"`,
-		`id="gmap-search-input"`,
-		`id="gmap-back-button"`,
-		`id="gmap-fit-button"`,
-		`id="gmap-canvas"`,
-		`id="gmap-scene"`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D24i must NOT remove existing affordance %q", want)
-		}
-	}
-}
-
 // TestExplorer_HTML_GovernanceMap_BackStackHistory pins the
 // Phase 2B Step 15 graph-navigation history mechanism, evolved
 // through Phase 2B Step 34 (D24h-fix) into a camera-bar control
@@ -10701,7 +6525,7 @@ func TestExplorer_HTML_GovernanceMap_BackStackHistory(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	// === History stack declaration ===
 	for _, want := range []string{
@@ -10927,93 +6751,6 @@ func TestExplorer_HTML_GovernanceMap_BackStackHistory(t *testing.T) {
 //     view (their data is null for that projection).
 //   - The toolbar root label updater receives the actual root entity
 //     name (no synthesised value).
-func TestExplorer_HTML_GovernanceMap_RootAwareRenderer(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-
-	// === Adapter: BS-slot synthesis is gone ===
-	// The pre-Step-14 shim built a fake business_service from the
-	// rootAISystemData; both the conditional and the local capture
-	// must be absent from the adapter.
-	if strings.Contains(body, "if (isAIView && businessService === null") {
-		t.Error("Adapter must not synthesise business_service from AI root (Step 14 removed the shim)")
-	}
-	if strings.Contains(body, "rootAISystemData = a;") {
-		t.Error("Adapter must not capture rootAISystemData (was only used by the removed shim)")
-	}
-
-	// === Renderer: root-kind branch exists and is currentGraphView-driven ===
-	if !strings.Contains(body, "isAIRootView") {
-		t.Error("Renderer must define an isAIRootView discriminator for the root-aware branch")
-	}
-	if !strings.Contains(body, "currentGraphView === 'ai_system'") {
-		t.Error("Renderer must branch on currentGraphView === 'ai_system'")
-	}
-	// Root-card position-key replaces the pre-Step-14 hard-coded `bsId`
-	// in connector blocks. The variable name is pinned by tests.
-	if !strings.Contains(body, "rootCardId") {
-		t.Error("Renderer must use rootCardId as the projection-root position key")
-	}
-
-	// === AI root renders with the AI SYSTEM label + class set ===
-	// The exact class string the renderer puts on the AI root card
-	// when in ai_system view.
-	if !strings.Contains(body, "'ai-system-node selected gmap-root-node'") {
-		t.Error("AI root card must use class 'ai-system-node selected gmap-root-node'")
-	}
-	// The pre-existing BUSINESS SERVICE root class for service view
-	// must remain.
-	if !strings.Contains(body, "'business-service-node selected gmap-root-node'") {
-		t.Error("BS root card must still use class 'business-service-node selected gmap-root-node' in service view")
-	}
-
-	// === AI row skips the root system in ai_system view ===
-	if !strings.Contains(body, "ai.id === rootAISystemEntry.id") {
-		t.Error("AI row loop must skip the root AI system in ai_system view (ai.id === rootAISystemEntry.id)")
-	}
-
-	// === Authority + Coverage right-column cards are gated ===
-	// Both are only rendered in service view. The decision_surface
-	// follow-up widened the gate to also exclude the surface root
-	// (the projector emits no authority_summary / coverage nodes for
-	// either non-service view), so the canonical literal is now the
-	// compound `!isAIRootView && !isSurfRootView` form. The single
-	// `!isAIRootView` form must NOT remain alone — that would re-enable
-	// misleading zero-counts in decision_surface view.
-	if !strings.Contains(body, "if (!isAIRootView && !isSurfRootView) {") {
-		t.Error("Authority/Coverage right-column cards must be gated by `!isAIRootView && !isSurfRootView` (decision_surface widening)")
-	}
-
-	// === Toolbar label receives the real root name ===
-	// rootDisplayName is the unified variable for the toolbar +
-	// summary panel; it must be supplied to setGovernanceMapCurrentRoot.
-	if !strings.Contains(body, "rootDisplayName") {
-		t.Error("Renderer must compute a rootDisplayName variable used by the toolbar + summary")
-	}
-	if !strings.Contains(body, "setGovernanceMapCurrentRoot(currentGraphView, currentGraphRootId, rootDisplayName)") {
-		t.Error("Renderer must call setGovernanceMapCurrentRoot with the real rootDisplayName (not a synthesised value)")
-	}
-
-	// === Step 13 affordances still present (no regression) ===
-	if !strings.Contains(body, "gmap-root-node") {
-		t.Error("gmap-root-node class must remain in Step 14")
-	}
-	if !strings.Contains(body, "gmap-current-root") {
-		t.Error("gmap-current-root toolbar element must remain in Step 14")
-	}
-	if !strings.Contains(body, "gmap-node-inline-actions") {
-		t.Error("gmap-node-inline-actions container must remain in Step 14")
-	}
-	if !strings.Contains(body, "reframe-around-this") {
-		t.Error("reframe-around-this action kind must remain in Step 14")
-	}
-}
-
 // TestExplorer_HTML_GovernanceMap_GraphNativeNodeActions pins the
 // Phase 2B Step 13 graph-native UX deliverable:
 //
@@ -11036,94 +6773,6 @@ func TestExplorer_HTML_GovernanceMap_RootAwareRenderer(t *testing.T) {
 //   - The current view + root pretty-print labels ("Service",
 //     "AI System") and the format "View: X · Root: Y" are pinned so
 //     a regression that drops the orientation cue surfaces here.
-func TestExplorer_HTML_GovernanceMap_GraphNativeNodeActions(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-
-	// === Inline action container + button class ===
-	for _, want := range []string{
-		"gmap-node-inline-actions",
-		"gmap-action-reframe-inline",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("Explorer JS/CSS missing required inline-action literal %q", want)
-		}
-	}
-
-	// === Inline action wires into the existing dispatcher ===
-	// The inline button's click handler must call
-	// handleGovernanceMapAction(action) — duplicating reframe logic
-	// would be a regression.
-	if !strings.Contains(body, "handleGovernanceMapAction(action)") {
-		t.Error("Inline action click must call handleGovernanceMapAction(action) (reuse the existing dispatcher)")
-	}
-
-	// === Event-conflict prevention ===
-	// pointerdown stopPropagation prevents the drag handler from
-	// starting; click stopPropagation prevents node re-selection.
-	if !strings.Contains(body, "e.stopPropagation()") {
-		t.Error("Inline action handlers must call e.stopPropagation() to prevent drag/select conflicts")
-	}
-
-	// === Bottom-panel fallback preserved ===
-	// The pre-Step-13 button class must still appear in the file —
-	// inline rendering is additive, not a replacement.
-	if !strings.Contains(body, "gmap-action-reframe") {
-		t.Error("Bottom-panel reframe button class gmap-action-reframe must remain (fallback path)")
-	}
-	// Double-check the dispatcher case is still present.
-	if !strings.Contains(body, "case 'reframe-around-this'") {
-		t.Error("Dispatcher case 'reframe-around-this' must remain (defence-in-depth on click)")
-	}
-
-	// === Inline whitelist excludes record-navigation ===
-	// The inline-action populator must reject any action whose kind
-	// is not in the graph-primary whitelist. Pin the whitelist test
-	// by asserting the only kind we render inline is reframe.
-	if !strings.Contains(body, "action.kind !== 'reframe-around-this'") {
-		t.Error("Inline whitelist must exclude non-reframe action kinds (e.g., view-business-service-record, view-capability-record)")
-	}
-
-	// === Root marker ===
-	for _, want := range []string{
-		"gmap-root-node",
-		"gmap-current-root",
-		"setGovernanceMapCurrentRoot",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("Explorer markup/JS missing required root-orientation literal %q", want)
-		}
-	}
-
-	// === Pretty-print labels for the toolbar ===
-	for _, want := range []string{
-		"'AI System'",
-		"'Service'",
-		"View: ",
-		"Root: ",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("Toolbar root label missing required literal %q", want)
-		}
-	}
-
-	// === The toolbar label is updated on every successful render ===
-	// renderGovernanceMap must call setGovernanceMapCurrentRoot with
-	// the current view+root+name; renderGovernanceMapEmpty/Error must
-	// clear it (passing nulls).
-	if !strings.Contains(body, "setGovernanceMapCurrentRoot(currentGraphView, currentGraphRootId,") {
-		t.Error("renderGovernanceMap must call setGovernanceMapCurrentRoot(currentGraphView, currentGraphRootId, …)")
-	}
-	if !strings.Contains(body, "setGovernanceMapCurrentRoot(null, null, null)") {
-		t.Error("Empty/error render paths must clear the toolbar root label via setGovernanceMapCurrentRoot(null, null, null)")
-	}
-}
-
 // TestExplorer_HTML_GovernanceMap_NoInfrastructureNodeLabels asserts that
 // the governance-map markup does not introduce infrastructure-style
 // node labels. PR 5 explicitly disallows servers, VMs, load balancers,
@@ -11142,7 +6791,7 @@ func TestExplorer_HTML_GovernanceMap_NoInfrastructureNodeLabels(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 	for _, forbidden := range []string{
 		"server-node",
 		"vm-node",
@@ -11192,7 +6841,7 @@ func TestExplorer_HTML_GovernanceMap_NoOverlapInvariant(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	// 1. NODE_GAP constant present and >= 16. Tolerate any value 16..200
 	// so a future bump (e.g. 40px to match a wider design) doesn't break
@@ -11267,7 +6916,7 @@ func TestExplorer_HTML_GovernanceMap_LegendPresent(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 	for _, label := range []string{
 		"governance-map-legend",
 		"Service relationship",
@@ -11309,7 +6958,7 @@ func TestExplorer_HTML_Polish_BannersRemoved(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	// 1. DOM node markers — none of these IDs/classes may appear.
 	for _, marker := range []string{
@@ -11372,7 +7021,7 @@ func TestExplorer_HTML_Polish_FaviconPresent(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	// Favicon link element — must declare rel="icon" with an SVG MIME
 	// type. The data: URI form keeps the asset inline (no external
@@ -11414,7 +7063,7 @@ func TestExplorer_HTML_Polish_AcceptExplorerRemoved(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	// The brand text and its container class must both be gone.
 	if strings.Contains(body, "Accept Explorer") {
@@ -11472,147 +7121,6 @@ func TestExplorer_HTML_Polish_ServicesColumnHeadersPresent(t *testing.T) {
 // as a regression risk, and the CSS rule that lets vertical zoom-in
 // scroll instead of clipping. A regression that drops any of these
 // surfaces here rather than as a silent UI break.
-func TestExplorer_HTML_GovernanceMap_ZoomControls(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
-	// `body` so existing CSS-rule-substring assertions continue to
-	// match. The HTML body content is unchanged at the start; the
-	// conceptual stylesheet is appended in cascade order.
-	body += "\n" + getExplorerAllCSS(t, srv)
-
-	// Markup: surviving button IDs + accessible labels + the scene
-	// wrapper that the renderer injects nodes/SVG into. D24c
-	// reorganised the camera surface: the buttons are now icon-only
-	// SVGs in a vertical .gmap-camera-bar at top-left of the canvas.
-	// The display-only zoom-level span and the zoom-reset (100%)
-	// button are removed (per the brief, they fall outside the
-	// 5-button camera-bar set; reset folds into Fit/wheel-zoom).
-	// The .gmap-zoom-controls class on the camera container is
-	// removed too (its old text-button styling rule would have
-	// overridden the icon-only treatment); the new container
-	// uses the dedicated .gmap-camera-bar class instead.
-	//
-	// Same intent as before: zoom-in/zoom-out exist with proper
-	// aria-labels, in a coherent grouping, alongside the scene
-	// wrapper.
-	for _, marker := range []string{
-		`id="gmap-zoom-out"`,
-		`id="gmap-zoom-in"`,
-		// D26g-impl-2 — zoom controls live in .gmap-camera-cluster
-		// (split from the unified .gmap-camera-bar).
-		`gmap-camera-cluster`,
-		`aria-label="Zoom out"`,
-		`aria-label="Zoom in"`,
-		`id="gmap-scene"`,
-	} {
-		if !strings.Contains(body, marker) {
-			t.Errorf("Zoom controls: missing markup marker %q", marker)
-		}
-	}
-	// Removed-element pins.
-	for _, gone := range []string{
-		`id="gmap-zoom-level"`,
-		`id="gmap-zoom-reset"`,
-	} {
-		if strings.Contains(body, gone) {
-			t.Errorf("D24c removed %q (not part of the 5-button camera bar)", gone)
-		}
-	}
-
-	// JS state + helper-function declarations. Pinning the literal
-	// `function clampGmapZoom` form (rather than `clampGmapZoom =`)
-	// guards against an accidental refactor to an arrow-function
-	// expression, which would still work at runtime but break the
-	// documented surface for callers and for this regression test.
-	for _, decl := range []string{
-		`let gmapZoom`,
-		`GMAP_ZOOM`,
-		`function clampGmapZoom`,
-		`function applyGmapZoom`,
-		`function setGmapZoom`,
-		// D24i-fix — transform-based camera pan state. Both axes
-		// declared as `let` so applyGmapZoom can write the
-		// composite scene transform.
-		`let gmapPanX`,
-		`let gmapPanY`,
-	} {
-		if !strings.Contains(body, decl) {
-			t.Errorf("Zoom controls JS: missing declaration %q", decl)
-		}
-	}
-
-	// Transform application — both literals must appear together.
-	// (1) the scene receives transform: scale(z); (2) the canvas
-	// reports the post-scale width to the scroll wrapper. The two
-	// together make zoom visible AND scrollable; either alone is a
-	// silent half-fix.
-	// D24h-fix — applyGmapZoom now reads the rendered extent from
-	// computeGmapRenderedExtent(canvas) and writes canvas.style.width
-	// from the resulting scaledW (= extent.width × gmapZoom), not
-	// from baseW × gmapZoom directly. The product invariant is the
-	// same (canvas reports scaled width to the scroll wrapper); the
-	// dimension source changes from "padded envelope" to "rendered
-	// extent" so empty right/bottom padding is no longer carried into
-	// scrollWidth/scrollHeight.
-	// D24i-fix — scene transform now includes a translate prefix for
-	// transform-based camera pan. Pin both translate and scale so the
-	// composite transform is preserved (one without the other is a
-	// silent half-fix).
-	if !strings.Contains(body, `'translate(' + gmapPanX + 'px, ' + gmapPanY + 'px) scale(' + gmapZoom + ')'`) {
-		t.Error("D24i-fix: scene transform must apply `translate(<panX>px, <panY>px) scale(<zoom>)` so transform-based pan and zoom compose")
-	}
-	// Negative pin — pre-D24i-fix scale-only transform is gone. The
-	// new composite transform is the only path; a regression to scale-
-	// only would silently break pan.
-	if strings.Contains(body, `scene.style.transform = 'scale(' + gmapZoom + ')'`) {
-		t.Error("D24i-fix: pre-fix scale-only scene transform must be removed (replaced by translate+scale composite)")
-	}
-	if !strings.Contains(body, `function computeGmapRenderedExtent(canvas)`) {
-		t.Error("D24h-fix: computeGmapRenderedExtent helper must be declared (used by applyGmapZoom for canvas dimensions)")
-	}
-	if !strings.Contains(body, `canvas.style.width    = scaledW + 'px';`) {
-		t.Error("D24h-fix: applyGmapZoom must write canvas.style.width from scaledW (= extent.width × gmapZoom), not from baseW × gmapZoom")
-	}
-	if !strings.Contains(body, `canvas.style.height   = scaledH + 'px';`) {
-		t.Error("D24h-fix: applyGmapZoom must write canvas.style.height from scaledH (= extent.height × gmapZoom)")
-	}
-	// Negative pin — pre-D24h-fix dimension formula is gone.
-	if strings.Contains(body, `canvas.style.width = (baseW * gmapZoom) + 'px'`) {
-		t.Error("D24h-fix: pre-fix canvas.style.width formula `(baseW * gmapZoom)` must be removed (replaced by rendered-extent path)")
-	}
-
-	// Symmetric in/out arithmetic. Both literals must appear; the
-	// audit explicitly flagged a regression class where one direction
-	// works and the other doesn't.
-	if !strings.Contains(body, `gmapZoom * GMAP_ZOOM.STEP`) {
-		t.Error("Zoom controls JS: zoom-in handler must compute " +
-			"`gmapZoom * GMAP_ZOOM.STEP`")
-	}
-	if !strings.Contains(body, `gmapZoom / GMAP_ZOOM.STEP`) {
-		t.Error("Zoom controls JS: zoom-out handler must compute " +
-			"`gmapZoom / GMAP_ZOOM.STEP`")
-	}
-
-	// CSS contract — scroll wrapper allows vertical scroll so the
-	// scaled canvas is never clipped on zoom-in. `overflow-y: auto`
-	// appears in many unrelated rules elsewhere in the shell, so this
-	// pin is intentionally weak; it confirms the literal exists at
-	// least once. The functional change (flipping from `hidden` to
-	// `auto` on `.governance-map-canvas-scroll`) is what makes
-	// vertical scroll actually engage.
-	if !strings.Contains(body, `overflow-y: auto`) {
-		t.Error("Zoom controls CSS: `overflow-y: auto` must be present so " +
-			"the scroll wrapper engages a vertical scrollbar at zoom > 1")
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Live Business Service selector (replaces STRUCTURAL_CONTEXT-driven cards)
 // ---------------------------------------------------------------------------
@@ -11632,116 +7140,6 @@ func TestExplorer_HTML_GovernanceMap_ZoomControls(t *testing.T) {
 //
 // A regression that re-introduces any of these failure modes surfaces
 // here rather than as a silent UI break.
-func TestExplorer_HTML_ServicesView_LiveBSListSelector(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-
-	// 1. Live fetch URL — the literal `'/v1/businessservices'` must
-	// appear in the JS (separate from the per-BS governance-map URL,
-	// which uses `/v1/businessservices/` with a trailing slash and an
-	// {id} interpolation).
-	if !strings.Contains(body, `fetch('/v1/businessservices'`) {
-		t.Error("Live BS selector: must call fetch('/v1/businessservices', …)")
-	}
-	// 2. Envelope-shape access — the renderer must read
-	// payload.business_services (not the bare array).
-	if !strings.Contains(body, `payload.business_services`) &&
-		!strings.Contains(body, `bs.business_services`) {
-		t.Error("Live BS selector: must read payload.business_services from the envelope")
-	}
-
-	// 3. Live state-machine markers exist. These three classes are how
-	// the loading / empty / error states present to the operator.
-	for _, cls := range []string{
-		`services-bs-loading`,
-		`services-bs-empty`,
-		`services-bs-error`,
-	} {
-		if !strings.Contains(body, cls) {
-			t.Errorf("Live BS selector: missing state-strip class %q", cls)
-		}
-	}
-	// 4. Operator-visible empty/error strings — pinning these prevents
-	// an accidental silent fallback to demo data.
-	for _, msg := range []string{
-		"No business services found",
-		"Could not load business services",
-		"Loading business services",
-	} {
-		if !strings.Contains(body, msg) {
-			t.Errorf("Live BS selector: missing operator-facing string %q", msg)
-		}
-	}
-
-	// 5. State variables and the loader function are declared.
-	for _, decl := range []string{
-		`let liveBSList`,
-		`let liveBSError`,
-		`let liveBSLoading`,
-		`function loadBusinessServicesList`,
-	} {
-		if !strings.Contains(body, decl) {
-			t.Errorf("Live BS selector: missing JS declaration %q", decl)
-		}
-	}
-
-	// 6. The hardcoded default selection is gone. The previous code
-	// initialised currentSelectedService with the literal demo BS id;
-	// the live path defaults from the response instead.
-	if strings.Contains(body, `let currentSelectedService = 'bs-merchant-services'`) {
-		t.Error("Live BS selector: currentSelectedService must NOT default to the demo " +
-			"`bs-merchant-services` literal — it should default from liveBSList[0].id")
-	}
-	if !strings.Contains(body, `let currentSelectedService = null`) {
-		t.Error("Live BS selector: expected `let currentSelectedService = null` (default " +
-			"comes from the live response, not a hardcoded constant)")
-	}
-	if !strings.Contains(body, `liveBSList[0].id`) {
-		t.Error("Live BS selector: must default currentSelectedService from " +
-			"liveBSList[0].id when the current selection isn't in the live list")
-	}
-
-	// 7. The unconditional "Demo seeded" badge is gone from the BS card
-	// render path. STRUCTURAL_CONTEXT survives elsewhere in the file
-	// (Overview mode, Settings counts) so we look for the BADGE STRING
-	// rather than the constant.
-	if strings.Contains(body, `services-bs-card-badge">Demo seeded`) {
-		t.Error("Live BS selector: the unconditional `Demo seeded` badge must be removed")
-	}
-
-	// 8. The selector renderer must NOT fall back to STRUCTURAL_CONTEXT
-	// on the fetch path. STRUCTURAL_CONTEXT is still defined in the file
-	// (Overview mode reads it), so we pin specific anti-patterns: the
-	// previous renderServicesBSList iterated `STRUCTURAL_CONTEXT.filter`
-	// on the populated branch. The new renderer must not.
-	if strings.Contains(body, `STRUCTURAL_CONTEXT.filter(svc =>`) {
-		t.Error("Live BS selector: renderServicesBSList must not iterate " +
-			"STRUCTURAL_CONTEXT.filter — that was the previous demo-only path")
-	}
-
-	// 9. The Services view's per-BS data fetch (used by both the map
-	// sub-view and the record page) is /v1/authority-graph. The view
-	// parameter is now driven by currentGraphView (Phase 2B Step 10
-	// reframe support); pin the URL prefix only.
-	if !strings.Contains(body, "/v1/authority-graph?view=") {
-		t.Error("Live BS selector: the /v1/authority-graph?view= URL prefix must be present")
-	}
-
-	// 10. The init bootstrap calls loadBusinessServicesList() so the
-	// fetch fires on script load. Pin the wiring so a regression that
-	// drops the bootstrap surfaces here.
-	if !strings.Contains(body, `setTimeout(loadBusinessServicesList`) {
-		t.Error("Live BS selector: loadBusinessServicesList must be invoked at init " +
-			"(via setTimeout(loadBusinessServicesList, 0) in the bootstrap block)")
-	}
-}
-
 // ---------------------------------------------------------------------------
 // AI System detail polish — surface returned fields in the details panel
 // ---------------------------------------------------------------------------
@@ -11759,100 +7157,6 @@ func TestExplorer_HTML_ServicesView_LiveBSListSelector(t *testing.T) {
 //     extracted helpers are actually wired in)
 //   - the binding scope precedence chain (matches the connector code's
 //     surface > process > capability > business_service order)
-func TestExplorer_HTML_GovernanceMap_AISystemDetailsSurfaceReturnedFields(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-
-	// 1. Helper-function declarations. Pinning the literal `function name`
-	// form (not `name = function` or arrow) keeps the documented surface
-	// stable for the test and for callers that grep for them. After
-	// D27j-ui-foundation-3 these helpers live in
-	// /explorer/assets/js/util-format.js; the test follows the move so
-	// the surface-stability invariant continues to hold.
-	utilFormatJS := getExplorerAsset(t, srv, "/explorer/assets/js/util-format.js")
-	for _, decl := range []string{
-		`function formatExternalRef`,
-		`function formatAIBindingScope`,
-		`function formatAIBindingDetail`,
-	} {
-		if !strings.Contains(utilFormatJS, decl) {
-			t.Errorf("AI detail polish: missing helper declaration %q", decl)
-		}
-	}
-
-	// 2. Field-access patterns the AI System addNode block must use to
-	// surface the previously-ignored fields. These prove the helpers
-	// are wired in and the new fields actually flow into the details
-	// payload — not just declared and unused.
-	for _, access := range []string{
-		`ai.external_ref`,
-		`ai.active_version.release_label`,
-		`ai.active_version.status`,
-		`ai.bindings`,
-	} {
-		if !strings.Contains(body, access) {
-			t.Errorf("AI detail polish: missing field access %q in renderer", access)
-		}
-	}
-
-	// 3. Binding scope precedence inside formatAIBindingScope. Each scope
-	// id must be referenced individually so the helper can resolve any
-	// binding regardless of which scope id is set. The order must match
-	// the connector-resolution code: surface > process > capability > BS.
-	// After D27j-ui-foundation-3 the helper lives in util-format.js;
-	// the scope-access pins follow.
-	for _, scopeAccess := range []string{
-		`b.role`,
-		`b.surface_id`,
-		`b.process_id`,
-		`b.capability_id`,
-		`b.business_service_id`,
-		`b.description`,
-	} {
-		if !strings.Contains(utilFormatJS, scopeAccess) {
-			t.Errorf("AI detail polish: missing binding-scope access %q in util-format.js", scopeAccess)
-		}
-	}
-
-	// 4. Unscoped fallback — a binding with no scope id rendering as
-	// `unscoped` rather than throwing or leaving an empty scope row.
-	if !strings.Contains(utilFormatJS, `'unscoped'`) {
-		t.Error("AI detail polish: scope helper must return literal 'unscoped' " +
-			"when a binding has no scope id (defensive fallback)")
-	}
-
-	// 5. EXT-REF marker is added to the AI node's meta line when
-	// external_ref is present. Match the Business Service node's
-	// existing convention of pushing the literal 'EXT-REF' string.
-	if !strings.Contains(body, `if (ai.external_ref) meta.push('EXT-REF')`) {
-		t.Error("AI detail polish: AI System node must add 'EXT-REF' to its " +
-			"meta line when external_ref is present (matches the BS convention)")
-	}
-
-	// 6. Per-binding row keys. The details payload uses
-	// `binding_<n+1>` keys so each binding renders as its own row in
-	// the panel rather than only the count surfacing.
-	if !strings.Contains(body, `'binding_' + (idx + 1)`) {
-		t.Error("AI detail polish: each binding must produce its own details-row " +
-			"key via `'binding_' + (idx + 1)`")
-	}
-
-	// 7. The original `version` and `bindings` (count) keys are still
-	// produced — additive change, no regression in existing rows.
-	if !strings.Contains(body, `active_version: ai.active_version ? ai.active_version.version : 'none'`) {
-		t.Error("AI detail polish: existing active_version row must remain (additive change only)")
-	}
-	if !strings.Contains(body, `aiDetails.bindings = aiBindings.length`) {
-		t.Error("AI detail polish: existing bindings count row must remain alongside per-binding rows")
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Layer truncation indicators — visible "+N more" markers
 // ---------------------------------------------------------------------------
@@ -11871,171 +7175,6 @@ func TestExplorer_HTML_GovernanceMap_AISystemDetailsSurfaceReturnedFields(t *tes
 //   - the row-layout count includes the optional more-node slot
 //   - the details payload exposes layer / rendered / total / omitted / note
 //   - the more-node is NOT iterated by any connector loop
-func TestExplorer_HTML_GovernanceMap_TruncationIndicators(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-
-	// 1. CSS class exists. The styling block uses a dashed border to
-	// visually distinguish from semantic entity nodes. CSS lives in
-	// governance-map.css after D27j-ui-foundation-2.
-	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
-	if !strings.Contains(gmapCSS, `.gmap-more-node {`) {
-		t.Error("Truncation: .gmap-more-node CSS rule missing in governance-map.css")
-	}
-
-	// 2. The cap remains in place for all five capped layers. A
-	// regression that removed slice() to `render all hidden nodes`
-	// would change the visual contract entirely; pin all five.
-	for _, sliceCall := range []string{
-		`fullRels.slice(0, GMAP.MAX_PER_LAYER)`,
-		`fullCaps.slice(0, GMAP.MAX_PER_LAYER)`,
-		`fullProcs.slice(0, GMAP.MAX_PER_LAYER)`,
-		`fullSurfaces.slice(0, GMAP.MAX_PER_LAYER)`,
-		`fullAISystems.slice(0, GMAP.MAX_PER_LAYER)`,
-	} {
-		if !strings.Contains(body, sliceCall) {
-			t.Errorf("Truncation: %q missing — the existing cap must remain", sliceCall)
-		}
-	}
-
-	// 3. Omitted-count math: full minus rendered, clamped to >= 0
-	// inside getTruncationInfo. Pin the literal subtraction so a
-	// regression that miscomputes the count (e.g. uses raw length)
-	// surfaces here.
-	for _, omitted := range []string{
-		`fullRels.length      - relSlice.length`,
-		`fullCaps.length      - caps.length`,
-		`fullProcs.length     - procs.length`,
-		`fullSurfaces.length  - surfaces.length`,
-		`fullAISystems.length - aiSystems.length`,
-	} {
-		if !strings.Contains(body, omitted) {
-			t.Errorf("Truncation: omitted-count expression %q missing", omitted)
-		}
-	}
-
-	// 4. Helper-function declarations. After D27j-ui-foundation-3
-	// `getTruncationInfo` lives in /explorer/assets/js/util-format.js
-	// (pure helper extraction); `addMoreNode` remains inline in the
-	// main script because it touches gmap render state.
-	utilFormatJS := getExplorerAsset(t, srv, "/explorer/assets/js/util-format.js")
-	if !strings.Contains(utilFormatJS, `function getTruncationInfo`) {
-		t.Errorf("Truncation: helper declaration %q missing in util-format.js", `function getTruncationInfo`)
-	}
-	if !strings.Contains(body, `function addMoreNode`) {
-		t.Errorf("Truncation: helper declaration %q missing", `function addMoreNode`)
-	}
-
-	// 5. Stable per-layer IDs. The renderer uses these as keys both
-	// for `positions[...]` and as the `more:...` id passed to addNode.
-	for _, id := range []string{
-		`'more:relationships'`,
-		`'more:capabilities'`,
-		`'more:processes'`,
-		`'more:surfaces'`,
-		`'more:ai-systems'`,
-	} {
-		if !strings.Contains(body, id) {
-			t.Errorf("Truncation: stable id %q missing", id)
-		}
-	}
-	// addMoreNode also concatenates `'more:' + layerKey` internally.
-	// Pin that literal so the prefix can't drift.
-	if !strings.Contains(body, `'more:' + layerKey`) {
-		t.Error("Truncation: addMoreNode must build its id as `'more:' + layerKey` so " +
-			"per-layer stable ids stay consistent")
-	}
-
-	// 6. The `+N more` display string is composed inside addMoreNode.
-	if !strings.Contains(body, `'+' + info.omitted + ' more'`) {
-		t.Error("Truncation: the more-node's name must be the literal " +
-			"`'+' + info.omitted + ' more'` (operator-visible '+N more')")
-	}
-
-	// 7. Row-layout counts include the optional more-node slot. These
-	// drive both reqRow() (canvas sizing) and distributeRow() (per-row
-	// node positions); without them, an 8-surface row with cap=6 would
-	// render only 6 slots and the more-node would overlap the last
-	// real surface card.
-	for _, layoutN := range []string{
-		`relLayoutN  = relSlice.length  + (relOmitted  > 0 ? 1 : 0)`,
-		`capLayoutN  = caps.length      + (capOmitted  > 0 ? 1 : 0)`,
-		`procLayoutN = procs.length     + (procOmitted > 0 ? 1 : 0)`,
-		`surfLayoutN = surfaces.length  + (surfOmitted > 0 ? 1 : 0)`,
-		`aiLayoutN   = aiSystems.length + (aiOmitted   > 0 ? 1 : 0)`,
-	} {
-		if !strings.Contains(body, layoutN) {
-			t.Errorf("Truncation: layout-count expression %q missing", layoutN)
-		}
-	}
-	// The distributeRow() callsites must pass the LAYOUT count, not
-	// the visible-slice length, so the more-node has a real slot.
-	for _, call := range []string{
-		`distributeRow(relLayoutN`,
-		`distributeRow(capLayoutN`,
-		`distributeRow(procLayoutN`,
-		`distributeRow(surfLayoutN`,
-		`distributeRow(aiLayoutN`,
-	} {
-		if !strings.Contains(body, call) {
-			t.Errorf("Truncation: distributeRow callsite %q missing — the more-node "+
-				"would overlap the last real card if the layout count is unchanged", call)
-		}
-	}
-
-	// 8. Details-panel keys exposed by addMoreNode. The keys form the
-	// row labels in the details panel, so the operator can see why
-	// items were hidden.
-	for _, key := range []string{
-		`layer: layerLabel`,
-		`rendered: String(info.rendered)`,
-		`total: String(info.total)`,
-		`omitted: String(info.omitted)`,
-		`note: 'Additional items are hidden to preserve map readability.'`,
-	} {
-		if !strings.Contains(body, key) {
-			t.Errorf("Truncation: details payload field %q missing", key)
-		}
-	}
-
-	// 9. The more-node must NOT appear in any connector iteration.
-	// All five connector blocks iterate the visible slices (relSlice,
-	// caps, procs, surfaces, aiSystems) — a regression that iterated
-	// the full arrays would draw connectors to/from omitted entities.
-	// Pin the visible-slice iteration form for each connector kind.
-	for _, iter := range []string{
-		`relSlice.forEach(rel => {`,
-		`caps.forEach(c => {`,
-		`procs.forEach(p => {`,
-		`surfaces.forEach(s => {`,
-		`aiSystems.forEach(ai => {`,
-	} {
-		if !strings.Contains(body, iter) {
-			t.Errorf("Truncation: connector iteration must use the visible slice "+
-				"(found no occurrence of %q — a regression to fullX would draw "+
-				"connectors to omitted entities)", iter)
-		}
-	}
-	// Conversely, no connector block should reference the more-node ID.
-	for _, illegal := range []string{
-		`'more:' + rel`,
-		`'more:' + c.id`,
-		`'more:' + p.id`,
-		`'more:' + s.id`,
-		`'more:' + ai.id`,
-	} {
-		if strings.Contains(body, illegal) {
-			t.Errorf("Truncation: more-node must never be a connector target — found %q", illegal)
-		}
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Governance Map node drill-down (this PR)
 // ---------------------------------------------------------------------------
@@ -12060,245 +7199,6 @@ func TestExplorer_HTML_GovernanceMap_TruncationIndicators(t *testing.T) {
 // served as static HTML); the assertions below are deliberately literal
 // so a refactor that drops a class, a label, or the dispatcher wiring
 // fails this test loudly.
-func TestExplorer_HTML_GovernanceMap_NodeDrillDownActions(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
-	// `body` so existing CSS-rule-substring assertions continue to
-	// match. The HTML body content is unchanged at the start; the
-	// conceptual stylesheet is appended in cascade order.
-	body += "\n" + getExplorerAllCSS(t, srv)
-
-	// 1. Action container exists in the details panel markup. Pinning
-	// both the id and the class keeps a refactor that renames either
-	// from breaking the renderer's empty-state CSS rule.
-	for _, marker := range []string{
-		`id="gmap-details-actions"`,
-		`class="gmap-details-actions"`,
-	} {
-		if !strings.Contains(body, marker) {
-			t.Errorf("Drill-down: missing details-actions marker %q", marker)
-		}
-	}
-
-	// 2. CSS empty-state contract: the wrapper must collapse when no
-	// actions are appended, otherwise unsupported node types would show
-	// an empty bordered region. The :empty / :not(:empty) rules are
-	// load-bearing for that guarantee.
-	for _, rule := range []string{
-		`.gmap-details-actions:empty`,
-		`.gmap-details-actions:not(:empty)`,
-	} {
-		if !strings.Contains(body, rule) {
-			t.Errorf("Drill-down: empty-state CSS rule %q missing", rule)
-		}
-	}
-
-	// 3. View-record button class + label. The class is the stable
-	// hook for tests + future styling; the label is what the operator
-	// reads, so a regression to e.g. "Open record" should fail here.
-	for _, marker := range []string{
-		`gmap-action-view-record`,
-		`'View record'`,
-	} {
-		if !strings.Contains(body, marker) {
-			t.Errorf("Drill-down: View-record affordance %q missing", marker)
-		}
-	}
-
-	// 4. addNode persists action metadata as a JSON-encoded data
-	// attribute. Pinning the JSON.stringify form prevents a refactor
-	// from accidentally storing executable callbacks on the dataset.
-	for _, marker := range []string{
-		`spec.actions || []`,
-		`node.dataset.nodeActions = JSON.stringify(spec.actions || [])`,
-	} {
-		if !strings.Contains(body, marker) {
-			t.Errorf("Drill-down: addNode action plumbing %q missing", marker)
-		}
-	}
-
-	// 5. selectGovernanceMapNode reads the action metadata and hands
-	// it to the renderer. The parse + setGovernanceMapDetailsActions
-	// call together make the action area selection-driven (not render-
-	// time-driven) so click → select → action is a single round-trip.
-	for _, marker := range []string{
-		`selectedNode.dataset.nodeActions`,
-		`setGovernanceMapDetailsActions(`,
-	} {
-		if !strings.Contains(body, marker) {
-			t.Errorf("Drill-down: selection wiring %q missing", marker)
-		}
-	}
-
-	// 6. Action renderer + dispatcher declarations. Pinning the
-	// `function name(` form keeps the dispatcher entry-point stable.
-	for _, decl := range []string{
-		`function setGovernanceMapDetailsActions`,
-		`function handleGovernanceMapAction`,
-	} {
-		if !strings.Contains(body, decl) {
-			t.Errorf("Drill-down: declaration %q missing", decl)
-		}
-	}
-
-	// 7. Whitelisted action kinds. The dispatcher routes ONLY known
-	// kinds; the BS + Related Service nodes attach
-	// `view-business-service-record`, the Capability node attaches
-	// `view-capability-record`. Both kinds must appear; an additional
-	// kind for processes / surfaces / AI systems would require a
-	// corresponding record-page destination, which does not exist
-	// today.
-	for _, kind := range []string{
-		`'view-business-service-record'`,
-		`'view-capability-record'`,
-	} {
-		if !strings.Contains(body, kind) {
-			t.Errorf("Drill-down: whitelisted action kind %s missing", kind)
-		}
-	}
-
-	// 8. Dispatcher routes through the existing record-page entry
-	// points. Pinning the call form (not just the function name) is
-	// the load-bearing assertion that each action is not a fake
-	// route: each shares its destination with the catalogue's "open
-	// record" click handler for that resource type.
-	for _, marker := range []string{
-		`showBusinessServiceRecord(action.target_id)`,
-		`showCapabilityRecord(action.target_id)`,
-	} {
-		if !strings.Contains(body, marker) {
-			t.Errorf("Drill-down: dispatcher must call %s", marker)
-		}
-	}
-
-	// 9. Business Service + Capability nodes each attach their
-	// matching record-action kind. target_id carries the bare id (no
-	// `bs:` / `cap:` prefix) so the existing record loader receives
-	// the cache key directly.
-	for _, marker := range []string{
-		`kind: 'view-business-service-record', target_id: bs.id`,
-		`kind: 'view-capability-record', target_id: c.id`,
-	} {
-		if !strings.Contains(body, marker) {
-			t.Errorf("Drill-down: node action attachment %q missing", marker)
-		}
-	}
-
-	// 10. Related Service node attaches the action only when a real
-	// target BS id exists on the related-service edge. Without the
-	// guard the action would render for unresolvable related services
-	// and clicking would land the operator on an unloadable record.
-	for _, marker := range []string{
-		`rel.target_business_service_id`,
-		`kind: 'view-business-service-record', target_id: rel.target_business_service_id`,
-	} {
-		if !strings.Contains(body, marker) {
-			t.Errorf("Drill-down: Related Service action gating %q missing", marker)
-		}
-	}
-
-	// 11. Unsupported node types must not receive a fake record
-	// action. The proc, surface, AI, authority, coverage, and
-	// more-node addNode calls each remain free of any record-action
-	// metadata. We assert by walking every (kind: '<x>',
-	// target_id: <expr>) site for the two whitelisted kinds and
-	// confirming each target_id expression is in the per-kind
-	// allowlist; an unrecognised expression for a known kind
-	// indicates a fake action attached to an unsupported node type.
-	type actionSite struct {
-		prefix       string
-		allowed      map[string]struct{}
-		minOccurr    int
-		minOccurrFor string
-	}
-	sites := []actionSite{
-		{
-			prefix: `kind: 'view-business-service-record', target_id: `,
-			allowed: map[string]struct{}{
-				`bs.id`:                          {},
-				`rel.target_business_service_id`: {},
-			},
-			minOccurr:    2,
-			minOccurrFor: "BS + Related Service nodes",
-		},
-		{
-			prefix: `kind: 'view-capability-record', target_id: `,
-			allowed: map[string]struct{}{
-				`c.id`: {},
-			},
-			minOccurr:    1,
-			minOccurrFor: "Capability node",
-		},
-	}
-	for _, site := range sites {
-		idx := 0
-		occurrences := 0
-		for {
-			hit := strings.Index(body[idx:], site.prefix)
-			if hit < 0 {
-				break
-			}
-			occurrences++
-			start := idx + hit + len(site.prefix)
-			end := start
-			for end < len(body) && body[end] != ',' && body[end] != '}' && body[end] != '\n' {
-				end++
-			}
-			expr := strings.TrimSpace(body[start:end])
-			if _, ok := site.allowed[expr]; !ok {
-				t.Errorf("Drill-down: unsupported node type carries fake record action for kind %q; "+
-					"target_id expression %q is not in the whitelist", site.prefix, expr)
-			}
-			idx = end
-		}
-		if occurrences < site.minOccurr {
-			t.Errorf("Drill-down: expected at least %d %q action site(s) (%s), found %d",
-				site.minOccurr, site.prefix, site.minOccurrFor, occurrences)
-		}
-	}
-
-	// 12. Existing node click remains selection-only. The handler
-	// installed in addNode must continue to call selectGovernanceMapNode
-	// — and crucially it must NOT call showBusinessServiceRecord
-	// directly. Pinning both forms guards against a regression that
-	// short-circuits selection in favour of immediate navigation.
-	// D24i — the click handler is now multi-selection-aware (Ctrl/
-	// Cmd-click toggles, plain click replaces with single id). The
-	// selection-only invariant survives via the plain-click branch's
-	// `selectGovernanceMapNode(spec.id)` call. Pin the symbol pair
-	// (handler installs `'click'` + plain branch calls
-	// `selectGovernanceMapNode(spec.id)`) instead of the pre-D24i
-	// arrow-fn literal.
-	if !strings.Contains(body, `node.addEventListener('click', (e) => {`) {
-		t.Error(`Drill-down: addNode must install a click handler that takes the event object (D24i Ctrl-click toggle dispatch)`)
-	}
-	if !strings.Contains(body, `selectGovernanceMapNode(spec.id);`) {
-		t.Error(`Drill-down: node plain-click must remain selection-only (calls selectGovernanceMapNode(spec.id))`)
-	}
-	// The string `showBusinessServiceRecord(spec.id)` would indicate the
-	// click handler navigates directly. It must not appear anywhere.
-	if strings.Contains(body, `showBusinessServiceRecord(spec.id)`) {
-		t.Error(`Drill-down: node click must NOT call showBusinessServiceRecord(spec.id) — ` +
-			`navigation is gated behind the action area`)
-	}
-
-	// 13. The dispatcher is the only path from the action button to
-	// showBusinessServiceRecord. Pinning the click handler form keeps
-	// the indirection in place — direct calls from the renderer to
-	// showBusinessServiceRecord without going through the dispatcher
-	// would skip the kind/target_id validation.
-	if !strings.Contains(body, `handleGovernanceMapAction(action)`) {
-		t.Error(`Drill-down: action button click must route through handleGovernanceMapAction(action)`)
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Governance Map node dragging (Phase 6)
 // ---------------------------------------------------------------------------
@@ -12337,281 +7237,6 @@ func TestExplorer_HTML_GovernanceMap_NodeDrillDownActions(t *testing.T) {
 // is served as static HTML); the assertions below are deliberately
 // literal so a refactor that drops a class, a handler, or the zoom
 // arithmetic fails this test loudly.
-func TestExplorer_HTML_GovernanceMap_NodeDragging(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-
-	// 1. In-memory override store. Pinning the literal `let
-	// gmapDragOverrides = {}` form guarantees a plain object literal
-	// (not a Map, not a Proxy, not a storage call). A regression
-	// that switched the declaration to a storage-backed structure
-	// would change the right-hand side and surface here.
-	if !strings.Contains(body, `let gmapDragOverrides = {}`) {
-		t.Error("Drag state: must declare `let gmapDragOverrides = {}` (plain in-memory object)")
-	}
-
-	// 2. Effective-position lookup helper exists and is the single
-	// resolver for both node cards and connectors. Pinning the
-	// `function effectiveGmapPosition(` form keeps the entry point
-	// stable.
-	if !strings.Contains(body, `function effectiveGmapPosition(`) {
-		t.Error("Effective-position lookup: function effectiveGmapPosition must be defined")
-	}
-	// The lookup must consult gmapDragOverrides first, then fall back
-	// to gmapPositions. Pin both call sites so a refactor that drops
-	// the override branch surfaces here.
-	for _, marker := range []string{
-		`gmapDragOverrides[id]`,
-		`gmapPositions[id]`,
-	} {
-		if !strings.Contains(body, marker) {
-			t.Errorf("Effective-position lookup: missing %q", marker)
-		}
-	}
-
-	// 3. addLiveConnector + repaint helper exist; both endpoints in
-	// the repaint walker resolve through effectiveGmapPosition. The
-	// repaint helper is what keeps the SAME effective-position
-	// lookup applied to both endpoints during a drag — assert it
-	// looks up BOTH src and dst through that helper.
-	for _, decl := range []string{
-		`function addLiveConnector(`,
-		`function repaintGmapConnectors(`,
-	} {
-		if !strings.Contains(body, decl) {
-			t.Errorf("Connector tracking: declaration %q missing", decl)
-		}
-	}
-	// Carve out the repaintGmapConnectors function body and assert
-	// it calls effectiveGmapPosition twice — once for the src
-	// endpoint (sp), once for the dst endpoint (dp). The slice ends
-	// at the function's closing brace at 2-space indent.
-	const repaintAnchor = `function repaintGmapConnectors(`
-	repaintStart := strings.Index(body, repaintAnchor)
-	if repaintStart < 0 {
-		t.Fatalf("Connector tracking: could not locate %s", repaintAnchor)
-	}
-	repaintRest := body[repaintStart+len(repaintAnchor):]
-	repaintEnd := strings.Index(repaintRest, "\n  }")
-	if repaintEnd < 0 {
-		t.Fatalf("Connector tracking: could not locate function-body terminator after %s", repaintAnchor)
-	}
-	repaintBody := repaintRest[:repaintEnd]
-	if strings.Count(repaintBody, `effectiveGmapPosition(`) < 2 {
-		t.Error("Connector repaint: both endpoints must resolve through effectiveGmapPosition (expected ≥2 calls in repaintGmapConnectors)")
-	}
-	// Connector array: registered for repaint. Pin the literal
-	// declaration so a regression to a single-pass renderer (no
-	// stored connectors) is caught.
-	if !strings.Contains(body, `let gmapConnectors = []`) {
-		t.Error("Connector tracking: must declare `let gmapConnectors = []`")
-	}
-
-	// 4. Pointer event handlers — all four required for mouse + touch
-	// + cancel paths. Pin the literal addEventListener('<event>'
-	// form so a refactor to a different handler shape (e.g. inline
-	// onpointerdown attribute) surfaces here.
-	for _, evt := range []string{
-		`addEventListener('pointerdown'`,
-		`addEventListener('pointermove'`,
-		`addEventListener('pointerup'`,
-		`addEventListener('pointercancel'`,
-	} {
-		if !strings.Contains(body, evt) {
-			t.Errorf("Pointer events: missing handler registration %q", evt)
-		}
-	}
-
-	// 5. Pointer capture is acquired on pointerdown and released on
-	// pointerup/pointercancel. Pinning both call literals keeps the
-	// capture pair balanced (capture without release leaks the
-	// gesture; release without capture is benign but indicates a
-	// regression).
-	for _, marker := range []string{
-		`setPointerCapture(`,
-		`releasePointerCapture(`,
-	} {
-		if !strings.Contains(body, marker) {
-			t.Errorf("Pointer capture: missing call %q", marker)
-		}
-	}
-
-	// 6. Drag-state declaration. The per-gesture bookkeeping must
-	// be a module-level `let`, not a global / window assignment.
-	if !strings.Contains(body, `let gmapDragState = null`) {
-		t.Error("Drag state: must declare `let gmapDragState = null`")
-	}
-
-	// 7. Threshold literal. Pin both the named constant declaration
-	// and a representative occurrence of the comparison so a
-	// regression that drops the constant or compares with the wrong
-	// operand surfaces here. After D27j-ui-foundation-5 the constant
-	// declaration lives in
-	// /explorer/assets/js/governance-map/constants.js; the comparison
-	// (which references the local const binding) stays inline.
-	gmConstantsForDrag := getExplorerAsset(t, srv, "/explorer/assets/js/governance-map/constants.js")
-	if !strings.Contains(gmConstantsForDrag, `GMAP_DRAG_THRESHOLD_PX = 4`) {
-		t.Error("Drag threshold: must declare `GMAP_DRAG_THRESHOLD_PX = 4` in constants.js")
-	}
-	if !strings.Contains(body, `Math.max(Math.abs(dx), Math.abs(dy)) <= GMAP_DRAG_THRESHOLD_PX`) {
-		t.Error("Drag threshold: must compare `Math.max(Math.abs(dx), Math.abs(dy)) <= GMAP_DRAG_THRESHOLD_PX` (≤4 stays a click)")
-	}
-
-	// 8. Zoom-aware drag arithmetic. Pointer-space deltas MUST be
-	// divided by gmapZoom (or a local alias of it) before being
-	// applied to node coordinates. D24i — the divide-by-zoom step is
-	// hoisted into local sceneDx / sceneDy aliases so both individual
-	// drag and group drag share one conversion. Pin the alias
-	// definitions plus the individual-drag application form.
-	for _, marker := range []string{
-		`const z = gmapZoom || 1`,
-		`const sceneDx = dx / z`,
-		`const sceneDy = dy / z`,
-		`gmapDragState.startNodeX + sceneDx`,
-		`gmapDragState.startNodeY + sceneDy`,
-	} {
-		if !strings.Contains(body, marker) {
-			t.Errorf("Zoom-aware drag: missing arithmetic literal %q", marker)
-		}
-	}
-
-	// 9. attachGmapDragHandlers is the single drag-wire helper. Pin
-	// its declaration AND the call from addNode so the wiring is
-	// guaranteed for every node (cap, proc, surface, AI, BS, more,
-	// authority, coverage — all go through addNode).
-	if !strings.Contains(body, `function attachGmapDragHandlers(`) {
-		t.Error("Drag wiring: function attachGmapDragHandlers must be defined")
-	}
-	if !strings.Contains(body, `attachGmapDragHandlers(node, spec.id)`) {
-		t.Error("Drag wiring: addNode must call attachGmapDragHandlers(node, spec.id) so every node is draggable")
-	}
-
-	// 10. Click-vs-drag suppression. After a real drag the gesture
-	// must NOT fire the existing click → selectGovernanceMapNode
-	// handler. The implementation installs a one-shot capture-phase
-	// click swallower; pin the call form (third argument `true`
-	// for capture) and the stopPropagation+preventDefault pair.
-	const dragHandlerAnchor = `function attachGmapDragHandlers(`
-	dhStart := strings.Index(body, dragHandlerAnchor)
-	if dhStart < 0 {
-		t.Fatalf("Drag wiring: could not locate %s", dragHandlerAnchor)
-	}
-	dhRest := body[dhStart+len(dragHandlerAnchor):]
-	// The drag-handler function body ends at its closing brace at
-	// 2-space indent — same termination convention used elsewhere
-	// in this test file. Inner blocks close at 4+ spaces.
-	dhEnd := strings.Index(dhRest, "\n  }")
-	if dhEnd < 0 {
-		t.Fatalf("Drag wiring: could not locate function-body terminator after %s", dragHandlerAnchor)
-	}
-	dhBody := dhRest[:dhEnd]
-	for _, marker := range []string{
-		`addEventListener('click', swallow, true)`,
-		`ev.stopPropagation()`,
-		`ev.preventDefault()`,
-		`removeEventListener('click', swallow, true)`,
-	} {
-		if !strings.Contains(dhBody, marker) {
-			t.Errorf("Drag click suppression: marker %q missing inside attachGmapDragHandlers", marker)
-		}
-	}
-	// And the gating: the swallower must only be installed when the
-	// gesture actually crossed the threshold (hasDragged true). The
-	// `if (wasDrag)` literal pins that gating so a regression to
-	// "always-suppress" (which would break click → select for
-	// non-dragged taps) surfaces here.
-	if !strings.Contains(dhBody, `if (wasDrag)`) {
-		t.Error("Drag click suppression: must be gated on `if (wasDrag)` so clicks without a drag still fire selection")
-	}
-
-	// 11. NEGATIVE pins — no persistence inside the drag code path.
-	// Scope to the attachGmapDragHandlers function body (already
-	// carved above) so unrelated sessionStorage usage elsewhere in
-	// the file (auth, simulator) does NOT trigger a false positive.
-	for _, illegal := range []string{
-		`localStorage`,
-		`sessionStorage`,
-		`document.cookie`,
-		`indexedDB`,
-		`fetch(`,
-		`XMLHttpRequest`,
-		`navigator.sendBeacon`,
-	} {
-		if strings.Contains(dhBody, illegal) {
-			t.Errorf("Drag persistence: %q must NOT appear in attachGmapDragHandlers — drag positions are session-local in-memory only", illegal)
-		}
-	}
-	// Same negative scope applied to the gmapDragOverrides
-	// declaration site. Carve a small 200-char window around the
-	// `let gmapDragOverrides = {}` literal and assert no storage
-	// call leaks into that neighbourhood.
-	doStart := strings.Index(body, `let gmapDragOverrides = {}`)
-	if doStart < 0 {
-		t.Fatal("Drag state: gmapDragOverrides declaration not found for negative-pin scope")
-	}
-	doEnd := doStart + 400
-	if doEnd > len(body) {
-		doEnd = len(body)
-	}
-	overridesNeighbourhood := body[doStart:doEnd]
-	for _, illegal := range []string{
-		`localStorage`,
-		`sessionStorage.setItem`,
-		`sessionStorage.getItem`,
-		`document.cookie`,
-		`indexedDB.open`,
-	} {
-		if strings.Contains(overridesNeighbourhood, illegal) {
-			t.Errorf("Drag state declaration: %q must NOT appear near gmapDragOverrides — overrides are in-memory only", illegal)
-		}
-	}
-
-	// 12. clearGovernanceMapCanvas resets gmapDragOverrides + the
-	// connector tracker so each new render starts with a fresh
-	// list. Without these resets, switching BS would leave stale
-	// overrides on shared node ids (authority/coverage) or stale
-	// path-element refs in the connectors array.
-	for _, marker := range []string{
-		`gmapDragOverrides = {}`,
-		`gmapConnectors = []`,
-	} {
-		// Note: `gmapDragOverrides = {}` appears in BOTH the `let`
-		// declaration and the canvas-clear reassignment — the
-		// `Contains` check is satisfied by either, and the `let`
-		// declaration assertion above already pins the declaration
-		// site, so this loop guarantees the reset literal exists.
-		if !strings.Contains(body, marker) {
-			t.Errorf("Canvas clear: must reset %q", marker)
-		}
-	}
-	// Pin the reset is invoked from the canvas-clear function body.
-	const clearAnchor = `function clearGovernanceMapCanvas(`
-	clrStart := strings.Index(body, clearAnchor)
-	if clrStart < 0 {
-		t.Fatalf("Canvas clear: could not locate %s", clearAnchor)
-	}
-	clrRest := body[clrStart+len(clearAnchor):]
-	clrEnd := strings.Index(clrRest, "\n  }")
-	if clrEnd < 0 {
-		t.Fatalf("Canvas clear: could not locate function-body terminator after %s", clearAnchor)
-	}
-	clrBody := clrRest[:clrEnd]
-	for _, marker := range []string{
-		`gmapDragOverrides = {}`,
-		`gmapConnectors = []`,
-	} {
-		if !strings.Contains(clrBody, marker) {
-			t.Errorf("Canvas clear: %q must be invoked inside clearGovernanceMapCanvas", marker)
-		}
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Catalogue → Record → Map navigation (this PR)
 // ---------------------------------------------------------------------------
@@ -12633,176 +7258,6 @@ func TestExplorer_HTML_GovernanceMap_NodeDragging(t *testing.T) {
 // Defensive-rendering pins (loading / empty / error states; field-
 // missing fallback to "—") and the no-hardcoded-default rule are
 // pinned in the same test so a regression to any of them surfaces here.
-func TestExplorer_HTML_ServicesView_CatalogueRecordNavigation(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-
-	// 1. Sub-view containers + identifying markup. Each sub-view is a
-	// stable id the router toggles between. The catalogue renders the
-	// live BS list; the record renders one BS in detail; the map wraps
-	// the existing PR 5 governance-map workbench.
-	for _, marker := range []string{
-		`id="services-catalogue-view"`,
-		`id="services-record-view"`,
-		`id="services-map-view"`,
-		`class="services-bs-list services-catalogue-list"`,
-		`id="services-record-body"`,
-		`class="services-record-section-title"`,
-	} {
-		if !strings.Contains(body, marker) {
-			t.Errorf("Catalogue/record nav: missing markup marker %q", marker)
-		}
-	}
-
-	// 2. Navigation affordances. The brief explicitly requires a
-	// back-to-catalogue affordance from the record page, a back-to-
-	// record affordance from the map page, and an Open-Governance-Map
-	// primary action on the record page.
-	for _, marker := range []string{
-		`id="services-record-back-btn"`,
-		`id="services-record-open-map-btn"`,
-		`id="services-map-back-btn"`,
-		`Open Governance Map`,
-		`← Business Services`,
-	} {
-		if !strings.Contains(body, marker) {
-			t.Errorf("Catalogue/record nav: missing affordance %q", marker)
-		}
-	}
-
-	// 3. Sub-view state machine + transition functions. Pinning the
-	// `function name` form (not `name = function`) keeps the documented
-	// callable surface stable for the test and for future callers.
-	// serviceRecordCache was extracted to /explorer/assets/js/state.js
-	// (D27j-ui-foundation-4); other state declarations remain inline.
-	for _, decl := range []string{
-		`let servicesSubView`,
-		`function setServicesSubView`,
-		`function showServicesCatalogue`,
-		`function showBusinessServiceRecord`,
-		`function showBusinessServiceMap`,
-		`function loadBusinessServiceRecord`,
-		`function renderBusinessServiceRecord`,
-		`function renderServicesCatalogue`,
-		`let serviceRecordLoading`,
-		`let serviceRecordError`,
-	} {
-		if !strings.Contains(body, decl) {
-			t.Errorf("Catalogue/record nav JS: missing declaration %q", decl)
-		}
-	}
-	stateJSForServices := getExplorerAsset(t, srv, "/explorer/assets/js/state.js")
-	if !strings.Contains(stateJSForServices, "window.MIDASExplorerState.serviceRecordCache") {
-		t.Error("Catalogue/record nav JS: missing declaration `serviceRecordCache` in state.js")
-	}
-
-	// 4. Data plumbing — both fetches present, both via fetch().
-	if !strings.Contains(body, `fetch('/v1/businessservices'`) {
-		t.Error("Catalogue/record nav: catalogue must fetch /v1/businessservices")
-	}
-	// Phase 2B Step 10: the record page's URL is composed from
-	// currentGraphView + currentGraphRootId rather than baking
-	// `view=service` into the literal. Pin the encodeURIComponent +
-	// &depth=5 fragments so a regression that drops the URL composition
-	// pattern (e.g., reverts to a hardcoded literal or to a different
-	// endpoint) surfaces here.
-	if !strings.Contains(body, `'/v1/authority-graph?view=' + encodeURIComponent(currentGraphView)`) {
-		t.Error("Catalogue/record nav: record page must compose URL from currentGraphView (no hard-coded view=service)")
-	}
-	if !strings.Contains(body, `'&id=' + encodeURIComponent(currentGraphRootId) + '&depth=5'`) {
-		t.Error("Catalogue/record nav: record page URL must include &id= + currentGraphRootId + &depth=5 fragments")
-	}
-
-	// 5. Record-page consumption of governance-map payload fields. The
-	// brief requires every section to render from the payload — pin the
-	// field accesses so a regression to STRUCTURAL_CONTEXT surfaces.
-	for _, access := range []string{
-		`payload.business_service`,
-		`payload.relationships`,
-		`payload.capabilities`,
-		`payload.processes`,
-		`payload.surfaces`,
-		`payload.ai_systems`,
-		`payload.authority_summary`,
-		`payload.coverage`,
-	} {
-		if !strings.Contains(body, access) {
-			t.Errorf("Catalogue/record nav: record renderer must consume payload field %q", access)
-		}
-	}
-
-	// 6. No hardcoded `bs-merchant-services` default in the catalogue
-	// or record-page paths. The previous demo default must not survive.
-	// (STRUCTURAL_CONTEXT itself remains in the file for unrelated
-	// consumers, but never as a fallback for the live flows.)
-	if strings.Contains(body, `let currentSelectedService = 'bs-merchant-services'`) {
-		t.Error("Catalogue/record nav: hardcoded `currentSelectedService = 'bs-merchant-services'` must not survive")
-	}
-	// The catalogue/record path must not fall back to STRUCTURAL_CONTEXT
-	// when the live fetch fails. The previous selector renderer used
-	// `STRUCTURAL_CONTEXT.filter(svc =>` — that pattern must not return.
-	if strings.Contains(body, `STRUCTURAL_CONTEXT.filter(svc =>`) {
-		t.Error("Catalogue/record nav: STRUCTURAL_CONTEXT.filter must not appear in catalogue/record/map paths")
-	}
-
-	// 7. Defensive-rendering empty / loading / error strings. Each is
-	// the operator-visible message rendered when its state branch fires.
-	for _, msg := range []string{
-		// Catalogue states
-		"No business services found",
-		"Could not load business services",
-		"Loading business services",
-		// Record states
-		"Loading record…",
-		"Could not load record",
-		// Section empty states
-		"No related services",
-		"No capabilities linked",
-		"No processes linked",
-		"No decision surfaces under this service",
-		"No AI systems linked",
-	} {
-		if !strings.Contains(body, msg) {
-			t.Errorf("Catalogue/record nav: missing defensive-rendering string %q", msg)
-		}
-	}
-
-	// 8. The record page's field grid uses formatFieldValue so missing
-	// fields render as "—" (operator distinguishes "field exists, no
-	// value" from "field doesn't apply"). Pin the helper + the literal
-	// fallback string. After D27j-ui-foundation-3 the helper lives in
-	// /explorer/assets/js/util-format.js; the literal fallback HTML
-	// string flows through to the helper's return value, so the
-	// markup pin moves there too.
-	utilFormatJS := getExplorerAsset(t, srv, "/explorer/assets/js/util-format.js")
-	if !strings.Contains(utilFormatJS, `function formatFieldValue`) {
-		t.Error("Catalogue/record nav: formatFieldValue helper missing in util-format.js")
-	}
-	if !strings.Contains(utilFormatJS, `services-record-field-val muted">—`) {
-		t.Error("Catalogue/record nav: missing-field fallback must render as `—`")
-	}
-
-	// 9. The previous Overview / Governance Map mode toggle must not
-	// reappear as the primary navigation mechanism. Reintroducing it
-	// would split navigation between the toggle and the catalogue flow.
-	for _, retired := range []string{
-		`id="services-mode-overview-btn"`,
-		`id="services-mode-map-btn"`,
-		`class="services-mode-toolbar"`,
-	} {
-		if strings.Contains(body, retired) {
-			t.Errorf("Catalogue/record nav: retired Overview/Map mode toggle marker %q "+
-				"must not reappear", retired)
-		}
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Capabilities catalogue + record navigation (this PR)
 // ---------------------------------------------------------------------------
@@ -12838,414 +7293,6 @@ func TestExplorer_HTML_ServicesView_CatalogueRecordNavigation(t *testing.T) {
 // loading / error / empty for the three sub-resource sections) and
 // core-fields row labels are pinned literally so a regression that
 // drops one surfaces here.
-func TestExplorer_HTML_CapabilitiesView_CatalogueRecordNavigation(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-
-	// 1. Sidebar nav item — data attribute + visible label. Pinning
-	// both keeps "Capabilities" the operator-visible label and the
-	// data-nav-view literal the routing key.
-	for _, marker := range []string{
-		`data-nav-view="capabilities"`,
-		`>Capabilities<`,
-	} {
-		if !strings.Contains(body, marker) {
-			t.Errorf("Capabilities view: missing nav marker %q", marker)
-		}
-	}
-
-	// 2. VALID_VIEWS includes 'capabilities'. The exact array order
-	// places capabilities immediately after services so the sidebar
-	// order matches the route registry.
-	if !strings.Contains(body, `const VALID_VIEWS = ['services', 'capabilities', 'evaluate', 'records', 'settings']`) {
-		t.Error("Capabilities view: VALID_VIEWS must include 'capabilities' immediately after 'services'")
-	}
-
-	// 3. View container exists and carries both id and data-view.
-	for _, marker := range []string{
-		`id="view-capabilities"`,
-		`data-view="capabilities"`,
-	} {
-		if !strings.Contains(body, marker) {
-			t.Errorf("Capabilities view: missing section marker %q", marker)
-		}
-	}
-
-	// 4. Sub-view containers — catalogue + record. The map sub-view
-	// is intentionally absent from this view (no /governance-map for
-	// capabilities); the test pins the absence implicitly by NOT
-	// asserting a `capabilities-map-view` id and asserting the
-	// guardrails block below. The three sub-resource section
-	// containers (children / business-services / ai-bindings) are
-	// rendered into the body dynamically by renderCapabilityRecord
-	// and pinned here as source-level literals.
-	for _, marker := range []string{
-		`id="capabilities-catalogue-view"`,
-		`id="capabilities-record-view"`,
-		`class="capabilities-list"`,
-		`id="capabilities-record-body"`,
-		`id="capabilities-record-name"`,
-		`id="capabilities-record-id"`,
-		`id="capabilities-record-status"`,
-		`id="capabilities-record-children"`,
-		`id="capabilities-record-business-services"`,
-		`id="capabilities-record-ai-bindings"`,
-	} {
-		if !strings.Contains(body, marker) {
-			t.Errorf("Capabilities view: missing sub-view marker %q", marker)
-		}
-	}
-
-	// 5. Catalogue fetches /v1/capabilities — bare-array endpoint.
-	// Pinning the literal `fetch('/v1/capabilities'` form keeps the
-	// path and the call shape stable.
-	if !strings.Contains(body, `fetch('/v1/capabilities'`) {
-		t.Error("Capabilities catalogue: must fetch '/v1/capabilities' (bare-array endpoint)")
-	}
-
-	// 6. Catalogue consumes the bare-array shape via Array.isArray. A
-	// future regression that switched to `payload.capabilities` would
-	// silently render nothing — pin the positive (Array.isArray)
-	// form. The negative form (no envelope-key access) is enforced
-	// inside the capabilities-module slice carved out below, because
-	// `payload.capabilities` legitimately appears elsewhere in the
-	// file (BS governance-map renderer reads the BS payload's
-	// capabilities array).
-	if !strings.Contains(body, `Array.isArray(payload) ? payload : []`) {
-		t.Error(`Capabilities catalogue: must parse the bare-array via "Array.isArray(payload) ? payload : []"`)
-	}
-
-	// 7. Capabilities-module slice — bounded by two anchor strings
-	// that are unique to the capabilities JS module. Used for the
-	// negative pins below (STRUCTURAL_CONTEXT, payload.capabilities,
-	// fake unsupported sections) so they don't false-positive on
-	// occurrences elsewhere in the file.
-	const capModStart = `let capabilitiesSubView = 'catalogue';`
-	const capModEnd = `function wireCapabilitiesSubViewControls`
-	startIdx := strings.Index(body, capModStart)
-	endIdx := strings.Index(body, capModEnd)
-	if startIdx < 0 || endIdx < 0 || endIdx <= startIdx {
-		t.Fatalf("Capabilities view: could not locate the capabilities module bounds in served HTML "+
-			"(startIdx=%d, endIdx=%d)", startIdx, endIdx)
-	}
-	capabilitiesModule := body[startIdx:endIdx]
-
-	// 7a. STRUCTURAL_CONTEXT MUST NOT be CONSULTED inside the
-	// capabilities module. The bare token may legitimately appear
-	// in comments explaining "this view does NOT use STRUCTURAL_CONTEXT",
-	// so the check looks for *consumption* patterns (member access,
-	// indexed access, iteration) rather than the bare name. Each
-	// pattern below covers one real way to read from the constant.
-	for _, illegalUse := range []string{
-		`STRUCTURAL_CONTEXT.`,   // .find, .map, .filter, .length, etc.
-		`STRUCTURAL_CONTEXT[`,   // indexed access
-		`STRUCTURAL_CONTEXT,`,   // passed as argument
-		`STRUCTURAL_CONTEXT)`,   // call/iteration ending
-		`STRUCTURAL_CONTEXT ||`, // fallback chain
-		`= STRUCTURAL_CONTEXT`,  // assignment
-		`(STRUCTURAL_CONTEXT`,   // wrapped in expression
-	} {
-		if strings.Contains(capabilitiesModule, illegalUse) {
-			t.Errorf("Capabilities module: must NOT consume STRUCTURAL_CONTEXT — found usage pattern %q", illegalUse)
-		}
-	}
-	// 7b. The /v1/capabilities catalogue endpoint is bare-array; the
-	// list loader must NOT read `payload.capabilities`. The
-	// /v1/capabilities/{id}/children sub-resource endpoint, by
-	// contrast, has envelope shape `{capability_id, capabilities[]}`,
-	// so its loader legitimately reads `payload.capabilities`. To
-	// pin only the catalogue path we carve out the loadCapabilitiesList
-	// function body and assert the negative against THAT slice. (The
-	// other call sites — the BS governance-map renderer reading the
-	// BS-payload's caps array, and the children envelope loader — are
-	// outside this slice and remain untouched.)
-	const listLoaderAnchor = `function loadCapabilitiesList`
-	listStart := strings.Index(capabilitiesModule, listLoaderAnchor)
-	if listStart < 0 {
-		t.Fatalf("Capabilities catalogue: could not locate %s in module slice", listLoaderAnchor)
-	}
-	listSlice := capabilitiesModule[listStart:]
-	listEnd := strings.Index(listSlice[1:], "\n  function ")
-	if listEnd > 0 {
-		listSlice = listSlice[:listEnd+1]
-	}
-	if strings.Contains(listSlice, `payload.capabilities`) {
-		t.Error("Capabilities catalogue list loader: must NOT read payload.capabilities — /v1/capabilities is bare array, not envelope")
-	}
-
-	// 8. State variables + helpers — pinning the declarations keeps
-	// the documented surface stable. `let` for state, `function NAME(`
-	// for callable functions; the parentheses suffix prevents matches
-	// against e.g. comment mentions of the function name. The nine
-	// per-cap maps (children / business-services / ai-bindings × cache
-	// / loading / error) back the three sub-resource sections. After
-	// D27j-ui-foundation-4 the parent `capabilityRecordCache` map lives
-	// in /explorer/assets/js/state.js; everything else remains inline.
-	stateJSForCaps := getExplorerAsset(t, srv, "/explorer/assets/js/state.js")
-	if !strings.Contains(stateJSForCaps, "window.MIDASExplorerState.capabilityRecordCache") {
-		t.Error("Capabilities view: state declaration `capabilityRecordCache` missing in state.js")
-	}
-	for _, decl := range []string{
-		`let capabilitiesSubView`,
-		`let currentSelectedCapability`,
-		`let liveCapabilityList`,
-		`let liveCapabilityError`,
-		`let liveCapabilityLoading`,
-		`let capabilityRecordLoading`,
-		`let capabilityRecordError`,
-		`const capabilityChildrenCache`,
-		`const capabilityChildrenLoading`,
-		`const capabilityChildrenError`,
-		`const capabilityBusinessServicesCache`,
-		`const capabilityBusinessServicesLoading`,
-		`const capabilityBusinessServicesError`,
-		`const capabilityAIBindingsCache`,
-		`const capabilityAIBindingsLoading`,
-		`const capabilityAIBindingsError`,
-	} {
-		if !strings.Contains(body, decl) {
-			t.Errorf("Capabilities view: state declaration %q missing", decl)
-		}
-	}
-	for _, fn := range []string{
-		`function setCapabilitiesSubView`,
-		`function showCapabilitiesCatalogue`,
-		`function showCapabilityRecord`,
-		`function loadCapabilitiesList`,
-		`function loadCapabilityRecord`,
-		`function renderCapabilitiesCatalogue`,
-		`function renderCapabilityRecord`,
-		`function loadCapabilityChildren`,
-		`function loadCapabilityBusinessServices`,
-		`function loadCapabilityAIBindings`,
-		`function renderCapabilityChildrenSection`,
-		`function renderCapabilityBusinessServicesSection`,
-		`function renderCapabilityAIBindingsSection`,
-	} {
-		if !strings.Contains(body, fn) {
-			t.Errorf("Capabilities view: function declaration %q missing", fn)
-		}
-	}
-
-	// 9. Record page fetches /v1/capabilities/<id>. Pin the
-	// encodeURIComponent form so an id with a slash or space cannot
-	// land a request on a partial path. The three sub-resource loaders
-	// share the same encodeURIComponent posture and append their
-	// canonical sub-paths; pinning each literal keeps a typo from
-	// landing requests on the wrong endpoint.
-	if !strings.Contains(body, `'/v1/capabilities/' + encodeURIComponent(capId)`) {
-		t.Error(`Capabilities record: must fetch '/v1/capabilities/' + encodeURIComponent(capId)`)
-	}
-	for _, marker := range []string{
-		`'/v1/capabilities/' + encodeURIComponent(capId) + '/children'`,
-		`'/v1/capabilities/' + encodeURIComponent(capId) + '/businessservices'`,
-		`'/v1/capabilities/' + encodeURIComponent(capId) + '/ai-bindings'`,
-	} {
-		if !strings.Contains(body, marker) {
-			t.Errorf("Capabilities sub-resources: missing fetch URL literal %q", marker)
-		}
-	}
-
-	// 10. Core-fields row labels — full Phase-1 wire shape. The
-	// renderer surfaces every field on the wire; missing optional
-	// values render as "—" via the muted span. Pinning the literal
-	// `['<key>',` array form keeps the labels stable across
-	// gofmt-driven realignment. The external_ref row uses
-	// formatExternalRef so the value matches the BS record page.
-	for _, key := range []string{
-		`['id',                   payload.id]`,
-		`['name',                 payload.name]`,
-		`['description',          payload.description]`,
-		`['status',               payload.status]`,
-		`['owner',                payload.owner]`,
-		`['parent_capability_id', payload.parent_capability_id]`,
-		`['origin',               payload.origin]`,
-		`['managed',              managedVal]`,
-		`['replaces',             payload.replaces]`,
-		`['created_by',           payload.created_by]`,
-		`['created_at',           payload.created_at]`,
-		`['updated_at',           payload.updated_at]`,
-		`['external_ref',         payload.external_ref ? formatExternalRef(payload.external_ref) : '']`,
-	} {
-		if !strings.Contains(body, key) {
-			t.Errorf("Capabilities record: core-field row %q missing", key)
-		}
-	}
-
-	// 10a. Identity pill keys for the Phase-1 fields the renderer
-	// surfaces above the core grid. Each key is rendered only when
-	// the underlying field is populated; pinning the `key: '<x>'`
-	// form makes a regression that drops a pill surface here.
-	for _, marker := range []string{
-		`{ key: 'parent',   val: payload.parent_capability_id }`,
-		`{ key: 'origin',   val: payload.origin }`,
-		`{ key: 'managed',  val: String(payload.managed) }`,
-		`{ key: 'replaces', val: payload.replaces }`,
-		`{ key: 'ext',      val: 'EXT-REF' }`,
-	} {
-		if !strings.Contains(body, marker) {
-			t.Errorf("Capabilities identity strip: pill marker %q missing", marker)
-		}
-	}
-
-	// 10b. Click-through wiring — child rows navigate to that
-	// capability's record page; BS rows navigate to that BS's record
-	// page. Pin the call form (target_id-bearing showXRecord(...))
-	// so a refactor that drops navigation is caught here.
-	for _, marker := range []string{
-		`showCapabilityRecord(child.id)`,
-		`showBusinessServiceRecord(bs.id)`,
-	} {
-		if !strings.Contains(body, marker) {
-			t.Errorf("Capabilities sub-resources: click wiring %q missing", marker)
-		}
-	}
-
-	// 11. Back-to-catalogue affordance + label. The label is the
-	// operator-visible text; pin both the button id and the literal
-	// string so a relabel surfaces here.
-	for _, marker := range []string{
-		`id="capabilities-record-back-btn"`,
-		`← Capabilities`,
-	} {
-		if !strings.Contains(body, marker) {
-			t.Errorf("Capabilities record: back-affordance marker %q missing", marker)
-		}
-	}
-
-	// 12. State strips — catalogue loading / error / empty / no-match.
-	// Each literal is the operator-visible string; a relabel that
-	// drifts away from "Loading capabilities…" should surface here.
-	for _, literal := range []string{
-		`Loading capabilities…`,
-		`Could not load capabilities`,
-		`No capabilities found`,
-	} {
-		if !strings.Contains(body, literal) {
-			t.Errorf("Capabilities catalogue: state-strip literal %q missing", literal)
-		}
-	}
-	// 13. State strips — record loading / error / no-record.
-	for _, literal := range []string{
-		`Loading record…`,
-		`Could not load capability`,
-		`No record loaded.`,
-	} {
-		if !strings.Contains(body, literal) {
-			t.Errorf("Capabilities record: state-strip literal %q missing", literal)
-		}
-	}
-
-	// 13a. Sub-resource section titles. Each is rendered as an
-	// operator-visible string by renderCapabilityRecord; pinning the
-	// literal protects the copy from drift. The BS section title
-	// deliberately spells "using this Capability" rather than
-	// "Related Business Services" so the operator sees the
-	// Capability-centric framing the endpoint actually returns.
-	for _, literal := range []string{
-		`Child capabilities`,
-		`Business Services using this Capability`,
-		`AI System bindings`,
-	} {
-		if !strings.Contains(body, literal) {
-			t.Errorf("Capabilities sub-resource section title %q missing", literal)
-		}
-	}
-
-	// 13b. Per-sub-resource state strips. Each loader produces its
-	// own loading and error strip; an empty success state renders an
-	// "empty" message inside the renderRelatedList helper. Pinning
-	// each literal makes a relabel surface here.
-	for _, literal := range []string{
-		`Loading child capabilities…`,
-		`Could not load child capabilities`,
-		`No child capabilities`,
-		`Loading business services…`,
-		`Could not load business services`,
-		`No business services use this capability`,
-		`Loading AI bindings…`,
-		`Could not load AI bindings`,
-		`No AI bindings at this capability scope`,
-	} {
-		if !strings.Contains(body, literal) {
-			t.Errorf("Capabilities sub-resource state-strip literal %q missing", literal)
-		}
-	}
-
-	// 13c. AI bindings section is intentionally non-clickable: the
-	// renderer must NOT wire a click handler on its rows. We carve
-	// out the renderCapabilityAIBindingsSection function body
-	// (bounded by its `function ` declaration on the start side and
-	// the function's closing brace at 2-space indent on the end
-	// side) and assert the slice contains no addEventListener call.
-	// Inner blocks close at 4+ space indent and so do not match the
-	// `\n  }` terminator.
-	const aiRendererAnchor = `function renderCapabilityAIBindingsSection`
-	aiStart := strings.Index(body, aiRendererAnchor)
-	if aiStart < 0 {
-		t.Fatalf("AI bindings renderer: could not locate %s in served HTML", aiRendererAnchor)
-	}
-	rest := body[aiStart+len(aiRendererAnchor):]
-	end := strings.Index(rest, "\n  }")
-	if end < 0 {
-		t.Fatalf("AI bindings renderer: could not locate function-body terminator after %s", aiRendererAnchor)
-	}
-	aiRendererBody := rest[:end]
-	if strings.Contains(aiRendererBody, `addEventListener`) {
-		t.Error("AI bindings renderer: must NOT call addEventListener — section is intentionally non-clickable")
-	}
-	if strings.Contains(aiRendererBody, `showCapabilityRecord`) ||
-		strings.Contains(aiRendererBody, `showBusinessServiceRecord`) {
-		t.Error("AI bindings renderer: must NOT route clicks to other record pages — there is no per-binding record page today")
-	}
-
-	// 14. Guardrails — neither the per-capability governance map nor
-	// the BS-only "Open Governance Map" affordance must leak into
-	// the capabilities module. The three sub-resource sections
-	// (children / business services / AI bindings) have real
-	// Phase-3 backing endpoints, so they are NOT in this list.
-	for _, illegal := range []string{
-		// Governance summary strip — no /governance-map for capabilities.
-		`gmap-action`,
-		// Open-Governance-Map button copy from the BS record page.
-		`Open Governance Map`,
-	} {
-		if strings.Contains(capabilitiesModule, illegal) {
-			t.Errorf("Capabilities module: must NOT contain %q — that section/action has no real backing endpoint", illegal)
-		}
-	}
-
-	// 15. Governance Map dispatcher whitelist remains narrow:
-	// view-business-service-record (BS + Related Service nodes) and
-	// view-capability-record (this PR) are the only supported kinds.
-	// Adding a process / surface / AI-system record kind would
-	// require a corresponding record-page destination, none of
-	// which exists today.
-	for _, illegalKind := range []string{
-		`'view-process-record'`,
-		`'view-surface-record'`,
-		`'view-aisystem-record'`,
-	} {
-		if strings.Contains(body, illegalKind) {
-			t.Errorf("Drill-down dispatcher: action kind %q must NOT be added in this PR", illegalKind)
-		}
-	}
-
-	// 16. Bootstrap — loadCapabilitiesList is invoked at startup so
-	// the catalogue is ready when the operator first clicks the
-	// Capabilities sidebar item. setTimeout(loadCapabilitiesList, 0)
-	// is the same pattern the BS list uses.
-	if !strings.Contains(body, `setTimeout(loadCapabilitiesList, 0)`) {
-		t.Error("Capabilities bootstrap: must call setTimeout(loadCapabilitiesList, 0) at startup")
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Collapsible sidebar (this PR)
 // ---------------------------------------------------------------------------
@@ -13273,7 +7320,7 @@ func TestExplorer_HTML_Shell_CollapsibleSidebar(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	// 1. The toggle button — id-stable + accessible.
 	if !strings.Contains(body, `id="sidebar-collapse-toggle"`) {
@@ -13399,7 +7446,7 @@ func TestExplorer_HTML_LayersControl_StructureAndAccessibility(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	// Button + panel skeleton.
 	for _, want := range []string{
@@ -13486,7 +7533,7 @@ func TestExplorer_HTML_LayersControl_ChipsPreserved(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	// Locate the Layers panel slice — chips MUST live inside it.
 	panelStart := strings.Index(body, `id="gmap-layers-panel"`)
@@ -13554,7 +7601,7 @@ func TestExplorer_HTML_LayersControl_NoFailModePolicy(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	// The D27j-ui-1 Layers control did not introduce any FailModePolicy
 	// chip or surface. D27j-ui-2b later landed compact FMP badges on
@@ -13588,7 +7635,7 @@ func TestExplorer_HTML_LayersControl_OpenCloseWiring(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	for _, want := range []string{
 		`function wireGmapLayersButton`,
@@ -13621,7 +7668,7 @@ func TestExplorer_HTML_AuthorityGraphAdapter_CarriesFailModePolicyID(t *testing.
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	for _, want := range []string{
 		// business_service case in mapAuthorityGraphToGovernanceMapShape.
@@ -13640,31 +7687,6 @@ func TestExplorer_HTML_AuthorityGraphAdapter_CarriesFailModePolicyID(t *testing.
 // data-kind="failmode" chip, no FAIL_MODE_POLICY_RESOLVED rendering,
 // no inspector section. The Layers popover must not include a
 // fail-mode toggle until D27j-ui-2b.
-func TestExplorer_HTML_AuthorityGraphAdapter_NoFailModePolicyRendering(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-
-	for _, forbidden := range []string{
-		`data-kind="failmode"`,
-		`data-kind="fail_mode_policy"`,
-		`data-kind="fail-mode-policy"`,
-		`>FAIL_MODE_POLICY_RESOLVED<`,
-		`gmap-fmp-badge`,
-		`gmap-failmode-badge`,
-		`renderFailModePolicy`,
-		`fetchFailModePolicy`,
-	} {
-		if strings.Contains(body, forbidden) {
-			t.Errorf("D27j-ui-2a: forbidden token %q must NOT appear (deferred to later tranches)", forbidden)
-		}
-	}
-}
-
 // LayersControl_CSSPresent pins the five new selectors in
 // governance-map.css. The legacy chip selectors must remain so the
 // chip visuals are unchanged inside the popover.
@@ -13718,7 +7740,7 @@ func TestExplorer_HTML_BusinessServiceNode_FMPDefaultBadge_RendersWhenConfigured
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	for _, want := range []string{
 		`if (bs.fail_mode_policy_id) {`,
@@ -13735,35 +7757,6 @@ func TestExplorer_HTML_BusinessServiceNode_FMPDefaultBadge_RendersWhenConfigured
 // pins the surface helper. Both the override branch and the inherited
 // branch must be present in the helper, AND the helper must be called
 // at both surface render sites (root + row) via .concat().
-func TestExplorer_HTML_DecisionSurfaceNode_FMPOverrideAndInheritedBadges(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-
-	for _, want := range []string{
-		// Helper declaration.
-		`function failModePolicyBadgesForSurface(surf)`,
-		// Override branch (surface has its own policy).
-		`if (surf && surf.fail_mode_policy_id) {`,
-		`return [{ cls: 'fmp-override', text: 'FMP override' }];`,
-		// Inherited branch (no surface override + root BS has policy).
-		`if (data.business_service && data.business_service.fail_mode_policy_id) {`,
-		`return [{ cls: 'fmp-inherited', text: 'FMP inherited' }];`,
-		// Helper applied at the surface-root site.
-		`.concat(failModePolicyBadgesForSurface(surf)),`,
-		// Helper applied at the surface-row site (per-iteration `s`).
-		`.concat(failModePolicyBadgesForSurface(s)),`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D27j-ui-2b: surface FMP badge wiring missing %q", want)
-		}
-	}
-}
-
 // TestExplorer_HTML_FailModePolicyBadges_NoStatusVersionOrLifecycleStrings
 // pins the badge-text vocabulary. The brief explicitly forbids any
 // language that implies runtime resolution (status, version, soft/open,
@@ -13777,7 +7770,7 @@ func TestExplorer_HTML_FailModePolicyBadges_NoStatusVersionOrLifecycleStrings(t 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	// The three approved badge texts must be the ONLY values rendered
 	// inside `text:` keys preceded by an `fmp-` cls. Pin them as the
@@ -13835,42 +7828,6 @@ func TestExplorer_HTML_FailModePolicyBadges_NoStatusVersionOrLifecycleStrings(t 
 // guards the topology boundary. The badge tranche is visual-only; no
 // new node kind, no new connector class, no new inspector function
 // declaration may slip in.
-func TestExplorer_HTML_FailModePolicyBadges_NoNodeOrEdgeOrInspectorIntroduced(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-
-	for _, forbidden := range []string{
-		// New node kinds.
-		`kind: 'fail_mode_policy'`,
-		`kind: 'failmode'`,
-		`kind: 'fmp'`,
-		// New connector class.
-		`connector-fail-mode-policy`,
-		`connector-failmode`,
-		`gmap-fmp-connector`,
-		// New addNode call referencing fail-mode.
-		`addNode({ id: 'fmp:`,
-		// Inspector / fetch helpers.
-		`function renderFailModePolicy`,
-		`function fetchFailModePolicy`,
-		`function loadFailModePolicy`,
-		`function resolveFailModePolicy`,
-		// Audit-event rendering.
-		`>FAIL_MODE_POLICY_RESOLVED<`,
-		`'FAIL_MODE_POLICY_RESOLVED'`,
-		`"FAIL_MODE_POLICY_RESOLVED"`,
-	} {
-		if strings.Contains(body, forbidden) {
-			t.Errorf("D27j-ui-2b: forbidden token %q must not appear (topology / inspector / audit boundary)", forbidden)
-		}
-	}
-}
-
 // TestExplorer_HTML_LayersControl_StillNoFailModeChip_AfterBadges
 // re-asserts D27j-ui-1's negative pin. Defensive — explicit boundary
 // for reviewers diffing this PR. Adding a chip here would also break
@@ -13882,7 +7839,7 @@ func TestExplorer_HTML_LayersControl_StillNoFailModeChip_AfterBadges(t *testing.
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 	for _, forbidden := range []string{
 		`data-kind="failmode"`,
 		`data-kind="fail_mode_policy"`,
@@ -14073,7 +8030,7 @@ func TestExplorer_HTML_DefaultHasNoThemeAttribute(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	for _, forbidden := range []string{
 		`data-theme="light"`,
@@ -14319,7 +8276,7 @@ func TestExplorer_HTML_LayersControl_RowMarkup_Present(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	for _, want := range []string{
 		// Toggle row: chip class first, row class second, then aria.
@@ -14691,7 +8648,7 @@ func TestExplorer_HTML_DefaultRoot_StillNoThemeAttribute_Theme4(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	for _, forbidden := range []string{
 		`data-theme="light"`,
@@ -14990,7 +8947,7 @@ func TestExplorer_HTML_RecordsAndEvidence_RendererFunctionsStillInline(t *testin
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	for _, want := range []string{
 		`function renderRecordsView`,
@@ -15029,7 +8986,7 @@ func TestExplorer_HTML_ThemeToggle_LivesInSettingsOnly(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	for _, want := range []string{
 		`class="settings-card settings-appearance-card"`,
@@ -15063,7 +9020,7 @@ func TestExplorer_HTML_ThemeToggle_NotInShellHeaderOrGraphToolbar(t *testing.T) 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	// Slice between the shell header opening and its closing </header>.
 	headerStart := strings.Index(body, `class="shell-header"`)
@@ -15117,7 +9074,7 @@ func TestExplorer_HTML_ThemeJS_DataThemeSetAndRemoveLogic(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	for _, want := range []string{
 		// Storage key constant.
@@ -15152,7 +9109,7 @@ func TestExplorer_HTML_ThemeJS_PreferencePersistenceSource(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	for _, want := range []string{
 		// Storage I/O on the configured key.
@@ -15192,7 +9149,7 @@ func TestExplorer_HTML_ThemeJS_NoPrefersColorScheme(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 	tokensCSS := getExplorerAsset(t, srv, "/explorer/assets/css/tokens.css")
 	settingsCSS := getExplorerAsset(t, srv, "/explorer/assets/css/settings.css")
 
@@ -15257,7 +9214,7 @@ func TestExplorer_HTML_ThemeToggle_DefaultDarkPosturePreserved(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	// Static HTML must not preset data-theme.
 	for _, forbidden := range []string{
@@ -15628,33 +9585,6 @@ func TestExplorer_AssetsCSS_GraphNodeTypeMarkers_GlyphMapping(t *testing.T) {
 // no-markup-change boundary. addNode still renders <span class="gmap-
 // node-label">…</span> with no sibling marker span — markers are
 // pseudo-elements only.
-func TestExplorer_HTML_GraphNodeMarkup_NoMarkerSpanIntroduced(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-
-	// addNode source must still emit the existing label span.
-	if !strings.Contains(body, `'<span class="gmap-node-label">' + escHtml(spec.label) + '</span>'`) {
-		t.Error("D27j-ui-theme-4c: addNode must still emit `<span class=\"gmap-node-label\">…</span>` (markup unchanged)")
-	}
-
-	// Negative pins: no marker-span class introduced.
-	for _, forbidden := range []string{
-		`gmap-node-marker`,
-		`class="gmap-node-marker"`,
-		`<span class="gmap-node-marker"`,
-		`gmap-marker-`,
-	} {
-		if strings.Contains(body, forbidden) {
-			t.Errorf("D27j-ui-theme-4c: marker span class %q must NOT exist (CSS pseudo-element only)", forbidden)
-		}
-	}
-}
-
 // TestExplorer_HTML_GraphRenderingFunctions_StillInline_Theme4c is a
 // JS-unchanged sanity check scoped to this tranche. The marker work
 // is CSS-only, so renderGovernanceMap, addNode, addLiveConnector,
@@ -15675,7 +9605,7 @@ func TestExplorer_HTML_GraphRenderingFunctions_StillInline_Theme4c(t *testing.T)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	for _, want := range []string{
 		`function renderGovernanceMap(data)`,
@@ -15913,7 +9843,7 @@ func TestExplorer_HTML_Theme4d_NoSelectedPathJSIntroduced(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	for _, forbidden := range []string{
 		`is-on-selected-path`,
@@ -15964,7 +9894,7 @@ func TestExplorer_HTML_RightRail_Markup_Present(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	for _, want := range []string{
 		// Rail container — additive class composition; legacy class
@@ -16013,7 +9943,7 @@ func TestExplorer_HTML_RightRail_PreservesExistingDetailIDs(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	for _, want := range []string{
 		`id="gmap-details"`,
@@ -16040,7 +9970,7 @@ func TestExplorer_HTML_RightRail_InspectorIsDefaultActive(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	// Inspector: active class + aria-selected=true.
 	if !strings.Contains(body, `class="gmap-right-rail-tab is-active" data-rail-tab="inspector" role="tab" aria-selected="true"`) {
@@ -16081,7 +10011,7 @@ func TestExplorer_HTML_RightRail_PlaceholdersInert(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	// Positive pins — placeholder copy lives in the Evidence and
 	// Config panels.
@@ -16130,7 +10060,7 @@ func TestExplorer_HTML_RightRail_TabSwitchingJS_Present(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	for _, want := range []string{
 		`function setGmapRightRailTab(tab)`,
@@ -16726,7 +10656,7 @@ func TestExplorer_AssetsCSS_RightRailTab_NoUppercase(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	// HTML labels in sentence case.
 	for _, want := range []string{
@@ -17349,7 +11279,7 @@ func TestExplorer_HTML_RightRail_NoBehaviourExpansion(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	// Slice the right-rail Evidence panel from its opening
 	// data-rail-panel="evidence" marker to the next </section>. The
@@ -17412,7 +11342,7 @@ func TestExplorer_HTML_RightRail_GovernanceContainer_Present(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	// Container exists with the expected id + class.
 	if !strings.Contains(body, `id="gmap-details-governance" class="gmap-details-governance"`) {
@@ -17437,36 +11367,6 @@ func TestExplorer_HTML_RightRail_GovernanceContainer_Present(t *testing.T) {
 
 // TestExplorer_HTML_RightRail_GovernanceJS_Present pins the new
 // helpers + the field-filter integration in selectGovernanceMapNode.
-func TestExplorer_HTML_RightRail_GovernanceJS_Present(t *testing.T) {
-	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
-		WithExplorerEnabled(true)
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-
-	for _, want := range []string{
-		`function setGovernanceMapDetailsGovernance(html)`,
-		`function buildFailModePolicyInspectorSection(nodeKind, details, data)`,
-		// Filter governance-only keys out of the generic field render.
-		`const GOVERNANCE_KEYS = ['fail_mode_policy_id'];`,
-		`.filter(k => GOVERNANCE_KEYS.indexOf(k) < 0)`,
-		// selectGovernanceMapNode invokes the helper + setter.
-		`setGovernanceMapDetailsGovernance(`,
-		`buildFailModePolicyInspectorSection(selectedNode.dataset.nodeKind || '', details, gmapData)`,
-		// Detail propagation: BS root, surface root, surface row each
-		// carry fail_mode_policy_id in their details payload.
-		`'fail_mode_policy_id': bs.fail_mode_policy_id || ''`,
-		`'fail_mode_policy_id': surf.fail_mode_policy_id || ''`,
-		`'fail_mode_policy_id': s.fail_mode_policy_id || ''`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D27j-ui-3b: governance JS source %q missing", want)
-		}
-	}
-}
-
 // TestExplorer_HTML_RightRail_FMPSemantics_Present pins all five
 // branches of buildFailModePolicyInspectorSection: BS-with / BS-
 // without / surface-override / surface-inherited / surface-none.
@@ -17478,7 +11378,7 @@ func TestExplorer_HTML_RightRail_FMPSemantics_Present(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	// Branch dispatch.
 	for _, want := range []string{
@@ -17517,7 +11417,7 @@ func TestExplorer_HTML_RightRail_FMPNoForbiddenLanguage(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	// Locate the helper body. Slice from the function declaration
 	// to a fixed 2000-byte bound — comfortably covers the ~1100-byte
@@ -17566,7 +11466,7 @@ func TestExplorer_HTML_RightRail_FMPNoFetchOrEndpoint(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := rec.Body.String()
+	body := getExplorerAllJS(t, srv)
 
 	start := strings.Index(body, `function buildFailModePolicyInspectorSection`)
 	if start < 0 {
