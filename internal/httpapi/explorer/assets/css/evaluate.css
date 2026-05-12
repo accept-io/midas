@@ -1,0 +1,79 @@
+  /* ──────────────────────────────────────────────────────────────────────
+     Evaluate view (Cluster 3)
+     Three-column workbench layout: request builder | governed decision |
+     decision evidence. Each column is a card on the dark canvas. Existing
+     IDs are preserved verbatim — only their parent containers change.
+     ────────────────────────────────────────────────────────────────────── */
+
+  .evaluate-view {
+    padding: 24px;
+  }
+  .evaluate-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 24px;
+    align-items: start;
+  }
+  .evaluate-col {
+    background: var(--surface-container-low);
+    border: 1px solid var(--outline-variant);
+    border-radius: var(--radius-panel);
+    padding: 22px;
+    min-width: 0;
+  }
+  .evaluate-col-request  { border-left: 2px solid var(--primary); }
+  .evaluate-col-decision { background: var(--surface-container-high); }
+
+  .evaluate-col-header { margin-bottom: 18px; }
+  .evaluate-col-header h2 {
+    font-size: 20px;
+    font-weight: 700;
+    font-family: var(--font-display);
+    letter-spacing: -0.01em;
+    color: var(--primary);
+    margin-bottom: 4px;
+  }
+  .evaluate-col-header p {
+    font-size: 12px;
+    color: var(--on-surface-variant);
+  }
+  .evaluate-col-decision .evaluate-col-header h2 { color: var(--on-surface); }
+
+  /* Decision column — centre-aligned hero outcome */
+  .evaluate-col-decision .outcome-card {
+    text-align: center;
+  }
+  .evaluate-col-decision .outcome-card .outcome-label {
+    font-size: 36px;
+    margin-bottom: 8px;
+  }
+  .evaluate-col-decision .meta-row {
+    justify-content: center;
+  }
+
+  /* Technical Details — demoted block at the bottom of the evidence column */
+  .evaluate-tech-section {
+    margin-top: 24px;
+    padding-top: 18px;
+    border-top: 1px solid var(--outline-variant);
+  }
+  .evaluate-tech-title {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--slate-500);
+    margin-bottom: 12px;
+  }
+
+  .evaluate-coverage-row {
+    margin-top: 24px;
+  }
+  .evaluate-coverage-row .section-title {
+    margin-bottom: 8px;
+  }
+
+  @media (max-width: 1280px) {
+    .evaluate-grid { grid-template-columns: 1fr; }
+  }
+

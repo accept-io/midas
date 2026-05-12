@@ -68,6 +68,7 @@ var topLevelSections = []string{
 	"version", "profile", "server", "store", "auth",
 	"local_iam", "platform_oidc",
 	"observability", "control_plane", "dev", "dispatcher", "kafka", "structural",
+	"fail_mode",
 }
 
 // Load discovers, reads, and returns the merged Config.
@@ -305,6 +306,18 @@ func applyEnvOverrides(cfg *Config, sources map[string]Source, getenv func(strin
 		cfg.Dev.SeedDemoUser = b
 		markEnv("dev")
 	}
+	if v := getenv("MIDAS_DEV_SEED_SYNTHETIC_DRIFT"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("config: MIDAS_DEV_SEED_SYNTHETIC_DRIFT must be a boolean (true/false): %q", v)
+		}
+		// Drift-2a-fix — assign a non-nil pointer so the explicit
+		// operator value wins over the SeedDemoData inheritance in
+		// DevConfig.EffectiveSeedSyntheticDrift. An unset env keeps
+		// whatever YAML provided (or nil).
+		cfg.Dev.SeedSyntheticDrift = &b
+		markEnv("dev")
+	}
 
 	// Dispatcher
 	if v := getenv("MIDAS_DISPATCHER_ENABLED"); v != "" {
@@ -370,6 +383,16 @@ func applyEnvOverrides(cfg *Config, sources map[string]Source, getenv func(strin
 	if v := getenv("MIDAS_STRUCTURAL_MODE"); v != "" {
 		cfg.Structural.Mode = StructuralMode(strings.ToLower(strings.TrimSpace(v)))
 		markEnv("structural")
+	}
+
+	// FailMode (D29d). DeploymentDefaultPolicyID is an opaque
+	// identifier; whitespace is trimmed but case and content are
+	// preserved verbatim. Following the convention of other env-
+	// overrides in this loader, an empty string is treated as "not
+	// set" — operators clear the deployment default via YAML, not env.
+	if v := getenv("MIDAS_FAIL_MODE_DEPLOYMENT_DEFAULT_POLICY_ID"); v != "" {
+		cfg.FailMode.DeploymentDefaultPolicyID = strings.TrimSpace(v)
+		markEnv("fail_mode")
 	}
 
 	// Kafka

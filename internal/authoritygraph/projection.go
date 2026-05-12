@@ -163,15 +163,24 @@ type ExternalRefData struct {
 // "business_service". Mirrors the governance-map DTO
 // (governanceMapBusinessService) for the fields available on the
 // businessservice.BusinessService domain type.
+//
+// FailModePolicyID is a data-only reference to a closed-only
+// FailModePolicy that supplies the default fail-mode posture for
+// surfaces under this service when those surfaces have no explicit
+// override. The projection carries the reference verbatim from the
+// domain — no policy lookup, no resolution, no rule inspection. Use
+// omitempty so an unset reference collapses to nothing on the wire,
+// matching every other optional string on this struct.
 type BusinessServiceData struct {
-	ID              string           `json:"id"`
-	Name            string           `json:"name"`
-	Description     string           `json:"description,omitempty"`
-	Status          string           `json:"status"`
-	Owner           string           `json:"owner,omitempty"`
-	ServiceType     string           `json:"service_type,omitempty"`
-	RegulatoryScope string           `json:"regulatory_scope,omitempty"`
-	ExternalRef     *ExternalRefData `json:"external_ref,omitempty"`
+	ID               string           `json:"id"`
+	Name             string           `json:"name"`
+	Description      string           `json:"description,omitempty"`
+	Status           string           `json:"status"`
+	Owner            string           `json:"owner,omitempty"`
+	ServiceType      string           `json:"service_type,omitempty"`
+	RegulatoryScope  string           `json:"regulatory_scope,omitempty"`
+	FailModePolicyID string           `json:"fail_mode_policy_id,omitempty"`
+	ExternalRef      *ExternalRefData `json:"external_ref,omitempty"`
 }
 
 // RelatedBusinessServiceData carries the typed information for a node
@@ -265,6 +274,13 @@ type DecisionSurfaceData struct {
 	Description           string   `json:"description,omitempty"`
 	Status                string   `json:"status"`
 	ProcessID             string   `json:"process_id"`
+	// FailModePolicyID is a data-only reference to a surface-level
+	// FailModePolicy override. The projection carries the reference
+	// verbatim from surface.DecisionSurface; runtime resolution
+	// (failmode.Resolve, audit-chain emission) is intentionally NOT
+	// invoked here. Empty/omitted means "no surface-level override —
+	// fall back to BusinessService default at evaluation time".
+	FailModePolicyID      string   `json:"fail_mode_policy_id,omitempty"`
 	AIBindingIDs          []string `json:"ai_binding_ids"`
 	InheritedAIBindingIDs []string `json:"inherited_ai_binding_ids"`
 	ProfileCount          int      `json:"profile_count"`

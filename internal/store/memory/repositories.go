@@ -13,6 +13,7 @@ import (
 	"github.com/accept-io/midas/internal/businessservice"
 	"github.com/accept-io/midas/internal/businessservicecapability"
 	"github.com/accept-io/midas/internal/capability"
+	"github.com/accept-io/midas/internal/drift"
 	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/failmode"
 	"github.com/accept-io/midas/internal/governanceexpectation"
@@ -631,6 +632,11 @@ func NewRepositories() *store.Repositories {
 		AISystemVersions:             aiVersionRepo,
 		AISystemBindings:             aiBindingRepo,
 		FailModePolicies:             NewFailModePolicyRepo(),
+		DriftDefinitions:             NewDriftDefinitionRepo(),
+		DriftSeries:                  NewDriftSeriesRepo(),
+		DriftSeriesPoints:            NewDriftSeriesPointRepo(),
+		DriftObservations:            NewDriftObservationRepo(),
+		DriftAnnotations:             NewDriftAnnotationRepo(),
 	}
 }
 
@@ -648,3 +654,8 @@ var _ aisystem.SystemRepository = (*AISystemRepo)(nil)
 var _ aisystem.VersionRepository = (*AISystemVersionRepo)(nil)
 var _ aisystem.BindingRepository = (*AISystemBindingRepo)(nil)
 var _ failmode.PolicyRepository = (*FailModePolicyRepo)(nil)
+var _ drift.DriftDefinitionRepository = (*DriftDefinitionRepo)(nil)
+var _ drift.DriftSeriesRepository = (*DriftSeriesRepo)(nil)
+var _ drift.DriftSeriesPointRepository = (*DriftSeriesPointRepo)(nil)
+var _ drift.DriftObservationRepository = (*DriftObservationRepo)(nil)
+var _ drift.DriftAnnotationRepository = (*DriftAnnotationRepo)(nil)

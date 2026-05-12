@@ -1,0 +1,2521 @@
+  /* ──────────────────────────────────────────────────────────────────────
+     Governance Map (Epic 1, PR 5)
+     ServiceNow-style node-link visual rendered inside the Services view
+     centre panel. Layout is static / slot-based — nodes are positioned
+     by category at known (x,y) slots and connectors are drawn into an
+     SVG layer behind the HTML node cards using the same coordinates.
+     The connectors are the product, so the SVG layer is load-bearing.
+     ────────────────────────────────────────────────────────────────────── */
+
+  .services-mode-tabs {
+    display: flex;
+    gap: 6px;
+    margin-top: 10px;
+  }
+  .services-mode-tab {
+    background: var(--surface-container);
+    color: var(--slate-400);
+    border: 1px solid var(--outline-variant);
+    padding: 6px 14px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .services-mode-tab.active {
+    background: var(--surface-container-high);
+    color: var(--primary);
+    border-color: var(--primary);
+  }
+
+  /* Top-level Services layouts. Exactly one is active at a time —
+     Overview (the original three-column grid) or Map (the full-width
+     governance-map workbench). The mode toggle is a sibling of both
+     containers so it remains visible across modes. */
+  .services-mode-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 18px;
+  }
+  .services-mode-toolbar .services-mode-tabs { margin-top: 0; }
+
+  .services-overview-layout { display: block; }
+  .services-overview-layout.hidden { display: none; }
+  .services-map-layout      { display: none; }
+  .services-map-layout.active { display: block; }
+
+  .governance-map-workbench {
+    background: var(--surface-container-low);
+    border: 1px solid var(--outline-variant);
+    border-radius: var(--radius-panel);
+    overflow: hidden;
+    width: 100%;
+    /* Phase 2B Step 16 — workbench shell. The card is now a vertical
+       flex-stack (toolbar / legend / body) with a hard height cap of
+       (viewport − fixed shell chrome − services-view padding 24+24
+       − map-view-header ~50px). The body child flex-fills the
+       remaining space; canvas-scroll inside it fills its grid cell.
+       Net effect: outer page scroll never engages on the map
+       sub-view, because the workbench card itself never grows past
+       the viewport. */
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - var(--header-height) - var(--footer-height) - 48px - 50px);
+    min-height: 480px;
+  }
+  .governance-map-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 22px;
+    background: var(--surface-container-lowest);
+    border-bottom: 1px solid var(--outline-variant);
+  }
+  .governance-map-toolbar .gmap-status {
+    font-size: 11px;
+    color: var(--slate-500);
+  }
+
+  /* Phase 2B Step 16 — graph body wrapper. 2-column grid that
+     splits the workbench's flex-fill area into the canvas-scroll
+     viewport on the left and the selected-node inspector on the
+     right. minmax(0, 1fr) on the canvas column lets the canvas
+     shrink under viewport pressure (without min-content blowing
+     out grid sizing); the inspector takes a fixed 320px column.
+     The wrapper itself is `flex: 1 1 auto; min-height: 0;` so it
+     consumes the workbench's remaining height after the toolbar
+     and legend rows.
+     Phase 2B Step 31 (D24e) — inspector rail promoted to a top-
+     level pane (sibling of .shell-sidebar). The body is now a
+     single-column grid because the inspector no longer lives
+     inside it. Horizontal space for the inspector is reserved at
+     the shell level (margin-right on .shell-main when body.gmap-
+     mode is set), so the canvas-scroll naturally fills the
+     reclaimed width. */
+  .governance-map-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    flex: 1 1 auto;
+    min-height: 0;
+    /* Phase 2B Step 25 (D22) — relative positioning lets the
+       floating camera puck (a third absolute-positioned child)
+       overlay the canvas cell. Position:absolute children are
+       removed from grid flow, so the existing single-column layout
+       is untouched. */
+    position: relative;
+  }
+  /* D26g-impl-2 — Canvas control clusters split by purpose.
+     The original .gmap-camera-bar (D24c, vertical 8-button strip)
+     mixed interaction-mode and camera/viewport controls. D26g-impl-2
+     splits it into two purpose-specific clusters:
+       .gmap-mode-rail       — Pan / Select (interaction-mode rail)
+                               anchored top-left of canvas because
+                               mode is the operator's first-gesture
+                               choice. 2 icon buttons stacked.
+       .gmap-camera-cluster  — Zoom in / Zoom out / Fit / Centre /
+                               Focus (camera + viewport cluster)
+                               anchored bottom-right of canvas where
+                               viewport controls conventionally live
+                               (Google Maps, CAD UIs). 5 icon
+                               buttons in a horizontal row. Bottom-
+                               right is the canvas corner farthest
+                               from the inspector seam, so the cluster
+                               does not compete for canvas-edge real
+                               estate when the inspector toggles.
+     Both clusters are absolute-positioned against .governance-map-
+     body (which is position: relative since D22) at z-index 5,
+     above #gmap-svg (1) and .gmap-node (2). Button visual chrome is
+     shared across both clusters via grouped selectors below. */
+  .gmap-mode-rail {
+    position: absolute;
+    top: 8px;
+    left: 16px;
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 4px;
+    background: var(--surface-container-high);
+    border: 1px solid var(--outline-variant);
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.30);
+  }
+  .gmap-camera-cluster {
+    position: absolute;
+    bottom: 16px;
+    right: 16px;
+    z-index: 5;
+    display: flex;
+    flex-direction: row;
+    gap: 4px;
+    padding: 4px;
+    background: var(--surface-container-high);
+    border: 1px solid var(--outline-variant);
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.30);
+  }
+  /* Shared icon-only button styling — applies to both clusters. 32x32
+     square, no min-width, no horizontal padding, transparent
+     background so the cluster's own background reads through.
+     currentColor on the SVG inherits text colour; hover shifts
+     background + foreground subtly. */
+  .gmap-mode-rail button,
+  .gmap-camera-cluster button {
+    width: 32px;
+    height: 32px;
+    min-width: 0;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    color: var(--slate-300);
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    line-height: 1;
+  }
+  .gmap-mode-rail button:hover:not(:disabled),
+  .gmap-camera-cluster button:hover:not(:disabled) {
+    background: var(--surface-container);
+    color: var(--on-surface);
+  }
+  .gmap-mode-rail button:disabled,
+  .gmap-camera-cluster button:disabled {
+    opacity: 0.40;
+    cursor: not-allowed;
+  }
+  .gmap-mode-rail button:focus-visible,
+  .gmap-camera-cluster button:focus-visible {
+    outline: 2px solid var(--primary, #4ea1ff);
+    outline-offset: 1px;
+  }
+  /* Focus-toggle pressed state: filled primary so the operator can
+     see at a glance that focus mode is engaged. Lives on the camera
+     cluster only — the mode rail's active state uses the
+     stronger is-active treatment below. */
+  .gmap-camera-cluster button[aria-pressed="true"] {
+    background: var(--surface-container);
+    color: var(--primary, #4ea1ff);
+  }
+  /* Phase 2B Step 39 (D24i-fix3) — active mode-toggle button. The
+     `is-active` class layered on top of aria-pressed="true"
+     produces a noticeably stronger active treatment than the focus-
+     toggle's pressed state, because the Pan/Select choice is a
+     persistent mode (not a transient gesture) and should be
+     unmistakable at a glance. The active button gets a primary
+     border + text colour + a surface fill so it reads as a
+     "filled pill". */
+  .gmap-mode-rail button.is-active {
+    background: var(--surface-container-high);
+    color: var(--primary, #4ea1ff);
+    border: 1px solid var(--primary, #4ea1ff);
+  }
+  /* Phase 2B Step 23 — collapsible inspector rail (D20).
+     Phase 2B Step 31 (D24e) — inspector promoted to top-level pane,
+     so the collapse selector moved from .governance-map-body to
+     <body> (where the --inspector-width override and the gmap-mode
+     shell rules already live). The inspector rail's width follows
+     --inspector-width (320px expanded / 56px collapsed); the
+     reclaimed horizontal space appears in .shell-main's margin-right
+     and propagates to .governance-map-body / .governance-map-canvas-
+     scroll automatically. No graph rerender, no camera
+     recalculation, no graph-state mutation. */
+  body.inspector-collapsed #gmap-details {
+    padding: 8px 6px;
+    overflow: hidden;
+  }
+  body.inspector-collapsed #gmap-details .gmap-details-section {
+    display: none;
+  }
+  /* D27j-ui-3a-refine-3b — collapsed-state chromeless treatment.
+     In collapsed state the rail strip should visually merge with
+     the canvas, not the body / shell background. The 3e tranche
+     replaced 3b's `background: transparent` with the canvas token
+     (--surface-container-lowest) — transparent exposed --bg, which
+     is a different shade from the canvas (--surface-container-
+     lowest), producing the visible dark stripe the user reported.
+     Painting the same token the canvas uses makes the
+     handle-width collapsed column read as a continuation of the
+     canvas surface. The left border still drops to transparent so
+     the now-matching surfaces do not sport a visible 1px hairline
+     at the join. */
+  body.inspector-collapsed .governance-map-details {
+    background: var(--surface-container-lowest);
+  }
+  body.inspector-collapsed #gmap-details {
+    border-left-color: transparent;
+  }
+  /* D27j-ui-3a-refine-6 — close the collapsed-state overlap. The
+     base #gmap-details consumes var(--inspector-width) for its
+     width; collapsed --inspector-width resolves to 56px while
+     the shell reservation is now 28px (handle-width). The 28px
+     mismatch caused the rail aside to paint --surface-container-
+     lowest over canvas pixels and to swallow pointer events in
+     the difference. Overriding the rail width to the handle-
+     width token in collapsed state aligns rail width = handle
+     width = shell reservation = 28px, with no overlap and no
+     phantom canvas-coloured strip. The base width declaration
+     (var(--inspector-width)) remains untouched so the expanded
+     320px width still resolves correctly. */
+  body.inspector-collapsed #gmap-details {
+    width: var(--gmap-right-rail-handle-width);
+  }
+  /* Phase 2B Step 30 (D24f) — inspector toggle harmonised with the
+     left sidebar's canonical .shell-sidebar-toggle pattern. The
+     toggle button now multi-classes both .shell-sidebar-toggle (for
+     the canonical visual treatment — 28x22 bordered, surface-
+     container-low background, light hover, 14px font, etc.) and
+     .gmap-inspector-toggle (this rule — for the bottom-anchor
+     positioning inside the inspector rail's flex column). The
+     canonical class delivers the visual; this class delivers the
+     position.
+     margin-top: auto pushes the button to the bottom of the flex
+     column (the rail's display: flex; flex-direction: column).
+     align-self: flex-end aligns it to the right edge of the rail
+     (matching the brief's "bottom-right of the inspector rail").
+     flex-shrink: 0 prevents the button from being compressed when
+     the inspector content is tall. */
+  .gmap-inspector-toggle {
+    margin-top: auto;
+    align-self: flex-end;
+    flex-shrink: 0;
+  }
+
+  /* D26g-impl-1 — Workbench toolbar groups. The toolbar is a flex
+     row with three logical groups (left/centre/right). The element
+     also carries the legacy `governance-map-legend` class so the
+     historical strip-row CSS rule applies for chrome (background,
+     border-bottom). The group classes only handle layout: ordering,
+     gaps, and centre-flex behaviour. */
+  .governance-map-toolbar-left,
+  .governance-map-toolbar-centre,
+  .governance-map-toolbar-right {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+  .governance-map-toolbar-centre {
+    flex: 1 1 auto;
+    gap: 12px;
+  }
+  /* Back-button styling inside the toolbar. The button is icon-only
+     (32x22 to match the existing .shell-sidebar-toggle / inspector-
+     toggle visual size), bordered, with a disabled treatment when
+     gmapHistory is empty. */
+  .governance-map-toolbar-left #gmap-back-button {
+    width: 28px;
+    height: 22px;
+    min-width: 0;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--surface-container-low);
+    color: var(--slate-300);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 4px;
+    cursor: pointer;
+    line-height: 1;
+    flex-shrink: 0;
+  }
+  .governance-map-toolbar-left #gmap-back-button:hover:not(:disabled) {
+    background: var(--surface-container);
+    color: var(--on-surface);
+  }
+  .governance-map-toolbar-left #gmap-back-button:disabled {
+    opacity: 0.40;
+    cursor: not-allowed;
+  }
+  .governance-map-toolbar-left #gmap-back-button:focus-visible {
+    outline: 2px solid var(--primary, #4ea1ff);
+    outline-offset: 1px;
+  }
+  /* Search input — toolbar-context styling. Lighter than the canvas-
+     overlay treatment because the toolbar already has a darker
+     background; sized to a compact min-width so it does not crowd
+     the filter chips on narrow viewports. */
+  .governance-map-toolbar .gmap-search-input {
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+    color: var(--on-surface);
+    min-width: 180px;
+    max-width: 240px;
+    flex-shrink: 0;
+  }
+  .governance-map-toolbar .gmap-search-input::placeholder {
+    color: var(--slate-500);
+  }
+  .governance-map-toolbar .gmap-search-input:focus-visible {
+    outline: 2px solid var(--primary, #4ea1ff);
+    outline-offset: 1px;
+  }
+
+  /* Orientation context — small, low-emphasis text. At narrow
+     widths (≤1280px) the rendered string is abbreviated by the
+     setGovernanceMapCurrentRoot helper to drop the Root segment;
+     the helper queries window width at write time. Until that
+     trims, CSS keeps the line single-line via white-space: nowrap. */
+  .gmap-orientation-context {
+    font-size: 11px;
+    color: var(--slate-400);
+    white-space: nowrap;
+    max-width: 280px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Form / Graph view-mode toggle — segmented control. Visually
+     distinct from filter chips (rounded-rect container + internal
+     two-segment highlight) so the operator reads it as a category
+     change rather than a filter. The Graph segment is always
+     visually active in this phase; clicking Form shows the
+     "Form view coming soon" inline feedback (.gmap-view-mode-feedback
+     adjacent). */
+  .gmap-view-mode-toggle {
+    display: inline-flex;
+    background: rgba(20, 24, 32, 0.65);
+    border: 1px solid var(--outline-variant);
+    border-radius: 6px;
+    padding: 2px;
+  }
+  /* D26g-impl-4 — Segmented toggle is now icon-only. Each segment is
+     a 24x22 icon button with currentColor SVG strokes. Sizing is
+     fixed so the toolbar's right edge does not jitter when the
+     active segment swaps. The active state lifts the segment's
+     background and shifts the icon stroke to the primary colour;
+     the inactive state stays muted so the operator's eye lands on
+     the active segment first. */
+  .gmap-view-mode-segment {
+    width: 26px;
+    height: 22px;
+    min-width: 0;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    color: var(--slate-400);
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    line-height: 1;
+  }
+  .gmap-view-mode-segment:hover:not(.is-active) {
+    color: var(--on-surface);
+    background: rgba(255, 255, 255, 0.04);
+  }
+  .gmap-view-mode-segment.is-active {
+    background: var(--surface-container-high);
+    color: var(--primary);
+  }
+  .gmap-view-mode-segment:focus-visible {
+    outline: 2px solid var(--primary, #4ea1ff);
+    outline-offset: 1px;
+  }
+  .gmap-view-mode-segment svg {
+    display: block;
+  }
+  /* Coming-soon feedback message — appears next to the toggle
+     when the operator clicks the Form segment. Hidden by default
+     (opacity 0); .is-visible fades it in. setTimeout-driven
+     auto-hide after 3s. */
+  .gmap-view-mode-feedback {
+    font-size: 11px;
+    color: var(--slate-400);
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    pointer-events: none;
+    white-space: nowrap;
+  }
+  .gmap-view-mode-feedback.is-visible {
+    opacity: 1;
+  }
+
+  /* Canvas-scroll fills the (now single-column) .governance-map-body
+     grid cell horizontally and vertically. The pre-Step-16
+     max-height: 720px cap is gone — vertical overflow lands in the
+     workbench-card height limit, not a fixed pixel height. Both-axis
+     scroll preserved so the zoom feature can still grow the canvas
+     beyond the viewport diagonally.
+     Phase 2B Step 32 (D24g) — orphaned `border-right: 1px solid
+     var(--outline-variant);` removed. Pre-D24e it served as the
+     visual seam between the canvas-scroll cell and the in-grid
+     inspector cell; after D24e promoted the inspector to a top-level
+     pane, the inspector's own `border-left` (paired with the
+     workbench's outer `border`) provides that seam. The canvas-scroll
+     border-right was visible as a faint phantom inner line, parallel
+     to but distinct from the inspector pane — pure styling residue. */
+  .governance-map-canvas-scroll {
+    overflow-x: auto;
+    overflow-y: auto;
+    background: var(--surface-container-lowest);
+    height: 100%;
+    min-height: 0;
+  }
+  .governance-map-canvas {
+    position: relative;
+    width: 1180px;
+    min-width: 1180px;
+    height: 720px;
+    background: var(--surface-container-lowest);
+    border-bottom: 1px solid var(--outline-variant);
+    overflow: visible;
+  }
+  /* Zoom scene wrapper. Holds the SVG connector layer and every node
+     card; the renderer injects into the scene so the connector layer
+     and the HTML cards transform together. The scene's internal
+     coordinates are unscaled (baseW × CANVAS_H); transform: scale(z)
+     with transform-origin: 0 0 produces the apparent size, and the
+     parent canvas reports the scaled dimensions to the scroll wrapper. */
+  .governance-map-scene {
+    position: absolute;
+    top: 0;
+    left: 0;
+    transform-origin: 0 0;
+    will-change: transform;
+  }
+  .governance-map-svg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 1;
+    overflow: visible;
+  }
+
+  /* Zoom controls — three buttons + a live percentage indicator,
+     centred between the toolbar's title and the source slot. The
+     buttons are visually neutral: enabled = workbench surface,
+     hovered = lighter, disabled = dimmed and not pointer-active. */
+  /* Phase 2B Step 15 — graph navigation Back button. Matches the
+     zoom-control visual chrome so it feels like part of the same
+     graph-tool family. Hidden by default ([hidden] attr); the
+     `updateGmapBackButtonState` helper toggles visibility based on
+     whether gmapHistory has entries. */
+  /* Phase 2B Step 27 (D24c) — Back button restyled to icon-only
+     chevron. Compact 28x28 inline button, transparent background,
+     no border (subtle hover shifts background only). Matches the
+     camera-bar's icon language (16x16 SVG, currentColor, 1.5px
+     stroke). The ID + handler are unchanged. */
+  .gmap-back-button {
+    width: 28px;
+    height: 28px;
+    min-width: 0;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    color: var(--slate-300);
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    line-height: 1;
+  }
+  /* Phase 2B Step 24 — focus-mode workspace toggle. Same compact
+     visual language as the Back button (12px monospace, 3px radius),
+     plus a pressed state that fills the button when focus mode is
+     active so the operator sees the workspace-mode toggle is on. */
+  .gmap-focus-toggle {
+    background: var(--surface-container);
+    color: var(--slate-300);
+    border: 1px solid var(--outline-variant);
+    padding: 3px 10px;
+    font-size: 12px;
+    font-family: var(--font-mono);
+    border-radius: 3px;
+    cursor: pointer;
+    line-height: 1.2;
+  }
+  .gmap-focus-toggle:hover {
+    background: var(--surface-container-high);
+    color: var(--on-surface);
+  }
+  .gmap-focus-toggle[aria-pressed="true"] {
+    background: var(--surface-container-high);
+    color: var(--primary, #4ea1ff);
+    border-color: var(--primary, #4ea1ff);
+  }
+  .gmap-focus-toggle:focus-visible {
+    outline: 2px solid var(--primary, #4ea1ff);
+    outline-offset: 1px;
+  }
+  .gmap-back-button:hover:not(:disabled) {
+    background: var(--surface-container-high);
+    color: var(--on-surface);
+  }
+  .gmap-back-button:disabled {
+    opacity: 0.40;
+    cursor: not-allowed;
+  }
+  .gmap-back-button:focus-visible {
+    outline: 2px solid var(--primary, #4ea1ff);
+    outline-offset: 1px;
+  }
+
+  .gmap-zoom-controls {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .gmap-zoom-controls button {
+    background: var(--surface-container);
+    color: var(--slate-300);
+    border: 1px solid var(--outline-variant);
+    padding: 3px 8px;
+    font-size: 12px;
+    font-family: var(--font-mono);
+    border-radius: 3px;
+    cursor: pointer;
+    min-width: 28px;
+    line-height: 1.2;
+  }
+  .gmap-zoom-controls button:hover:not(:disabled) {
+    background: var(--surface-container-high);
+    color: var(--on-surface);
+  }
+  .gmap-zoom-controls button:disabled {
+    opacity: 0.40;
+    cursor: not-allowed;
+  }
+  #gmap-zoom-level {
+    display: inline-block;
+    min-width: 44px;
+    text-align: center;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--slate-400);
+  }
+
+  .gmap-node {
+    position: absolute;
+    width: 220px;
+    min-height: 64px;
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    border-radius: 8px;
+    padding: 9px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    color: var(--on-surface);
+    z-index: 2;
+    cursor: pointer;
+    font-family: inherit;
+    text-align: left;
+    transition: border-color 0.12s, background 0.12s, transform 0.08s;
+  }
+  .gmap-node:hover { background: var(--surface-container-high); }
+  .gmap-node:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 1px;
+  }
+  /* D27j-ui-theme-4d — clean ring instead of diffuse glow. The 2px
+     ring sits outside the existing 1px border + 4px left rail; the
+     surface-container-high background still reads as "active". The
+     selected node-name weight is bumped below to compound the
+     emphasis without changing layout. */
+  .gmap-node.selected {
+    border-color: var(--primary);
+    background: var(--surface-container-high);
+    box-shadow: 0 0 0 2px var(--primary);
+  }
+  .gmap-node.selected .gmap-node-name {
+    font-weight: 700;
+  }
+  /* Phase 2B Step 13 — graph-native primary actions.
+     Inline-action container is hidden by default and revealed only
+     when the node is selected AND the container has at least one
+     child. The container itself starts with the [hidden] attribute
+     so the renderer doesn't reserve vertical space for nodes that
+     have no inline actions. selectGovernanceMapNode populates it
+     for graph-primary action kinds (currently: reframe-around-this);
+     other action kinds (record-navigation) stay in the bottom panel. */
+  .gmap-node-inline-actions {
+    display: none;
+    margin-top: 8px;
+    gap: 6px;
+  }
+  .gmap-node.selected .gmap-node-inline-actions:not([hidden]) {
+    display: flex;
+    flex-wrap: wrap;
+  }
+  .gmap-action-reframe-inline {
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 5px;
+    border: 1px solid var(--primary, #4ea1ff);
+    background: var(--surface-container);
+    color: var(--on-surface);
+    cursor: pointer;
+    font-family: inherit;
+    line-height: 1.2;
+  }
+  .gmap-action-reframe-inline:hover {
+    background: var(--surface-container-high);
+  }
+  .gmap-action-reframe-inline:focus-visible {
+    outline: 2px solid var(--primary, #4ea1ff);
+    outline-offset: 1px;
+  }
+  /* Phase 2B Step 13 — current graph root indicator.
+     The BS-slot card carries `gmap-root-node` whenever it represents
+     the projection root (in view=service that's the real BS; in
+     view=ai_system it's the AI system promoted into the BS slot by
+     the adapter compatibility shim). The treatment is a thin glow
+     ring — distinct from .selected so a user can tell "this is the
+     root" even when they have selected a different node. */
+  /* D27j-ui-theme-4d — clean 2px primary ring; the dual-shadow
+     (ring + diffuse glow) was operationally indistinguishable from
+     the .selected glow at zoom-out and added visual noise. */
+  .gmap-node.gmap-root-node {
+    box-shadow: 0 0 0 2px var(--primary);
+  }
+  .gmap-node.gmap-root-node.selected {
+    box-shadow: 0 0 0 2px var(--primary);
+  }
+
+  /* Phase 2B Step 21 — graph search highlight (D18).
+     Distinct from .selected (primary-blue) and .gmap-root-node
+     (primary glow) so a search match never visually conflicts with
+     the operator's existing selection or with the current root
+     marker. Uses --secondary (the existing accept-green accent) for
+     the highlight ring. .gmap-search-match is the live-typing
+     highlight applied to every node whose nodeName / nodeId
+     substring-matches the current search term;
+     .gmap-search-active is the stronger marker applied to the
+     single node the helper has focused (single match, or first
+     match on Enter). */
+  .gmap-node.gmap-search-match {
+    border-color: var(--secondary, #4edea3);
+    box-shadow: 0 0 0 1px var(--secondary, #4edea3);
+  }
+  /* D27j-ui-theme-4d — clean 2px secondary ring; the diffuse second
+     shadow layer was redundant against the search-match 1px ring at
+     normal zoom. */
+  .gmap-node.gmap-search-active {
+    border-color: var(--secondary, #4edea3);
+    box-shadow: 0 0 0 2px var(--secondary, #4edea3);
+  }
+  .gmap-search-input {
+    background: var(--surface-container);
+    color: var(--on-surface);
+    border: 1px solid var(--outline-variant);
+    padding: 3px 10px;
+    font-size: 12px;
+    font-family: var(--font-mono);
+    border-radius: 3px;
+    line-height: 1.2;
+    min-width: 160px;
+  }
+  .gmap-search-input::placeholder {
+    color: var(--slate-500);
+  }
+  .gmap-search-input:focus-visible {
+    outline: 2px solid var(--primary, #4ea1ff);
+    outline-offset: 1px;
+  }
+
+  .gmap-node-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    color: var(--slate-500);
+  }
+  /* D27j-ui-theme-4c — CSS-only node type markers. The label span is
+     promoted to inline-flex so its ::before pseudo-element sits as a
+     compact glyph before the uppercase kind text. The base rule sizes
+     and centres the marker; per-kind rules below set content + colour
+     via the --gmap-type-* identity tokens introduced in theme-4b, so
+     each marker flips per theme via tokens.css with no light-mode
+     override required. */
+  .gmap-node-label::before {
+    display: inline-block;
+    flex: 0 0 auto;
+    min-width: 0.85em;
+    font-size: 0.9em;
+    line-height: 1;
+    text-align: center;
+  }
+  .business-service-node .gmap-node-label::before { content: "■"; color: var(--gmap-type-business); }
+  .related-service-node  .gmap-node-label::before { content: "▢"; color: var(--gmap-type-related); }
+  .capability-node       .gmap-node-label::before { content: "◧"; color: var(--gmap-type-capability); }
+  .process-node          .gmap-node-label::before { content: "▶"; color: var(--gmap-type-process); }
+  .decision-surface-node .gmap-node-label::before { content: "◆"; color: var(--gmap-type-surface); }
+  .ai-system-node        .gmap-node-label::before { content: "◉"; color: var(--gmap-type-ai); }
+  .authority-node        .gmap-node-label::before { content: "❖"; color: var(--gmap-type-authority); }
+  .coverage-node         .gmap-node-label::before { content: "◐"; color: var(--gmap-type-coverage); }
+  .gmap-node-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--on-surface);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .gmap-node-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    font-size: 10px;
+    color: var(--slate-400);
+    font-family: var(--font-mono);
+  }
+  .gmap-badge {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 1px 6px;
+    border-radius: var(--radius-tight);
+    border: 1px solid var(--outline-variant);
+    color: var(--slate-400);
+  }
+  .gmap-badge.ok { color: var(--secondary); border-color: rgba(78,222,163,0.40); }
+  .gmap-badge.warn { color: #f0b67a; border-color: rgba(240,182,122,0.45); }
+  .gmap-badge.bind { color: var(--primary); border-color: rgba(173,198,255,0.40); }
+
+  /* D27j-ui-2b — FailModePolicy reference badges. Compact, low-noise,
+     reuses the .gmap-badge rectangle (no broader redesign). The badge
+     surfaces the configured reference state only — it must not imply
+     policy status, version, or runtime resolution.
+     D27j-ui-theme-4b aligned the badge identity to the semantic graph
+     palette: fmp-default reads as a Business-Service-level property,
+     fmp-override reads as a Decision-Surface-level property. The
+     fmp-inherited treatment stays muted + dashed because inheritance
+     semantics ("propagated from parent") would be lost if the badge
+     used a kind-specific colour. */
+  .gmap-badge.fmp-default   { color: var(--gmap-type-business); border-color: rgba(58,123,217,0.30); }
+  .gmap-badge.fmp-override  { color: var(--gmap-type-surface);  border-color: rgba(15,118,110,0.45); }
+  .gmap-badge.fmp-inherited { color: var(--slate-400);          border-color: rgba(173,198,255,0.20); border-style: dashed; }
+
+  /* Per-type node accents — left border + label colour. D27j-ui-theme-4b
+     migrated each accent from raw hex / interaction tokens to the new
+     semantic identity tokens (--gmap-type-*). Business Service no
+     longer reuses --primary (action) and Decision Surface no longer
+     reuses --secondary (success); each kind now has its own dedicated
+     identity hue that flips per theme via tokens.css. */
+  .business-service-node { border-left: 4px solid var(--gmap-type-business); }
+  .related-service-node  { border-left: 4px solid var(--gmap-type-related); }
+  .capability-node       { border-left: 4px solid var(--gmap-type-capability); }
+  .process-node          { border-left: 4px solid var(--gmap-type-process); }
+  .decision-surface-node { border-left: 4px solid var(--gmap-type-surface); }
+  .ai-system-node        { border-left: 4px solid var(--gmap-type-ai); }
+  .authority-node        { border-left: 4px dashed var(--gmap-type-authority); }
+  .coverage-node         { border-left: 4px solid var(--gmap-type-coverage); }
+
+  /* Truncation marker — placed at the end of any layer the
+     GMAP.MAX_PER_LAYER cap truncated. Visually distinct from semantic
+     entity nodes (dashed border, muted palette, italic name) so the
+     operator reads it as "summary, not entity". The styling does not
+     reuse any per-entity class, so a regression that drops or renames
+     the .gmap-more-node selector surfaces here visually as well as via
+     the source-level test. */
+  .gmap-more-node {
+    border: 1px dashed var(--outline-variant);
+    border-left: 4px dashed var(--slate-500);
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--slate-400);
+  }
+  .gmap-more-node .gmap-node-label { color: var(--slate-500); }
+  .gmap-more-node .gmap-node-name {
+    color: var(--slate-300);
+    font-style: italic;
+  }
+  .gmap-more-node .gmap-node-meta { color: var(--slate-500); }
+
+  /* Connector line styles — these classes are the contract Cluster B/C
+     tests pin. D27j-ui-theme-4d refined connector hierarchy: stroke
+     widths trimmed for a lighter technical workbench feel; service
+     edges quieted via --gmap-conn-neutral; coverage-gap stays most
+     prominent (risk semantic); authority and gap dasharrays preserved
+     verbatim. Hover stroke-width (3.5) and hit-target stroke-width
+     (12) untouched — the lighter base makes the hover bump even more
+     visible. */
+  .connector-service     { fill: none; stroke: var(--gmap-conn-neutral);   stroke-width: 1.6; opacity: 0.78; }
+  .connector-ai-binding  { fill: none; stroke: var(--gmap-type-ai);        stroke-width: 1.8; opacity: 0.92; }
+  .connector-authority   { fill: none; stroke: var(--gmap-type-authority); stroke-width: 1.7; stroke-dasharray: 6 4; opacity: 0.88; }
+  .connector-evidence    { fill: none; stroke: var(--gmap-type-surface);   stroke-width: 1.7; opacity: 0.88; }
+  .connector-gap         { fill: none; stroke: var(--gmap-type-risk);      stroke-width: 1.8; stroke-dasharray: 5 5; opacity: 0.95; }
+
+  /* D26h-impl — Connector hover relationship preview.
+     The base .governance-map-svg layer keeps pointer-events: none
+     (set above at line 4218); .gmap-connector overrides per-path so
+     only the stroked path captures pointer events. The cursor
+     becomes a pointer to telegraph that hover discloses meaning;
+     transitions soften the stroke-width / opacity flip so quick
+     traversals don't flash. */
+  .gmap-connector {
+    pointer-events: stroke;
+    cursor: pointer;
+    transition: stroke-width 0.10s ease-out, opacity 0.10s ease-out, filter 0.10s ease-out;
+  }
+  /* Hovered connector — bumped stroke + opacity + soft glow. The
+     filter uses currentColor via drop-shadow so each connector
+     kind keeps its own colour identity. Dasharrays on
+     connector-authority and connector-gap are preserved (the rule
+     does not touch stroke-dasharray). */
+  .gmap-connector.is-hovered {
+    stroke-width: 3.5;
+    opacity: 1;
+    filter: drop-shadow(0 0 4px currentColor);
+  }
+  /* Suppress connector hover during active canvas gestures so the
+     pointer can't get captured mid-pan / mid-lasso. The body classes
+     are toggled by the canvas pointer-down handler's threshold-
+     crossing branches; this rule wins because of selector
+     specificity. */
+  body.gmap-canvas-panning .gmap-connector,
+  body.gmap-canvas-lassoing .gmap-connector,
+  body.gmap-canvas-panning .gmap-connector-hit-target,
+  body.gmap-canvas-lassoing .gmap-connector-hit-target {
+    pointer-events: none;
+    cursor: inherit;
+  }
+  /* D26h-fix — wider invisible hit target. The visible connector
+     stroke is 2.0–2.2px (too thin to hover reliably with a normal
+     cursor velocity); the hit target is a transparent 12px stroke
+     that captures hover on the same `d` curve. SVG paint order
+     places it above the visible path, but `stroke: transparent`
+     means the visible stroke shows through unmodified. The hit
+     target carries no visual classes; class manipulation happens
+     on the visible path via gmapVisibleConnectorForHoverTarget. */
+  .gmap-connector-hit-target {
+    fill: none;
+    stroke: transparent;
+    stroke-width: 12;
+    pointer-events: stroke;
+    cursor: pointer;
+  }
+  /* Hide the hit target alongside its visible connector when the
+     visibility filter (.gmap-connector-hidden) hides the visible
+     path. Filters work by toggling .gmap-connector-hidden on the
+     visible path; the hit target tracks via the same class.
+     Currently the filter only sets the class on the visible path,
+     so we provide a sibling rule that also display:none's the
+     adjacent hit target if the visible path carries the hidden
+     class. (Today the filter manages only the visible path; this
+     rule is defensive for the future case where the hit target
+     might still capture hovers on a hidden visible path.) */
+  path.gmap-connector-hidden + path.gmap-connector-hit-target {
+    display: none;
+  }
+  /* Endpoint halo on the source + target node cards. Outline (not
+     border) composes additively with .gmap-node.selected and
+     .gmap-multi-selected — the selected node keeps its primary
+     border + box-shadow, and the endpoint outline sits outside as
+     an additional ring. Subtle so it doesn't dominate the canvas
+     when the operator hovers many edges in succession. */
+  .gmap-node.is-connector-endpoint {
+    outline: 2px solid rgba(173, 198, 255, 0.45);
+    outline-offset: 2px;
+  }
+  /* Connector tooltip — single shared element appended once inside
+     .governance-map-body. Anchored relative to the body via
+     position: absolute + per-hover left/top updates. pointer-events:
+     none so it never blocks the canvas; z-index 5 keeps it above
+     the SVG layer + node cards but below modal-style affordances if
+     any are introduced later. */
+  .gmap-connector-tooltip {
+    position: absolute;
+    z-index: 6;
+    pointer-events: none;
+    max-width: 280px;
+    padding: 6px 10px;
+    background: rgba(20, 24, 32, 0.95);
+    border: 1px solid var(--outline-variant);
+    border-radius: 4px;
+    font-size: 11px;
+    line-height: 1.35;
+    color: var(--on-surface);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.40);
+  }
+  .gmap-connector-tooltip[hidden] { display: none; }
+  .gmap-connector-tooltip-kind {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--slate-500);
+    margin-bottom: 2px;
+  }
+  .gmap-connector-tooltip-route {
+    color: var(--slate-200);
+    word-break: break-word;
+  }
+
+  /* D26g-impl-1 — `.governance-map-toolbar` is the new primary class
+     for the workbench-frame control strip above the canvas. The
+     legacy `.governance-map-legend` class is preserved as a back-
+     compat token on the same element so historical CSS deep-styling
+     and the existing focus-mode rules continue to resolve. The two
+     selectors share the strip's chrome (padding, background, border-
+     bottom) but the toolbar selector also imposes a flex-row layout
+     with space-between justification so the three groups (left,
+     centre, right) anchor to their respective edges. */
+  .governance-map-toolbar,
+  .governance-map-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    padding: 10px 22px;
+    background: var(--surface-container-lowest);
+    border-bottom: 1px solid var(--outline-variant);
+    font-size: 11px;
+    color: var(--slate-400);
+  }
+  .governance-map-toolbar {
+    flex-wrap: nowrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  /* Phase 2B Step 26 (D23) — split the passive connection key
+     (read-once explanatory swatches) from the operational filter
+     chip group. Phase 2B Step 27 (D24c) — the connection key
+     itself relocated to a canvas overlay (.gmap-legend-overlay
+     below); this rule still applies to the .gmap-connection-key
+     wrapper inside that overlay.
+     D26g-impl-3 — compacted further: the previous 14px gap and
+     nowrap layout produced a wide bottom-centre strip that
+     visually competed with the camera cluster + evidence tray.
+     The new compact-edge layout wraps onto two short lines if the
+     viewport demands it, and uses a tighter row × column gap
+     (6px × 10px) to read as a passive edge key rather than a
+     dominant strip. */
+  .gmap-connection-key {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 6px 10px;
+    align-items: center;
+    line-height: 1.3;
+  }
+  /* D26g-impl-3 — the connection-key overlay was originally placed
+     at the bottom-centre of the canvas (D24c). After D26g-impl-2
+     anchored the camera cluster at bottom-right, the centre overlay
+     began visually competing with the cluster + the Runtime
+     Evidence tray boundary directly below the canvas-body. The
+     overlay now anchors at bottom-left as a compact edge key:
+     lower visual weight (smaller font, tighter padding, narrower
+     max-width), still passive (pointer-events: none), still inside
+     .governance-map-body so it sits above the tray boundary and
+     does not need to know about tray height.
+     Bottom-left placement also avoids the inspector seam on the
+     right (the inspector's left edge moves with --inspector-width;
+     the legend at left: 16px never collides regardless of inspector
+     state). */
+  .gmap-legend-overlay {
+    position: absolute;
+    bottom: 16px;
+    left: 16px;
+    transform: none;
+    z-index: 5;
+    max-width: 280px;
+    padding: 4px 8px;
+    background: rgba(20, 24, 32, 0.65);
+    border: 1px solid var(--outline-variant);
+    border-radius: 4px;
+    font-size: 10px;
+    color: rgba(180, 200, 210, 0.78);
+    pointer-events: none;
+  }
+  .gmap-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .gmap-legend-swatch {
+    display: inline-block;
+    width: 18px;
+    height: 2px;
+    background: #8b949c;
+    border-radius: 2px;
+  }
+  .gmap-legend-swatch.ai-binding { background: #6fb7e6; height: 2px; }
+  .gmap-legend-swatch.authority  { background: transparent; border-top: 2px dashed #6fb7e6; }
+  .gmap-legend-swatch.evidence   { background: #4edea3; }
+  .gmap-legend-swatch.gap        { background: transparent; border-top: 2px dashed #f0b67a; }
+
+  /* Phase 2B Step 22 — graph density filters (D19).
+     Visibility classes applied by applyGmapVisibilityFilters: a node
+     in a filtered category gains .gmap-node-hidden, and any
+     connector touching a hidden node gains .gmap-connector-hidden
+     (Option A — connector visibility follows endpoint visibility),
+     plus an explicit class-based filter when the operator hides the
+     "Bindings" chip (the connector-ai-binding paths have no node
+     handle to derive from). Both classes simply set display:none —
+     keeps the toggle reversible without losing other inline styles. */
+  .gmap-node.gmap-node-hidden { display: none; }
+  path.gmap-connector-hidden  { display: none; }
+
+  /* Filter-chip styling — compact pill-shape matching the existing
+     toolbar button visual language. Pressed (filter on) state uses
+     the standard surface; off state uses dashed border + muted text
+     so the operator can read which categories are currently
+     suppressed. The chips live inside .governance-map-legend so
+     they pair naturally with the connector-class swatches above. */
+  .gmap-filter-chip {
+    background: var(--surface-container);
+    color: var(--slate-300);
+    border: 1px solid var(--outline-variant);
+    padding: 2px 8px;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    border-radius: var(--radius-tight);
+    cursor: pointer;
+    line-height: 1.2;
+  }
+  .gmap-filter-chip:hover:not(:disabled) {
+    background: var(--surface-container-high);
+    color: var(--on-surface);
+  }
+  .gmap-filter-chip.is-off {
+    background: transparent;
+    color: var(--slate-500);
+    border-style: dashed;
+  }
+  .gmap-filter-chip:focus-visible {
+    outline: 2px solid var(--primary, #4ea1ff);
+    outline-offset: 1px;
+  }
+  .gmap-filter-chips {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+  }
+
+  /* D27j-ui-1 — Layers Control. The flat chip row was replaced by a
+     button + popover panel that groups visibility filters by intent
+     (Structural / AI Context / Governance). The chip class itself
+     (.gmap-filter-chip) and every data-kind value are unchanged, so
+     these selectors are additive. The panel is positioned absolutely
+     against .gmap-layers-control so it floats above the canvas
+     without disturbing the toolbar's flex layout. */
+  .gmap-layers-control {
+    position: relative;
+    display: inline-block;
+  }
+  .gmap-layers-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--surface-container);
+    color: var(--slate-200);
+    border: var(--border-hairline);
+    padding: 3px 8px;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    border-radius: var(--radius-tight);
+    box-shadow: none;
+    cursor: pointer;
+    line-height: 1.2;
+  }
+  .gmap-layers-button:hover:not(:disabled) {
+    background: var(--surface-container-high);
+    color: var(--on-surface);
+  }
+  .gmap-layers-button:focus-visible {
+    outline: 2px solid var(--primary, #4ea1ff);
+    outline-offset: 1px;
+  }
+  .gmap-layers-button[aria-expanded="true"] {
+    background: var(--surface-container-high);
+    color: var(--on-surface);
+  }
+  /* D27j-ui-theme-3 — sharper Layers chrome. Tighter overlay shadow,
+     denser internal spacing, hairline border. The panel's content was
+     converted from rounded-pill chip rows into dense command rows
+     (.gmap-layer-row) — see the row selectors below. */
+  .gmap-layers-panel {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: 30;
+    min-width: 220px;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    background: var(--surface-container-high, #1d2026);
+    border: var(--border-hairline);
+    border-radius: var(--radius-panel);
+    box-shadow: var(--shadow-overlay-tight);
+  }
+  .gmap-layers-panel[hidden] { display: none; }
+  .gmap-layer-group {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+  /* Thin divider between groups. Adjacent-sibling combinator avoids any
+     markup change — the first group has no top divider. */
+  .gmap-layer-group + .gmap-layer-group {
+    border-top: 1px solid var(--outline-variant);
+    padding-top: var(--space-2);
+  }
+  .gmap-layer-group-title {
+    font-size: 10px;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--slate-400);
+  }
+
+  /* D27j-ui-theme-3 — row-style layer toggle. Sits on top of the
+     legacy .gmap-filter-chip class so wireGmapFilterChips wiring
+     keeps working without modification. The pill geometry from
+     .gmap-filter-chip is overridden here (full-width, transparent,
+     left-aligned, indicator + label two-cell layout). The .is-off
+     state from wireGmapFilterChips is reinterpreted: instead of a
+     dashed border on a pill, it fades the row and hollows the
+     indicator. */
+  .gmap-layer-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    justify-content: flex-start;
+    border-radius: var(--radius-tight);
+    border: 1px solid transparent;
+    background: transparent;
+    padding: 4px 6px;
+    color: var(--slate-200);
+    text-align: left;
+  }
+  .gmap-layer-row:hover:not(:disabled) {
+    background: var(--surface-container);
+    color: var(--on-surface);
+    border-color: transparent;
+  }
+  .gmap-layer-row.is-off {
+    opacity: 0.58;
+    color: var(--slate-400);
+    background: transparent;
+    border-style: solid;
+    border-color: transparent;
+  }
+  .gmap-layer-row-indicator {
+    width: 8px;
+    height: 8px;
+    flex: 0 0 auto;
+    background: var(--primary);
+    border: 1px solid var(--outline-variant);
+  }
+  .gmap-layer-row.is-off .gmap-layer-row-indicator {
+    background: transparent;
+  }
+  .gmap-layer-row-reset .gmap-layer-row-indicator {
+    background: transparent;
+    border-color: transparent;
+  }
+  .gmap-layer-row-label {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    line-height: 1.2;
+  }
+
+  /* Phase 2B Step 36 (D25b) — Bottom evidence and governance drift
+     tray. Sibling of .governance-map-body inside the workbench's
+     flex column. Collapsed default (~36px header bar); expanded
+     reveals tabs + drift chart + summary tiles (~280px).
+     Safe-area coordination: when expanded, the workbench's flex
+     column shrinks .governance-map-body by the tray's expanded
+     height. .governance-map-canvas-scroll's clientHeight inside
+     the body therefore shrinks automatically; the D24g
+     gmapSafeArea(scrollEl) helper reads clientHeight at fit time,
+     so subsequent fits use the smaller available space. The tray
+     does not modify --gmap-overlay-inset-bottom — that variable
+     remains the inset for the legend overlay inside canvas-scroll.
+     A re-fit fires on expand/collapse so the graph immediately
+     repositions to the new available area. */
+  .gmap-evidence-tray {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--surface-container-low);
+    border-top: 1px solid var(--outline-variant);
+    height: 36px;
+    overflow: hidden;
+    transition: height 0.18s ease-out;
+  }
+  .gmap-evidence-tray.is-expanded {
+    /* Phase 2B Step 36 (D25b-fix) — expanded height bumped from 280
+       to 320 so the Drift tab's stacked content (controls + 4 tiles
+       + 110px chart + panel padding) fits without engaging an
+       internal scrollbar. The 40px increase pairs with removing
+       `overflow-y: auto` from the generic .gmap-evidence-tray-panel
+       rule below. List-heavy future tabs that genuinely need
+       scrolling opt in via `.is-scrollable`. */
+    height: 320px;
+  }
+  .gmap-evidence-tray-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 14px;
+    height: 36px;
+    flex-shrink: 0;
+    background: var(--surface-container-lowest);
+    border-bottom: 1px solid var(--outline-variant);
+    font-family: var(--font-display);
+  }
+  .gmap-evidence-tray-title {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--slate-300);
+  }
+  .gmap-evidence-tray-node {
+    font-size: 12px;
+    color: var(--slate-400);
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .gmap-evidence-tray-node strong {
+    color: var(--on-surface);
+    font-weight: 600;
+  }
+  .gmap-evidence-tray-node-kind {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--slate-500);
+    padding: 2px 6px;
+    border: 1px solid var(--outline-variant);
+    border-radius: 3px;
+    background: var(--surface-container);
+  }
+  .gmap-evidence-tray-demo-badge {
+    font-size: 10px;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--slate-400);
+    padding: 2px 8px;
+    border: 1px dashed var(--outline-variant);
+    border-radius: 999px;
+    background: rgba(173, 198, 255, 0.06);
+    cursor: help;
+  }
+  .gmap-evidence-tray-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 22px;
+    background: var(--surface-container-low);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 4px;
+    color: var(--slate-400);
+    cursor: pointer;
+    font-family: inherit;
+    padding: 0;
+    font-size: 14px;
+    line-height: 1;
+  }
+  .gmap-evidence-tray-toggle:hover {
+    background: var(--surface-container);
+    color: var(--on-surface);
+  }
+  .gmap-evidence-tray-toggle:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 1px;
+  }
+  /* Body — tabs + active panel. Hidden when collapsed (height: 0
+     parent clips it via overflow: hidden). */
+  .gmap-evidence-tray-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .gmap-evidence-tray-tabs {
+    display: flex;
+    gap: 4px;
+    padding: 6px 14px 0;
+    border-bottom: 1px solid var(--outline-variant);
+    background: var(--surface-container-lowest);
+    flex-shrink: 0;
+  }
+  .gmap-evidence-tray-tab {
+    background: transparent;
+    color: var(--slate-400);
+    border: 1px solid transparent;
+    border-bottom: none;
+    padding: 6px 12px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    border-radius: 4px 4px 0 0;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .gmap-evidence-tray-tab:hover:not(.is-active) {
+    color: var(--slate-200);
+    background: var(--surface-container);
+  }
+  .gmap-evidence-tray-tab.is-active {
+    color: var(--primary);
+    background: var(--surface-container-low);
+    border-color: var(--outline-variant);
+    border-bottom-color: var(--surface-container-low);
+    margin-bottom: -1px;
+  }
+  /* Phase 2B Step 36 (D25b-fix) — vertical scrolling removed from
+     the generic panel rule. The Drift tab's content fits in the
+     320px expanded tray without scrolling; surfacing a scrollbar
+     only for the chart/tiles content was a UX regression. List-
+     heavy future tabs (Activity log, Evidence list) opt in via the
+     `.is-scrollable` modifier below. */
+  .gmap-evidence-tray-panel {
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 12px 14px;
+  }
+  .gmap-evidence-tray-panel.is-scrollable {
+    overflow-y: auto;
+  }
+  .gmap-evidence-tray-empty {
+    padding: 24px;
+    color: var(--slate-500);
+    font-size: 12px;
+    text-align: center;
+  }
+  .gmap-evidence-tray-coming-soon {
+    padding: 24px;
+    color: var(--slate-500);
+    font-size: 12px;
+    font-family: var(--font-mono);
+    text-align: center;
+  }
+  /* Phase 2B Step 40 (D25e) — kind-aware drift panel chrome.
+     Subtitle: short kind-specific framing. Disclaimer: persistent
+     synthetic-data provenance line so the operator never reads tile
+     values without the demo context. Exposure explanation: appears
+     for structural kinds (BS, Capability, Process, Related Service,
+     Authority synthetic) instead of a metric chart, communicating
+     that the values are a roll-up across runtime-bearing children. */
+  .gmap-evidence-tray-subtitle {
+    color: var(--slate-300);
+    font-size: 12px;
+    margin-bottom: 6px;
+    line-height: 1.4;
+  }
+  .gmap-evidence-tray-disclaimer {
+    color: var(--slate-500);
+    font-size: 11px;
+    font-family: var(--font-mono);
+    margin-bottom: 12px;
+    padding: 6px 10px;
+    background: rgba(173, 198, 255, 0.04);
+    border-left: 2px solid var(--outline-variant);
+    border-radius: 3px;
+  }
+  .gmap-evidence-tray-exposure-explanation {
+    color: var(--slate-400);
+    font-size: 12px;
+    line-height: 1.5;
+    padding: 14px 12px;
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    border-radius: 6px;
+  }
+  /* D26c — Activity tab list. Each row is a compact runtime-envelope
+     summary; the list scrolls internally so the tray height stays fixed. */
+  .gmap-evidence-tray-activity-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 220px;
+    overflow-y: auto;
+  }
+  .gmap-evidence-tray-activity-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 10px;
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    border-radius: 4px;
+    font-size: 11px;
+  }
+  .gmap-evidence-tray-activity-row-head {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .gmap-evidence-tray-activity-row-body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    color: var(--slate-300);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    line-height: 1.4;
+  }
+  .gmap-evidence-tray-activity-row-body strong {
+    color: var(--slate-500);
+    font-weight: 500;
+    margin-right: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 9px;
+  }
+  .gmap-evidence-tray-activity-time {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--slate-400);
+  }
+  .gmap-evidence-tray-activity-state {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--slate-500);
+  }
+  .gmap-evidence-tray-activity-id {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--slate-500);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* Drift tab — controls + tiles + chart. */
+  .gmap-evidence-tray-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  .gmap-evidence-tray-control {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--slate-400);
+  }
+  .gmap-evidence-tray-control select {
+    background: var(--surface-container);
+    color: var(--on-surface);
+    border: 1px solid var(--outline-variant);
+    border-radius: 4px;
+    padding: 3px 8px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+  .gmap-evidence-tray-tiles {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .gmap-evidence-tray-tile {
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    border-radius: 6px;
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .gmap-evidence-tray-tile-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--slate-500);
+  }
+  .gmap-evidence-tray-tile-value {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--on-surface);
+    font-family: var(--font-mono);
+  }
+  .gmap-evidence-tray-tile-status-stable {
+    color: var(--secondary);
+  }
+  .gmap-evidence-tray-tile-status-drifting {
+    color: #fcd34d;
+  }
+  .gmap-evidence-tray-tile-status-critical {
+    color: var(--error);
+  }
+  .gmap-evidence-tray-chart {
+    width: 100%;
+    height: 110px;
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    border-radius: 6px;
+    padding: 6px;
+    overflow: hidden;
+  }
+  .gmap-evidence-tray-chart-svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+  .gmap-evidence-tray-chart-grid {
+    stroke: var(--outline-variant);
+    stroke-width: 0.5;
+    fill: none;
+  }
+  .gmap-evidence-tray-chart-line {
+    fill: none;
+    stroke: var(--primary, #4ea1ff);
+    stroke-width: 1.5;
+  }
+  .gmap-evidence-tray-chart-area {
+    fill: rgba(78, 161, 255, 0.10);
+    stroke: none;
+  }
+  .gmap-evidence-tray-chart-axis-label {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    fill: var(--slate-500);
+  }
+  .gmap-evidence-tray-chart-empty {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    fill: var(--slate-500);
+    text-anchor: middle;
+  }
+
+  /* D26f — Analytical Drift-tab layout. Replaces the previous vertical
+     stack of (controls + tile grid + chart) with a two-column grid:
+     a compact signal-context column on the left and a dominant
+     chart/explanation panel on the right. The chart is now the
+     dominant analytical visual rather than a thin band beneath the
+     tile grid. Activity tab is unaffected — it keeps its list-based
+     scrollable layout (.gmap-evidence-tray-activity-list). */
+  .gmap-evidence-tray-analytic-layout {
+    display: grid;
+    grid-template-columns: 280px minmax(0, 1fr);
+    gap: 14px;
+    height: 100%;
+    min-height: 0;
+  }
+  .gmap-evidence-tray-signal-column {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+    min-width: 0;
+    overflow: hidden;
+  }
+  .gmap-evidence-tray-chart-panel {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    border-radius: 6px;
+    padding: 6px;
+    overflow: hidden;
+  }
+  /* Override the legacy .gmap-evidence-tray-chart 110px-fixed-height
+     rule when the chart sits inside the analytical chart panel. The
+     panel itself supplies the border/background; the inner chart fills
+     the remaining height for a Palantir-style dominant chart visual. */
+  .gmap-evidence-tray-chart-panel .gmap-evidence-tray-chart {
+    height: 100%;
+    background: transparent;
+    border: none;
+    padding: 0;
+    border-radius: 0;
+    overflow: hidden;
+  }
+  .gmap-evidence-tray-chart-panel .gmap-evidence-tray-exposure-explanation {
+    height: 100%;
+    margin: 0;
+    border: none;
+    background: transparent;
+    padding: 6px 4px;
+    overflow: auto;
+  }
+  .gmap-evidence-tray-signal-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin: 0;
+  }
+  .gmap-evidence-tray-signal-item {
+    display: grid;
+    grid-template-columns: 110px minmax(0, 1fr);
+    gap: 8px;
+    padding: 5px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    font-size: 11px;
+    align-items: baseline;
+  }
+  .gmap-evidence-tray-signal-item:last-child {
+    border-bottom: none;
+  }
+  .gmap-evidence-tray-signal-label {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--slate-500);
+    font-weight: 600;
+  }
+  .gmap-evidence-tray-signal-value {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--on-surface);
+    word-break: break-word;
+  }
+  .gmap-evidence-tray-signal-value.gmap-evidence-tray-tile-status-stable {
+    color: var(--secondary);
+  }
+  .gmap-evidence-tray-signal-value.gmap-evidence-tray-tile-status-drifting {
+    color: #fcd34d;
+  }
+  .gmap-evidence-tray-signal-value.gmap-evidence-tray-tile-status-critical {
+    color: var(--error);
+  }
+  /* Compact provenance line — replaces the full-width disclaimer block.
+     The compact element carries the full D25e disclaimer text in its
+     title attribute so the operator can hover for the long form, and
+     the trust-test pin
+     ("Illustrative demo signal. Not calculated from runtime envelopes.")
+     continues to match against the served HTML. */
+  .gmap-evidence-tray-provenance-compact {
+    margin-top: auto;
+    padding: 6px 8px;
+    font-size: 10px;
+    line-height: 1.4;
+    color: var(--slate-500);
+    font-family: var(--font-mono);
+    background: rgba(173, 198, 255, 0.04);
+    border-left: 2px solid var(--outline-variant);
+    border-radius: 3px;
+    cursor: help;
+  }
+  /* Compact controls — Metric / Range selectors live inside the signal
+     column rather than consuming a full-width row above the chart. */
+  .gmap-evidence-tray-controls-compact {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin: 4px 0 0 0;
+  }
+  .gmap-evidence-tray-controls-compact .gmap-evidence-tray-control {
+    font-size: 10px;
+  }
+  .gmap-evidence-tray-controls-compact .gmap-evidence-tray-control select {
+    padding: 2px 6px;
+    font-size: 10px;
+  }
+
+  /* Phase 2B Step 16 — selected-node inspector. Now lives in the
+     right column of .governance-map-body instead of below the
+     canvas. Internal layout switched from a 2-column grid to a
+     vertical flex stack (Selected node section above, Map summary
+     section below). overflow-y: auto so long binding lists scroll
+     INSIDE the rail without engaging the page or the canvas-scroll
+     viewport. The border separates the rail from the canvas-scroll
+     column visually (border-left replaces the pre-Step-16
+     border-top). */
+  .governance-map-details {
+    padding: 14px 18px;
+    background: var(--surface-container-low);
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+    overflow-y: auto;
+    height: 100%;
+    min-height: 0;
+  }
+  /* Phase 2B Step 31 (D24e) — inspector rail promoted from the
+     right grid cell of .governance-map-body to a top-level pane,
+     fixed to the right edge of the viewport (mirror of the left
+     .shell-sidebar). z-index 40 matches the sidebar so the two
+     panes occupy the same shell layer above the header (z:30) and
+     the canvas-edge overlays (z:5). border-left replaces the
+     pre-D24e border-right that used to sit on the canvas-scroll
+     cell — the visual separator between graph and inspector now
+     lives on the inspector rail itself. The default display:none
+     hides the rail outside the map sub-view; body.gmap-mode below
+     re-enables it. The id-selector specificity (100) beats the
+     class-selector .governance-map-details (010), so display:none
+     wins by default; body.gmap-mode #gmap-details (110) beats
+     both when active. */
+  #gmap-details {
+    position: fixed;
+    top: 0;
+    right: 0;
+    height: 100vh;
+    width: var(--inspector-width);
+    z-index: 40;
+    border-left: 1px solid var(--outline-variant);
+    transition: width 0.18s ease-out;
+    display: none;
+  }
+  body.gmap-mode #gmap-details {
+    display: flex;
+  }
+  .gmap-details-section {
+    display: block;
+  }
+  .gmap-details-title {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--slate-500);
+    margin-bottom: 6px;
+  }
+  .gmap-details-name {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--on-surface);
+    margin-bottom: 4px;
+  }
+  .gmap-details-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    padding: 3px 0;
+    border-bottom: 1px dotted var(--outline-variant);
+  }
+  .gmap-details-row:last-child { border-bottom: 0; }
+  .gmap-details-key { color: var(--slate-500); font-family: var(--font-mono); font-size: 11px; }
+  .gmap-details-val { color: var(--on-surface); font-family: var(--font-mono); font-size: 11px; }
+
+  /* D27j-ui-3a — right rail three-tab shell. The .gmap-right-rail
+     class is additive on top of .governance-map-details so the
+     existing fixed positioning, body.gmap-mode show/hide, and
+     body.inspector-collapsed collapse mechanics are reused without
+     change. The vertical tab strip is positioned absolutely on the
+     left edge of the rail; tabpanels reserve a 36px left padding so
+     their content doesn't overlap the strip. The collapse toggle
+     stays the last child and inherits margin-top: auto from the
+     rail's flex column to anchor at the bottom. */
+  .gmap-right-rail {
+    position: fixed;
+    /* width / height / top / right inherited from the existing
+       .governance-map-details rule above. */
+  }
+  /* D27j-ui-3a-refine-2 — chromeless right-edge tab control.
+     The previous compact-card treatment introduced a visible card
+     (background, border, radius, shadow) which the user explicitly
+     rejected — the target is Palantir-style chromeless: only the
+     vertical labels are visible, separated by short horizontal
+     hairline dividers, with a single faint vertical hairline along
+     the right edge of the stack hinting at the rail seam.
+     Positioning stays `fixed` so the strip escapes the rail's
+     overflow-y: auto (which auto-promotes overflow-x to auto too).
+     D27j-ui-3a-refine-3a — anchor flipped from
+     `right: var(--inspector-width)` (which placed the strip OUTSIDE
+     the rail, overlapping the canvas) to `right: 0` (inside the
+     rail, flush against its right edge). The strip now occupies the
+     top-right portion of the rail; the bottom-anchored collapse
+     toggle continues to occupy the bottom-right corner. */
+  /* D27j-ui-3a-refine-3b — chrome stripped from the tab strip
+     itself. The always-on right-edge hairline created a visible
+     vertical line in collapsed state; that visual seam now comes
+     from the rail container's own border (scoped to expanded state
+     by the collapsed-chromeless rule below) so the tab strip carries
+     no border at all. */
+  .gmap-right-rail-tabs {
+    position: fixed;
+    top: var(--space-5);
+    right: 0;
+    bottom: auto;
+    width: var(--gmap-right-rail-handle-width);
+    display: flex;
+    flex-direction: column;
+    z-index: 1;
+    /* D27j-ui-3a-refine-3e — animate `right` so the strip glides
+       from the viewport edge (collapsed) to the panel-canvas seam
+       (expanded) in lockstep with #gmap-details' own width
+       transition. Same duration / easing as the rail's transition. */
+    transition: right 0.18s ease-out;
+    /* D27j-ui-3a-refine-4 — single side-mounted drawer-handle
+       surface. The strip is now one continuous handle: quiet
+       canvas-token background (so it mostly merges into the
+       graph), a hairline outline on the three exposed sides, and
+       softened radii on the two outside corners only. The
+       drawer-attached side (right) carries no border so the handle
+       reads as one object with the drawer body in expanded state
+       (where the rail's panel surface paints --surface-container-
+       low and the handle's --surface-container-lowest sits flush
+       against it) and as a continuation of the canvas in collapsed
+       state (where both the handle background and the rail panel
+       behind it paint --surface-container-lowest). No box-shadow:
+       the target is a tactile handle, not a floating card. */
+    background: var(--surface-container-lowest);
+    border-top: var(--border-hairline);
+    border-left: var(--border-hairline);
+    border-bottom: var(--border-hairline);
+    border-right: 0;
+    border-radius: var(--radius-panel) 0 0 var(--radius-panel);
+  }
+  /* D27j-ui-3a-refine-3e — state-dependent tab strip position.
+     Collapsed state inherits the base `right: 0` (strip flush with
+     viewport edge, sitting in the handle-width column the canvas
+     extends through). Expanded state pulls the strip in by
+     (rail width − strip width) so it lands at the panel's left
+     edge / panel-canvas seam. Calc resolves to (320 − 28) = 292px
+     under the default --inspector-width and the 5 handle-width
+     token. The :not(.inspector-collapsed) selector ensures the
+     override only fires while the rail is open and the panels are
+     visible. */
+  body.gmap-mode:not(.inspector-collapsed) .gmap-right-rail-tabs {
+    right: calc(var(--inspector-width) - var(--gmap-right-rail-handle-width));
+  }
+  /* D27j-ui-3a-refine-6 — state-tuned handle background. The
+     base rule paints --surface-container-lowest (canvas colour)
+     so the handle merges with the canvas in collapsed state.
+     Expanded state shifts the background to --surface-container-
+     low (drawer panel colour) so the handle merges with the
+     drawer body instead, removing the visual contrast band that
+     made the handle read as an intruding stripe even though
+     it sat fully inside the drawer reservation. The three-sided
+     border + rounded outside corners are unchanged in both
+     states, so the handle silhouette remains readable. */
+  body.gmap-mode:not(.inspector-collapsed) .gmap-right-rail-tabs {
+    background: var(--surface-container-low);
+  }
+  .gmap-right-rail-tab {
+    /* Approach A: vertical-lr alone produces inward-facing labels
+       (top of letterforms toward the canvas). Sentence case;
+       no text-transform.
+       position: relative is retained for any future per-tab
+       absolute decoration; the inter-tab pseudo divider was
+       removed in 3a-refine-4 because it broke the single-handle
+       reading.
+       D27j-ui-3a-refine-3b — display: flex with both-axis centring
+       horizontally + vertically centres the rotated text inside the
+       handle-width tab box. Without this the rotated text anchored
+       to the inline-start edge, biasing the labels visually to one
+       side of the strip. */
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    writing-mode: vertical-lr;
+    text-orientation: mixed;
+    background: transparent;
+    color: var(--on-surface-variant);
+    border: 0;
+    padding: var(--space-2) var(--space-1);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.10em;
+    font-family: inherit;
+    cursor: pointer;
+    line-height: 1;
+  }
+  /* Hover and active states are text-colour-only — no background
+     fill, no border, no shadow. The chromeless target relies on
+     label colour shift alone to indicate state. */
+  .gmap-right-rail-tab:hover:not(.is-active) {
+    color: var(--on-surface);
+  }
+  .gmap-right-rail-tab.is-active {
+    color: var(--primary);
+  }
+  .gmap-right-rail-tab:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 1px;
+  }
+  .gmap-right-rail-panel {
+    /* D27j-ui-3a-refine-3e — padding allowance back on the left.
+       3a-refine-3a parked the chromeless strip flush at the rail's
+       right edge (`right: 0`); 3e makes the strip state-dependent
+       and parks it at the panel's LEFT edge (panel-canvas seam) in
+       expanded state. Panel content therefore needs the
+       (--gmap-right-rail-handle-width + var(--space-3)) allowance
+       on the left so rows clear the labels. Collapsed panels are
+       display:none, so this padding is operationally irrelevant in
+       collapsed state. */
+    padding: var(--space-3) var(--space-3) var(--space-3) calc(var(--gmap-right-rail-handle-width) + var(--space-3));
+    overflow-y: auto;
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+  .gmap-right-rail-panel[hidden] { display: none; }
+  .gmap-right-rail-placeholder {
+    color: var(--on-surface-variant);
+    font-size: 12px;
+    line-height: 1.5;
+    margin: 0;
+  }
+  /* D27j-ui-3a-refine-5 — shared rail header. One header sits
+     once at the top of #gmap-details, immediately after the tabs
+     <nav>; setGmapRightRailTab writes the active label into the
+     title element on every tab switch. The header is hidden in
+     collapsed state because the drawer body is hidden then; the
+     handle alone provides the affordance. The same left padding
+     allowance the panels use keeps the title text clear of the
+     tab strip; the close button sits on the right edge with
+     standard space-3 breathing room. */
+  .gmap-right-rail-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-3) var(--space-3) 0 calc(var(--gmap-right-rail-handle-width) + var(--space-3));
+    flex-shrink: 0;
+  }
+  .gmap-right-rail-header-title {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--on-surface);
+    line-height: 1;
+  }
+  .gmap-right-rail-close {
+    background: transparent;
+    border: 0;
+    padding: 0;
+    width: 24px;
+    height: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--on-surface-variant);
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    border-radius: var(--radius-tight);
+    font-family: inherit;
+  }
+  .gmap-right-rail-close:hover {
+    background: var(--surface-container);
+    color: var(--on-surface);
+  }
+  .gmap-right-rail-close:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 1px;
+  }
+  /* Collapsed state hides the entire rail header (title + close
+     button). The handle alone provides the affordance; the close
+     button is meaningless when there is nothing to close. */
+  body.inspector-collapsed .gmap-right-rail-header {
+    display: none;
+  }
+  /* D27j-ui-3a-refine-5 — hide the bottom chevron toggle in
+     gmap-mode. The new header close button is the canonical close
+     affordance; the chevron is no longer the primary control. The
+     element and its JS wiring remain in the DOM (keeping the
+     existing test surface stable and preserving the underlying
+     collapse code path that closeGmapRightRail and the click-to-
+     open branch both call into). Scoped to gmap-mode so the rule
+     does not affect other views. */
+  body.gmap-mode #gmap-inspector-toggle {
+    display: none;
+  }
+  /* Collapsed state — the existing body.inspector-collapsed rule
+     shrinks the rail to 56px. Inside that narrow width the tab
+     strip stays visible so the operator can see which panel is
+     active; the panel content hides via the existing
+     .gmap-details-section visibility rule. */
+  body.inspector-collapsed .gmap-right-rail-panel { display: none; }
+
+  /* D27j-ui-3a-refine-2 — light-mode rail tab states.
+     Most rules need no light override because:
+       - var(--border-hairline) expands to 1px solid var(--outline-variant),
+         and --outline-variant itself flips per theme via tokens.css.
+       - the between-tab pseudo-divider also uses var(--outline-variant)
+         directly.
+       - tab text colour uses var(--on-surface-variant) / var(--primary)
+         which both flip per theme.
+     Only the placeholder colour override remains because that selector
+     is matched by other light-mode tests as a sentinel. */
+  :root[data-theme="light"] .gmap-right-rail-placeholder {
+    color: var(--on-surface-variant);
+  }
+
+  /* Action area inside the selected-node details column. Only shown when
+     setGovernanceMapDetailsActions() appends at least one action button —
+     otherwise the wrapper has no children and collapses to zero height
+     (no top margin / padding leaks when empty). */
+  .gmap-details-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .gmap-details-actions:empty { display: none; }
+  .gmap-details-actions:not(:empty) { margin-top: 12px; }
+
+  /* D27j-ui-3b — Inspector Governance section. Compact reference
+     rows for the FailModePolicy subsection. The wrapper container
+     stays in the DOM at all times; an empty innerHTML collapses it
+     to zero height (no padding/margin leakage when no governance
+     content applies). */
+  .gmap-details-governance:empty { display: none; }
+  .gmap-fmp-reference {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+  .gmap-fmp-reference-row {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-2);
+    font-size: 12px;
+    padding: 3px 0;
+    border-bottom: 1px dotted var(--outline-variant);
+  }
+  .gmap-fmp-reference-row:last-child { border-bottom: 0; }
+  .gmap-fmp-reference-key {
+    color: var(--on-surface-variant);
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+  .gmap-fmp-reference-val {
+    color: var(--on-surface);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    text-align: right;
+    word-break: break-all;
+  }
+  .gmap-fmp-reference-code {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    background: var(--surface-container-low);
+    border: var(--border-hairline);
+    border-radius: var(--radius-tight);
+    padding: 0 4px;
+    color: var(--on-surface);
+  }
+  .gmap-action-view-record {
+    font-size: 12px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--outline-variant);
+    background: var(--surface-container);
+    color: var(--on-surface);
+    cursor: pointer;
+  }
+  .gmap-action-view-record:hover { background: var(--surface-container-high); }
+  .gmap-action-view-record:focus-visible {
+    outline: 2px solid var(--primary, #4ea1ff);
+    outline-offset: 2px;
+  }
+
+  .governance-map-empty,
+  .governance-map-error {
+    padding: 48px 24px;
+    text-align: center;
+    color: var(--slate-400);
+    font-size: 13px;
+  }
+  .governance-map-empty .gmap-empty-title,
+  .governance-map-error .gmap-empty-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--on-surface);
+    margin-bottom: 6px;
+  }
+  .governance-map-error { color: #f0b67a; }
+
+  @media (max-width: 1100px) {
+    .governance-map-details { grid-template-columns: 1fr; }
+  }
+
+  /* ──────────────────────────────────────────────────────────────────
+     D27j-ui-theme-4 — Governance Map light-mode overrides.
+     Activated only when :root carries data-theme="light"; dark mode is
+     the default and every dark base rule above is preserved. The block
+     retones canvas, graph nodes, connectors, badges (including FMP),
+     local graph controls, connector tooltip, and a minimum-viable
+     right-inspector pass so the inspector does not render dark-on-
+     light. Bottom evidence tray retoning is deferred to D27j-ui-theme-5.
+     The light shadow tokens were already overridden in tokens.css
+     (D27j-ui-theme-2) so consumers that read --shadow-overlay-* flip
+     automatically — no per-rule shadow override is needed here.
+     ────────────────────────────────────────────────────────────── */
+
+  /* Workbench / canvas. The workbench is white; canvas-scroll is the
+     near-white grey from --surface-container-low; the SVG scene is
+     left to its parent so connectors paint cleanly against grey. */
+  :root[data-theme="light"] .governance-map-workbench {
+    background: var(--surface-container-lowest);
+    border-color: var(--outline-variant);
+  }
+  :root[data-theme="light"] .governance-map-toolbar {
+    background: var(--surface-container-lowest);
+    border-bottom-color: var(--outline-variant);
+  }
+  :root[data-theme="light"] .governance-map-canvas-scroll {
+    background: var(--surface-container-low);
+  }
+  :root[data-theme="light"] .governance-map-toolbar .gmap-search-input,
+  :root[data-theme="light"] .gmap-search-input {
+    background: var(--surface-container-lowest);
+    color: var(--on-surface);
+    border-color: var(--outline-variant);
+  }
+  :root[data-theme="light"] .gmap-search-input::placeholder {
+    color: var(--on-surface-variant);
+  }
+
+  /* Graph nodes. White card on light grey canvas, hairline border,
+     selected state uses primary container fill + primary border (no
+     diffuse glow). Root marker drops to a 2px solid ring; hover/
+     search-active stays accent green. */
+  :root[data-theme="light"] .gmap-node {
+    background: var(--surface-container-lowest);
+    border-color: var(--outline-variant);
+    color: var(--on-surface);
+  }
+  :root[data-theme="light"] .gmap-node:hover {
+    background: var(--surface-container-low);
+  }
+  :root[data-theme="light"] .gmap-node.selected {
+    border-color: var(--primary);
+    background: var(--primary-container);
+    box-shadow: none;
+  }
+  :root[data-theme="light"] .gmap-node.gmap-root-node {
+    box-shadow: 0 0 0 2px var(--primary);
+  }
+  :root[data-theme="light"] .gmap-node.gmap-root-node.selected {
+    box-shadow: 0 0 0 2px var(--primary);
+  }
+  :root[data-theme="light"] .gmap-node.gmap-search-match {
+    border-color: var(--secondary);
+    box-shadow: 0 0 0 1px var(--secondary);
+  }
+  :root[data-theme="light"] .gmap-node.gmap-search-active {
+    border-color: var(--secondary);
+    box-shadow: 0 0 0 2px var(--secondary);
+  }
+  :root[data-theme="light"] .gmap-node-label  { color: var(--on-surface-variant); }
+  :root[data-theme="light"] .gmap-node-name   { color: var(--on-surface); }
+  :root[data-theme="light"] .gmap-node-meta   { color: var(--on-surface-variant); }
+  :root[data-theme="light"] .gmap-node.is-connector-endpoint {
+    outline-color: rgba(0, 74, 162, 0.30);
+  }
+
+  /* Per-type node accents. D27j-ui-theme-4b moved each kind onto a
+     dedicated semantic identity token (--gmap-type-*) that flips per
+     theme via tokens.css. The light overrides below now consume the
+     same tokens — they are technically redundant with the dark base
+     rules (which also consume the tokens) but kept here as the
+     explicit light-mode contract; future tranches may diverge per
+     theme without re-introducing the rules. */
+  :root[data-theme="light"] .business-service-node { border-left-color: var(--gmap-type-business); }
+  :root[data-theme="light"] .related-service-node  { border-left-color: var(--gmap-type-related); }
+  :root[data-theme="light"] .capability-node       { border-left-color: var(--gmap-type-capability); }
+  :root[data-theme="light"] .process-node          { border-left-color: var(--gmap-type-process); }
+  :root[data-theme="light"] .decision-surface-node { border-left-color: var(--gmap-type-surface); }
+  :root[data-theme="light"] .ai-system-node        { border-left-color: var(--gmap-type-ai); }
+  :root[data-theme="light"] .authority-node        { border-left-color: var(--gmap-type-authority); }
+  :root[data-theme="light"] .coverage-node         { border-left-color: var(--gmap-type-coverage); }
+  :root[data-theme="light"] .gmap-more-node {
+    background: rgba(15, 23, 42, 0.03);
+    color: var(--on-surface-variant);
+    border-color: var(--outline-variant);
+  }
+
+  /* Connectors. Stroke-width and stroke-dasharray are NOT overridden
+     — those carry semantic meaning and are pinned by tests. Only
+     colour and hover halo are retoned for white canvas.
+     D27j-ui-theme-4b: typed connectors now consume the semantic
+     identity tokens, so stroke colour flips per theme via tokens.css.
+     The light overrides below are the explicit light-mode contract.
+     .connector-service stays on a raw light-grey value until
+     D27j-ui-theme-4d introduces a dedicated --gmap-conn-neutral. */
+  :root[data-theme="light"] .connector-service     { stroke: var(--gmap-conn-neutral);  opacity: 0.78; }
+  :root[data-theme="light"] .connector-ai-binding  { stroke: var(--gmap-type-ai);        opacity: 0.92; }
+  :root[data-theme="light"] .connector-authority   { stroke: var(--gmap-type-authority); opacity: 0.88; }
+  :root[data-theme="light"] .connector-evidence    { stroke: var(--gmap-type-surface);   opacity: 0.88; }
+  :root[data-theme="light"] .connector-gap         { stroke: var(--gmap-type-risk);      opacity: 0.95; }
+  :root[data-theme="light"] .gmap-connector.is-hovered {
+    filter: drop-shadow(0 0 2px currentColor);
+  }
+
+  /* Connector tooltip. Light surface, hairline border, tokenised
+     overlay shadow flips per-theme via tokens.css. */
+  :root[data-theme="light"] .gmap-connector-tooltip {
+    background: var(--surface-container-highest);
+    border-color: var(--outline-variant);
+    color: var(--on-surface);
+    box-shadow: var(--shadow-overlay-tight);
+  }
+  :root[data-theme="light"] .gmap-connector-tooltip-kind  { color: var(--on-surface-variant); }
+  :root[data-theme="light"] .gmap-connector-tooltip-route { color: var(--on-surface); }
+
+  /* Badges (general + FailModePolicy). The fmp-inherited dashed style
+     is set in the base rule via border-style: dashed; we only override
+     border-color, so the dashed semantics survive. */
+  :root[data-theme="light"] .gmap-badge {
+    border-color: var(--outline-variant);
+    color: var(--on-surface-variant);
+  }
+  :root[data-theme="light"] .gmap-badge.ok    { color: var(--secondary); border-color: rgba(31, 122, 79, 0.45); }
+  :root[data-theme="light"] .gmap-badge.warn  { color: #b35a0e;          border-color: rgba(179, 90, 14, 0.45); }
+  :root[data-theme="light"] .gmap-badge.bind  { color: var(--primary);   border-color: rgba(0, 74, 162, 0.40); }
+  /* D27j-ui-theme-4b — FMP badges align to the semantic identity
+     tokens in light mode too: fmp-default uses the Business Service
+     hue, fmp-override uses the Decision Surface hue, fmp-inherited
+     stays muted + dashed (set in the base rule's border-style). */
+  :root[data-theme="light"] .gmap-badge.fmp-default   { color: var(--gmap-type-business); border-color: rgba(58, 123, 217, 0.30); }
+  :root[data-theme="light"] .gmap-badge.fmp-override  { color: var(--gmap-type-surface);  border-color: rgba(15, 118, 110, 0.45); }
+  :root[data-theme="light"] .gmap-badge.fmp-inherited { color: var(--on-surface-variant); border-color: rgba(0, 74, 162, 0.20); }
+
+  /* Local graph controls — mode rail, camera cluster, view-mode
+     segmented toggle, layers button + panel + rows, filter chip
+     fallback. Each surface flips to white/grey; active states use
+     --primary-container so the corporate blue reads disciplined. */
+  :root[data-theme="light"] .gmap-mode-rail,
+  :root[data-theme="light"] .gmap-camera-cluster {
+    background: var(--surface-container-lowest);
+    border-color: var(--outline-variant);
+  }
+  :root[data-theme="light"] .gmap-mode-rail button,
+  :root[data-theme="light"] .gmap-camera-cluster button {
+    color: var(--on-surface-variant);
+  }
+  :root[data-theme="light"] .gmap-mode-rail button:hover:not(:disabled),
+  :root[data-theme="light"] .gmap-camera-cluster button:hover:not(:disabled) {
+    background: var(--surface-container);
+    color: var(--on-surface);
+  }
+  :root[data-theme="light"] .gmap-camera-cluster button[aria-pressed="true"],
+  :root[data-theme="light"] .gmap-mode-rail button.is-active {
+    background: var(--primary-container);
+    color: var(--on-primary-container);
+  }
+  :root[data-theme="light"] .gmap-view-mode-segment {
+    background: var(--surface-container-lowest);
+    color: var(--on-surface-variant);
+    border-color: var(--outline-variant);
+  }
+  :root[data-theme="light"] .gmap-view-mode-segment.is-active {
+    background: var(--primary-container);
+    color: var(--on-primary-container);
+  }
+  :root[data-theme="light"] .gmap-layers-button {
+    background: var(--surface-container-lowest);
+    color: var(--on-surface);
+    border-color: var(--outline-variant);
+  }
+  :root[data-theme="light"] .gmap-layers-button:hover:not(:disabled),
+  :root[data-theme="light"] .gmap-layers-button[aria-expanded="true"] {
+    background: var(--surface-container);
+  }
+  :root[data-theme="light"] .gmap-layers-panel {
+    background: var(--surface-container-lowest);
+    border-color: var(--outline-variant);
+  }
+  :root[data-theme="light"] .gmap-layer-group-title {
+    color: var(--on-surface-variant);
+  }
+  :root[data-theme="light"] .gmap-layer-group + .gmap-layer-group {
+    border-top-color: var(--outline-variant);
+  }
+  :root[data-theme="light"] .gmap-layer-row {
+    color: var(--on-surface);
+  }
+  :root[data-theme="light"] .gmap-layer-row:hover:not(:disabled) {
+    background: var(--surface-container);
+  }
+  :root[data-theme="light"] .gmap-layer-row.is-off {
+    color: var(--on-surface-variant);
+  }
+  :root[data-theme="light"] .gmap-layer-row-indicator {
+    background: var(--primary);
+    border-color: var(--outline-variant);
+  }
+  :root[data-theme="light"] .gmap-layer-row.is-off .gmap-layer-row-indicator {
+    background: transparent;
+  }
+  :root[data-theme="light"] .gmap-filter-chip {
+    background: var(--surface-container-lowest);
+    color: var(--on-surface-variant);
+    border-color: var(--outline-variant);
+  }
+
+  /* Right inspector — minimum-viable retoning so the panel does not
+     render dark-on-light. Full inspector pass (typography, evidence
+     rows, hash-chain, runtime-evidence rendering) lives in the
+     D27j-ui-theme-5 records / inspector / evidence tranche. */
+  :root[data-theme="light"] #gmap-details {
+    background: var(--surface-container-lowest);
+    border-left-color: var(--outline-variant);
+  }
+  :root[data-theme="light"] .gmap-details-section {
+    border-bottom-color: var(--outline-variant);
+  }
+  :root[data-theme="light"] .gmap-details-row {
+    border-bottom-color: var(--outline-variant);
+  }
+  :root[data-theme="light"] .gmap-details-key { color: var(--on-surface-variant); }
+  :root[data-theme="light"] .gmap-details-val { color: var(--on-surface); }
+
+  /* end-of-theme-4-light-block */
+
+  /* ──────────────────────────────────────────────────────────────────
+     D27j-ui-theme-5 — Records / Inspector / Evidence Light Mode.
+     Extends theme-4: completes the right-inspector visual pass and
+     adds light-mode chrome for the bottom evidence tray (header,
+     tabs, panels, drift tiles, activity rows, signal items,
+     provenance label). No new rendering — only retoning of existing
+     markup. Audit-event endpoint introduction and runtime-evidence
+     rendering remain out of scope.
+     ────────────────────────────────────────────────────────────── */
+
+  /* Right inspector — full pass. Theme-4 retoned the surface/border;
+     theme-5 covers section title, name, action button, and dotted
+     row separator. */
+  :root[data-theme="light"] .gmap-details-title {
+    color: var(--on-surface-variant);
+  }
+  :root[data-theme="light"] .gmap-details-name {
+    color: var(--on-surface);
+  }
+  :root[data-theme="light"] .gmap-details-row {
+    border-bottom-color: var(--outline-variant);
+  }
+  :root[data-theme="light"] .gmap-action-view-record {
+    background: var(--surface-container-lowest);
+    color: var(--primary);
+    border-color: var(--outline-variant);
+  }
+  :root[data-theme="light"] .gmap-action-view-record:hover:not(:disabled) {
+    background: var(--surface-container);
+  }
+
+  /* Bottom evidence tray — container, header, toggle. */
+  :root[data-theme="light"] .gmap-evidence-tray {
+    background: var(--surface-container-low);
+    border-top-color: var(--outline-variant);
+  }
+  :root[data-theme="light"] .gmap-evidence-tray-header {
+    background: var(--surface-container-lowest);
+    border-bottom-color: var(--outline-variant);
+  }
+  :root[data-theme="light"] .gmap-evidence-tray-title {
+    color: var(--on-surface);
+  }
+  :root[data-theme="light"] .gmap-evidence-tray-node {
+    color: var(--on-surface-variant);
+  }
+  :root[data-theme="light"] .gmap-evidence-tray-node strong {
+    color: var(--on-surface);
+  }
+  :root[data-theme="light"] .gmap-evidence-tray-node-kind {
+    color: var(--on-surface-variant);
+    border-color: var(--outline-variant);
+    background: var(--surface-container);
+  }
+  :root[data-theme="light"] .gmap-evidence-tray-demo-badge {
+    color: var(--on-surface-variant);
+    border-color: var(--outline-variant);
+    background: var(--primary-container);
+  }
+  :root[data-theme="light"] .gmap-evidence-tray-toggle {
+    background: var(--surface-container-lowest);
+    border-color: var(--outline-variant);
+    color: var(--on-surface-variant);
+  }
+  :root[data-theme="light"] .gmap-evidence-tray-toggle:hover {
+    background: var(--surface-container);
+    color: var(--on-surface);
+  }
+
+  /* Tray tabs. Active tab uses primary fill; inactive stays muted. */
+  :root[data-theme="light"] .gmap-evidence-tray-tabs {
+    background: var(--surface-container-lowest);
+    border-bottom-color: var(--outline-variant);
+  }
+  :root[data-theme="light"] .gmap-evidence-tray-tab {
+    color: var(--on-surface-variant);
+  }
+  :root[data-theme="light"] .gmap-evidence-tray-tab:hover:not(.is-active) {
+    color: var(--on-surface);
+    background: var(--surface-container);
+  }
+  :root[data-theme="light"] .gmap-evidence-tray-tab.is-active {
+    color: var(--primary);
+    background: var(--surface-container-low);
+    border-color: var(--outline-variant);
+    border-bottom-color: var(--surface-container-low);
+  }
+
+  /* Tray empty / coming-soon / disclaimer. */
+  :root[data-theme="light"] .gmap-evidence-tray-empty,
+  :root[data-theme="light"] .gmap-evidence-tray-coming-soon,
+  :root[data-theme="light"] .gmap-evidence-tray-disclaimer {
+    color: var(--on-surface-variant);
+  }
+  :root[data-theme="light"] .gmap-evidence-tray-subtitle {
+    color: var(--on-surface);
+  }
+
+  /* Drift tiles. */
+  :root[data-theme="light"] .gmap-evidence-tray-tile {
+    background: var(--surface-container-lowest);
+    border-color: var(--outline-variant);
+  }
+  :root[data-theme="light"] .gmap-evidence-tray-tile-label {
+    color: var(--on-surface-variant);
+  }
+  :root[data-theme="light"] .gmap-evidence-tray-tile-value {
+    color: var(--on-surface);
+  }
+  :root[data-theme="light"] .gmap-evidence-tray-tile-status-stable   { color: var(--secondary); }
+  :root[data-theme="light"] .gmap-evidence-tray-tile-status-drifting { color: #b35a0e; }
+  :root[data-theme="light"] .gmap-evidence-tray-tile-status-critical { color: var(--error); }
+
+  /* Drift chart axis / grid / empty. */
+  :root[data-theme="light"] .gmap-evidence-tray-chart-axis-label {
+    color: var(--on-surface-variant);
+  }
+  :root[data-theme="light"] .gmap-evidence-tray-chart-empty {
+    color: var(--on-surface-variant);
+  }
+
+  /* Activity rows. */
+  :root[data-theme="light"] .gmap-evidence-tray-activity-row {
+    border-bottom-color: var(--outline-variant);
+  }
+  :root[data-theme="light"] .gmap-evidence-tray-activity-row-body {
+    color: var(--on-surface);
+  }
+  :root[data-theme="light"] .gmap-evidence-tray-activity-row-body strong {
+    color: var(--on-surface);
+  }
+  :root[data-theme="light"] .gmap-evidence-tray-activity-time,
+  :root[data-theme="light"] .gmap-evidence-tray-activity-state,
+  :root[data-theme="light"] .gmap-evidence-tray-activity-id {
+    color: var(--on-surface-variant);
+  }
+
+  /* Signal items + provenance. */
+  :root[data-theme="light"] .gmap-evidence-tray-signal-item {
+    border-bottom-color: var(--outline-variant);
+  }
+  :root[data-theme="light"] .gmap-evidence-tray-signal-label {
+    color: var(--on-surface-variant);
+  }
+  :root[data-theme="light"] .gmap-evidence-tray-signal-value {
+    color: var(--on-surface);
+  }
+  :root[data-theme="light"] .gmap-evidence-tray-provenance-compact {
+    color: var(--on-surface-variant);
+  }
+
+  /* end-of-theme-5-light-block */

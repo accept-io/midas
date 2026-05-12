@@ -1,0 +1,249 @@
+  /* ──────────────────────────────────────────────────────────────────────────
+     MIDAS Explorer — dark workbench theme
+     Single-page shell with four internal views: Services, Evaluate, Records,
+     Settings. No external dependencies (no Tailwind, no Google Fonts, no
+     Material Symbols). Visual language adapted from the Stitch reference
+     mockups using local CSS only.
+     ────────────────────────────────────────────────────────────────────── */
+
+  :root {
+    /* Stitch palette (M3-inspired dark) */
+    --bg:                          #111125;
+    --surface:                     #111125;
+    --surface-container-lowest:    #0c0c1f;
+    --surface-container-low:       #1a1a2e;
+    --surface-container:           #1e1e32;
+    --surface-container-high:      #28283d;
+    --surface-container-highest:   #333348;
+    --surface-bright:              #37374d;
+    --surface-variant:             #333348;
+
+    --on-surface:                  #e2e0fc;
+    --on-surface-variant:          #c2c6d6;
+
+    --primary:                     #adc6ff;
+    --primary-container:           #4d8eff;
+    --on-primary:                  #002e6a;
+    --on-primary-container:        #00285d;
+    /* M3 surface-tint role. Currently unconsumed by component CSS;
+       added in D27j-ui-theme-1 so the light-mode override has a
+       matching token to flip. Dark default mirrors --primary. */
+    --surface-tint:                #adc6ff;
+
+    --secondary:                   #4edea3;
+    --on-secondary:                #003824;
+    --secondary-container:         #00a572;
+
+    --tertiary:                    #d1c79e;
+    --tertiary-container:          #b5ac84;
+
+    --error:                       #ffb4ab;
+    --error-container:             #93000a;
+    --on-error:                    #690005;
+
+    --outline:                     #8c909f;
+    --outline-variant:             #424754;
+
+    /* Accent surfaces */
+    --slate-900:                   #1A1A2E;
+    --slate-800:                   #1e293b;
+    --slate-700:                   #334155;
+    --slate-500:                   #64748b;
+    --slate-400:                   #94a3b8;
+    --slate-300:                   #cbd5e1;
+    --slate-200:                   #e2e8f0;
+
+    /* Brand colour-coding for resolved authority chain */
+    --chain-surface:   #60a5fa;  /* blue   */
+    --chain-profile:   #c084fc;  /* purple */
+    --chain-grant:     #34d399;  /* emerald */
+    --chain-agent:     var(--primary);
+
+    /* Sizing */
+    --sidebar-width:    256px;
+    --inspector-width:  320px;
+    --header-height:    56px;
+    --footer-height:    40px;
+    /* D27j-ui-3a-refine-5 — Right-rail drawer-handle width. Single
+       source of truth for: .gmap-right-rail-tabs width, the
+       collapsed-state shell reservation (shell-{header,footer}
+       right + shell-main margin-right), the expanded-state strip
+       inset (right: calc(var(--inspector-width) - HANDLE)), and the
+       panel-padding allowance that keeps content clear of the
+       strip. Theme-neutral (no light-mode override). 28px — tight
+       enough to read as a drawer pull, wide enough to comfortably
+       host the 10px-font vertical labels. */
+    --gmap-right-rail-handle-width: 28px;
+
+    /* Phase 2B Step 32 (D24g) — Authority Graph canvas-edge overlay
+       footprints. The four insets describe the rectangle inside
+       .governance-map-canvas-scroll that is NOT covered by any
+       canvas-edge overlay. Auto-camera helpers (fitGmapToBounds,
+       focusGmapOnRoot, focusGmapOnNode) consume these via the
+       gmapSafeArea() helper to position graph content inside the
+       usable area. Manual pan / zoom continues to operate on raw
+       canvas-scroll coordinates and ignores these insets. Future
+       overlays adopt the pattern by bumping the relevant variable. */
+    --gmap-overlay-inset-left:   56px;  /* camera bar: left:16 + 4+32+4 padding/button = 56 */
+    --gmap-overlay-inset-top:    48px;  /* top-left + top-right at top:8, ~30 tall + 10 buffer */
+    --gmap-overlay-inset-right:   8px;  /* phantom border removed in D24g; small breathing buffer */
+    --gmap-overlay-inset-bottom: 48px;  /* legend at bottom:12, ~30 tall + 6 buffer */
+
+    /* Type stack — system fallbacks; no Google Fonts CDN */
+    --font-body:    -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, Roboto, sans-serif;
+    --font-display: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, Roboto, sans-serif;
+    --font-mono:    ui-monospace, "SF Mono", "Cascadia Code", "Fira Code", Menlo, Consolas, monospace;
+
+    /* D27j-ui-theme-2 — engineering workbench shape and elevation
+       tokens. Theme-neutral: every consumer reads the same name in
+       dark and light, with shadow values overridden in the light
+       block to keep elevation legible against white surfaces. The
+       four radius tiers are sharp / tight / panel / pip; tight is
+       the default for buttons, inputs, and rectangular badges, panel
+       is for cards and popovers, pip stays reserved for true dots
+       and pulses. Border tokens shorthand the common 1px hairline
+       and 1px stronger outline patterns so consumers can call the
+       intent rather than spelling the colour. Spacing tokens follow
+       the 4px grid. */
+    --radius-sharp:  0;
+    --radius-tight:  2px;
+    --radius-panel:  4px;
+    --radius-pip:    999px;
+
+    --border-hairline: 1px solid var(--outline-variant);
+    --border-strong:   1px solid var(--outline);
+
+    --shadow-overlay-tight: 0 2px 8px rgba(0,0,0,0.24);
+    --shadow-overlay-light: 0 4px 16px rgba(0,0,0,0.16);
+
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 24px;
+    --space-6: 32px;
+
+    /* D27j-ui-theme-4b — Governance Map semantic identity tokens.
+       These are graph-object identity colours, deliberately separate
+       from interaction tokens (--primary, --secondary, --error). The
+       split fixes accidental visual conflations:
+         Business Service was = --primary (action blue)
+         Decision Surface  was = --secondary (success green)
+         AI System and Authority shared #6fb7e6
+         Capability and Process shared neutral grey
+       Each token has a unified value where contrast works on both
+       dark #111125 and light #f8f9fb backgrounds; six are flipped to
+       a darker / less-saturated variant under data-theme="light"
+       inside the override block below. --gmap-type-risk is reserved
+       for genuine warning state (coverage gap connector + future
+       error edge); never a node-type identity. */
+    --gmap-type-business:   #3a7bd9;
+    --gmap-type-related:    #7a8398;
+    --gmap-type-capability: #1e9059;
+    --gmap-type-process:    #a8753a;
+    --gmap-type-surface:    #0f766e;
+    --gmap-type-ai:         #0ea5e0;
+    --gmap-type-authority:  #a78bfa;
+    --gmap-type-coverage:   #c98a3e;
+    --gmap-type-risk:       #ef4444;
+
+    /* D27j-ui-theme-4d — connector hierarchy. Neutral grey for the
+       service-relationship connector, deliberately quieter than any
+       --gmap-type-* hue so structural edges read as supporting
+       infrastructure. Same value works on dark #111125 and light
+       #f8f9fb backgrounds; no light override required. */
+    --gmap-conn-neutral:    #7a8398;
+  }
+
+  /* D27j-ui-theme-1 — light-mode token foundation.
+     Dark remains the default. Light mode is opt-in via the data-theme
+     attribute on :root and no UI toggle is wired in this tranche.
+     Component CSS still contains dark-mode assumptions (raw rgba
+     whites on black, dark hex literals, dark-tuned shadows) that will
+     be addressed in later theme tranches; until then, light mode
+     renders partially. The token surface here is what those later
+     tranches build against. */
+  :root[data-theme="light"] {
+    --bg:                          #f8f9fb;
+    --surface:                     #f8f9fb;
+    --surface-container-lowest:    #ffffff;
+    --surface-container-low:       #f2f4f6;
+    --surface-container:           #eceef0;
+    --surface-container-high:      #e6e8ea;
+    --surface-container-highest:   #e0e3e5;
+    --surface-bright:              #ffffff;
+    --surface-variant:             #e0e3e5;
+
+    --on-surface:                  #191c1e;
+    --on-surface-variant:          #424753;
+
+    --primary:                     #004aa2;
+    --primary-container:           #e3ecf8;
+    --on-primary:                  #ffffff;
+    --on-primary-container:        #002a64;
+    --surface-tint:                #005ac3;
+
+    --secondary:                   #1f7a4f;
+    --on-secondary:                #ffffff;
+    --secondary-container:         #d6efe1;
+
+    --tertiary:                    #6b5a18;
+    --tertiary-container:          #f1e9c9;
+
+    --error:                       #b3261e;
+    --error-container:             #f9dedc;
+    --on-error:                    #ffffff;
+
+    --outline:                     #727784;
+    --outline-variant:             #c2c6d5;
+
+    /* Slate scale value-flipped in place. Token rename to a neutral
+       palette is deferred to a later cleanup tranche; consumers stay
+       unchanged. */
+    --slate-900:                   #ffffff;
+    --slate-800:                   #f2f4f6;
+    --slate-700:                   #e0e3e5;
+    --slate-500:                   #727784;
+    --slate-400:                   #5a5e6b;
+    --slate-300:                   #424753;
+    --slate-200:                   #191c1e;
+
+    /* Brand chain colours desaturated for readability on light
+       surfaces. */
+    --chain-surface:               #2563eb;
+    --chain-profile:               #7c3aed;
+    --chain-grant:                 #15803d;
+    --chain-agent:                 #004aa2;
+
+    /* D27j-ui-theme-2 — light-mode shadow overrides. Heavy black
+       alphas would crush against white surfaces; use cool slate
+       alphas tuned for legibility without consumer-card glow. */
+    --shadow-overlay-tight: 0 2px 8px rgba(15,23,42,0.10);
+    --shadow-overlay-light: 0 4px 16px rgba(15,23,42,0.06);
+
+    /* D27j-ui-theme-4b — Governance Map semantic identity overrides.
+       Six of the nine type tokens shift to a darker / less-saturated
+       hue for adequate contrast against white surfaces. Three
+       (--gmap-type-business, --gmap-type-related, --gmap-type-surface)
+       work unified on both backgrounds and are not redeclared. */
+    --gmap-type-capability: #15803d;
+    --gmap-type-process:    #8b5e26;
+    --gmap-type-ai:         #0277b3;
+    --gmap-type-authority:  #7c4ad6;
+    --gmap-type-coverage:   #a06324;
+    --gmap-type-risk:       #dc2626;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    background: var(--bg);
+    color: var(--on-surface);
+  }
+  body {
+    font-family: var(--font-body);
+    font-size: 14px;
+    line-height: 1.5;
+    min-height: 100vh;
+  }
+

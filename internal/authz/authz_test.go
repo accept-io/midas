@@ -32,9 +32,10 @@ import (
 // platform.admin bundle.
 func TestAllControlPlaneWritePermissions_Count(t *testing.T) {
 	got := authz.AllControlPlaneWritePermissions()
-	// 25 = 23 prior + 2 FailModePolicy lifecycle permissions (D27j-impl-1c).
-	if len(got) != 25 {
-		t.Errorf("want 25 control-plane write permissions, got %d", len(got))
+	// 30 = 25 prior + 5 DriftDefinition lifecycle permissions
+	// (Drift-1e: submit, approve, reject, deprecate, retire).
+	if len(got) != 30 {
+		t.Errorf("want 30 control-plane write permissions, got %d", len(got))
 	}
 }
 
@@ -124,6 +125,13 @@ func TestGovernanceApprover_ExactScope(t *testing.T) {
 		authz.PermProfileApprove,
 		authz.PermGovernanceExpectationApprove,
 		authz.PermFailModePolicyApprove,
+		// Drift-1e: governance.approver gets approve+reject on
+		// DriftDefinition. Reject sits with the same gate as approve
+		// because both are positive maker-checker counterparties
+		// (rejection back to draft is a governance review action,
+		// not destructive lifecycle progression).
+		authz.PermDriftDefinitionApprove,
+		authz.PermDriftDefinitionReject,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("governance.approver bundle size: want %d, got %d (%v)", len(want), len(got), got)
@@ -160,18 +168,52 @@ func TestGovernanceApprover_ExactScope(t *testing.T) {
 	}
 }
 
-// TestEmptyBundleRoles asserts that operator, viewer, and reviewer hold
-// zero control-plane write permissions. This preserves the demo/demo user's
-// behaviour (operator) and keeps the read-only and review-only roles out of
-// the new model entirely.
+// TestEmptyBundleRoles asserts that viewer and reviewer hold zero
+// control-plane write permissions. platform.operator gained
+// drift_definition:submit in Drift-1e (operator-grade entry into the
+// review lifecycle), so it is exercised by its own test below.
 func TestEmptyBundleRoles(t *testing.T) {
 	for _, role := range []string{
-		identity.RolePlatformOperator,
 		identity.RolePlatformViewer,
 		identity.RoleGovernanceReviewer,
 	} {
 		if got := authz.PermissionsForRole(role); len(got) != 0 {
 			t.Errorf("role %q must have empty write bundle, got %v", role, got)
+		}
+	}
+}
+
+// TestPlatformOperator_ExactScope pins platform.operator to exactly
+// the Drift-1e submit permission. Operator-grade lifecycle entry —
+// no approval, no destructive actions, no other Kind's writes.
+func TestPlatformOperator_ExactScope(t *testing.T) {
+	got := authz.PermissionsForRole(identity.RolePlatformOperator)
+	want := []authz.Permission{
+		authz.PermDriftDefinitionSubmit,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("platform.operator bundle size: want %d, got %d (%v)", len(want), len(got), got)
+	}
+	gotSet := toSet(got)
+	for _, p := range want {
+		if _, ok := gotSet[p]; !ok {
+			t.Errorf("platform.operator missing %q", p)
+		}
+	}
+	// Explicit denials — destructive lifecycle and write paths must
+	// not reach the operator role.
+	p := &identity.Principal{Roles: []string{identity.RolePlatformOperator}}
+	for _, denied := range []authz.Permission{
+		authz.PermDriftDefinitionApprove,
+		authz.PermDriftDefinitionReject,
+		authz.PermDriftDefinitionDeprecate,
+		authz.PermDriftDefinitionRetire,
+		authz.PermSurfaceApprove,
+		authz.PermProfileApprove,
+		authz.PermControlplaneApply,
+	} {
+		if authz.HasPermission(p, denied) {
+			t.Errorf("platform.operator must not hold %q", denied)
 		}
 	}
 }

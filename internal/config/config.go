@@ -67,6 +67,7 @@ type Config struct {
 	Dispatcher    DispatcherConfig    `yaml:"dispatcher"`
 	Kafka         KafkaConfig         `yaml:"kafka"`
 	Structural    StructuralConfig    `yaml:"structural"`
+	FailMode      FailModeConfig      `yaml:"fail_mode"`
 }
 
 // PlatformOIDCConfig configures OIDC-based platform login (Explorer/console SSO).
@@ -161,6 +162,49 @@ type DevConfig struct {
 	// with the platform.operator role at startup when true. The seed is idempotent.
 	// NEVER enable this in production — it creates a well-known credential.
 	SeedDemoUser bool `yaml:"seed_demo_user"`
+
+	// SeedSyntheticDrift controls the synthetic Drift demo signal.
+	//
+	// Tri-state semantics (Drift-2a-fix):
+	//
+	//   - nil  → operator did not provide a value; the effective
+	//            behaviour inherits from SeedDemoData. When demo data
+	//            is on, synthetic drift is also on; when demo data is
+	//            off, synthetic drift is off. Read via the
+	//            EffectiveSeedSyntheticDrift() helper, not via the
+	//            field directly.
+	//   - &true / &false → operator explicitly opted in/out via env
+	//            MIDAS_DEV_SEED_SYNTHETIC_DRIFT or YAML
+	//            seed_synthetic_drift. The explicit value always
+	//            wins over SeedDemoData.
+	//
+	// The synthetic seed populates a deterministic dev/demo-only
+	// dataset (DriftDefinitions + Series + Points + Observations +
+	// Annotations) over the demo entities created by SeedDemo, so the
+	// Drift heatmap / workbench / inspector UI has populated data
+	// before runtime drift ingestion exists. Idempotent. NEVER enable
+	// in production.
+	SeedSyntheticDrift *bool `yaml:"seed_synthetic_drift,omitempty"`
+}
+
+// EffectiveSeedSyntheticDrift returns the operational decision for
+// whether the synthetic drift seed should run.
+//
+// Decision precedence (highest to lowest):
+//  1. Explicit operator value (env MIDAS_DEV_SEED_SYNTHETIC_DRIFT or
+//     YAML seed_synthetic_drift) — used verbatim when SeedSyntheticDrift
+//     is non-nil.
+//  2. Inherited from SeedDemoData — when SeedSyntheticDrift is nil,
+//     synthetic drift follows the demo seed: demo on ⇒ synthetic drift
+//     on; demo off ⇒ synthetic drift off.
+//
+// Consumers (cmd/midas/main.go) must read this helper rather than the
+// raw pointer so the inheritance rule remains a single source of truth.
+func (d DevConfig) EffectiveSeedSyntheticDrift() bool {
+	if d.SeedSyntheticDrift != nil {
+		return *d.SeedSyntheticDrift
+	}
+	return d.SeedDemoData
 }
 
 // ServerConfig controls the HTTP listener.
@@ -301,6 +345,31 @@ type StructuralConfig struct {
 	// "permissive" (default): structural fields are optional; platform works immediately.
 	// "enforced": structural links are required (reserved for future use).
 	Mode StructuralMode `yaml:"mode"`
+}
+
+// FailModeConfig configures runtime fail-mode policy resolution
+// behaviour. D29d introduces a single field — the optional
+// deployment-default FailModePolicy id used by the orchestrator's
+// resolver when neither the Surface nor its BusinessService declares
+// an override.
+//
+// The runtime resolver remains evidence-only across D27j and D29*:
+// resolving a deployment default does not influence outcome
+// computation, audit hash chains, or POLICY_EVALUATED payloads — it
+// changes only the frequency at which FAIL_MODE_POLICY_RESOLVED (and
+// downstream FAIL_MODE_POLICY_TRIGGER_FIRED) audit events are emitted.
+// A future tranche will plumb the resolved policy into evaluation;
+// until then this field is purely an observability seam.
+type FailModeConfig struct {
+	// DeploymentDefaultPolicyID is the optional FailModePolicy id used
+	// by failmode.ResolveWithPath when neither the Surface nor its
+	// owning BusinessService declares an override. Empty (the default)
+	// preserves the existing "no deployment default" behaviour
+	// inherited from pre-D29d, where the orchestrator passed "".
+	// Lookups that fail at runtime are logged-only and do not change
+	// the evaluation outcome; this is the same posture as Surface and
+	// BusinessService overrides under D27j-impl-2.
+	DeploymentDefaultPolicyID string `yaml:"deployment_default_policy_id"`
 }
 
 // KafkaConfig holds Kafka broker settings for the Kafka publisher.

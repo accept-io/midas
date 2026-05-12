@@ -1,0 +1,286 @@
+  /* ──────────────────────────────────────────────────────────────────────
+     Capabilities catalogue + record (Capabilities view)
+     Mirrors the Services catalogue/record visual language. Class names
+     are capabilities-* so they can later be reused on a per-entity-type
+     basis (Process, Surface, AI System catalogues) without re-styling.
+     The rules deliberately reuse the same colour tokens, padding scale
+     and typography as the Services equivalents — visual consistency
+     across catalogues is intentional. There is no map sub-view here:
+     no per-capability /governance-map endpoint exists today, so the
+     map markup is omitted entirely (rather than disabled).
+     ────────────────────────────────────────────────────────────────── */
+
+  .capabilities-subview { display: none; }
+  .capabilities-subview.active { display: block; }
+
+  .capabilities-catalogue { padding: 0; }
+  .capabilities-catalogue-header { margin-bottom: 18px; }
+  .capabilities-catalogue-title {
+    font-size: 22px;
+    font-weight: 700;
+    font-family: var(--font-display);
+    color: var(--on-surface);
+    letter-spacing: -0.01em;
+    margin-bottom: 4px;
+  }
+  .capabilities-catalogue-subtitle {
+    font-size: 12px;
+    color: var(--slate-500);
+    margin-bottom: 12px;
+  }
+  .capabilities-search {
+    width: 100%;
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    border-radius: 4px;
+    padding: 8px 12px;
+    color: var(--on-surface);
+    font-family: inherit;
+    font-size: 13px;
+  }
+  .capabilities-search:focus {
+    outline: 2px solid var(--primary, #4ea1ff);
+    outline-offset: 1px;
+  }
+  .capabilities-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 14px;
+    margin-top: 14px;
+  }
+
+  .capabilities-card {
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    border-radius: 6px;
+    padding: 14px 16px;
+    cursor: pointer;
+    transition: background 0.12s, border-color 0.12s;
+    text-align: left;
+    font-family: inherit;
+    color: inherit;
+    width: 100%;
+    display: block;
+  }
+  .capabilities-card:hover { background: var(--surface-container-high); }
+  .capabilities-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+  .capabilities-card-id {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--primary);
+    background: rgba(173,198,255,0.10);
+    padding: 2px 8px;
+    border-radius: 4px;
+  }
+  .capabilities-card-status {
+    font-size: 9px;
+    background: var(--surface-container-high);
+    color: var(--slate-300);
+    border: 1px solid var(--outline-variant);
+    border-radius: 3px;
+    padding: 2px 7px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 700;
+  }
+  .capabilities-card-name {
+    font-size: 16px;
+    font-weight: 700;
+    font-family: var(--font-display);
+    color: var(--on-surface);
+    margin-bottom: 6px;
+    letter-spacing: -0.01em;
+  }
+  .capabilities-card-desc {
+    font-size: 12px;
+    color: var(--slate-400);
+    margin-bottom: 8px;
+    line-height: 1.4;
+  }
+  .capabilities-card-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    font-size: 11px;
+    color: var(--slate-400);
+  }
+  .capabilities-card-owner {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 3px;
+    background: var(--surface-container-high);
+    color: var(--slate-300);
+    border: 1px solid var(--outline-variant);
+  }
+
+  /* State strips (loading / empty / error / no-match). Mirror the
+     Services equivalents but use capabilities- prefixes so a future
+     visual divergence is one block, not a regex. */
+  .capabilities-loading,
+  .capabilities-empty,
+  .capabilities-error,
+  .capabilities-no-match {
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    border-radius: 6px;
+    padding: 14px 16px;
+    font-size: 12px;
+    color: var(--slate-400);
+    line-height: 1.5;
+  }
+  .capabilities-empty strong,
+  .capabilities-error strong {
+    color: var(--on-surface);
+    font-weight: 600;
+    display: block;
+    margin-bottom: 4px;
+  }
+  .capabilities-error {
+    border-left: 4px solid var(--error);
+    color: var(--error);
+  }
+  .capabilities-error strong { color: var(--error); }
+
+  /* Record page — header + identity strip + sectioned body. Mirrors
+     services-record-* visually but kept under capabilities-record-* so
+     the two record pages can diverge cleanly later (different sections,
+     different actions). */
+  .capabilities-record { padding: 0; }
+  .capabilities-record-header { margin-bottom: 18px; }
+  .capabilities-record-back {
+    background: transparent;
+    border: 0;
+    color: var(--primary);
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    padding: 0;
+    margin-bottom: 8px;
+  }
+  .capabilities-record-back:hover { text-decoration: underline; }
+  .capabilities-record-title-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+  }
+  .capabilities-record-name {
+    font-size: 22px;
+    font-weight: 700;
+    font-family: var(--font-display);
+    color: var(--on-surface);
+    letter-spacing: -0.01em;
+  }
+  .capabilities-record-id {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--primary);
+    background: rgba(173,198,255,0.10);
+    padding: 3px 9px;
+    border-radius: 4px;
+  }
+  .capabilities-record-status {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 700;
+    padding: 3px 9px;
+    border-radius: 3px;
+    background: var(--surface-container-high);
+    color: var(--slate-300);
+    border: 1px solid var(--outline-variant);
+  }
+  .capabilities-record-body {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+  .capabilities-record-section {
+    background: var(--surface-container-low);
+    border: 1px solid var(--outline-variant);
+    border-radius: 6px;
+    padding: 16px 20px;
+  }
+  .capabilities-record-section-title {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--slate-500);
+    margin-bottom: 12px;
+  }
+  .capabilities-record-identity {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 14px;
+    font-size: 11px;
+  }
+  .capabilities-record-identity-pill {
+    background: var(--surface-container-high);
+    border: 1px solid var(--outline-variant);
+    border-radius: 999px;
+    padding: 4px 10px;
+    color: var(--slate-300);
+    font-family: var(--font-mono);
+  }
+  .capabilities-record-identity-pill .key {
+    color: var(--slate-500);
+    text-transform: uppercase;
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    margin-right: 4px;
+  }
+  .capabilities-record-field-grid {
+    display: grid;
+    grid-template-columns: minmax(140px, max-content) 1fr;
+    column-gap: 18px;
+    row-gap: 8px;
+  }
+  .capabilities-record-field-key {
+    color: var(--slate-500);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 700;
+    padding-top: 2px;
+  }
+  .capabilities-record-field-val {
+    color: var(--on-surface);
+    font-size: 12px;
+    font-family: var(--font-mono);
+    word-break: break-word;
+  }
+  .capabilities-record-field-val.muted { color: var(--slate-500); font-style: italic; }
+  .capabilities-record-loading,
+  .capabilities-record-error,
+  .capabilities-record-empty {
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    border-radius: 6px;
+    padding: 18px 20px;
+    color: var(--slate-400);
+    font-size: 12px;
+  }
+  .capabilities-record-error {
+    border-left: 4px solid var(--error);
+    color: var(--error);
+  }
+
+  /* Map sub-view header — distinct from the map's own internal toolbar.
+     Provides the back affordance + selected-BS context. */
+  .services-map-view-header {
+    margin-bottom: 14px;
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+

@@ -135,55 +135,72 @@ func TestApply_FailModePolicy_ForcesReviewEvenWhenLifecycleStatusActive(t *testi
 	}
 }
 
-func TestApply_FailModePolicy_RejectsSoftMode(t *testing.T) {
+// D29b replacements — the deleted RejectsSoftMode / RejectsOpenMode
+// tests are replaced by positive admittance checks plus a forbidden-
+// combination test.
+
+func TestApply_FailModePolicy_AcceptsSoftMode_EvidenceOnly(t *testing.T) {
 	parsed := makeValidFMPDoc("default-fail-mode")
 	doc := parsed.Doc.(types.FailModePolicyDocument)
 	for i := range doc.Spec.Rules {
 		if doc.Spec.Rules[i].CorrectnessClass == "resource" {
 			doc.Spec.Rules[i].PermittedMode = "soft"
+			doc.Spec.Rules[i].EnforcementState = "evidence_only"
 		}
 	}
 	parsed.Doc = doc
 
 	errs := validate.ValidateDocument(parsed)
-	if len(errs) == 0 {
-		t.Fatal("expected validation errors for soft mode; got none")
-	}
-	found := false
-	for _, e := range errs {
-		if e.Field == "spec.rules" && strings.Contains(e.Message, "not admitted") {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("expected 'not admitted' validator error; got %+v", errs)
+	if len(errs) != 0 {
+		t.Errorf("apply validate must accept soft + evidence_only; got %+v", errs)
 	}
 }
 
-func TestApply_FailModePolicy_RejectsOpenMode(t *testing.T) {
+func TestApply_FailModePolicy_AcceptsOpenMode_EvidenceOnly(t *testing.T) {
 	parsed := makeValidFMPDoc("default-fail-mode")
 	doc := parsed.Doc.(types.FailModePolicyDocument)
 	for i := range doc.Spec.Rules {
 		if doc.Spec.Rules[i].CorrectnessClass == "resource" {
 			doc.Spec.Rules[i].PermittedMode = "open"
+			doc.Spec.Rules[i].EnforcementState = "evidence_only"
+		}
+	}
+	parsed.Doc = doc
+
+	errs := validate.ValidateDocument(parsed)
+	if len(errs) != 0 {
+		t.Errorf("apply validate must accept open + evidence_only; got %+v", errs)
+	}
+}
+
+func TestApply_FailModePolicy_RejectsForbiddenCombination_ClosedEnforcedPermitWithEvidence(t *testing.T) {
+	parsed := makeValidFMPDoc("default-fail-mode")
+	doc := parsed.Doc.(types.FailModePolicyDocument)
+	for i := range doc.Spec.Rules {
+		if doc.Spec.Rules[i].CorrectnessClass == "resource" {
+			// closed + enforced + permit_with_evidence is forbidden:
+			// closed posture cannot produce a relax outcome under
+			// active enforcement.
+			doc.Spec.Rules[i].PermittedMode = "closed"
+			doc.Spec.Rules[i].EnforcementState = "enforced"
+			doc.Spec.Rules[i].Outcome = "permit_with_evidence"
 		}
 	}
 	parsed.Doc = doc
 
 	errs := validate.ValidateDocument(parsed)
 	if len(errs) == 0 {
-		t.Fatal("expected validation errors for open mode; got none")
+		t.Fatal("expected validation errors for closed + enforced + permit_with_evidence; got none")
 	}
 	found := false
 	for _, e := range errs {
-		if e.Field == "spec.rules" && strings.Contains(e.Message, "not admitted") {
+		if e.Field == "spec.rules" && strings.Contains(e.Message, "not permitted") {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("expected 'not admitted' validator error; got %+v", errs)
+		t.Errorf("expected 'not permitted' validator error; got %+v", errs)
 	}
 }
 

@@ -303,14 +303,15 @@ func buildServiceGraph(gmap *governancemap.Map, bsID string) ([]Node, []Edge) {
 			bsLabel = bs.Name
 		}
 		bsData = &BusinessServiceData{
-			ID:              bs.ID,
-			Name:            bs.Name,
-			Description:     bs.Description,
-			Status:          bs.Status,
-			Owner:           bs.OwnerID,
-			ServiceType:     string(bs.ServiceType),
-			RegulatoryScope: bs.RegulatoryScope,
-			ExternalRef:     toExternalRefData(bs.ExternalRef),
+			ID:               bs.ID,
+			Name:             bs.Name,
+			Description:      bs.Description,
+			Status:           bs.Status,
+			Owner:            bs.OwnerID,
+			ServiceType:      string(bs.ServiceType),
+			RegulatoryScope:  bs.RegulatoryScope,
+			FailModePolicyID: bs.FailModePolicyID,
+			ExternalRef:      toExternalRefData(bs.ExternalRef),
 		}
 	}
 	nodes = append(nodes, Node{
@@ -506,6 +507,7 @@ func buildServiceGraph(gmap *governancemap.Map, bsID string) ([]Node, []Edge) {
 				Description:           s.Description,
 				Status:                string(s.Status),
 				ProcessID:             s.ProcessID,
+				FailModePolicyID:      s.FailModePolicyID,
 				AIBindingIDs:          directIDs,
 				InheritedAIBindingIDs: inheritedIDs,
 				ProfileCount:          sn.ProfileCount,
@@ -1074,6 +1076,7 @@ func (s *Service) surfaceNode(surf *surface.DecisionSurface) Node {
 			Description:           surf.Description,
 			Status:                string(surf.Status),
 			ProcessID:             surf.ProcessID,
+			FailModePolicyID:      surf.FailModePolicyID,
 			AIBindingIDs:          []string{},
 			InheritedAIBindingIDs: []string{},
 		},
@@ -1131,14 +1134,15 @@ func (s *Service) businessServiceNode(bs *businessservice.BusinessService) Node 
 		ID:    bs.ID,
 		Label: label,
 		BusinessService: &BusinessServiceData{
-			ID:              bs.ID,
-			Name:            bs.Name,
-			Description:     bs.Description,
-			Status:          bs.Status,
-			Owner:           bs.OwnerID,
-			ServiceType:     string(bs.ServiceType),
-			RegulatoryScope: bs.RegulatoryScope,
-			ExternalRef:     toExternalRefData(bs.ExternalRef),
+			ID:               bs.ID,
+			Name:             bs.Name,
+			Description:      bs.Description,
+			Status:           bs.Status,
+			Owner:            bs.OwnerID,
+			ServiceType:      string(bs.ServiceType),
+			RegulatoryScope:  bs.RegulatoryScope,
+			FailModePolicyID: bs.FailModePolicyID,
+			ExternalRef:      toExternalRefData(bs.ExternalRef),
 		},
 	}
 }

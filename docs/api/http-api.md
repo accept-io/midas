@@ -212,6 +212,21 @@ The envelope contains five sections: `identity`, `submitted`, `resolved`, `evalu
 
 ---
 
+## Evidence APIs
+
+The `/v1/evidence/*` family exposes the runtime audit-event chain and integrity verification for one envelope, plus a cross-envelope event search and a composed evidence-packet export. All four endpoints require `platform.viewer` or above and operate against the production audit / envelope repositories (disjoint from the Explorer workbench routes).
+
+| Endpoint | Purpose |
+|--------|---------|
+| `GET /v1/evidence/envelopes/{id}/audit-events` | Ordered audit-event chain for one envelope (`sequence_no` ASC). |
+| `GET /v1/evidence/audit-events` | Cross-envelope event search with `event_type` / `event_types` / `envelope_id` / `request_source` / `request_id` / `since` / `until` / `limit` / `order` filters. |
+| `GET /v1/evidence/envelopes/{id}/integrity` | Per-envelope chain verification. HTTP 200 with `valid: false` reports integrity findings in-band; HTTP 500 is reserved for repository / read failures. |
+| `GET /v1/evidence/envelopes/{id}/packet` | One response composing envelope + audit events + integrity. The envelope sub-object preserves the `/v1/envelopes/{id}` shape (including `submitted.raw`); the packet wrapper itself has no top-level submitted field. |
+
+See [`docs/operations/runtime-evidence-api.md`](../operations/runtime-evidence-api.md) for the operator guide: filter semantics, integrity error-kind taxonomy, packet composition rules, privacy posture, and current limitations (no redaction / signing / streaming / batch / cursor / `payload_contains` today).
+
+---
+
 ## Escalations
 
 ### GET /v1/escalations

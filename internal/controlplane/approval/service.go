@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/accept-io/midas/internal/authority"
 	"github.com/accept-io/midas/internal/controlaudit"
+	"github.com/accept-io/midas/internal/drift"
 	"github.com/accept-io/midas/internal/failmode"
 	"github.com/accept-io/midas/internal/governanceexpectation"
 	"github.com/accept-io/midas/internal/identity"
@@ -30,6 +32,20 @@ var (
 	ErrFailModePolicyNotFound    = errors.New("fail mode policy not found")
 	ErrFailModePolicyNotInReview = errors.New("fail mode policy is not in review state")
 	ErrFailModePolicyNotActive   = errors.New("fail mode policy is not in active state")
+
+	// DriftDefinition lifecycle sentinels (Drift-1e). The HTTP layer
+	// translates these to 404 / 409 / 403 via mapApprovalError.
+	// ErrDriftDefinitionInvalidTransition fires when the source state
+	// is wrong for the requested action (e.g. submit on a non-draft
+	// revision). The narrower NotIn{Draft,Review,Active} sentinels
+	// are reserved for actions whose source state is uniquely defined.
+	ErrDriftDefinitionNotFound          = errors.New("drift definition not found")
+	ErrDriftDefinitionNotInDraft        = errors.New("drift definition is not in draft state")
+	ErrDriftDefinitionNotInReview       = errors.New("drift definition is not in review state")
+	ErrDriftDefinitionNotActive         = errors.New("drift definition is not in active state")
+	ErrDriftDefinitionAlreadyRetired    = errors.New("drift definition is already retired")
+	ErrDriftDefinitionMakerChecker      = errors.New("approver must not be the same actor that created or last updated this revision")
+	ErrDriftDefinitionInvalidTransition = errors.New("drift definition lifecycle transition not permitted from current state")
 )
 
 type SurfaceRepository interface {
@@ -63,6 +79,19 @@ type FailModePolicyRepository interface {
 	Update(ctx context.Context, p *failmode.FailModePolicy) error
 }
 
+// DriftDefinitionRepository is the minimal read/write interface
+// required by DriftDefinition lifecycle operations (Drift-1e). Mirrors
+// ProfileRepository / FailModePolicyRepository in shape: versioned
+// (id, version) lookup + lifecycle/audit-only Update. Drift-1b's
+// Update method mutates only parent lifecycle / approval / successor
+// fields; child metric rows are immutable within a revision (atomic-
+// revision invariant), so the lifecycle service never needs metric
+// access here.
+type DriftDefinitionRepository interface {
+	FindByIDAndVersion(ctx context.Context, id string, version int) (*drift.DriftDefinition, error)
+	Update(ctx context.Context, d *drift.DriftDefinition) error
+}
+
 // Service orchestrates surface lifecycle governance: approval and deprecation.
 //
 // If an outbox.Repository is provided (via NewServiceWithOutbox), a surface.approved
@@ -73,13 +102,14 @@ type FailModePolicyRepository interface {
 // If a controlaudit.Repository is provided, a control-plane audit record is
 // appended after each successful lifecycle transition.
 type Service struct {
-	repo               SurfaceRepository
-	profileRepo        ProfileRepository        // nil-safe: profile operations unavailable if nil
-	expectationRepo    ExpectationRepository    // nil-safe: GE operations unavailable if nil
-	failModePolicyRepo FailModePolicyRepository // nil-safe: FailModePolicy operations unavailable if nil
-	policy             Policy
-	outbox             outbox.Repository       // nil-safe: no event emitted if nil
-	controlAudit       controlaudit.Repository // nil-safe: no audit record if nil
+	repo                SurfaceRepository
+	profileRepo         ProfileRepository         // nil-safe: profile operations unavailable if nil
+	expectationRepo     ExpectationRepository     // nil-safe: GE operations unavailable if nil
+	failModePolicyRepo  FailModePolicyRepository  // nil-safe: FailModePolicy operations unavailable if nil
+	driftDefinitionRepo DriftDefinitionRepository // nil-safe: DriftDefinition lifecycle unavailable if nil
+	policy              Policy
+	outbox              outbox.Repository       // nil-safe: no event emitted if nil
+	controlAudit        controlaudit.Repository // nil-safe: no audit record if nil
 }
 
 // NewService constructs a Service without outbox emission. Existing callers
@@ -156,6 +186,17 @@ func (s *Service) WithExpectationRepository(repo ExpectationRepository) *Service
 // matching the WithExpectationRepository builder.
 func (s *Service) WithFailModePolicyRepository(repo FailModePolicyRepository) *Service {
 	s.failModePolicyRepo = repo
+	return s
+}
+
+// WithDriftDefinitionRepository injects the DriftDefinition repository
+// used by Drift-1e lifecycle methods (SubmitDriftDefinition,
+// ApproveDriftDefinition, RejectDriftDefinition,
+// DeprecateDriftDefinition, RetireDriftDefinition). When nil, the
+// methods return an error explaining the repository is not configured.
+// Returns the receiver for chaining.
+func (s *Service) WithDriftDefinitionRepository(repo DriftDefinitionRepository) *Service {
+	s.driftDefinitionRepo = repo
 	return s
 }
 
@@ -628,6 +669,271 @@ func (s *Service) DeprecateFailModePolicy(
 	}
 
 	s.appendControlAudit(ctx, controlaudit.NewFailModePolicyDeprecatedRecord(deprecatedBy, current.ID, current.Version, reason))
+
+	return current, nil
+}
+
+// ---------------------------------------------------------------------
+// DriftDefinition lifecycle (Drift-1e)
+// ---------------------------------------------------------------------
+//
+// Five lifecycle actions: submit, approve, reject, deprecate, retire.
+// Each method:
+//
+//   - looks up the (id, version) pair via the narrow repository
+//   - validates the source state against drift's lifecycle graph
+//   - mutates only parent lifecycle / approval / successor fields
+//   - never touches embedded DriftMetricDefinition rows
+//   - emits a control-audit record after a successful update
+//
+// Drift-1e mirrors the FailModePolicy / Profile / GovernanceExpectation
+// posture: the repository's Update is single-row; cross-version atomic
+// deprecation (deprecate prior active when activating a new revision)
+// is NOT performed in this tranche, matching every other versioned
+// approval Kind. Operators must explicitly deprecate prior active
+// revisions through the deprecate endpoint.
+
+// SubmitDriftDefinition transitions a DriftDefinition revision from
+// draft to review. Allowed source state: draft. The reason is captured
+// on the control-audit record only (drift.DriftDefinition has no
+// dedicated submission_reason column).
+func (s *Service) SubmitDriftDefinition(
+	ctx context.Context,
+	id string,
+	version int,
+	submittedBy string,
+	reason string,
+) (*drift.DriftDefinition, error) {
+	if s.driftDefinitionRepo == nil {
+		return nil, fmt.Errorf("drift definition repository not configured")
+	}
+
+	current, err := s.driftDefinitionRepo.FindByIDAndVersion(ctx, id, version)
+	if err != nil {
+		return nil, err
+	}
+	if current == nil {
+		return nil, ErrDriftDefinitionNotFound
+	}
+
+	if current.Status != drift.DriftDefinitionStatusDraft {
+		return nil, ErrDriftDefinitionNotInDraft
+	}
+	if !current.CanTransitionTo(drift.DriftDefinitionStatusReview) {
+		return nil, ErrDriftDefinitionInvalidTransition
+	}
+
+	now := time.Now().UTC()
+	current.Status = drift.DriftDefinitionStatusReview
+	current.UpdatedAt = now
+
+	if err := s.driftDefinitionRepo.Update(ctx, current); err != nil {
+		return nil, err
+	}
+
+	s.appendControlAudit(ctx, controlaudit.NewDriftDefinitionSubmittedRecord(submittedBy, current.ID, current.Version, reason))
+
+	return current, nil
+}
+
+// ApproveDriftDefinition transitions a DriftDefinition revision from
+// review to active. Maker-checker is enforced at the service layer:
+// the approver must not equal the revision's CreatedBy field
+// (case-insensitive trim). Allowed source state: review.
+func (s *Service) ApproveDriftDefinition(
+	ctx context.Context,
+	id string,
+	version int,
+	approvedBy string,
+) (*drift.DriftDefinition, error) {
+	if s.driftDefinitionRepo == nil {
+		return nil, fmt.Errorf("drift definition repository not configured")
+	}
+
+	current, err := s.driftDefinitionRepo.FindByIDAndVersion(ctx, id, version)
+	if err != nil {
+		return nil, err
+	}
+	if current == nil {
+		return nil, ErrDriftDefinitionNotFound
+	}
+
+	if current.Status != drift.DriftDefinitionStatusReview {
+		return nil, ErrDriftDefinitionNotInReview
+	}
+	if !current.CanTransitionTo(drift.DriftDefinitionStatusActive) {
+		return nil, ErrDriftDefinitionInvalidTransition
+	}
+
+	// Maker-checker: trim and case-insensitive compare.
+	approver := strings.ToLower(strings.TrimSpace(approvedBy))
+	maker := strings.ToLower(strings.TrimSpace(current.CreatedBy))
+	if approver != "" && maker != "" && approver == maker {
+		return nil, ErrDriftDefinitionMakerChecker
+	}
+
+	now := time.Now().UTC()
+	current.Status = drift.DriftDefinitionStatusActive
+	current.ApprovedBy = approvedBy
+	current.ApprovedAt = &now
+	current.UpdatedAt = now
+
+	// Defensive fallback mirroring ApproveProfile / ApproveFailModePolicy /
+	// ApproveGovernanceExpectation. The apply mapper always sets a non-zero
+	// EffectiveDate; this branch covers any future code path that bypasses
+	// apply.
+	if current.EffectiveDate.IsZero() {
+		current.EffectiveDate = now
+	}
+
+	if err := s.driftDefinitionRepo.Update(ctx, current); err != nil {
+		return nil, err
+	}
+
+	s.appendControlAudit(ctx, controlaudit.NewDriftDefinitionApprovedRecord(approvedBy, current.ID, current.Version))
+
+	return current, nil
+}
+
+// RejectDriftDefinition transitions a DriftDefinition revision from
+// review back to draft. Allowed source state: review. The reason is
+// captured on the control-audit record only; approved_by and
+// approved_at are left unchanged (they are already empty in review
+// state).
+func (s *Service) RejectDriftDefinition(
+	ctx context.Context,
+	id string,
+	version int,
+	rejectedBy string,
+	reason string,
+) (*drift.DriftDefinition, error) {
+	if s.driftDefinitionRepo == nil {
+		return nil, fmt.Errorf("drift definition repository not configured")
+	}
+
+	current, err := s.driftDefinitionRepo.FindByIDAndVersion(ctx, id, version)
+	if err != nil {
+		return nil, err
+	}
+	if current == nil {
+		return nil, ErrDriftDefinitionNotFound
+	}
+
+	if current.Status != drift.DriftDefinitionStatusReview {
+		return nil, ErrDriftDefinitionNotInReview
+	}
+	if !current.CanTransitionTo(drift.DriftDefinitionStatusDraft) {
+		return nil, ErrDriftDefinitionInvalidTransition
+	}
+
+	now := time.Now().UTC()
+	current.Status = drift.DriftDefinitionStatusDraft
+	current.UpdatedAt = now
+
+	if err := s.driftDefinitionRepo.Update(ctx, current); err != nil {
+		return nil, err
+	}
+
+	s.appendControlAudit(ctx, controlaudit.NewDriftDefinitionRejectedRecord(rejectedBy, current.ID, current.Version, reason))
+
+	return current, nil
+}
+
+// DeprecateDriftDefinition transitions a DriftDefinition revision from
+// active to deprecated. Allowed source state: active. Successor
+// information (when supplied) is persisted on the row's
+// SuccessorDefinitionID and SuccessorVersion fields.
+//
+// Note: this method does NOT auto-activate any revision; activation
+// flows through ApproveDriftDefinition. The successor fields here are
+// metadata pointing at a separately-approved revision.
+func (s *Service) DeprecateDriftDefinition(
+	ctx context.Context,
+	id string,
+	version int,
+	deprecatedBy string,
+	reason string,
+	successorDefinitionID string,
+	successorVersion int,
+) (*drift.DriftDefinition, error) {
+	if s.driftDefinitionRepo == nil {
+		return nil, fmt.Errorf("drift definition repository not configured")
+	}
+
+	current, err := s.driftDefinitionRepo.FindByIDAndVersion(ctx, id, version)
+	if err != nil {
+		return nil, err
+	}
+	if current == nil {
+		return nil, ErrDriftDefinitionNotFound
+	}
+
+	if current.Status != drift.DriftDefinitionStatusActive {
+		return nil, ErrDriftDefinitionNotActive
+	}
+	if !current.CanTransitionTo(drift.DriftDefinitionStatusDeprecated) {
+		return nil, ErrDriftDefinitionInvalidTransition
+	}
+
+	now := time.Now().UTC()
+	current.Status = drift.DriftDefinitionStatusDeprecated
+	current.UpdatedAt = now
+	if succID := strings.TrimSpace(successorDefinitionID); succID != "" {
+		current.SuccessorDefinitionID = succID
+	}
+	if successorVersion > 0 {
+		current.SuccessorVersion = successorVersion
+	}
+
+	if err := s.driftDefinitionRepo.Update(ctx, current); err != nil {
+		return nil, err
+	}
+
+	s.appendControlAudit(ctx, controlaudit.NewDriftDefinitionDeprecatedRecord(deprecatedBy, current.ID, current.Version, reason))
+
+	return current, nil
+}
+
+// RetireDriftDefinition transitions a DriftDefinition revision to
+// retired. Allowed source states: draft, review, active, deprecated.
+// Retired is terminal — this method rejects retired sources with
+// ErrDriftDefinitionAlreadyRetired.
+func (s *Service) RetireDriftDefinition(
+	ctx context.Context,
+	id string,
+	version int,
+	retiredBy string,
+	reason string,
+) (*drift.DriftDefinition, error) {
+	if s.driftDefinitionRepo == nil {
+		return nil, fmt.Errorf("drift definition repository not configured")
+	}
+
+	current, err := s.driftDefinitionRepo.FindByIDAndVersion(ctx, id, version)
+	if err != nil {
+		return nil, err
+	}
+	if current == nil {
+		return nil, ErrDriftDefinitionNotFound
+	}
+
+	if current.Status == drift.DriftDefinitionStatusRetired {
+		return nil, ErrDriftDefinitionAlreadyRetired
+	}
+	if !current.CanTransitionTo(drift.DriftDefinitionStatusRetired) {
+		return nil, ErrDriftDefinitionInvalidTransition
+	}
+
+	now := time.Now().UTC()
+	current.Status = drift.DriftDefinitionStatusRetired
+	current.UpdatedAt = now
+	current.RetiredAt = &now
+
+	if err := s.driftDefinitionRepo.Update(ctx, current); err != nil {
+		return nil, err
+	}
+
+	s.appendControlAudit(ctx, controlaudit.NewDriftDefinitionRetiredRecord(retiredBy, current.ID, current.Version, reason))
 
 	return current, nil
 }

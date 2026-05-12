@@ -164,35 +164,104 @@ func TestMapFailModePolicy_SetsCreatedByAndTimestamps(t *testing.T) {
 	}
 }
 
-func TestMapFailModePolicy_RejectsSoftViaValidate(t *testing.T) {
+// D29b replacements — the deleted RejectsSoftViaValidate / RejectsOpenViaValidate
+// tests are replaced by positive admittance checks plus a forbidden-
+// combination test that exercises the mapper's defensive failmode.Validate
+// call on a coherent three-axis declaration that the matrix rejects.
+
+func TestMapFailModePolicy_AcceptsSoftMode_EvidenceOnly(t *testing.T) {
 	doc := validFailModePolicyDoc()
 	for i := range doc.Spec.Rules {
 		if doc.Spec.Rules[i].CorrectnessClass == "resource" {
 			doc.Spec.Rules[i].PermittedMode = "soft"
+			doc.Spec.Rules[i].EnforcementState = "evidence_only"
 		}
 	}
-	_, err := mapFailModePolicyDocumentToDomain(doc, time.Now(), "u", 1)
-	if err == nil {
-		t.Fatal("expected mapper-side rejection of soft mode; got nil")
+	p, err := mapFailModePolicyDocumentToDomain(doc, time.Now(), "u", 1)
+	if err != nil {
+		t.Fatalf("mapper must accept soft + evidence_only; got %v", err)
 	}
-	if !strings.Contains(err.Error(), "not admitted") {
-		t.Errorf("expected 'not admitted' in error; got %v", err)
+	// Verify the new fields survive the mapping.
+	for _, r := range p.Rules {
+		if r.CorrectnessClass == failmode.CorrectnessClassResource {
+			if r.PermittedMode != failmode.PermittedModeSoft {
+				t.Errorf("resource PermittedMode: want soft, got %q", r.PermittedMode)
+			}
+			if r.EnforcementState != failmode.EnforcementStateEvidenceOnly {
+				t.Errorf("resource EnforcementState: want evidence_only, got %q", r.EnforcementState)
+			}
+		}
 	}
 }
 
-func TestMapFailModePolicy_RejectsOpenViaValidate(t *testing.T) {
+func TestMapFailModePolicy_AcceptsOpenMode_EvidenceOnly(t *testing.T) {
 	doc := validFailModePolicyDoc()
 	for i := range doc.Spec.Rules {
 		if doc.Spec.Rules[i].CorrectnessClass == "resource" {
 			doc.Spec.Rules[i].PermittedMode = "open"
+			doc.Spec.Rules[i].EnforcementState = "evidence_only"
+		}
+	}
+	p, err := mapFailModePolicyDocumentToDomain(doc, time.Now(), "u", 1)
+	if err != nil {
+		t.Fatalf("mapper must accept open + evidence_only; got %v", err)
+	}
+	for _, r := range p.Rules {
+		if r.CorrectnessClass == failmode.CorrectnessClassResource {
+			if r.PermittedMode != failmode.PermittedModeOpen {
+				t.Errorf("resource PermittedMode: want open, got %q", r.PermittedMode)
+			}
+		}
+	}
+}
+
+func TestMapFailModePolicy_RejectsForbiddenAxisCombination(t *testing.T) {
+	doc := validFailModePolicyDoc()
+	for i := range doc.Spec.Rules {
+		if doc.Spec.Rules[i].CorrectnessClass == "resource" {
+			// soft + enforced + deny is forbidden by the matrix.
+			doc.Spec.Rules[i].PermittedMode = "soft"
+			doc.Spec.Rules[i].EnforcementState = "enforced"
+			doc.Spec.Rules[i].Outcome = "deny"
 		}
 	}
 	_, err := mapFailModePolicyDocumentToDomain(doc, time.Now(), "u", 1)
 	if err == nil {
-		t.Fatal("expected mapper-side rejection of open mode; got nil")
+		t.Fatal("expected mapper-side rejection of soft + enforced + deny; got nil")
 	}
-	if !strings.Contains(err.Error(), "not admitted") {
-		t.Errorf("expected 'not admitted' in error; got %v", err)
+	if !strings.Contains(err.Error(), "not permitted") {
+		t.Errorf("expected 'not permitted' in error; got %v", err)
+	}
+}
+
+// TestMapFailModePolicy_AppliesAxisAwareDefaults_OmittedFields pins that
+// a document with omitted enforcement_state and outcome fields produces
+// a persisted policy whose rules carry the operator-supplied (empty)
+// values verbatim. The defaulting happens at the validator and
+// persistence layers, not in the mapper; the mapper preserves the
+// distinction so a future tranche can tell "default" from "explicit".
+func TestMapFailModePolicy_AppliesAxisAwareDefaults_OmittedFields(t *testing.T) {
+	doc := validFailModePolicyDoc()
+	// validFailModePolicyDoc returns rules without enforcement_state /
+	// outcome — exercise the omitted path.
+	for i := range doc.Spec.Rules {
+		if doc.Spec.Rules[i].EnforcementState != "" || doc.Spec.Rules[i].Outcome != "" {
+			t.Fatalf("test precondition: rule[%d] must have empty axis fields", i)
+		}
+	}
+	p, err := mapFailModePolicyDocumentToDomain(doc, time.Now(), "u", 1)
+	if err != nil {
+		t.Fatalf("mapper must accept rule with omitted axis fields; got %v", err)
+	}
+	// Mapper preserves the empty values verbatim (the validator's
+	// defaulting is non-mutating).
+	for _, r := range p.Rules {
+		if r.EnforcementState != "" {
+			t.Errorf("mapper preserved empty EnforcementState; got %q on class %q", r.EnforcementState, r.CorrectnessClass)
+		}
+		if r.Outcome != "" {
+			t.Errorf("mapper preserved empty Outcome; got %q on class %q", r.Outcome, r.CorrectnessClass)
+		}
 	}
 }
 

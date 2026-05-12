@@ -46,7 +46,6 @@ spec:
   status: active
   decision_type: operational
   reversibility_class: reversible
-  failure_mode: closed
   business_owner: Head of Customer Operations
   technical_owner: platform-team
   process_id: proc-refund-handling
@@ -108,7 +107,9 @@ spec:
   status: active
 ```
 
-> **Note on `failure_mode` and `fail_mode` in the bundle above.** The `failure_mode` field on Surface is persisted by the control plane but is **not consulted by the inline runtime evaluator today** — the value is round-tripped through apply for compatibility but has no behavioural effect at evaluation time. The `fail_mode` field on Profile **is** consulted at runtime, but only for the narrow policy-evaluator-error sub-case (and only on the profile resolved at evaluation time). See [docs/operations/runtime-readiness.md §11](runtime-readiness.md) for the full narrow-field table, the audit-payload caveat on the `open` path, and the planned migration into the FailModePolicy entity.
+> **Note on fail-mode governance.** The `fail_mode` field on Profile is the profile-scoped fallback for policy-evaluator errors (`open` continues, `closed` escalates with `ReasonPolicyError`). It applies when no enforced FailModePolicy rule covers the evaluation. To bind a Surface or BusinessService to a governed FailModePolicy, use `fail_mode_policy_id`. See [docs/operations/runtime-readiness.md](runtime-readiness.md) for the fail-mode governance summary and the audit-payload caveat on the `open` path.
+
+> **Note on deployment-default FailModePolicy.** A cluster-wide baseline policy can be configured so every evaluation has a FailModePolicy even when no Surface or BusinessService names one. Set `fail_mode.deployment_default_policy_id` in MIDAS config, or override at the process level with the env var `MIDAS_FAIL_MODE_DEPLOYMENT_DEFAULT_POLICY_ID`. Default: empty (no deployment baseline). The deployment default is the lowest-priority level of the resolution hierarchy — Surfaces or BusinessServices that already declare `fail_mode_policy_id` take precedence. See [runtime-readiness.md §11.5.10](runtime-readiness.md) for the resolution hierarchy.
 
 ---
 

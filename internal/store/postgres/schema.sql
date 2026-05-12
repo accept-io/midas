@@ -183,7 +183,6 @@ CREATE TABLE IF NOT EXISTS decision_surfaces (
 
     policy_package TEXT,
     policy_version TEXT,
-    failure_mode TEXT NOT NULL DEFAULT 'closed',
 
     mandatory_evidence JSONB NOT NULL DEFAULT '[]',
     audit_retention_hours INTEGER NOT NULL DEFAULT 0,
@@ -266,9 +265,6 @@ CREATE TABLE IF NOT EXISTS decision_surfaces (
             reversibility_class IS NULL
             OR reversibility_class IN ('reversible', 'conditionally_reversible', 'irreversible')
         ),
-
-    CONSTRAINT chk_surfaces_failure_mode
-        CHECK (failure_mode IN ('open', 'closed')),
 
     CONSTRAINT chk_surfaces_audit_retention
         CHECK (audit_retention_hours = 0 OR audit_retention_hours >= 24),
@@ -1943,3 +1939,520 @@ DO $$ BEGIN
             (ext_source_system IS NOT NULL AND ext_source_id IS NOT NULL)
         );
 END $$;
+
+-- =============================================================================
+-- DRIFT — Drift-1b
+-- =============================================================================
+-- Drift is a first-class governance-native structural entity. Drift-1b adds
+-- PostgreSQL persistence for the Drift-1a domain model. Every table here is
+-- runtime-inert: no decision/runtime path consults them in this tranche, no
+-- audit-chain integration is wired in, and no aggregation worker writes
+-- points. Population, data, prediction, performance, and concept drift are
+-- deferred to V2 — those values are NOT admitted by any CHECK constraint.
+-- A single 'unknown' status is NOT admitted by any status CHECK; the split
+-- into 'unknown_insufficient_data' and 'unknown_detector_error' is enforced
+-- at the database layer.
+
+-- -----------------------------------------------------------------------------
+-- drift_definitions: governed, versioned drift specifications. Composite
+-- (id, version) primary key mirrors authority_profiles / fail_mode_policies.
+-- Embedded metrics live in the child table drift_metric_definitions.
+-- -----------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS drift_definitions (
+    id      TEXT    NOT NULL,
+    version INTEGER NOT NULL,
+
+    name        TEXT NOT NULL,
+    description TEXT,
+
+    status          TEXT        NOT NULL,
+    effective_date  TIMESTAMPTZ NOT NULL,
+    effective_until TIMESTAMPTZ,
+    retired_at      TIMESTAMPTZ,
+
+    business_owner  TEXT NOT NULL,
+    technical_owner TEXT NOT NULL,
+
+    target_entity_kind TEXT NOT NULL,
+    target_entity_id   TEXT NOT NULL,
+
+    origin   TEXT    NOT NULL DEFAULT 'manual',
+    managed  BOOLEAN NOT NULL DEFAULT TRUE,
+    replaces TEXT,
+
+    successor_definition_id TEXT,
+    successor_version       INTEGER,
+
+    created_at  TIMESTAMPTZ NOT NULL,
+    updated_at  TIMESTAMPTZ NOT NULL,
+    created_by  TEXT,
+    approved_by TEXT,
+    approved_at TIMESTAMPTZ,
+
+    PRIMARY KEY (id, version),
+
+    CONSTRAINT fk_drift_def_successor
+        FOREIGN KEY (successor_definition_id, successor_version)
+        REFERENCES drift_definitions (id, version)
+        DEFERRABLE INITIALLY DEFERRED,
+
+    CONSTRAINT chk_drift_def_status
+        CHECK (status IN ('draft', 'review', 'active', 'deprecated', 'retired')),
+
+    CONSTRAINT chk_drift_def_origin
+        CHECK (origin IN ('manual', 'inferred', 'auto_instrumented')),
+
+    CONSTRAINT chk_drift_def_target_entity_kind
+        CHECK (target_entity_kind IN (
+            'business_service', 'capability', 'process',
+            'decision_surface', 'ai_system', 'ai_system_binding',
+            'agent', 'authority_profile', 'authority_grant'
+        )),
+
+    CONSTRAINT chk_drift_def_version_positive
+        CHECK (version > 0),
+
+    CONSTRAINT chk_drift_def_effective_dates
+        CHECK (effective_until IS NULL OR effective_until > effective_date),
+
+    CONSTRAINT chk_drift_def_retired_at
+        CHECK (retired_at IS NULL OR retired_at >= effective_date),
+
+    CONSTRAINT chk_drift_def_no_self_replace
+        CHECK (replaces IS NULL OR replaces <> id),
+
+    CONSTRAINT chk_drift_def_approval_fields
+        CHECK (
+            (status IN ('draft', 'review') AND approved_at IS NULL)
+            OR (status IN ('active', 'deprecated', 'retired'))
+        )
+);
+
+CREATE INDEX IF NOT EXISTS idx_drift_definitions_id_version_desc
+    ON drift_definitions (id, version DESC);
+
+CREATE INDEX IF NOT EXISTS idx_drift_definitions_status
+    ON drift_definitions (id, status);
+
+CREATE INDEX IF NOT EXISTS idx_drift_definitions_target_entity
+    ON drift_definitions (target_entity_kind, target_entity_id);
+
+CREATE INDEX IF NOT EXISTS idx_drift_definitions_active_window
+    ON drift_definitions (id, effective_date)
+    WHERE status = 'active';
+
+-- -----------------------------------------------------------------------------
+-- drift_metric_definitions: one row per embedded metric inside a
+-- DriftDefinition revision. Atomic-revision invariant: any add/remove/modify
+-- of a metric requires a NEW DriftDefinition revision (Drift-1a). This child
+-- table cascades on parent delete.
+-- -----------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS drift_metric_definitions (
+    definition_id      TEXT    NOT NULL,
+    definition_version INTEGER NOT NULL,
+    metric_id          TEXT    NOT NULL,
+
+    drift_type        TEXT NOT NULL,
+    baseline_strategy TEXT NOT NULL,
+
+    baseline_window_seconds INTEGER NOT NULL DEFAULT 0,
+    window_seconds          INTEGER NOT NULL,
+
+    cadence TEXT NOT NULL,
+
+    warning_threshold  DOUBLE PRECISION NOT NULL,
+    breached_threshold DOUBLE PRECISION NOT NULL,
+    threshold_direction TEXT            NOT NULL,
+
+    governance_expectation_ref TEXT,
+    governance_expectation_ver INTEGER NOT NULL DEFAULT 0,
+
+    description TEXT,
+
+    PRIMARY KEY (definition_id, definition_version, metric_id),
+
+    CONSTRAINT fk_drift_metric_definition
+        FOREIGN KEY (definition_id, definition_version)
+        REFERENCES drift_definitions (id, version)
+        ON DELETE CASCADE,
+
+    -- Drift-1a V1 taxonomy. Population, data, prediction, performance, and
+    -- concept drift are deferred to V2 and MUST NOT appear here.
+    CONSTRAINT chk_drift_metric_drift_type
+        CHECK (drift_type IN (
+            'invocation', 'outcome', 'confidence', 'latency', 'evidence',
+            'authority', 'policy', 'coverage', 'process_path'
+        )),
+
+    -- V1 baselines only. Champion-challenger and seasonality-aware are
+    -- deferred to V2.
+    CONSTRAINT chk_drift_metric_baseline_strategy
+        CHECK (baseline_strategy IN (
+            'rolling', 'fixed_governed', 'previous_equivalent',
+            'since_last_governed_change', 'manually_pinned'
+        )),
+
+    CONSTRAINT chk_drift_metric_cadence
+        CHECK (cadence IN ('minute', 'hour', 'day', 'week')),
+
+    CONSTRAINT chk_drift_metric_threshold_direction
+        CHECK (threshold_direction IN ('ascending', 'descending')),
+
+    CONSTRAINT chk_drift_metric_window_seconds
+        CHECK (window_seconds > 0),
+
+    CONSTRAINT chk_drift_metric_baseline_window_seconds
+        CHECK (baseline_window_seconds >= 0),
+
+    CONSTRAINT chk_drift_metric_governance_expectation_ver
+        CHECK (governance_expectation_ver >= 0),
+
+    -- Threshold band coherence: ascending requires warning < breached;
+    -- descending requires warning > breached.
+    CONSTRAINT chk_drift_metric_threshold_band
+        CHECK (
+            (threshold_direction = 'ascending'  AND warning_threshold < breached_threshold)
+            OR
+            (threshold_direction = 'descending' AND warning_threshold > breached_threshold)
+        )
+);
+
+CREATE INDEX IF NOT EXISTS idx_drift_metric_definitions_def
+    ON drift_metric_definitions (definition_id, definition_version);
+
+CREATE INDEX IF NOT EXISTS idx_drift_metric_definitions_drift_type
+    ON drift_metric_definitions (drift_type);
+
+CREATE INDEX IF NOT EXISTS idx_drift_metric_definitions_cadence
+    ON drift_metric_definitions (cadence);
+
+-- -----------------------------------------------------------------------------
+-- drift_series: one row per chartable time-series. System-managed; populated
+-- by the aggregation worker added in Drift-3b. Drift-1b only persists series
+-- created by tests. previous_series_id and superseded_by_series_id are
+-- deliberately NOT FK-enforced — they create insertion-ordering friction
+-- that the project's existing convention for series-style stitching avoids;
+-- self-reference checks live in Go (drift.ValidateSeries) and the column-
+-- level CHECK below.
+-- -----------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS drift_series (
+    id TEXT PRIMARY KEY,
+
+    definition_id      TEXT    NOT NULL,
+    definition_version INTEGER NOT NULL,
+    metric_id          TEXT    NOT NULL,
+
+    cadence TEXT NOT NULL,
+    status  TEXT NOT NULL,
+
+    continuity_group_id     TEXT NOT NULL,
+    previous_series_id      TEXT,
+    superseded_by_series_id TEXT,
+    cutover_at              TIMESTAMPTZ,
+    sealed_at               TIMESTAMPTZ,
+
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+
+    CONSTRAINT fk_drift_series_metric_def
+        FOREIGN KEY (definition_id, definition_version, metric_id)
+        REFERENCES drift_metric_definitions (definition_id, definition_version, metric_id),
+
+    CONSTRAINT chk_drift_series_status
+        CHECK (status IN (
+            'healthy', 'warning', 'breached',
+            'unknown_insufficient_data', 'unknown_detector_error'
+        )),
+
+    CONSTRAINT chk_drift_series_cadence
+        CHECK (cadence IN ('minute', 'hour', 'day', 'week')),
+
+    CONSTRAINT chk_drift_series_definition_version_positive
+        CHECK (definition_version > 0),
+
+    CONSTRAINT chk_drift_series_no_self_previous
+        CHECK (previous_series_id IS NULL OR previous_series_id <> id),
+
+    CONSTRAINT chk_drift_series_no_self_superseded_by
+        CHECK (superseded_by_series_id IS NULL OR superseded_by_series_id <> id),
+
+    CONSTRAINT chk_drift_series_sealed_at
+        CHECK (sealed_at IS NULL OR sealed_at >= created_at)
+);
+
+CREATE INDEX IF NOT EXISTS idx_drift_series_def
+    ON drift_series (definition_id, definition_version);
+
+CREATE INDEX IF NOT EXISTS idx_drift_series_def_metric
+    ON drift_series (definition_id, definition_version, metric_id);
+
+CREATE INDEX IF NOT EXISTS idx_drift_series_continuity_group
+    ON drift_series (continuity_group_id);
+
+CREATE INDEX IF NOT EXISTS idx_drift_series_status
+    ON drift_series (status);
+
+-- -----------------------------------------------------------------------------
+-- drift_series_points: append-only time-windowed summary records. Computed
+-- by the aggregation worker (Drift-3b) and the threshold detector (Drift-3c);
+-- Drift-1b persists shape only. Backfill state is encoded on
+-- computation_mode and backfill_run_id — NOT on status. Status remains the
+-- detector-result band only.
+-- -----------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS drift_series_points (
+    id        TEXT PRIMARY KEY,
+    series_id TEXT NOT NULL REFERENCES drift_series(id) ON DELETE CASCADE,
+
+    window_start TIMESTAMPTZ NOT NULL,
+    window_end   TIMESTAMPTZ NOT NULL,
+
+    sample_count BIGINT NOT NULL DEFAULT 0,
+
+    summary_stats  JSONB NOT NULL DEFAULT '{}',
+    baseline_stats JSONB NOT NULL DEFAULT '{}',
+
+    baseline_window_id TEXT,
+
+    magnitude DOUBLE PRECISION NOT NULL DEFAULT 0,
+    status    TEXT             NOT NULL,
+
+    computation_mode      TEXT             NOT NULL,
+    computed_at           TIMESTAMPTZ      NOT NULL,
+    backfill_run_id       TEXT,
+    source_window_complete BOOLEAN         NOT NULL DEFAULT TRUE,
+
+    provenance_envelope_ids JSONB NOT NULL DEFAULT '[]',
+
+    created_at TIMESTAMPTZ NOT NULL,
+
+    CONSTRAINT uq_drift_series_points_window
+        UNIQUE (series_id, window_start, window_end),
+
+    CONSTRAINT chk_drift_point_status
+        CHECK (status IN (
+            'healthy', 'warning', 'breached',
+            'unknown_insufficient_data', 'unknown_detector_error'
+        )),
+
+    CONSTRAINT chk_drift_point_computation_mode
+        CHECK (computation_mode IN ('realtime', 'backfilled', 'corrected', 'imported')),
+
+    CONSTRAINT chk_drift_point_window_order
+        CHECK (window_start < window_end),
+
+    CONSTRAINT chk_drift_point_sample_count
+        CHECK (sample_count >= 0),
+
+    -- Backfill-coherence: backfilled points MUST carry a backfill_run_id.
+    CONSTRAINT chk_drift_point_backfill_run_id
+        CHECK (
+            computation_mode <> 'backfilled'
+            OR (backfill_run_id IS NOT NULL AND backfill_run_id <> '')
+        ),
+
+    -- baseline_window_id required UNLESS status indicates insufficient data.
+    CONSTRAINT chk_drift_point_baseline_window_id
+        CHECK (
+            status = 'unknown_insufficient_data'
+            OR (baseline_window_id IS NOT NULL AND baseline_window_id <> '')
+        ),
+
+    CONSTRAINT chk_drift_point_summary_stats_object
+        CHECK (jsonb_typeof(summary_stats) = 'object'),
+
+    CONSTRAINT chk_drift_point_baseline_stats_object
+        CHECK (jsonb_typeof(baseline_stats) = 'object'),
+
+    CONSTRAINT chk_drift_point_provenance_envelope_ids_array
+        CHECK (jsonb_typeof(provenance_envelope_ids) = 'array')
+);
+
+CREATE INDEX IF NOT EXISTS idx_drift_series_points_series_window
+    ON drift_series_points (series_id, window_start);
+
+CREATE INDEX IF NOT EXISTS idx_drift_series_points_series_status
+    ON drift_series_points (series_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_drift_series_points_computation_mode
+    ON drift_series_points (computation_mode);
+
+CREATE INDEX IF NOT EXISTS idx_drift_series_points_backfill_run
+    ON drift_series_points (backfill_run_id)
+    WHERE backfill_run_id IS NOT NULL;
+
+-- -----------------------------------------------------------------------------
+-- drift_observations: audit-chain-bearing materially-significant detector
+-- results. The audit-chain integration itself is Drift-4; Drift-1b persists
+-- the observation row only. Backfill state is encoded on backfilled +
+-- backfill_run_id, NOT on detector_status.
+-- -----------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS drift_observations (
+    id TEXT PRIMARY KEY,
+
+    definition_id      TEXT    NOT NULL,
+    definition_version INTEGER NOT NULL,
+    series_id          TEXT    NOT NULL REFERENCES drift_series(id),
+    point_id           TEXT    NOT NULL REFERENCES drift_series_points(id),
+
+    target_entity_kind TEXT NOT NULL,
+    target_entity_id   TEXT NOT NULL,
+
+    drift_type TEXT NOT NULL,
+
+    magnitude DOUBLE PRECISION NOT NULL DEFAULT 0,
+
+    detector_status TEXT NOT NULL,
+    operator_status TEXT NOT NULL,
+
+    baseline_window_id TEXT,
+
+    observed_window_start TIMESTAMPTZ NOT NULL,
+    observed_window_end   TIMESTAMPTZ NOT NULL,
+
+    detected_at TIMESTAMPTZ NOT NULL,
+    emitted_at  TIMESTAMPTZ NOT NULL,
+
+    backfilled      BOOLEAN NOT NULL DEFAULT FALSE,
+    backfill_run_id TEXT,
+
+    evidence_envelope_ids JSONB NOT NULL DEFAULT '[]',
+
+    related_fail_mode_policy_id TEXT,
+    related_governance_exp_ref  TEXT,
+
+    -- correction_of self-reference is intentionally NOT FK-enforced in
+    -- Drift-1b. Self-reference rejection lives in Go (drift.ValidateObservation)
+    -- and the column-level CHECK below.
+    correction_of TEXT,
+
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+
+    CONSTRAINT chk_drift_obs_drift_type
+        CHECK (drift_type IN (
+            'invocation', 'outcome', 'confidence', 'latency', 'evidence',
+            'authority', 'policy', 'coverage', 'process_path'
+        )),
+
+    CONSTRAINT chk_drift_obs_detector_status
+        CHECK (detector_status IN (
+            'healthy', 'warning', 'breached',
+            'unknown_insufficient_data', 'unknown_detector_error'
+        )),
+
+    CONSTRAINT chk_drift_obs_operator_status
+        CHECK (operator_status IN (
+            'open', 'triaged', 'resolved', 'accepted', 'superseded'
+        )),
+
+    CONSTRAINT chk_drift_obs_target_entity_kind
+        CHECK (target_entity_kind IN (
+            'business_service', 'capability', 'process',
+            'decision_surface', 'ai_system', 'ai_system_binding',
+            'agent', 'authority_profile', 'authority_grant'
+        )),
+
+    CONSTRAINT chk_drift_obs_definition_version_positive
+        CHECK (definition_version > 0),
+
+    CONSTRAINT chk_drift_obs_window_order
+        CHECK (observed_window_start < observed_window_end),
+
+    CONSTRAINT chk_drift_obs_backfill_run_id
+        CHECK (
+            (NOT backfilled)
+            OR (backfill_run_id IS NOT NULL AND backfill_run_id <> '')
+        ),
+
+    CONSTRAINT chk_drift_obs_no_self_correction
+        CHECK (correction_of IS NULL OR correction_of <> id),
+
+    CONSTRAINT chk_drift_obs_evidence_envelope_ids_array
+        CHECK (jsonb_typeof(evidence_envelope_ids) = 'array')
+);
+
+CREATE INDEX IF NOT EXISTS idx_drift_observations_series
+    ON drift_observations (series_id);
+
+CREATE INDEX IF NOT EXISTS idx_drift_observations_def_version
+    ON drift_observations (definition_id, definition_version);
+
+CREATE INDEX IF NOT EXISTS idx_drift_observations_target_entity
+    ON drift_observations (target_entity_kind, target_entity_id);
+
+CREATE INDEX IF NOT EXISTS idx_drift_observations_operator_status
+    ON drift_observations (operator_status);
+
+CREATE INDEX IF NOT EXISTS idx_drift_observations_detector_status
+    ON drift_observations (detector_status);
+
+CREATE INDEX IF NOT EXISTS idx_drift_observations_observed_window
+    ON drift_observations (observed_window_start);
+
+CREATE INDEX IF NOT EXISTS idx_drift_observations_backfill
+    ON drift_observations (backfill_run_id)
+    WHERE backfilled = TRUE;
+
+-- -----------------------------------------------------------------------------
+-- drift_annotations: operator annotations against series or observations.
+-- superseded_by_id self-reference is NOT FK-enforced in Drift-1b; Go-level
+-- validation rejects self-supersession.
+-- -----------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS drift_annotations (
+    id TEXT PRIMARY KEY,
+
+    target_kind TEXT NOT NULL,
+    target_id   TEXT NOT NULL,
+
+    annotation_type TEXT NOT NULL,
+    body            TEXT NOT NULL,
+
+    suppression_until TIMESTAMPTZ,
+
+    reference_envelope_ids JSONB NOT NULL DEFAULT '[]',
+
+    status            TEXT NOT NULL DEFAULT 'active',
+    superseded_by_id  TEXT,
+
+    author_id TEXT NOT NULL,
+
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+
+    CONSTRAINT chk_drift_ann_target_kind
+        CHECK (target_kind IN ('series', 'observation')),
+
+    CONSTRAINT chk_drift_ann_annotation_type
+        CHECK (annotation_type IN (
+            'known_business_change', 'suppression',
+            'remediation_note', 'acknowledgement'
+        )),
+
+    CONSTRAINT chk_drift_ann_status
+        CHECK (status IN ('active', 'superseded')),
+
+    CONSTRAINT chk_drift_ann_no_self_supersession
+        CHECK (superseded_by_id IS NULL OR superseded_by_id <> id),
+
+    CONSTRAINT chk_drift_ann_reference_envelope_ids_array
+        CHECK (jsonb_typeof(reference_envelope_ids) = 'array')
+);
+
+CREATE INDEX IF NOT EXISTS idx_drift_annotations_target
+    ON drift_annotations (target_kind, target_id);
+
+CREATE INDEX IF NOT EXISTS idx_drift_annotations_status
+    ON drift_annotations (status);
+
+CREATE INDEX IF NOT EXISTS idx_drift_annotations_author
+    ON drift_annotations (author_id);
+
+CREATE INDEX IF NOT EXISTS idx_drift_annotations_suppression_until
+    ON drift_annotations (suppression_until)
+    WHERE suppression_until IS NOT NULL;

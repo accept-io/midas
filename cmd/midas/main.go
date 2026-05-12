@@ -150,6 +150,26 @@ func main() {
 		demoSeeded = true
 	}
 
+	// Drift-2a-fix: synthetic drift seed. Reads the effective decision
+	// from cfg.Dev.EffectiveSeedSyntheticDrift() so the inheritance
+	// rule (synthetic drift follows SeedDemoData when the operator did
+	// not provide an explicit value) lives in one place. The generator
+	// references target IDs created by SeedDemo, so we still warn if
+	// synthetic drift is explicitly enabled while demo data is off —
+	// target lookups will fail loudly inside the generator, but the
+	// upstream warning makes the misconfiguration obvious at startup.
+	if cfg.Dev.EffectiveSeedSyntheticDrift() {
+		if !cfg.Dev.SeedDemoData {
+			slog.Warn("synthetic_drift_seed_without_demo_data",
+				"reason", "synthetic drift definitions target demo entity IDs",
+				"action", "enable MIDAS_DEV_SEED_DEMO_DATA=true to populate the referenced entities",
+			)
+		}
+		if err := bootstrap.SeedSyntheticDrift(context.Background(), repos); err != nil {
+			log.Fatal(err)
+		}
+	}
+
 	// --- Domain: orchestrator and services ---
 
 	var policyEval policy.PolicyEvaluator = policy.NoOpPolicyEvaluator{}
@@ -189,6 +209,15 @@ func main() {
 	coverageSvc := governancecoverage.NewService(repos.GovernanceExpectations)
 	orchestrator = orchestrator.WithCoverageService(coverageSvc)
 
+	// D29d Part B: wire the optional deployment-default FailModePolicy
+	// id. Empty (the default) preserves the pre-D29d "no deployment
+	// default" behaviour. The runtime resolver remains evidence-only;
+	// the configured value only influences when level-3 of the
+	// hierarchy walk can resolve to a policy (and thus the frequency
+	// of FAIL_MODE_POLICY_RESOLVED / FAIL_MODE_POLICY_TRIGGER_FIRED
+	// emission). Outcome computation is unchanged.
+	orchestrator = orchestrator.WithFailModeDeploymentDefaultPolicyID(cfg.FailMode.DeploymentDefaultPolicyID)
+
 	// Transaction runner for the control-plane apply executor. When the
 	// store backend is postgres we adapt *postgres.Store.WithTx into an
 	// apply.TxRunner so that bundle apply runs atomically. Memory mode
@@ -216,6 +245,7 @@ func main() {
 		AISystems:                    repos.AISystems,
 		AISystemVersions:             repos.AISystemVersions,
 		AISystemBindings:             repos.AISystemBindings,
+		DriftDefinitions:             repos.DriftDefinitions,
 		Tx:                           applyTx,
 	})
 
@@ -227,7 +257,8 @@ func main() {
 		repos.ControlAudit,
 	).
 		WithExpectationRepository(repos.GovernanceExpectations).
-		WithFailModePolicyRepository(repos.FailModePolicies)
+		WithFailModePolicyRepository(repos.FailModePolicies).
+		WithDriftDefinitionRepository(repos.DriftDefinitions)
 
 	introspectionSvc := httpapi.NewIntrospectionServiceFull(repos.Surfaces, repos.Profiles, repos.Agents, repos.Grants)
 	structuralSvc := httpapi.NewStructuralService(repos.Capabilities, repos.Processes, repos.Surfaces).
@@ -268,6 +299,28 @@ func main() {
 
 	srv := httpapi.NewServerFull(orchestrator, applyService, approvalSvc, introspectionSvc, controlAuditSvc, nil)
 	srv.WithStructural(structuralSvc)
+	// Drift-1d: wire the read-only Drift service. Each reader can be nil
+	// (graceful 501 per route); the *store.Repositories drift fields are
+	// populated by Drift-1a/1b in both memory and Postgres backends.
+	srv.WithDriftReadService(httpapi.NewDriftReadService(
+		repos.DriftDefinitions,
+		repos.DriftSeries,
+		repos.DriftSeriesPoints,
+		repos.DriftObservations,
+		repos.DriftAnnotations,
+	))
+	// D29d Part A: wire the read-only FailModePolicy service that
+	// backs /v1/fail_mode_policies/*. A nil reader produces 501 on
+	// every read route; the mutating /v1/controlplane/fail_mode_policies/*
+	// lifecycle handlers are unaffected. The runtime resolver and the
+	// approval service continue to consume the same repository.
+	srv.WithFailModePolicyReadService(httpapi.NewFailModePolicyReadService(repos.FailModePolicies))
+	// D30b: wire the read-only runtime evidence service that backs
+	// GET /v1/evidence/envelopes/{id}/audit-events. Reads the
+	// production envelope + audit repositories — disjoint from the
+	// Explorer-isolated audit store. When either reader is nil the
+	// route returns 501 Not Implemented.
+	srv.WithEvidenceReadService(httpapi.NewEvidenceReadService(repos.Envelopes, repos.Audit))
 	srv.WithExplicitValidator(explicitValidationSvc)
 	srv.WithPolicyMeta(policyMode, policyEvaluatorName)
 	srv.WithHealthCheck(readyFn)

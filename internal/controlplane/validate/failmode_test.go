@@ -188,7 +188,12 @@ func TestValidateFailModePolicy_RejectsInputWithClosed(t *testing.T) {
 	}
 }
 
-func TestValidateFailModePolicy_RejectsInputWithSoft(t *testing.T) {
+// D29b — input class still must be not_applicable. The error wording
+// changed from "not admitted by D27j-impl-1a" (pre-D29b) to the
+// not_applicable requirement message; the per-field validator pin
+// remains a presence check on spec.rules so this test is unaffected by
+// wording changes.
+func TestValidateFailModePolicy_RejectsInputWithSoft_BecauseInputRequiresNotApplicable(t *testing.T) {
 	doc := validFailModePolicyDoc()
 	for i := range doc.Spec.Rules {
 		if doc.Spec.Rules[i].CorrectnessClass == "input" {
@@ -197,11 +202,11 @@ func TestValidateFailModePolicy_RejectsInputWithSoft(t *testing.T) {
 	}
 	errs := validateFMP(t, doc)
 	if !containsFieldErrJustField(errs, "spec.rules") {
-		t.Errorf("expected spec.rules soft-rejected error; got %+v", errs)
+		t.Errorf("expected spec.rules input-must-be-not_applicable error; got %+v", errs)
 	}
 }
 
-func TestValidateFailModePolicy_RejectsInputWithOpen(t *testing.T) {
+func TestValidateFailModePolicy_RejectsInputWithOpen_BecauseInputRequiresNotApplicable(t *testing.T) {
 	doc := validFailModePolicyDoc()
 	for i := range doc.Spec.Rules {
 		if doc.Spec.Rules[i].CorrectnessClass == "input" {
@@ -210,7 +215,7 @@ func TestValidateFailModePolicy_RejectsInputWithOpen(t *testing.T) {
 	}
 	errs := validateFMP(t, doc)
 	if !containsFieldErrJustField(errs, "spec.rules") {
-		t.Errorf("expected spec.rules open-rejected error; got %+v", errs)
+		t.Errorf("expected spec.rules input-must-be-not_applicable error; got %+v", errs)
 	}
 }
 
@@ -223,47 +228,81 @@ func TestValidateFailModePolicy_RejectsNonInputWithNotApplicable(t *testing.T) {
 	}
 	errs := validateFMP(t, doc)
 	if !containsFieldErrJustField(errs, "spec.rules") {
-		t.Errorf("expected spec.rules non-input-must-be-closed error; got %+v", errs)
+		t.Errorf("expected spec.rules non-input-must-be-closed/soft/open error; got %+v", errs)
 	}
 }
 
-func TestValidateFailModePolicy_RejectsNonInputWithSoft(t *testing.T) {
+// D29b replacements — the two deleted closed-only "RejectsNonInputWith*"
+// tests are replaced by positive admittance checks plus a forbidden-
+// combination test covering the cross-axis matrix.
+
+func TestValidateFailModePolicy_AcceptsNonInputWithSoft_EvidenceOnly(t *testing.T) {
 	doc := validFailModePolicyDoc()
 	for i := range doc.Spec.Rules {
 		if doc.Spec.Rules[i].CorrectnessClass == "resource" {
 			doc.Spec.Rules[i].PermittedMode = "soft"
+			doc.Spec.Rules[i].EnforcementState = "evidence_only"
 		}
 	}
 	errs := validateFMP(t, doc)
-	found := false
-	for _, e := range errs {
-		if e.Field == "spec.rules" && strings.Contains(e.Message, "not admitted") {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("expected spec.rules 'not admitted' (soft-rejected) error; got %+v", errs)
+	if len(errs) != 0 {
+		t.Errorf("soft + evidence_only on resource must validate; got %+v", errs)
 	}
 }
 
-func TestValidateFailModePolicy_RejectsNonInputWithOpen(t *testing.T) {
+func TestValidateFailModePolicy_AcceptsNonInputWithOpen_EvidenceOnly(t *testing.T) {
 	doc := validFailModePolicyDoc()
 	for i := range doc.Spec.Rules {
 		if doc.Spec.Rules[i].CorrectnessClass == "resource" {
 			doc.Spec.Rules[i].PermittedMode = "open"
+			doc.Spec.Rules[i].EnforcementState = "evidence_only"
 		}
 	}
 	errs := validateFMP(t, doc)
-	found := false
-	for _, e := range errs {
-		if e.Field == "spec.rules" && strings.Contains(e.Message, "not admitted") {
-			found = true
-			break
-		}
+	if len(errs) != 0 {
+		t.Errorf("open + evidence_only on resource must validate; got %+v", errs)
 	}
-	if !found {
-		t.Errorf("expected spec.rules 'not admitted' (open-rejected) error; got %+v", errs)
+}
+
+// TestValidateFailModePolicy_AxisMatrix exercises a small but
+// representative subset of the (posture, enforcement_state, outcome)
+// matrix at the control-plane document layer. The Go-domain matrix in
+// internal/failmode/validate_test.go covers the full table; this test
+// pins that the same matrix surfaces correctly through the synthetic-
+// domain construction in validateFailModePolicyRules.
+func TestValidateFailModePolicy_AxisMatrix(t *testing.T) {
+	cases := []struct {
+		name    string
+		mode    string
+		state   string
+		outcome string
+		valid   bool
+	}{
+		{"closed + enforced + escalate", "closed", "enforced", "escalate", true},
+		{"closed + enforced + permit_with_evidence (forbidden)", "closed", "enforced", "permit_with_evidence", false},
+		{"soft + enforced + permit_with_evidence", "soft", "enforced", "permit_with_evidence", true},
+		{"soft + enforced + deny (forbidden)", "soft", "enforced", "deny", false},
+		{"open + enforced + permit_with_evidence", "open", "enforced", "permit_with_evidence", true},
+		{"open + enforced + manual_review (forbidden)", "open", "enforced", "manual_review", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			doc := validFailModePolicyDoc()
+			for i := range doc.Spec.Rules {
+				if doc.Spec.Rules[i].CorrectnessClass == "resource" {
+					doc.Spec.Rules[i].PermittedMode = tc.mode
+					doc.Spec.Rules[i].EnforcementState = tc.state
+					doc.Spec.Rules[i].Outcome = tc.outcome
+				}
+			}
+			errs := validateFMP(t, doc)
+			if tc.valid && len(errs) != 0 {
+				t.Errorf("expected valid; got %+v", errs)
+			}
+			if !tc.valid && !containsFieldErrJustField(errs, "spec.rules") {
+				t.Errorf("expected spec.rules rejection; got %+v", errs)
+			}
+		})
 	}
 }
 

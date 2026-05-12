@@ -44,6 +44,8 @@ $env:MIDAS_DEV_SEED_DEMO_DATA="false"; $env:MIDAS_DEV_SEED_DEMO_USER="false"; do
 
 > These variables persist for the current shell session. Open a fresh shell (or unset the variables) to return to default demo behaviour.
 
+When `MIDAS_DEV_SEED_DEMO_DATA=true`, MIDAS also seeds deterministic synthetic drift data by default so the Drift Overview is populated for demos. Set `MIDAS_DEV_SEED_SYNTHETIC_DRIFT=false` to suppress synthetic drift while keeping the structural demo data. Dev/demo-only; idempotent.
+
 **Run with Postgres:** uncomment the `postgres` service and `environment` block in `docker-compose.yml`.
 
 ### Go (no dependencies)

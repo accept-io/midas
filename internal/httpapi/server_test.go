@@ -20,6 +20,7 @@ import (
 	"github.com/accept-io/midas/internal/decision"
 	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/eval"
+	"github.com/accept-io/midas/internal/drift"
 	"github.com/accept-io/midas/internal/failmode"
 	"github.com/accept-io/midas/internal/governanceexpectation"
 	"github.com/accept-io/midas/internal/identity"
@@ -2637,6 +2638,14 @@ type mockApprovalService struct {
 	approveGovernanceExpectationFn func(ctx context.Context, expectationID string, version int, approvedBy string) (*governanceexpectation.GovernanceExpectation, error)
 	approveFailModePolicyFn        func(ctx context.Context, policyID string, version int, approvedBy string) (*failmode.FailModePolicy, error)
 	deprecateFailModePolicyFn      func(ctx context.Context, policyID string, version int, deprecatedBy string, reason string) (*failmode.FailModePolicy, error)
+	// DriftDefinition lifecycle (Drift-1e). Each function may be nil
+	// in tests that don't exercise the corresponding action — the
+	// stub returns a "not implemented" error in that case.
+	submitDriftDefinitionFn    func(ctx context.Context, id string, version int, submittedBy string, reason string) (*drift.DriftDefinition, error)
+	approveDriftDefinitionFn   func(ctx context.Context, id string, version int, approvedBy string) (*drift.DriftDefinition, error)
+	rejectDriftDefinitionFn    func(ctx context.Context, id string, version int, rejectedBy string, reason string) (*drift.DriftDefinition, error)
+	deprecateDriftDefinitionFn func(ctx context.Context, id string, version int, deprecatedBy string, reason string, successorDefinitionID string, successorVersion int) (*drift.DriftDefinition, error)
+	retireDriftDefinitionFn    func(ctx context.Context, id string, version int, retiredBy string, reason string) (*drift.DriftDefinition, error)
 }
 
 func (m *mockApprovalService) ApproveSurface(ctx context.Context, surfaceID string, submitter identity.Principal, approver identity.Principal) (*surface.DecisionSurface, error) {
@@ -2686,6 +2695,41 @@ func (m *mockApprovalService) DeprecateFailModePolicy(ctx context.Context, polic
 		return m.deprecateFailModePolicyFn(ctx, policyID, version, deprecatedBy, reason)
 	}
 	return nil, fmt.Errorf("deprecateFailModePolicy not implemented")
+}
+
+func (m *mockApprovalService) SubmitDriftDefinition(ctx context.Context, id string, version int, submittedBy string, reason string) (*drift.DriftDefinition, error) {
+	if m.submitDriftDefinitionFn != nil {
+		return m.submitDriftDefinitionFn(ctx, id, version, submittedBy, reason)
+	}
+	return nil, fmt.Errorf("submitDriftDefinition not implemented")
+}
+
+func (m *mockApprovalService) ApproveDriftDefinition(ctx context.Context, id string, version int, approvedBy string) (*drift.DriftDefinition, error) {
+	if m.approveDriftDefinitionFn != nil {
+		return m.approveDriftDefinitionFn(ctx, id, version, approvedBy)
+	}
+	return nil, fmt.Errorf("approveDriftDefinition not implemented")
+}
+
+func (m *mockApprovalService) RejectDriftDefinition(ctx context.Context, id string, version int, rejectedBy string, reason string) (*drift.DriftDefinition, error) {
+	if m.rejectDriftDefinitionFn != nil {
+		return m.rejectDriftDefinitionFn(ctx, id, version, rejectedBy, reason)
+	}
+	return nil, fmt.Errorf("rejectDriftDefinition not implemented")
+}
+
+func (m *mockApprovalService) DeprecateDriftDefinition(ctx context.Context, id string, version int, deprecatedBy string, reason string, successorDefinitionID string, successorVersion int) (*drift.DriftDefinition, error) {
+	if m.deprecateDriftDefinitionFn != nil {
+		return m.deprecateDriftDefinitionFn(ctx, id, version, deprecatedBy, reason, successorDefinitionID, successorVersion)
+	}
+	return nil, fmt.Errorf("deprecateDriftDefinition not implemented")
+}
+
+func (m *mockApprovalService) RetireDriftDefinition(ctx context.Context, id string, version int, retiredBy string, reason string) (*drift.DriftDefinition, error) {
+	if m.retireDriftDefinitionFn != nil {
+		return m.retireDriftDefinitionFn(ctx, id, version, retiredBy, reason)
+	}
+	return nil, fmt.Errorf("retireDriftDefinition not implemented")
 }
 
 // ---------------------------------------------------------------------------

@@ -244,6 +244,31 @@ func newRepositories(db sqltx.DBTX) (*store.Repositories, error) {
 		return nil, err
 	}
 
+	driftDefinitions, err := NewDriftDefinitionRepo(db)
+	if err != nil {
+		return nil, err
+	}
+
+	driftSeries, err := NewDriftSeriesRepo(db)
+	if err != nil {
+		return nil, err
+	}
+
+	driftSeriesPoints, err := NewDriftSeriesPointRepo(db)
+	if err != nil {
+		return nil, err
+	}
+
+	driftObservations, err := NewDriftObservationRepo(db)
+	if err != nil {
+		return nil, err
+	}
+
+	driftAnnotations, err := NewDriftAnnotationRepo(db)
+	if err != nil {
+		return nil, err
+	}
+
 	return &store.Repositories{
 		Capabilities:                 caps,
 		Processes:                    procs,
@@ -266,5 +291,10 @@ func newRepositories(db sqltx.DBTX) (*store.Repositories, error) {
 		AISystemVersions:             aiSystemVersions,
 		AISystemBindings:             aiSystemBindings,
 		FailModePolicies:             failModePolicies,
+		DriftDefinitions:             driftDefinitions,
+		DriftSeries:                  driftSeries,
+		DriftSeriesPoints:            driftSeriesPoints,
+		DriftObservations:            driftObservations,
+		DriftAnnotations:             driftAnnotations,
 	}, nil
 }

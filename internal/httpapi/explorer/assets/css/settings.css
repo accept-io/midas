@@ -1,0 +1,394 @@
+  /* ──────────────────────────────────────────────────────────────────────
+     Settings view (Cluster 5)
+     Two-column grid: left has Environment / Demo Data / Decision Records;
+     right has Authentication / Runtime Context / Danger Zone. Every
+     destructive action is disabled with a "not wired yet" tooltip — no
+     fake mutations, no invented backend.
+     ────────────────────────────────────────────────────────────────────── */
+
+  .settings-view { padding: 24px; }
+
+  .settings-grid {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 24px;
+    align-items: start;
+  }
+  .settings-col-main,
+  .settings-col-side {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  .settings-card {
+    background: var(--surface-container-low);
+    border: 1px solid rgba(255,255,255,0.05);
+    border-radius: var(--radius-panel);
+    padding: 22px;
+  }
+  .settings-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 18px;
+    gap: 12px;
+  }
+  .settings-card-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 18px;
+    font-weight: 700;
+    font-family: var(--font-display);
+    letter-spacing: -0.01em;
+    color: var(--on-surface);
+    margin: 0;
+  }
+  .settings-card-title-glyph {
+    color: var(--primary);
+    font-size: 16px;
+    width: 18px;
+    text-align: center;
+  }
+  .settings-version-chip {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--slate-500);
+    background: var(--surface-container-highest);
+    padding: 4px 10px;
+    border-radius: 4px;
+  }
+
+  .settings-env-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+  }
+  .settings-env-cell {
+    background: var(--surface-container-lowest);
+    border: 1px solid rgba(255,255,255,0.05);
+    border-radius: 4px;
+    padding: 14px;
+  }
+  .settings-env-cell-label {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--slate-500);
+    margin-bottom: 6px;
+  }
+  .settings-env-cell-value {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--on-surface);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .settings-env-cell-value.ok        { color: var(--secondary); }
+  .settings-env-cell-value.primary   { color: var(--primary); }
+  .settings-env-cell-value.tertiary  { color: var(--tertiary); }
+  .settings-env-cell-value.warn      { color: #fcd34d; }
+  .settings-env-cell-value.muted     { color: var(--slate-500); font-style: italic; text-transform: none; }
+  .settings-env-cell-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .settings-counts {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px 16px;
+    margin-bottom: 22px;
+  }
+  .settings-count-item {
+    border-left: 2px solid var(--primary);
+    padding: 4px 0 4px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .settings-count-value {
+    font-family: var(--font-display);
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--on-surface);
+    letter-spacing: -0.01em;
+    line-height: 1.1;
+  }
+  .settings-count-label {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--slate-500);
+    font-weight: 700;
+  }
+
+  .settings-explanatory {
+    font-size: 13px;
+    color: var(--on-surface-variant);
+    margin-bottom: 18px;
+    line-height: 1.55;
+  }
+
+  .settings-actions {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .btn-error {
+    background: transparent;
+    border: 1px solid var(--error);
+    color: var(--error);
+  }
+  .btn-error:hover:not(:disabled) {
+    background: rgba(255, 180, 171, 0.08);
+  }
+  .btn-danger {
+    width: 100%;
+    background: var(--error);
+    color: var(--on-error);
+    font-size: 12px;
+  }
+  .btn-danger:disabled {
+    background: rgba(255, 180, 171, 0.18);
+    color: var(--error);
+    border-color: rgba(255, 180, 171, 0.20);
+  }
+
+  .settings-warning {
+    margin-top: 16px;
+    padding: 12px 14px;
+    background: rgba(255, 180, 171, 0.06);
+    border-left: 3px solid var(--error);
+    border-radius: 0 4px 4px 0;
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+  }
+  .settings-warning-glyph {
+    color: var(--error);
+    font-size: 16px;
+    flex-shrink: 0;
+  }
+  .settings-warning-text {
+    font-size: 11px;
+    color: var(--error);
+    opacity: 0.92;
+    line-height: 1.55;
+  }
+  .settings-warning-text strong {
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-right: 4px;
+  }
+
+  .settings-records-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+  .settings-records-stat {
+    background: var(--surface-container);
+    border: 1px solid rgba(255,255,255,0.05);
+    border-radius: 4px;
+    padding: 18px 14px;
+    text-align: center;
+  }
+  .settings-records-stat-value {
+    font-family: var(--font-display);
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--on-surface);
+    letter-spacing: -0.01em;
+    display: block;
+    margin-bottom: 4px;
+    line-height: 1.1;
+  }
+  .settings-records-stat-label {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--slate-500);
+  }
+
+  .settings-last-update {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 700;
+    color: var(--slate-300);
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    padding: 4px 10px;
+    border-radius: 999px;
+  }
+  .settings-last-update-glyph { color: var(--secondary); }
+
+  .settings-records-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  .settings-records-actions .btn-ghost {
+    width: 100%;
+    text-align: center;
+    font-size: 11px;
+  }
+
+  .settings-auth-rows {
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 22px;
+  }
+  .settings-auth-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+  }
+  .settings-auth-row:last-child { border-bottom: 0; }
+  .settings-auth-key {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--slate-500);
+    font-weight: 700;
+  }
+  .settings-auth-val {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--on-surface);
+  }
+  .settings-auth-val.ok    { color: var(--secondary); }
+  .settings-auth-val.muted { color: var(--slate-500); font-style: italic; }
+  .settings-auth-val.warn  { color: #fcd34d; }
+
+  .settings-signout {
+    width: 100%;
+    padding: 11px 0;
+    background: var(--surface-container-highest);
+    color: var(--slate-500);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    font-size: 11px;
+    border: 1px solid var(--outline-variant);
+    border-radius: 4px;
+    cursor: not-allowed;
+    font-family: inherit;
+  }
+  .settings-signout:not(:disabled) {
+    color: var(--on-surface);
+    background: var(--surface-container-high);
+    cursor: pointer;
+  }
+  .settings-signout:not(:disabled):hover {
+    background: var(--surface-bright);
+  }
+  .settings-signout-note {
+    margin-top: 10px;
+    font-size: 10px;
+    text-align: center;
+    color: var(--slate-500);
+    font-style: italic;
+  }
+
+  .settings-danger {
+    border-color: rgba(255, 180, 171, 0.25);
+    background: rgba(255, 180, 171, 0.04);
+  }
+  .settings-danger .settings-card-title         { color: var(--error); }
+  .settings-danger .settings-card-title-glyph   { color: var(--error); }
+  .settings-danger-copy {
+    font-size: 12px;
+    color: var(--error);
+    opacity: 0.88;
+    margin-bottom: 18px;
+    line-height: 1.55;
+  }
+
+  /* Make runtime-card look at home inside the Runtime Context card */
+  .settings-card .runtime-card {
+    border: 0;
+    background: var(--surface-container-lowest);
+    padding: 12px 14px;
+  }
+
+  @media (max-width: 1280px) {
+    .settings-counts { grid-template-columns: repeat(3, 1fr); }
+  }
+  @media (max-width: 1100px) {
+    .settings-grid { grid-template-columns: 1fr; }
+    .settings-records-stats { grid-template-columns: 1fr; }
+    .settings-records-actions { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 720px) {
+    .settings-env-grid { grid-template-columns: 1fr 1fr; }
+    .settings-counts   { grid-template-columns: 1fr 1fr; }
+  }
+
+  /* ──────────────────────────────────────────────────────────────────
+     D27j-ui-theme-6 — Settings appearance / theme toggle.
+     Compact segmented control matching existing settings card
+     chrome. Uses theme-2 shape tokens for sharp corners + hairline
+     border. Both dark and light modes are readable because every
+     value reads from theme-aware tokens that flip via
+     :root[data-theme="light"] in tokens.css.
+     ────────────────────────────────────────────────────────────── */
+  .settings-appearance-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+  .settings-appearance-copy {
+    font-size: 12px;
+    color: var(--on-surface-variant);
+    margin: 0;
+  }
+  .settings-theme-toggle {
+    display: inline-flex;
+    border: var(--border-hairline);
+    border-radius: var(--radius-tight);
+    background: var(--surface-container-lowest);
+    overflow: hidden;
+    width: fit-content;
+  }
+  .settings-theme-option {
+    background: transparent;
+    border: 0;
+    padding: 6px 14px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-family: inherit;
+    color: var(--on-surface-variant);
+    cursor: pointer;
+    line-height: 1.2;
+  }
+  .settings-theme-option:hover:not(.is-active) {
+    background: var(--surface-container);
+    color: var(--on-surface);
+  }
+  .settings-theme-option.is-active {
+    background: var(--primary-container);
+    color: var(--on-primary-container);
+  }
+  .settings-theme-option:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: -2px;
+  }
+  .settings-theme-option + .settings-theme-option {
+    border-left: 1px solid var(--outline-variant);
+  }
+

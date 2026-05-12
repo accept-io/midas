@@ -20,6 +20,7 @@ const (
 	KindAISystemVersion             = "AISystemVersion"
 	KindAISystemBinding             = "AISystemBinding"
 	KindFailModePolicy              = "FailModePolicy"
+	KindDriftDefinition             = "DriftDefinition"
 )
 
 // Document is the common interface implemented by all control plane documents.
@@ -92,7 +93,6 @@ type SurfaceSpec struct {
 	// Policy integration
 	PolicyPackage string `json:"policy_package,omitempty" yaml:"policy_package,omitempty"`
 	PolicyVersion string `json:"policy_version,omitempty" yaml:"policy_version,omitempty"`
-	FailureMode   string `json:"failure_mode,omitempty" yaml:"failure_mode,omitempty"` // closed | open
 
 	// Ownership / governance
 	BusinessOwner  string   `json:"business_owner,omitempty" yaml:"business_owner,omitempty"`
@@ -662,10 +662,14 @@ func (b AISystemBindingDocument) GetID() string   { return b.Metadata.ID }
 // planner reads the latest persisted version via FindByID and assigns
 // existing.Version+1 (or 1 for first create).
 //
-// Closed-only invariant (D27j-impl-1b): rule.permitted_mode for the input
-// correctness class must be "not_applicable"; for the four other classes it
-// must be "closed". "soft" and "open" are rejected outright until a deliberate
-// later tranche admits them.
+// Three-axis rule matrix (D29b): each rule carries a permitted_mode
+// (closed | soft | open | not_applicable), an optional enforcement_state
+// (evidence_only | dry_run | enforced; default evidence_only), and an
+// optional outcome (deny | escalate | permit_with_evidence | manual_review;
+// default posture-implied). The validator enforces the cross-axis matrix:
+// see internal/failmode/validate.go for the full table. The runtime
+// resolver continues to record observability metadata only and does not
+// consult rule contents in this tranche.
 
 type FailModePolicyDocument struct {
 	APIVersion string                  `json:"apiVersion" yaml:"apiVersion"`
@@ -691,11 +695,18 @@ type FailModePolicySpec struct {
 }
 
 // FailModePolicyRuleSpec is the document shape for a single rule. Strings
-// at the document layer; the validator and mapper perform the closed-only
-// permitted-mode check using internal/failmode constants.
+// at the document layer; the validator and mapper run the three-axis
+// matrix check via internal/failmode constants (D29b).
+//
+// EnforcementState and Outcome are optional at the document layer and
+// default to evidence_only + posture-implied outcome via
+// failmode.ApplyRuleAxisDefaults. The runtime continues to record the
+// resolved policy as evidence only; D29b does not introduce enforcement.
 type FailModePolicyRuleSpec struct {
 	CorrectnessClass string `json:"correctness_class" yaml:"correctness_class"`
 	PermittedMode    string `json:"permitted_mode" yaml:"permitted_mode"`
+	EnforcementState string `json:"enforcement_state,omitempty" yaml:"enforcement_state,omitempty"`
+	Outcome          string `json:"outcome,omitempty" yaml:"outcome,omitempty"`
 	Reason           string `json:"reason,omitempty" yaml:"reason,omitempty"`
 }
 
@@ -712,3 +723,93 @@ type FailModePolicyLifecycle struct {
 
 func (f FailModePolicyDocument) GetKind() string { return f.Kind }
 func (f FailModePolicyDocument) GetID() string   { return f.Metadata.ID }
+
+// ---------------------------------------------------------------------------
+// DriftDefinition (Drift-1c)
+// ---------------------------------------------------------------------------
+//
+// DriftDefinition is the control-plane document for Drift-1a's first-class
+// drift entity. The shape mirrors FailModePolicy: a metadata block, a spec
+// block carrying the substantive content (including embedded metrics), and
+// a lifecycle block whose status/version are informational at apply time
+// (the mapper forces Status=review, the planner writes the persisted
+// version).
+//
+// Atomic-revision invariant. Embedded DriftMetricSpec entries have NO
+// independent lifecycle: any add/remove/modify to the metric set requires
+// a NEW DriftDefinition revision. Drift-1c rejects metric mutations that
+// reuse an existing (id, version) tuple.
+//
+// V1 taxonomy. The validator enforces the nine V1 drift types and rejects
+// population, data, prediction, performance, and concept by name.
+//
+// Runtime-inert. Applying a DriftDefinition does not start aggregation,
+// emit observations, or change runtime decision behaviour. The aggregation
+// worker (Drift-3b), threshold detector (Drift-3c), and audit-chain
+// integration (Drift-4) are scoped to later tranches.
+
+type DriftDefinitionDocument struct {
+	APIVersion string                   `json:"apiVersion" yaml:"apiVersion"`
+	Kind       string                   `json:"kind" yaml:"kind"`
+	Metadata   DocumentMetadata         `json:"metadata" yaml:"metadata"`
+	Spec       DriftDefinitionSpec      `json:"spec" yaml:"spec"`
+	Lifecycle  DriftDefinitionLifecycle `json:"lifecycle,omitempty" yaml:"lifecycle,omitempty"`
+}
+
+// DriftDefinitionSpec is the substantive payload. Origin defaults to
+// "manual"; Managed defaults to true via the pointer-bool convention so
+// callers can disambiguate "unset" from "explicit false" (mirrors
+// FailModePolicySpec).
+type DriftDefinitionSpec struct {
+	Name           string                  `json:"name" yaml:"name"`
+	Description    string                  `json:"description,omitempty" yaml:"description,omitempty"`
+	BusinessOwner  string                  `json:"business_owner" yaml:"business_owner"`
+	TechnicalOwner string                  `json:"technical_owner" yaml:"technical_owner"`
+	Target         DriftTargetSpec         `json:"target" yaml:"target"`
+	Metrics        []DriftMetricSpec       `json:"metrics" yaml:"metrics"`
+	Origin         string                  `json:"origin,omitempty" yaml:"origin,omitempty"`
+	Managed        *bool                   `json:"managed,omitempty" yaml:"managed,omitempty"`
+	Replaces       string                  `json:"replaces,omitempty" yaml:"replaces,omitempty"`
+}
+
+// DriftTargetSpec discriminates the governed entity a DriftDefinition
+// applies to. Kind is one of nine V1 entity kinds; ID is the logical
+// (not version-pinned) identifier.
+type DriftTargetSpec struct {
+	Kind string `json:"kind" yaml:"kind"`
+	ID   string `json:"id" yaml:"id"`
+}
+
+// DriftMetricSpec is the document shape for an embedded metric. Strings
+// at the document layer; the validator and mapper round-trip through
+// internal/drift constants. There is NO status / lifecycle / approved_by
+// here — DriftMetricDefinition has no independent lifecycle (atomic
+// revision invariant).
+type DriftMetricSpec struct {
+	MetricID                  string  `json:"metric_id" yaml:"metric_id"`
+	DriftType                 string  `json:"drift_type" yaml:"drift_type"`
+	BaselineStrategy          string  `json:"baseline_strategy" yaml:"baseline_strategy"`
+	BaselineWindowSeconds     int     `json:"baseline_window_seconds,omitempty" yaml:"baseline_window_seconds,omitempty"`
+	WindowSeconds             int     `json:"window_seconds" yaml:"window_seconds"`
+	Cadence                   string  `json:"cadence" yaml:"cadence"`
+	WarningThreshold          float64 `json:"warning_threshold" yaml:"warning_threshold"`
+	BreachedThreshold         float64 `json:"breached_threshold" yaml:"breached_threshold"`
+	ThresholdDirection        string  `json:"threshold_direction" yaml:"threshold_direction"`
+	GovernanceExpectationRef  string  `json:"governance_expectation_ref,omitempty" yaml:"governance_expectation_ref,omitempty"`
+	GovernanceExpectationVer  int     `json:"governance_expectation_ver,omitempty" yaml:"governance_expectation_ver,omitempty"`
+	Description               string  `json:"description,omitempty" yaml:"description,omitempty"`
+}
+
+// DriftDefinitionLifecycle mirrors FailModePolicyLifecycle: dates are
+// RFC3339 strings parsed in the mapper, status is informational and
+// forced to "review" on persistence, Version is informational because
+// the planner is authoritative on the persisted version.
+type DriftDefinitionLifecycle struct {
+	Status         string `json:"status,omitempty" yaml:"status,omitempty"`                   // accepted but persistence forces 'review'
+	EffectiveFrom  string `json:"effective_from,omitempty" yaml:"effective_from,omitempty"`   // RFC3339
+	EffectiveUntil string `json:"effective_until,omitempty" yaml:"effective_until,omitempty"` // RFC3339
+	Version        int    `json:"version,omitempty" yaml:"version,omitempty"`                 // informational; planner authoritative
+}
+
+func (d DriftDefinitionDocument) GetKind() string { return d.Kind }
+func (d DriftDefinitionDocument) GetID() string   { return d.Metadata.ID }

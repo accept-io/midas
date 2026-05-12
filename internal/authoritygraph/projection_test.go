@@ -82,3 +82,63 @@ func TestEdge_LabelOmitemptyOmitsAbsent(t *testing.T) {
 		t.Errorf("edge label key must be absent when empty; got %s", raw)
 	}
 }
+
+// TestBusinessServiceData_FailModePolicyID_OmitemptyJSONShape pins the
+// D27j-ui-2a wire convention: an empty FailModePolicyID collapses
+// (omitempty), a populated one renders the field. Other optional
+// strings on the struct already use omitempty; this matches them.
+func TestBusinessServiceData_FailModePolicyID_OmitemptyJSONShape(t *testing.T) {
+	t.Run("empty omits the key", func(t *testing.T) {
+		raw, err := json.Marshal(BusinessServiceData{ID: "bs-1", Name: "BS", Status: "active"})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if strings.Contains(string(raw), `"fail_mode_policy_id"`) {
+			t.Errorf("fail_mode_policy_id key must be omitted when empty; got %s", raw)
+		}
+	})
+	t.Run("populated renders the key and value", func(t *testing.T) {
+		raw, err := json.Marshal(BusinessServiceData{
+			ID: "bs-1", Name: "BS", Status: "active",
+			FailModePolicyID: "policy-1",
+		})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		body := string(raw)
+		if !strings.Contains(body, `"fail_mode_policy_id":"policy-1"`) {
+			t.Errorf("fail_mode_policy_id must serialise as \"policy-1\"; got %s", body)
+		}
+	})
+}
+
+// TestDecisionSurfaceData_FailModePolicyID_OmitemptyJSONShape mirrors
+// the BusinessServiceData test for the surface struct.
+func TestDecisionSurfaceData_FailModePolicyID_OmitemptyJSONShape(t *testing.T) {
+	base := DecisionSurfaceData{
+		ID: "surf-1", Version: 1, Name: "S", Status: "active", ProcessID: "proc-1",
+		AIBindingIDs:          []string{},
+		InheritedAIBindingIDs: []string{},
+	}
+	t.Run("empty omits the key", func(t *testing.T) {
+		raw, err := json.Marshal(base)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if strings.Contains(string(raw), `"fail_mode_policy_id"`) {
+			t.Errorf("fail_mode_policy_id key must be omitted when empty; got %s", raw)
+		}
+	})
+	t.Run("populated renders the key and value", func(t *testing.T) {
+		d := base
+		d.FailModePolicyID = "surf-policy"
+		raw, err := json.Marshal(d)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		body := string(raw)
+		if !strings.Contains(body, `"fail_mode_policy_id":"surf-policy"`) {
+			t.Errorf("fail_mode_policy_id must serialise as \"surf-policy\"; got %s", body)
+		}
+	})
+}

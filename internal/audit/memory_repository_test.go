@@ -561,10 +561,18 @@ func TestMemoryRepository_List_LimitClamps(t *testing.T) {
 		t.Errorf("Limit=3: want 3, got %d", len(got))
 	}
 
-	// Limit > MaxListLimit clamps silently. We can't easily seed >500
-	// in a unit test, so assert via EffectiveLimit.
-	if (ListFilter{Limit: MaxListLimit + 1}).EffectiveLimit() != MaxListLimit {
-		t.Errorf("EffectiveLimit must clamp to MaxListLimit")
+	// EffectiveLimit semantics (D30j):
+	//   - Limit == 0 → DefaultListLimit.
+	//   - 1 ≤ Limit ≤ MaxListLimit+1 → Limit (the +1 slot is the
+	//     cursor-pagination has-next probe headroom; public HTTP
+	//     callers cannot reach it because the handler validates user
+	//     Limit ≤ MaxListLimit before constructing the filter).
+	//   - Limit > MaxListLimit+1 → MaxListLimit+1 (silent clamp).
+	if (ListFilter{Limit: MaxListLimit + 1}).EffectiveLimit() != MaxListLimit+1 {
+		t.Errorf("EffectiveLimit must permit MaxListLimit+1 (cursor probe headroom)")
+	}
+	if (ListFilter{Limit: MaxListLimit + 2}).EffectiveLimit() != MaxListLimit+1 {
+		t.Errorf("EffectiveLimit must clamp Limit > MaxListLimit+1 to MaxListLimit+1")
 	}
 	if (ListFilter{}).EffectiveLimit() != DefaultListLimit {
 		t.Errorf("EffectiveLimit must default when zero")
@@ -581,6 +589,293 @@ func TestMemoryRepository_List_InvalidTimeRange_ReturnsError(t *testing.T) {
 	})
 	if !errors.Is(err, ErrInvalidTimeRange) {
 		t.Errorf("want ErrInvalidTimeRange, got %v", err)
+	}
+}
+
+// ===========================================================================
+// D30j — cursor pagination (memory backend).
+//
+// The repository-level contract: when ListFilter.Cursor is non-nil,
+// results are restricted to rows strictly past the cursor tuple per
+// the requested OrderDesc semantics. Pages are stitched by
+// constructing a cursor from the last row of the prior response and
+// re-issuing the same filter.
+// ===========================================================================
+
+func TestMemoryRepository_List_Cursor_Desc_PaginatesAcrossPages(t *testing.T) {
+	repo := NewMemoryRepository()
+	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+
+	// Five events spaced by one second so occurred_at is distinct per row.
+	for i := 0; i < 5; i++ {
+		makeListTestEvent(t, repo, AuditEventGovernanceConditionDetected,
+			"env-cursor-desc", "src", "req-1",
+			t0.Add(time.Duration(i)*time.Second), nil)
+	}
+
+	// Page 1: newest two.
+	p1, err := repo.List(context.Background(), ListFilter{
+		OrderDesc: true, Limit: 2,
+	})
+	if err != nil {
+		t.Fatalf("List page 1: %v", err)
+	}
+	if len(p1) != 2 {
+		t.Fatalf("page 1: want 2, got %d", len(p1))
+	}
+	if !p1[0].OccurredAt.Equal(t0.Add(4*time.Second)) ||
+		!p1[1].OccurredAt.Equal(t0.Add(3*time.Second)) {
+		t.Errorf("page 1: want [t0+4s, t0+3s], got [%s, %s]",
+			p1[0].OccurredAt, p1[1].OccurredAt)
+	}
+
+	// Page 2: continue from the last row of page 1.
+	cur := &ListCursor{
+		OccurredAt: p1[1].OccurredAt,
+		SequenceNo: p1[1].SequenceNo,
+		ID:         p1[1].ID,
+	}
+	p2, err := repo.List(context.Background(), ListFilter{
+		OrderDesc: true, Limit: 2, Cursor: cur,
+	})
+	if err != nil {
+		t.Fatalf("List page 2: %v", err)
+	}
+	if len(p2) != 2 {
+		t.Fatalf("page 2: want 2, got %d", len(p2))
+	}
+	if !p2[0].OccurredAt.Equal(t0.Add(2*time.Second)) ||
+		!p2[1].OccurredAt.Equal(t0.Add(1*time.Second)) {
+		t.Errorf("page 2: want [t0+2s, t0+1s], got [%s, %s]",
+			p2[0].OccurredAt, p2[1].OccurredAt)
+	}
+
+	// Page 3: only the oldest event remains.
+	cur = &ListCursor{
+		OccurredAt: p2[1].OccurredAt,
+		SequenceNo: p2[1].SequenceNo,
+		ID:         p2[1].ID,
+	}
+	p3, err := repo.List(context.Background(), ListFilter{
+		OrderDesc: true, Limit: 2, Cursor: cur,
+	})
+	if err != nil {
+		t.Fatalf("List page 3: %v", err)
+	}
+	if len(p3) != 1 {
+		t.Fatalf("page 3: want 1, got %d", len(p3))
+	}
+	if !p3[0].OccurredAt.Equal(t0) {
+		t.Errorf("page 3: want t0, got %s", p3[0].OccurredAt)
+	}
+
+	// Page 4: cursor past the last row → empty.
+	cur = &ListCursor{
+		OccurredAt: p3[0].OccurredAt,
+		SequenceNo: p3[0].SequenceNo,
+		ID:         p3[0].ID,
+	}
+	p4, err := repo.List(context.Background(), ListFilter{
+		OrderDesc: true, Limit: 2, Cursor: cur,
+	})
+	if err != nil {
+		t.Fatalf("List page 4: %v", err)
+	}
+	if len(p4) != 0 {
+		t.Errorf("page 4: want 0, got %d", len(p4))
+	}
+}
+
+func TestMemoryRepository_List_Cursor_Asc_PaginatesAcrossPages(t *testing.T) {
+	repo := NewMemoryRepository()
+	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+
+	for i := 0; i < 5; i++ {
+		makeListTestEvent(t, repo, AuditEventGovernanceConditionDetected,
+			"env-cursor-asc", "src", "req-1",
+			t0.Add(time.Duration(i)*time.Second), nil)
+	}
+
+	p1, err := repo.List(context.Background(), ListFilter{
+		OrderDesc: false, Limit: 2,
+	})
+	if err != nil {
+		t.Fatalf("List page 1: %v", err)
+	}
+	if len(p1) != 2 || !p1[0].OccurredAt.Equal(t0) ||
+		!p1[1].OccurredAt.Equal(t0.Add(time.Second)) {
+		t.Fatalf("page 1: want [t0, t0+1s], got %+v", p1)
+	}
+
+	cur := &ListCursor{
+		OccurredAt: p1[1].OccurredAt,
+		SequenceNo: p1[1].SequenceNo,
+		ID:         p1[1].ID,
+	}
+	p2, err := repo.List(context.Background(), ListFilter{
+		OrderDesc: false, Limit: 2, Cursor: cur,
+	})
+	if err != nil {
+		t.Fatalf("List page 2: %v", err)
+	}
+	if len(p2) != 2 || !p2[0].OccurredAt.Equal(t0.Add(2*time.Second)) ||
+		!p2[1].OccurredAt.Equal(t0.Add(3*time.Second)) {
+		t.Errorf("page 2: want [t0+2s, t0+3s], got %+v", p2)
+	}
+}
+
+func TestMemoryRepository_List_Cursor_TieBreaker_SameOccurredAtSameSequenceNo(t *testing.T) {
+	// Three events across different envelopes, all with the same
+	// occurred_at and identical sequence_no (= 1 within their own
+	// envelope). The id tertiary tie-breaker must produce a globally
+	// deterministic order, and the cursor must walk through it.
+	repo := NewMemoryRepository()
+	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+
+	a := makeListTestEvent(t, repo, AuditEventGovernanceConditionDetected,
+		"env-a", "src", "req-1", t0, nil)
+	b := makeListTestEvent(t, repo, AuditEventGovernanceConditionDetected,
+		"env-b", "src", "req-1", t0, nil)
+	c := makeListTestEvent(t, repo, AuditEventGovernanceConditionDetected,
+		"env-c", "src", "req-1", t0, nil)
+	// Pin IDs to a known order so the tertiary tie-breaker is
+	// exercised deterministically. After this, lexical id order is
+	// 1 < 2 < 3 → all sort comparisons hit the id tertiary branch.
+	a.ID = "id-1"
+	b.ID = "id-2"
+	c.ID = "id-3"
+
+	all, err := repo.List(context.Background(), ListFilter{
+		OrderDesc: false, Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("List all: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("want 3 events, got %d", len(all))
+	}
+	if all[0].ID != "id-1" || all[1].ID != "id-2" || all[2].ID != "id-3" {
+		t.Fatalf("tertiary tie-breaker: want [id-1, id-2, id-3], got [%s, %s, %s]",
+			all[0].ID, all[1].ID, all[2].ID)
+	}
+
+	// Cursor from id-1 → must return id-2 and id-3.
+	cur := &ListCursor{
+		OccurredAt: all[0].OccurredAt,
+		SequenceNo: all[0].SequenceNo,
+		ID:         all[0].ID,
+	}
+	rest, err := repo.List(context.Background(), ListFilter{
+		OrderDesc: false, Limit: 10, Cursor: cur,
+	})
+	if err != nil {
+		t.Fatalf("List after cursor: %v", err)
+	}
+	if len(rest) != 2 || rest[0].ID != "id-2" || rest[1].ID != "id-3" {
+		t.Errorf("cursor past id-1: want [id-2, id-3], got %+v", rest)
+	}
+
+	// Cursor from id-3 (the last row) → empty.
+	cur = &ListCursor{
+		OccurredAt: rest[1].OccurredAt,
+		SequenceNo: rest[1].SequenceNo,
+		ID:         rest[1].ID,
+	}
+	tail, err := repo.List(context.Background(), ListFilter{
+		OrderDesc: false, Limit: 10, Cursor: cur,
+	})
+	if err != nil {
+		t.Fatalf("List after final cursor: %v", err)
+	}
+	if len(tail) != 0 {
+		t.Errorf("cursor past final row: want 0, got %d", len(tail))
+	}
+}
+
+func TestMemoryRepository_List_Cursor_AppliesAlongsideEventTypeFilter(t *testing.T) {
+	// Cursor predicate composes with the other ListFilter dimensions —
+	// the cursor narrows the ordered scan but does not bypass any
+	// filter. Seed a mixed event-type chain and walk only the
+	// DETECTED events with a cursor.
+	repo := NewMemoryRepository()
+	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+
+	makeListTestEvent(t, repo, AuditEventGovernanceConditionDetected,
+		"env-mix", "src", "req-1", t0, nil)
+	makeListTestEvent(t, repo, AuditEventEvaluationStarted,
+		"env-mix", "src", "req-1", t0.Add(time.Second), nil)
+	makeListTestEvent(t, repo, AuditEventGovernanceConditionDetected,
+		"env-mix", "src", "req-1", t0.Add(2*time.Second), nil)
+	makeListTestEvent(t, repo, AuditEventEvaluationStarted,
+		"env-mix", "src", "req-1", t0.Add(3*time.Second), nil)
+	makeListTestEvent(t, repo, AuditEventGovernanceConditionDetected,
+		"env-mix", "src", "req-1", t0.Add(4*time.Second), nil)
+
+	p1, err := repo.List(context.Background(), ListFilter{
+		EventType: AuditEventGovernanceConditionDetected,
+		OrderDesc: false, Limit: 2,
+	})
+	if err != nil {
+		t.Fatalf("List page 1: %v", err)
+	}
+	if len(p1) != 2 {
+		t.Fatalf("page 1: want 2 DETECTED events, got %d", len(p1))
+	}
+	if !p1[0].OccurredAt.Equal(t0) || !p1[1].OccurredAt.Equal(t0.Add(2*time.Second)) {
+		t.Errorf("page 1: want [t0, t0+2s], got [%s, %s]",
+			p1[0].OccurredAt, p1[1].OccurredAt)
+	}
+	for _, ev := range p1 {
+		if ev.EventType != AuditEventGovernanceConditionDetected {
+			t.Errorf("page 1: leaked non-DETECTED event %s", ev.EventType)
+		}
+	}
+
+	cur := &ListCursor{
+		OccurredAt: p1[1].OccurredAt,
+		SequenceNo: p1[1].SequenceNo,
+		ID:         p1[1].ID,
+	}
+	p2, err := repo.List(context.Background(), ListFilter{
+		EventType: AuditEventGovernanceConditionDetected,
+		OrderDesc: false, Limit: 2, Cursor: cur,
+	})
+	if err != nil {
+		t.Fatalf("List page 2: %v", err)
+	}
+	if len(p2) != 1 {
+		t.Fatalf("page 2: want 1 remaining DETECTED event, got %d", len(p2))
+	}
+	if !p2[0].OccurredAt.Equal(t0.Add(4 * time.Second)) {
+		t.Errorf("page 2: want t0+4s, got %s", p2[0].OccurredAt)
+	}
+	if p2[0].EventType != AuditEventGovernanceConditionDetected {
+		t.Errorf("page 2: leaked non-DETECTED event %s", p2[0].EventType)
+	}
+}
+
+func TestMemoryRepository_List_Cursor_PastEnd_ReturnsEmpty(t *testing.T) {
+	// Repository-level "no more pages" signal: a cursor strictly past
+	// the last sorted row returns an empty slice, never a partial page.
+	repo := NewMemoryRepository()
+	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+
+	ev := makeListTestEvent(t, repo, AuditEventGovernanceConditionDetected,
+		"env-end", "src", "req-1", t0, nil)
+
+	cur := &ListCursor{
+		OccurredAt: ev.OccurredAt,
+		SequenceNo: ev.SequenceNo,
+		ID:         ev.ID,
+	}
+	got, err := repo.List(context.Background(), ListFilter{
+		OrderDesc: true, Limit: 10, Cursor: cur,
+	})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("cursor at last row: want 0, got %d", len(got))
 	}
 }
 

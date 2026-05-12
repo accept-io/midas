@@ -1,0 +1,109 @@
+  /* ──────────────────────────────────────────────────────────────────────
+     Local IAM overlays
+     ────────────────────────────────────────────────────────────────────── */
+
+  .iam-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.65);
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
+  }
+  .iam-overlay.visible { display: flex; }
+
+  .iam-card {
+    background: var(--surface-container);
+    border: 1px solid var(--outline-variant);
+    border-radius: var(--radius-panel);
+    padding: 32px 36px;
+    width: 100%;
+    max-width: 380px;
+    box-shadow: var(--shadow-overlay-light);
+    color: var(--on-surface);
+  }
+  .iam-card h2 {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--on-surface);
+    margin-bottom: 6px;
+    font-family: var(--font-display);
+  }
+  .iam-card p {
+    font-size: 13px;
+    color: var(--on-surface-variant);
+    margin-bottom: 20px;
+  }
+  .iam-field { margin-bottom: 14px; }
+  .iam-field label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--on-surface-variant);
+    margin-bottom: 4px;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .iam-field input {
+    width: 100%;
+    padding: 9px 12px;
+    border: 1px solid var(--outline-variant);
+    border-radius: 4px;
+    font-size: 13px;
+    font-family: inherit;
+    background: var(--surface-container-lowest);
+    color: var(--on-surface);
+    transition: border-color 0.12s;
+  }
+  .iam-field input:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px rgba(173,198,255,0.18);
+  }
+  .iam-submit {
+    width: 100%;
+    padding: 10px 0;
+    background: var(--primary);
+    color: var(--on-primary);
+    font-size: 14px;
+    font-weight: 700;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-top: 4px;
+    font-family: inherit;
+    transition: opacity 0.12s;
+  }
+  .iam-submit:hover { opacity: 0.9; }
+  .iam-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+  .iam-error {
+    margin-top: 12px;
+    padding: 8px 12px;
+    background: rgba(255, 180, 171, 0.12);
+    border: 1px solid rgba(255, 180, 171, 0.30);
+    border-radius: 4px;
+    font-size: 12px;
+    color: var(--error);
+    display: none;
+  }
+  .iam-error.visible { display: block; }
+  .iam-login-hint {
+    margin-top: 14px;
+    padding: 10px 12px;
+    background: rgba(173, 198, 255, 0.06);
+    border: 1px solid rgba(173, 198, 255, 0.20);
+    border-radius: 4px;
+    font-size: 11px;
+    color: var(--on-surface-variant);
+    line-height: 1.6;
+    display: none;
+  }
+  .iam-login-hint.visible { display: block; }
+  .iam-login-hint strong { display: block; font-weight: 700; color: var(--primary); margin-bottom: 2px; }
+  .iam-login-hint .iam-hint-entry + .iam-hint-entry {
+    margin-top: 8px;
+    border-top: 1px solid rgba(173, 198, 255, 0.18);
+    padding-top: 8px;
+  }
+

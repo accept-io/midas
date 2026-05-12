@@ -265,15 +265,48 @@ func (r *PostgresRepository) List(ctx context.Context, filter ListFilter) ([]*Au
 		}
 		addPredicate("payload_json @> $%d", string(bytes))
 	}
+	// D30j cursor predicate — restrict to rows strictly past the
+	// cursor tuple under the requested order direction. Both
+	// secondary (sequence_no) and tertiary (id) sort keys are ASC
+	// regardless of OrderDesc, so the comparison flips only on the
+	// occurred_at primary key.
+	if filter.Cursor != nil {
+		c := filter.Cursor
+		cmpPrimary := "<"
+		if !filter.OrderDesc {
+			cmpPrimary = ">"
+		}
+		// Allocate three parameter slots in order so the placeholder
+		// numbering stays consistent with addPredicate's bookkeeping.
+		args = append(args, c.OccurredAt.UTC())
+		occurredIdx := len(args)
+		args = append(args, c.SequenceNo)
+		seqIdx := len(args)
+		args = append(args, c.ID)
+		idIdx := len(args)
+		predicates = append(predicates, fmt.Sprintf(
+			"(occurred_at %s $%d "+
+				"OR (occurred_at = $%d AND sequence_no > $%d) "+
+				"OR (occurred_at = $%d AND sequence_no = $%d AND id > $%d))",
+			cmpPrimary, occurredIdx,
+			occurredIdx, seqIdx,
+			occurredIdx, seqIdx, idIdx,
+		))
+	}
 
 	q := selectClause
 	if len(predicates) > 0 {
 		q += " WHERE " + joinAnd(predicates)
 	}
+	// ORDER BY adds `id ASC` as the deterministic tertiary tie-breaker
+	// (D30j). The primary + secondary keys are preserved verbatim so
+	// the existing governancecoverage detected/gap pair ordering
+	// continues to behave; the tertiary only ever fires when both
+	// primary and secondary collide, which is rare-to-impossible.
 	if filter.OrderDesc {
-		q += " ORDER BY occurred_at DESC, sequence_no ASC"
+		q += " ORDER BY occurred_at DESC, sequence_no ASC, id ASC"
 	} else {
-		q += " ORDER BY occurred_at ASC, sequence_no ASC"
+		q += " ORDER BY occurred_at ASC, sequence_no ASC, id ASC"
 	}
 
 	args = append(args, filter.EffectiveLimit())

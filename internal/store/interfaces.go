@@ -10,6 +10,7 @@ import (
 	"github.com/accept-io/midas/internal/businessservicecapability"
 	"github.com/accept-io/midas/internal/capability"
 	"github.com/accept-io/midas/internal/controlaudit"
+	"github.com/accept-io/midas/internal/drift"
 	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/failmode"
 	"github.com/accept-io/midas/internal/governanceexpectation"
@@ -71,4 +72,16 @@ type Repositories struct {
 	// FailModePolicy at evaluation time will be required to nil-check at
 	// each call site.
 	FailModePolicies failmode.PolicyRepository
+
+	// Drift repositories introduced in Drift-1a. All five are nil-safe:
+	// no runtime path consults them in Drift-1a (the foundation tranche
+	// is runtime-inert). Aggregation, detection, ingestion, and the
+	// audit-chain integration are scoped to Drift-3a → Drift-4. Tests
+	// that build a partial Repositories may leave any of these nil;
+	// callers added by later tranches must nil-check at each site.
+	DriftDefinitions  drift.DriftDefinitionRepository
+	DriftSeries       drift.DriftSeriesRepository
+	DriftSeriesPoints drift.DriftSeriesPointRepository
+	DriftObservations drift.DriftObservationRepository
+	DriftAnnotations  drift.DriftAnnotationRepository
 }

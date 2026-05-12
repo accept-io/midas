@@ -12,6 +12,7 @@ import (
 	"github.com/accept-io/midas/internal/businessservice"
 	"github.com/accept-io/midas/internal/businessservicecapability"
 	"github.com/accept-io/midas/internal/capability"
+	"github.com/accept-io/midas/internal/failmode"
 	"github.com/accept-io/midas/internal/process"
 	"github.com/accept-io/midas/internal/store"
 	"github.com/accept-io/midas/internal/surface"
@@ -114,8 +115,16 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 			Status:      "active",
 			Origin:      "manual",
 			Managed:     true,
-			CreatedAt:   now,
-			UpdatedAt:   now,
+			// D29d demo seed: attach the canonical closed-only
+			// FailModePolicy as this BusinessService's default so the
+			// runtime resolver exercises the BS-default level of the
+			// fail-mode hierarchy walk. The runtime remains
+			// evidence-only; this attachment only changes the
+			// frequency of FAIL_MODE_POLICY_RESOLVED emission for
+			// evaluations against any Surface under this service.
+			FailModePolicyID: "fmp-demo-default",
+			CreatedAt:        now,
+			UpdatedAt:        now,
 		},
 		{
 			ID:          "bs-merchant-services",
@@ -568,7 +577,6 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 			ProcessID:          "proc-consumer-onboarding",
 			DecisionType:       surface.DecisionTypeTactical,
 			ReversibilityClass: surface.ReversibilityConditionallyReversible,
-			FailureMode:        surface.FailureModeClosed,
 			RequiredContext:    surface.ContextSchema{Fields: []surface.ContextField{}},
 			ConsequenceTypes:   []surface.ConsequenceType{},
 			Status:             surface.SurfaceStatusActive,
@@ -587,7 +595,6 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 			ProcessID:          "proc-consumer-onboarding",
 			DecisionType:       surface.DecisionTypeTactical,
 			ReversibilityClass: surface.ReversibilityConditionallyReversible,
-			FailureMode:        surface.FailureModeClosed,
 			RequiredContext:    surface.ContextSchema{Fields: []surface.ContextField{}},
 			ConsequenceTypes:   []surface.ConsequenceType{},
 			Status:             surface.SurfaceStatusActive,
@@ -606,7 +613,6 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 			ProcessID:          "proc-credit-assessment",
 			DecisionType:       surface.DecisionTypeTactical,
 			ReversibilityClass: surface.ReversibilityConditionallyReversible,
-			FailureMode:        surface.FailureModeClosed,
 			RequiredContext:    surface.ContextSchema{Fields: []surface.ContextField{}},
 			ConsequenceTypes:   []surface.ConsequenceType{},
 			Status:             surface.SurfaceStatusActive,
@@ -625,7 +631,6 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 			ProcessID:          "proc-merchant-risk-screen",
 			DecisionType:       surface.DecisionTypeTactical,
 			ReversibilityClass: surface.ReversibilityConditionallyReversible,
-			FailureMode:        surface.FailureModeClosed,
 			RequiredContext:    surface.ContextSchema{Fields: []surface.ContextField{}},
 			ConsequenceTypes:   []surface.ConsequenceType{},
 			Status:             surface.SurfaceStatusActive,
@@ -644,7 +649,6 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 			ProcessID:          "proc-merchant-payment-auth",
 			DecisionType:       surface.DecisionTypeTactical,
 			ReversibilityClass: surface.ReversibilityConditionallyReversible,
-			FailureMode:        surface.FailureModeClosed,
 			RequiredContext:    surface.ContextSchema{Fields: []surface.ContextField{}},
 			ConsequenceTypes:   []surface.ConsequenceType{},
 			Status:             surface.SurfaceStatusActive,
@@ -663,7 +667,6 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 			ProcessID:          "proc-merchant-payment-auth",
 			DecisionType:       surface.DecisionTypeStrategic,
 			ReversibilityClass: surface.ReversibilityIrreversible,
-			FailureMode:        surface.FailureModeClosed,
 			RequiredContext:    surface.ContextSchema{Fields: []surface.ContextField{}},
 			ConsequenceTypes:   []surface.ConsequenceType{},
 			Status:             surface.SurfaceStatusActive,
@@ -685,7 +688,6 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 			Name: "Collections Call Priority", Description: "Prioritises overdue accounts for collections outreach",
 			Domain: "consumer-lending", ProcessID: "proc-loan-collections",
 			DecisionType: surface.DecisionTypeTactical, ReversibilityClass: surface.ReversibilityReversible,
-			FailureMode:     surface.FailureModeOpen,
 			RequiredContext: surface.ContextSchema{Fields: []surface.ContextField{}},
 			ConsequenceTypes: []surface.ConsequenceType{}, Status: surface.SurfaceStatusActive,
 			EffectiveFrom: effective, BusinessOwner: "consumer-lending-team", TechnicalOwner: "midas",
@@ -696,7 +698,6 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 			Name: "Account Opening Eligibility", Description: "Determines eligibility to open a retail account",
 			Domain: "retail-banking", ProcessID: "proc-account-opening",
 			DecisionType: surface.DecisionTypeTactical, ReversibilityClass: surface.ReversibilityConditionallyReversible,
-			FailureMode:     surface.FailureModeClosed,
 			RequiredContext: surface.ContextSchema{Fields: []surface.ContextField{}},
 			ConsequenceTypes: []surface.ConsequenceType{}, Status: surface.SurfaceStatusActive,
 			EffectiveFrom: effective, BusinessOwner: "retail-banking-team", TechnicalOwner: "midas",
@@ -707,7 +708,6 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 			Name: "Statement Suppression", Description: "Suppresses statement generation under specified conditions",
 			Domain: "retail-banking", ProcessID: "proc-statement-generation",
 			DecisionType: surface.DecisionTypeOperational, ReversibilityClass: surface.ReversibilityReversible,
-			FailureMode:     surface.FailureModeOpen,
 			RequiredContext: surface.ContextSchema{Fields: []surface.ContextField{}},
 			ConsequenceTypes: []surface.ConsequenceType{}, Status: surface.SurfaceStatusActive,
 			EffectiveFrom: effective, BusinessOwner: "retail-banking-team", TechnicalOwner: "midas",
@@ -718,7 +718,6 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 			Name: "Payment Initiation Check", Description: "Pre-authorisation checks for outbound payments",
 			Domain: "payments", ProcessID: "proc-payment-initiation",
 			DecisionType: surface.DecisionTypeTactical, ReversibilityClass: surface.ReversibilityConditionallyReversible,
-			FailureMode:     surface.FailureModeClosed,
 			RequiredContext: surface.ContextSchema{Fields: []surface.ContextField{}},
 			ConsequenceTypes: []surface.ConsequenceType{}, Status: surface.SurfaceStatusActive,
 			EffectiveFrom: effective, BusinessOwner: "payments-team", TechnicalOwner: "midas",
@@ -729,7 +728,6 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 			Name: "Cross-Border Sanctions Screen", Description: "Sanctions screening for cross-border transfers",
 			Domain: "payments", ProcessID: "proc-cross-border-transfer",
 			DecisionType: surface.DecisionTypeStrategic, ReversibilityClass: surface.ReversibilityIrreversible,
-			FailureMode:     surface.FailureModeClosed,
 			RequiredContext: surface.ContextSchema{Fields: []surface.ContextField{}},
 			ConsequenceTypes: []surface.ConsequenceType{}, Status: surface.SurfaceStatusActive,
 			EffectiveFrom: effective, BusinessOwner: "payments-team", TechnicalOwner: "midas",
@@ -740,7 +738,6 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 			Name: "Card Issuance Decision", Description: "Approves or declines card issuance requests",
 			Domain: "cards", ProcessID: "proc-card-issuance-flow",
 			DecisionType: surface.DecisionTypeTactical, ReversibilityClass: surface.ReversibilityConditionallyReversible,
-			FailureMode:     surface.FailureModeClosed,
 			RequiredContext: surface.ContextSchema{Fields: []surface.ContextField{}},
 			ConsequenceTypes: []surface.ConsequenceType{}, Status: surface.SurfaceStatusActive,
 			EffectiveFrom: effective, BusinessOwner: "cards-team", TechnicalOwner: "midas",
@@ -751,7 +748,6 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 			Name: "Card Dispute Triage", Description: "Triage of card disputes into chargeback / decline / investigation paths",
 			Domain: "cards", ProcessID: "proc-card-dispute",
 			DecisionType: surface.DecisionTypeTactical, ReversibilityClass: surface.ReversibilityConditionallyReversible,
-			FailureMode:     surface.FailureModeOpen,
 			RequiredContext: surface.ContextSchema{Fields: []surface.ContextField{}},
 			ConsequenceTypes: []surface.ConsequenceType{}, Status: surface.SurfaceStatusActive,
 			EffectiveFrom: effective, BusinessOwner: "cards-team", TechnicalOwner: "midas",
@@ -762,7 +758,6 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 			Name: "KYC Evaluation", Description: "Evaluates KYC completeness and risk for new customers",
 			Domain: "customer-onboarding", ProcessID: "proc-kyc-collection",
 			DecisionType: surface.DecisionTypeTactical, ReversibilityClass: surface.ReversibilityConditionallyReversible,
-			FailureMode:     surface.FailureModeClosed,
 			RequiredContext: surface.ContextSchema{Fields: []surface.ContextField{}},
 			ConsequenceTypes: []surface.ConsequenceType{}, Status: surface.SurfaceStatusActive,
 			EffectiveFrom: effective, BusinessOwner: "onboarding-team", TechnicalOwner: "midas",
@@ -773,7 +768,6 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 			Name: "Vulnerability Flag", Description: "Flags potentially vulnerable customers for human review",
 			Domain: "customer-onboarding", ProcessID: "proc-vulnerability-screen",
 			DecisionType: surface.DecisionTypeStrategic, ReversibilityClass: surface.ReversibilityReversible,
-			FailureMode:     surface.FailureModeOpen,
 			RequiredContext: surface.ContextSchema{Fields: []surface.ContextField{}},
 			ConsequenceTypes: []surface.ConsequenceType{}, Status: surface.SurfaceStatusActive,
 			EffectiveFrom: effective, BusinessOwner: "onboarding-team", TechnicalOwner: "midas",
@@ -784,7 +778,6 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 			Name: "Transaction Anomaly Detection", Description: "Real-time anomaly detection on transaction streams",
 			Domain: "fraud-financial-crime", ProcessID: "proc-transaction-monitoring",
 			DecisionType: surface.DecisionTypeTactical, ReversibilityClass: surface.ReversibilityConditionallyReversible,
-			FailureMode:     surface.FailureModeOpen,
 			RequiredContext: surface.ContextSchema{Fields: []surface.ContextField{}},
 			ConsequenceTypes: []surface.ConsequenceType{}, Status: surface.SurfaceStatusActive,
 			EffectiveFrom: effective, BusinessOwner: "ffc-team", TechnicalOwner: "midas",
@@ -795,7 +788,6 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 			Name: "Transaction Velocity Check", Description: "Velocity-based screening for unusual transaction frequency",
 			Domain: "fraud-financial-crime", ProcessID: "proc-transaction-monitoring",
 			DecisionType: surface.DecisionTypeTactical, ReversibilityClass: surface.ReversibilityReversible,
-			FailureMode:     surface.FailureModeOpen,
 			RequiredContext: surface.ContextSchema{Fields: []surface.ContextField{}},
 			ConsequenceTypes: []surface.ConsequenceType{}, Status: surface.SurfaceStatusActive,
 			EffectiveFrom: effective, BusinessOwner: "ffc-team", TechnicalOwner: "midas",
@@ -806,7 +798,6 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 			Name: "AML Alert Triage", Description: "Triages AML alerts into investigation, dismissal, or escalation",
 			Domain: "fraud-financial-crime", ProcessID: "proc-aml-investigation",
 			DecisionType: surface.DecisionTypeTactical, ReversibilityClass: surface.ReversibilityConditionallyReversible,
-			FailureMode:     surface.FailureModeClosed,
 			RequiredContext: surface.ContextSchema{Fields: []surface.ContextField{}},
 			ConsequenceTypes: []surface.ConsequenceType{}, Status: surface.SurfaceStatusActive,
 			EffectiveFrom: effective, BusinessOwner: "ffc-team", TechnicalOwner: "midas",
@@ -1304,6 +1295,76 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 		}
 	}
 
+	// --- FailModePolicies (D29d demo seed) ---
+	// One canonical active, closed-only policy attached to
+	// bs-consumer-lending above as its BusinessService default. The
+	// runtime resolver remains evidence-only — this seed only
+	// exercises the BS-default level of failmode.ResolveWithPath; it
+	// does not influence outcomes, audit hash chains, or
+	// POLICY_EVALUATED payloads. The (id, version) is FindByIDAndVersion-
+	// keyed for per-entity idempotency, mirroring ensureProfile.
+	if repos.FailModePolicies != nil {
+		failModePolicies := []*failmode.FailModePolicy{
+			{
+				ID:             "fmp-demo-default",
+				Version:        1,
+				Name:           "Demo Closed-Only FailModePolicy",
+				Description:    "Canonical demo fail-mode policy: closed posture across all permitted classes, evidence-only enforcement.",
+				Status:         failmode.FailModePolicyStatusActive,
+				EffectiveDate:  effective,
+				BusinessOwner:  "consumer-lending-team",
+				TechnicalOwner: "platform-runtime-team",
+				Rules: []failmode.FailModePolicyRule{
+					{
+						CorrectnessClass: failmode.CorrectnessClassGovernanceIntegrity,
+						PermittedMode:    failmode.PermittedModeClosed,
+						EnforcementState: failmode.EnforcementStateEvidenceOnly,
+						Outcome:          failmode.OutcomeEscalate,
+					},
+					{
+						CorrectnessClass: failmode.CorrectnessClassPersistence,
+						PermittedMode:    failmode.PermittedModeClosed,
+						EnforcementState: failmode.EnforcementStateEvidenceOnly,
+						Outcome:          failmode.OutcomeEscalate,
+					},
+					{
+						// Input must carry not_applicable per the
+						// closed-only invariant (D27j-impl-1a) — the
+						// validator rejects any other PermittedMode
+						// for this class. EnforcementState is forced
+						// to evidence_only for not_applicable.
+						CorrectnessClass: failmode.CorrectnessClassInput,
+						PermittedMode:    failmode.PermittedModeNotApplicable,
+						EnforcementState: failmode.EnforcementStateEvidenceOnly,
+						Outcome:          failmode.OutcomeEscalate,
+					},
+					{
+						CorrectnessClass: failmode.CorrectnessClassResource,
+						PermittedMode:    failmode.PermittedModeClosed,
+						EnforcementState: failmode.EnforcementStateEvidenceOnly,
+						Outcome:          failmode.OutcomeEscalate,
+					},
+					{
+						CorrectnessClass: failmode.CorrectnessClassConsistency,
+						PermittedMode:    failmode.PermittedModeClosed,
+						EnforcementState: failmode.EnforcementStateEvidenceOnly,
+						Outcome:          failmode.OutcomeEscalate,
+					},
+				},
+				Origin:    "manual",
+				Managed:   true,
+				CreatedAt: now,
+				UpdatedAt: now,
+				CreatedBy: "system",
+			},
+		}
+		for _, p := range failModePolicies {
+			if err := ensureFailModePolicy(ctx, repos.FailModePolicies, p); err != nil {
+				return err
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -1410,6 +1471,27 @@ func ensureAgent(ctx context.Context, repo agent.AgentRepository, a *agent.Agent
 	}
 	if err := repo.Create(ctx, a); err != nil {
 		return fmt.Errorf("create agent %s: %w", a.ID, err)
+	}
+	return nil
+}
+
+// ensureFailModePolicy uses FindByIDAndVersion for the same reason as
+// ensureProfile: FailModePolicy is versioned and the seed inserts a
+// specific (id, version) row. FindByID would skip creation when a
+// later version exists, which is wrong for partial-seed repair on
+// upgrade. The repository's Create assigns the persisted Version from
+// the input row's Version field, so the seed remains in control of
+// the demo dataset's versioning.
+func ensureFailModePolicy(ctx context.Context, repo failmode.PolicyRepository, p *failmode.FailModePolicy) error {
+	existing, err := repo.FindByIDAndVersion(ctx, p.ID, p.Version)
+	if err != nil {
+		return fmt.Errorf("lookup fail mode policy %s v%d: %w", p.ID, p.Version, err)
+	}
+	if existing != nil {
+		return nil
+	}
+	if err := repo.Create(ctx, p); err != nil {
+		return fmt.Errorf("create fail mode policy %s v%d: %w", p.ID, p.Version, err)
 	}
 	return nil
 }

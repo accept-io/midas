@@ -81,6 +81,17 @@ const (
 	// deprecate is admin-only, matching profile-deprecate posture.
 	PermFailModePolicyApprove   Permission = "fail_mode_policy:approve"
 	PermFailModePolicyDeprecate Permission = "fail_mode_policy:deprecate"
+
+	// DriftDefinition lifecycle permissions (Drift-1e). Five actions
+	// instead of two because DriftDefinition has the full lifecycle
+	// graph (draft → review → active → deprecated → retired). Submit
+	// is operator-grade; approve/reject mirror surface/profile approver
+	// posture; deprecate and retire are admin-only (destructive).
+	PermDriftDefinitionSubmit    Permission = "drift_definition:submit"
+	PermDriftDefinitionApprove   Permission = "drift_definition:approve"
+	PermDriftDefinitionReject    Permission = "drift_definition:reject"
+	PermDriftDefinitionDeprecate Permission = "drift_definition:deprecate"
+	PermDriftDefinitionRetire    Permission = "drift_definition:retire"
 )
 
 // allControlPlaneWritePermissions is the canonical control-plane write
@@ -116,6 +127,11 @@ var allControlPlaneWritePermissions = []Permission{
 	PermGovernanceExpectationApprove,
 	PermFailModePolicyApprove,
 	PermFailModePolicyDeprecate,
+	PermDriftDefinitionSubmit,
+	PermDriftDefinitionApprove,
+	PermDriftDefinitionReject,
+	PermDriftDefinitionDeprecate,
+	PermDriftDefinitionRetire,
 	PermGrantSuspend,
 	PermGrantRevoke,
 	PermGrantReinstate,
@@ -156,13 +172,23 @@ var roleBundles = map[string][]Permission{
 		// approver pattern. The corresponding deprecate permission is
 		// deliberately admin-only.
 		PermFailModePolicyApprove,
+		// DriftDefinition approve + reject mirror the surface/profile
+		// approver pattern. Drift-1e splits the maker-checker counter-
+		// party so both approve and reject sit with the approver role
+		// (rejection back to draft is a positive governance action that
+		// belongs with the same gate as approval). Deprecate and retire
+		// remain admin-only.
+		PermDriftDefinitionApprove,
+		PermDriftDefinitionReject,
 	},
 
-	// Operator, viewer, and reviewer hold no control-plane write permissions
-	// under this model. Their existing role-based gates on read-path,
-	// data-plane evaluate, /v1/reviews, and Explorer sandbox routes are
-	// unchanged and intentionally out of scope for this package.
-	identity.RolePlatformOperator:   {},
+	// Operator and reviewer holdings: Drift-1e adds submit to the
+	// platform.operator bundle so an operator can move a DriftDefinition
+	// revision from draft to review without admin involvement. Viewer
+	// and reviewer remain empty.
+	identity.RolePlatformOperator: {
+		PermDriftDefinitionSubmit,
+	},
 	identity.RolePlatformViewer:     {},
 	identity.RoleGovernanceReviewer: {},
 }

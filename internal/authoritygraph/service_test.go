@@ -2,7 +2,9 @@ package authoritygraph
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/accept-io/midas/internal/aisystem"
@@ -2197,6 +2199,185 @@ func TestService_SurfView_NoSyntheticSummaryOrCoverage(t *testing.T) {
 	for _, e := range p.Edges {
 		if e.Kind == EdgeKindSummarises || e.Kind == EdgeKindReportsCoverage {
 			t.Errorf("decision_surface view must NOT emit %q edges; got %+v", e.Kind, e)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// D27j-ui-2a — FailModePolicyID propagation through every view
+// ---------------------------------------------------------------------------
+//
+// The projection carries the BusinessService.FailModePolicyID and
+// DecisionSurface.FailModePolicyID references verbatim. No policy
+// lookup, no resolution, no rule inspection. These tests prove the
+// data is present in typed-data when configured and nothing else
+// changes (no new node kind, no new edge kind, no new top-level
+// fields).
+
+func TestService_ServiceView_BusinessServiceData_CarriesFailModePolicyID(t *testing.T) {
+	m := makeFullDemoMap()
+	m.BusinessService.BusinessService.FailModePolicyID = "policy-bs-default"
+	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*governancemap.Map{"bs-1": m}}})
+	p, err := svc.Project(context.Background(), ViewService, "bs-1", MaxDepth)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	var bs *Node
+	for i := range p.Nodes {
+		if p.Nodes[i].Kind == NodeKindBusinessService && p.Nodes[i].ID == "bs-1" {
+			bs = &p.Nodes[i]
+			break
+		}
+	}
+	if bs == nil || bs.BusinessService == nil {
+		t.Fatalf("business_service typed data missing")
+	}
+	if got, want := bs.BusinessService.FailModePolicyID, "policy-bs-default"; got != want {
+		t.Errorf("bs fail_mode_policy_id: want %q, got %q", want, got)
+	}
+}
+
+func TestService_ServiceView_BusinessServiceData_OmitsEmptyFailModePolicyID(t *testing.T) {
+	// makeFullDemoMap leaves FailModePolicyID at zero, so the empty
+	// branch is the default. Marshal the projection and assert the key
+	// does not appear on the BS root node.
+	m := makeFullDemoMap()
+	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*governancemap.Map{"bs-1": m}}})
+	p, err := svc.Project(context.Background(), ViewService, "bs-1", MaxDepth)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	for _, n := range p.Nodes {
+		if n.Kind != NodeKindBusinessService || n.ID != "bs-1" || n.BusinessService == nil {
+			continue
+		}
+		raw, err := json.Marshal(n.BusinessService)
+		if err != nil {
+			t.Fatalf("marshal bs: %v", err)
+		}
+		if strings.Contains(string(raw), `"fail_mode_policy_id"`) {
+			t.Errorf("empty FailModePolicyID must be omitted from BS typed data; got %s", raw)
+		}
+		return
+	}
+	t.Fatal("business_service node missing")
+}
+
+func TestService_ServiceView_DecisionSurfaceData_CarriesFailModePolicyID(t *testing.T) {
+	m := makeFullDemoMap()
+	m.Surfaces[0].Surface.FailModePolicyID = "policy-surface-override"
+	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*governancemap.Map{"bs-1": m}}})
+	p, err := svc.Project(context.Background(), ViewService, "bs-1", MaxDepth)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	var surf *Node
+	for i := range p.Nodes {
+		if p.Nodes[i].Kind == NodeKindDecisionSurface && p.Nodes[i].ID == "surf-1" {
+			surf = &p.Nodes[i]
+			break
+		}
+	}
+	if surf == nil || surf.DecisionSurface == nil {
+		t.Fatalf("decision_surface typed data missing")
+	}
+	if got, want := surf.DecisionSurface.FailModePolicyID, "policy-surface-override"; got != want {
+		t.Errorf("surf fail_mode_policy_id: want %q, got %q", want, got)
+	}
+}
+
+func TestService_AIView_BusinessServiceData_CarriesFailModePolicyID(t *testing.T) {
+	stubs := newAIViewStubs()
+	stubs.systems.items["ai-1"] = &aisystem.AISystem{ID: "ai-1", Name: "AI", Status: "active"}
+	stubs.bindings.byAISystem["ai-1"] = []*aisystem.AISystemBinding{
+		{ID: "bind-1", AISystemID: "ai-1", BusinessServiceID: "bs-1"},
+	}
+	stubs.bss.items["bs-1"] = &businessservice.BusinessService{
+		ID: "bs-1", Name: "BS", Status: "active",
+		FailModePolicyID: "policy-bs-default",
+	}
+	svc := NewServiceWithReaders(stubs.readers())
+	p, err := svc.Project(context.Background(), ViewAISystem, "ai-1", MaxDepth)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	var bs *Node
+	for i := range p.Nodes {
+		if p.Nodes[i].Kind == NodeKindBusinessService && p.Nodes[i].ID == "bs-1" {
+			bs = &p.Nodes[i]
+			break
+		}
+	}
+	if bs == nil || bs.BusinessService == nil {
+		t.Fatalf("business_service typed data missing on ai_system view")
+	}
+	if got, want := bs.BusinessService.FailModePolicyID, "policy-bs-default"; got != want {
+		t.Errorf("ai_system view bs fail_mode_policy_id: want %q, got %q", want, got)
+	}
+}
+
+func TestService_SurfView_DecisionSurfaceData_CarriesFailModePolicyID(t *testing.T) {
+	stubs := makeSurfViewWithFullChainAndOneBinding()
+	stubs.surfs.items["surf-1"].FailModePolicyID = "policy-surface-override"
+	svc := NewServiceWithReaders(stubs.readers())
+	p, err := svc.Project(context.Background(), ViewDecisionSurface, "surf-1", MaxDepth)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	var surf *Node
+	for i := range p.Nodes {
+		if p.Nodes[i].Kind == NodeKindDecisionSurface && p.Nodes[i].ID == "surf-1" {
+			surf = &p.Nodes[i]
+			break
+		}
+	}
+	if surf == nil || surf.DecisionSurface == nil {
+		t.Fatalf("decision_surface typed data missing on decision_surface view")
+	}
+	if got, want := surf.DecisionSurface.FailModePolicyID, "policy-surface-override"; got != want {
+		t.Errorf("decision_surface view fail_mode_policy_id: want %q, got %q", want, got)
+	}
+}
+
+// TestService_ServiceView_NoFailModePolicyNodeOrEdgeIntroduced is the
+// structural guard for D27j-ui-2a: even when a BS and a surface both
+// carry FailModePolicyID values, the projection must not introduce
+// new node kinds, edge kinds, or top-level fields. The reference is
+// data-only.
+func TestService_ServiceView_NoFailModePolicyNodeOrEdgeIntroduced(t *testing.T) {
+	m := makeFullDemoMap()
+	m.BusinessService.BusinessService.FailModePolicyID = "policy-bs-default"
+	m.Surfaces[0].Surface.FailModePolicyID = "policy-surface-override"
+	svc := NewServiceWithReaders(Readers{GovernanceMap: &stubReader{items: map[string]*governancemap.Map{"bs-1": m}}})
+	p, err := svc.Project(context.Background(), ViewService, "bs-1", MaxDepth)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	for _, n := range p.Nodes {
+		if strings.Contains(n.Kind, "fail_mode_policy") || strings.Contains(n.Kind, "failmode") {
+			t.Errorf("D27j-ui-2a: no node kind may reference fail_mode_policy / failmode; got %+v", n)
+		}
+	}
+	for _, e := range p.Edges {
+		if strings.Contains(e.Kind, "fail_mode_policy") || strings.Contains(e.Kind, "failmode") {
+			t.Errorf("D27j-ui-2a: no edge kind may reference fail_mode_policy / failmode; got %+v", e)
+		}
+	}
+	// Marshal the whole projection and assert the only fail-mode-related
+	// key is the additive fail_mode_policy_id reference (no badge,
+	// node, or overlay leaks via JSON either).
+	raw, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, forbidden := range []string{
+		`"fail_mode_policy_node"`,
+		`"fail_mode_policy_edge"`,
+		`"FAIL_MODE_POLICY_RESOLVED"`,
+		`"effective_fail_mode_policy"`,
+	} {
+		if strings.Contains(string(raw), forbidden) {
+			t.Errorf("D27j-ui-2a: forbidden key %q present in projection JSON", forbidden)
 		}
 	}
 }

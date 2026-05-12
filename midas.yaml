@@ -188,6 +188,28 @@ dev:
   # Env: MIDAS_DEV_SEED_DEMO_USER=false
   seed_demo_user: true
 
+  # seed_synthetic_drift controls the deterministic, dev/demo-only synthetic
+  # drift dataset (DriftDefinitions + Series + Points + Observations +
+  # Annotations) over the existing demo entities so the Drift heatmap /
+  # workbench / inspector UI is populated for demos. Idempotent.
+  #
+  # When this key is omitted (the default in this sample), the value is
+  # INHERITED FROM seed_demo_data:
+  #   seed_demo_data: true  → synthetic drift is seeded
+  #   seed_demo_data: false → synthetic drift is not seeded
+  #
+  # Set this key explicitly to override the inheritance:
+  #   seed_synthetic_drift: false  → suppresses synthetic drift even when
+  #                                  seed_demo_data is true
+  #   seed_synthetic_drift: true   → forces synthetic drift even when
+  #                                  seed_demo_data is false (warns at
+  #                                  startup; the synthetic generator
+  #                                  references demo entity IDs)
+  #
+  # Env: MIDAS_DEV_SEED_SYNTHETIC_DRIFT=true|false (overrides this YAML key)
+  # NEVER enable in production.
+  # seed_synthetic_drift: false
+
 # ---------------------------------------------------------------------------
 # Outbox dispatcher (optional)
 # ---------------------------------------------------------------------------

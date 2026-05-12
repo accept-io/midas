@@ -159,8 +159,15 @@ func ParseYAML(data []byte) (ParsedDocument, error) {
 		}
 		return wrapDocument(doc), nil
 
+	case types.KindDriftDefinition:
+		var doc types.DriftDefinitionDocument
+		if err := strictUnmarshal(data, &doc); err != nil {
+			return ParsedDocument{}, fmt.Errorf("failed to parse DriftDefinition document: %w", err)
+		}
+		return wrapDocument(doc), nil
+
 	default:
-		return ParsedDocument{}, fmt.Errorf("unsupported kind: %q (must be Surface, Agent, Profile, Grant, Capability, Process, BusinessService, BusinessServiceCapability, BusinessServiceRelationship, GovernanceExpectation, AISystem, AISystemVersion, AISystemBinding, or FailModePolicy)", meta.Kind)
+		return ParsedDocument{}, fmt.Errorf("unsupported kind: %q (must be Surface, Agent, Profile, Grant, Capability, Process, BusinessService, BusinessServiceCapability, BusinessServiceRelationship, GovernanceExpectation, AISystem, AISystemVersion, AISystemBinding, FailModePolicy, or DriftDefinition)", meta.Kind)
 	}
 }
 

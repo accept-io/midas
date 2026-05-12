@@ -15,6 +15,50 @@ import (
 	"github.com/accept-io/midas/internal/eval"
 )
 
+// getExplorerAsset fetches /explorer/assets/<path> via the test server and
+// returns the response body. Fails the test on non-200 or empty body.
+// Used to relocate CSS-rule-substring assertions from the /explorer HTML
+// body to the corresponding extracted CSS file (D27j-ui-foundation-2).
+func getExplorerAsset(t *testing.T, srv *Server, path string) string {
+	t.Helper()
+	rec := performRequest(t, srv, http.MethodGet, path, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET %s: want 200, got %d: %s", path, rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if body == "" {
+		t.Fatalf("GET %s: empty body", path)
+	}
+	return body
+}
+
+// explorerCSSFiles is the canonical cascade order of extracted CSS files
+// (D27j-ui-foundation-2). Tests that assert CSS-rule presence use
+// getExplorerAllCSS to grep the full conceptual stylesheet without
+// caring which file a rule landed in. Cascade-order-sensitive tests can
+// still target a single file via getExplorerAsset.
+var explorerCSSFiles = []string{
+	"tokens", "shell", "components", "iam", "evaluate",
+	"settings", "records", "services", "capabilities", "governance-map",
+	"drift",
+}
+
+// getExplorerAllCSS fetches every extracted CSS file and concatenates
+// them in cascade order, separated by newlines. The result is the
+// conceptual stylesheet the browser receives — the same surface area
+// existing CSS-substring tests used to grep when CSS lived inline in
+// index.html. Cheap by test standards (10 small fetches against an
+// in-memory FileServer).
+func getExplorerAllCSS(t *testing.T, srv *Server) string {
+	t.Helper()
+	var sb strings.Builder
+	for _, name := range explorerCSSFiles {
+		sb.WriteString(getExplorerAsset(t, srv, "/explorer/assets/css/"+name+".css"))
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
 func TestExplorer_Disabled_Returns404(t *testing.T) {
 	// Server constructed without WithExplorerEnabled — routes not registered.
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil)
@@ -256,6 +300,900 @@ func TestExplorer_Assets_Served(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "MIDAS Explorer") {
 		t.Errorf("want body to contain 'MIDAS Explorer'")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// D27j-ui-foundation-2 — extracted CSS asset serving
+//
+// The Explorer shell embeds the explorer/ directory recursively via
+// //go:embed; nested asset paths are served by the existing
+// handleExplorerAssets route (http.FileServer over the embed FS). These
+// tests pin the new asset paths so future tranches that touch CSS can
+// trust the asset-route plumbing.
+// ---------------------------------------------------------------------------
+
+func TestExplorer_AssetsCSS_Tokens_Served(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer/assets/css/tokens.css", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	ct := rec.Header().Get("Content-Type")
+	if !strings.HasPrefix(ct, "text/css") {
+		t.Errorf("want Content-Type text/css, got %q", ct)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, ":root {") {
+		t.Error("tokens.css must contain the :root design-token block")
+	}
+}
+
+func TestExplorer_AssetsCSS_Shell_Served(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer/assets/css/shell.css", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	ct := rec.Header().Get("Content-Type")
+	if !strings.HasPrefix(ct, "text/css") {
+		t.Errorf("want Content-Type text/css, got %q", ct)
+	}
+	if !strings.Contains(rec.Body.String(), ".shell-sidebar") {
+		t.Error("shell.css must contain the .shell-sidebar selector")
+	}
+}
+
+func TestExplorer_AssetsCSS_GovernanceMap_Served(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer/assets/css/governance-map.css", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	ct := rec.Header().Get("Content-Type")
+	if !strings.HasPrefix(ct, "text/css") {
+		t.Errorf("want Content-Type text/css, got %q", ct)
+	}
+	if !strings.Contains(rec.Body.String(), ".governance-map-toolbar") {
+		t.Error("governance-map.css must contain the .governance-map-toolbar selector")
+	}
+}
+
+func TestExplorer_AssetsCSS_NotFound_Returns404(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer/assets/css/does-not-exist.css", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("want 404 for missing CSS asset, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestExplorer_HTML_LinksAllExtractedCSS pins that index.html references
+// all 10 extracted CSS files in cascade order. The cascade order matters
+// because some rules in later files override declarations in earlier
+// files (e.g. governance-map.css overrides shared component declarations
+// inside the gmap context). strings.Index is used to verify monotonic
+// position so a regression that reorders the <link> tags fails the test.
+func TestExplorer_HTML_LinksAllExtractedCSS(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	wantOrdered := []string{
+		`<link rel="stylesheet" href="/explorer/assets/css/tokens.css">`,
+		`<link rel="stylesheet" href="/explorer/assets/css/shell.css">`,
+		`<link rel="stylesheet" href="/explorer/assets/css/components.css">`,
+		`<link rel="stylesheet" href="/explorer/assets/css/iam.css">`,
+		`<link rel="stylesheet" href="/explorer/assets/css/evaluate.css">`,
+		`<link rel="stylesheet" href="/explorer/assets/css/settings.css">`,
+		`<link rel="stylesheet" href="/explorer/assets/css/records.css">`,
+		`<link rel="stylesheet" href="/explorer/assets/css/services.css">`,
+		`<link rel="stylesheet" href="/explorer/assets/css/capabilities.css">`,
+		`<link rel="stylesheet" href="/explorer/assets/css/governance-map.css">`,
+	}
+	prevIdx := -1
+	for _, want := range wantOrdered {
+		idx := strings.Index(body, want)
+		if idx < 0 {
+			t.Errorf("missing CSS <link>: %q", want)
+			continue
+		}
+		if idx <= prevIdx {
+			t.Errorf("CSS <link> out of cascade order: %q at idx=%d previous=%d", want, idx, prevIdx)
+		}
+		prevIdx = idx
+	}
+	// The inline <style> block must be gone.
+	if strings.Contains(body, "<style>") {
+		t.Error("inline <style> block must be removed from index.html (CSS is now extracted)")
+	}
+}
+
+// TestExplorer_HTML_RootDOMRoots_Preserved pins the load-bearing DOM
+// containers after CSS extraction. Belt-and-braces guard tied to this
+// tranche so the protection is grouped with the extraction and any
+// future regression here is attributed to a CSS-extraction-related
+// change rather than a feature regression.
+func TestExplorer_HTML_RootDOMRoots_Preserved(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		`<aside class="shell-sidebar"`,
+		`<header class="shell-header"`,
+		`<main class="shell-main"`,
+		`id="view-services"`,
+		`id="view-capabilities"`,
+		`id="view-evaluate"`,
+		`id="view-records"`,
+		`id="view-settings"`,
+		`id="gmap-details"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("DOM root marker missing after CSS extraction: %q", want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// D27j-ui-foundation-3 — extracted JavaScript utility asset serving
+//
+// Plain-script utility files (no ES modules, no build step) attach pure
+// helpers onto window.MIDASExplorerUtils before the main inline script
+// runs. The inline IIFE binds them to local consts so existing call-sites
+// keep working without rewrite. These tests pin the asset routing and
+// the namespace contract.
+// ---------------------------------------------------------------------------
+
+// jsContentType is satisfied by either text/javascript (the registered
+// IANA type, which Go's mime package returns on most platforms) or the
+// older application/javascript. Both are acceptable per RFC 9239.
+func jsContentType(ct string) bool {
+	return strings.HasPrefix(ct, "text/javascript") ||
+		strings.HasPrefix(ct, "application/javascript")
+}
+
+func TestExplorer_AssetsJS_UtilFormat_Served(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer/assets/js/util-format.js", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	ct := rec.Header().Get("Content-Type")
+	if !jsContentType(ct) {
+		t.Errorf("want JavaScript Content-Type, got %q", ct)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"window.MIDASExplorerUtils",
+		"function escapeHTML(",
+		"function escHtml(",
+		"function deepEqual(",
+		"function formatVal(",
+		"function formatFieldValue(",
+		"function formatExternalRef(",
+		"function formatAIBindingScope(",
+		"function formatAIBindingDetail(",
+		"function formatConsequenceVal(",
+		"function formatGmapDemoValue(",
+		"function recordsOutcomeClass(",
+		"function bandClassFor(",
+		"function getTruncationInfo(",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("util-format.js must contain %q", want)
+		}
+	}
+}
+
+func TestExplorer_AssetsJS_UtilTime_Served(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer/assets/js/util-time.js", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); !jsContentType(ct) {
+		t.Errorf("want JavaScript Content-Type, got %q", ct)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "window.MIDASExplorerUtils") {
+		t.Error("util-time.js must reference window.MIDASExplorerUtils")
+	}
+	if !strings.Contains(body, "function formatRecordTimestamp(") {
+		t.Error("util-time.js must declare formatRecordTimestamp")
+	}
+}
+
+func TestExplorer_AssetsJS_UtilDom_Served(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer/assets/js/util-dom.js", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); !jsContentType(ct) {
+		t.Errorf("want JavaScript Content-Type, got %q", ct)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "window.MIDASExplorerUtils") {
+		t.Error("util-dom.js must reference window.MIDASExplorerUtils")
+	}
+	if !strings.Contains(body, "function copyToClipboard(") {
+		t.Error("util-dom.js must declare copyToClipboard")
+	}
+}
+
+func TestExplorer_AssetsJS_NotFound_Returns404(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer/assets/js/does-not-exist.js", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("want 404 for missing JS asset, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestExplorer_HTML_LinksAllExtractedJS pins that index.html references
+// the three extracted JS assets in load order, AND that they appear
+// before the inline main script. Plain script tags (no type=module, no
+// defer, no async) are required so the namespace is populated before
+// the inline IIFE binds its local consts.
+func TestExplorer_HTML_LinksAllExtractedJS(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	wantOrdered := []string{
+		`<script src="/explorer/assets/js/util-format.js"></script>`,
+		`<script src="/explorer/assets/js/util-time.js"></script>`,
+		`<script src="/explorer/assets/js/util-dom.js"></script>`,
+	}
+	prevIdx := -1
+	for _, want := range wantOrdered {
+		idx := strings.Index(body, want)
+		if idx < 0 {
+			t.Errorf("missing JS <script> tag: %q", want)
+			continue
+		}
+		if idx <= prevIdx {
+			t.Errorf("JS <script> tag out of load order: %q at idx=%d previous=%d", want, idx, prevIdx)
+		}
+		prevIdx = idx
+	}
+	// All extracted-utility tags must appear before the inline IIFE
+	// opener so the namespace is populated by the time local consts
+	// bind to it.
+	inlineIIFE := strings.Index(body, "(function () {\n  'use strict';\n\n  // D27j-ui-foundation-3")
+	if inlineIIFE < 0 {
+		t.Fatal("inline IIFE opener (with D27j-ui-foundation-3 marker) not found")
+	}
+	if prevIdx >= inlineIIFE {
+		t.Errorf("util-*.js script tags must precede the inline IIFE; lastTagIdx=%d inlineIIFEIdx=%d", prevIdx, inlineIIFE)
+	}
+	// Negative pins: extracted utility tags must use plain script form.
+	for _, forbidden := range []string{
+		`<script type="module" src="/explorer/assets/js/util-format.js"`,
+		`<script defer src="/explorer/assets/js/util-format.js"`,
+		`<script async src="/explorer/assets/js/util-format.js"`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("D27j-ui-foundation-3: util-format.js script tag must be a plain <script src=…> (no module/defer/async); found %q", forbidden)
+		}
+	}
+}
+
+// TestExplorer_HTML_MainScriptStillInline pins that the main app
+// script remains inline in index.html — the utility extraction must
+// not have moved feature, render, fetch, state, or event-binding
+// code out.
+func TestExplorer_HTML_MainScriptStillInline(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		// Inline IIFE bookends.
+		"(function () {",
+		"'use strict';",
+		"})();",
+		// Bootstrap + view router (must remain inline).
+		"function showView(",
+		// Governance Map render (must remain inline).
+		"function renderGovernanceMap(data)",
+		// Records render (must remain inline).
+		"function renderExplorerEnvelopeDetailSections(env)",
+		// API fetch wrappers (must remain inline).
+		"function loadExplorerRuntimeRecords()",
+		// Filter state (must remain inline).
+		"const gmapVisibilityFilters",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("main inline script must still contain %q", want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// D27j-ui-foundation-4 — API client + state/cache namespace foundation
+//
+// api.js exposes window.MIDASExplorerAPI (currently buildAuthHeaders).
+// state.js exposes window.MIDASExplorerState and hoists three pure
+// cache containers (serviceRecordCache, capabilityRecordCache,
+// explorerEnvelopeDetailsById). These tests pin asset routing,
+// content type, namespace presence, script load order, and the new
+// inline IIFE local bindings. The 404 case is already covered by
+// D27j-ui-foundation-3's TestExplorer_AssetsJS_NotFound_Returns404
+// (same /explorer/assets/js/ subtree); not duplicated here.
+// ---------------------------------------------------------------------------
+
+func TestExplorer_AssetsJS_API_Served(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer/assets/js/api.js", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); !jsContentType(ct) {
+		t.Errorf("want JavaScript Content-Type, got %q", ct)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "window.MIDASExplorerAPI") {
+		t.Error("api.js must reference window.MIDASExplorerAPI")
+	}
+	if !strings.Contains(body, "function buildAuthHeaders(") {
+		t.Error("api.js must declare buildAuthHeaders")
+	}
+}
+
+func TestExplorer_AssetsJS_State_Served(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer/assets/js/state.js", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); !jsContentType(ct) {
+		t.Errorf("want JavaScript Content-Type, got %q", ct)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "window.MIDASExplorerState") {
+		t.Error("state.js must reference window.MIDASExplorerState")
+	}
+	for _, want := range []string{
+		"window.MIDASExplorerState.serviceRecordCache",
+		"window.MIDASExplorerState.capabilityRecordCache",
+		"window.MIDASExplorerState.explorerEnvelopeDetailsById",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("state.js must reference %q", want)
+		}
+	}
+}
+
+// TestExplorer_HTML_LinksAPIAndStateScripts pins that index.html
+// references api.js + state.js AFTER the three util-*.js tags AND
+// before the inline <script> opener. Plain <script src=...> only.
+func TestExplorer_HTML_LinksAPIAndStateScripts(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	wantOrdered := []string{
+		`<script src="/explorer/assets/js/util-format.js"></script>`,
+		`<script src="/explorer/assets/js/util-time.js"></script>`,
+		`<script src="/explorer/assets/js/util-dom.js"></script>`,
+		`<script src="/explorer/assets/js/api.js"></script>`,
+		`<script src="/explorer/assets/js/state.js"></script>`,
+	}
+	prevIdx := -1
+	for _, want := range wantOrdered {
+		idx := strings.Index(body, want)
+		if idx < 0 {
+			t.Errorf("missing JS <script> tag: %q", want)
+			continue
+		}
+		if idx <= prevIdx {
+			t.Errorf("JS <script> tag out of load order: %q at idx=%d previous=%d", want, idx, prevIdx)
+		}
+		prevIdx = idx
+	}
+	// All five extracted-script tags must appear before the inline IIFE.
+	inlineIIFE := strings.Index(body, "(function () {\n  'use strict';\n\n  // D27j-ui-foundation-3")
+	if inlineIIFE < 0 {
+		t.Fatal("inline IIFE opener not found")
+	}
+	if prevIdx >= inlineIIFE {
+		t.Errorf("util/api/state script tags must precede the inline IIFE; lastTagIdx=%d inlineIIFEIdx=%d", prevIdx, inlineIIFE)
+	}
+	// Negative pins on api.js / state.js script tags — must remain plain.
+	for _, forbidden := range []string{
+		`<script type="module" src="/explorer/assets/js/api.js"`,
+		`<script defer src="/explorer/assets/js/api.js"`,
+		`<script async src="/explorer/assets/js/api.js"`,
+		`<script type="module" src="/explorer/assets/js/state.js"`,
+		`<script defer src="/explorer/assets/js/state.js"`,
+		`<script async src="/explorer/assets/js/state.js"`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("D27j-ui-foundation-4: api.js/state.js must use plain <script src=…> tags; found %q", forbidden)
+		}
+	}
+}
+
+// TestExplorer_HTML_StateNamespaceBoundInline pins that the inline
+// IIFE binds the new ExplorerAPI / ExplorerState namespaces and the
+// three extracted cache local consts (so existing call-sites continue
+// to mutate the same objects).
+func TestExplorer_HTML_StateNamespaceBoundInline(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		`const ExplorerAPI   = window.MIDASExplorerAPI   || {};`,
+		`const ExplorerState = window.MIDASExplorerState || {};`,
+		`const serviceRecordCache          = ExplorerState.serviceRecordCache;`,
+		`const capabilityRecordCache       = ExplorerState.capabilityRecordCache;`,
+		`const explorerEnvelopeDetailsById = ExplorerState.explorerEnvelopeDetailsById;`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("inline IIFE must contain namespace/cache binding %q", want)
+		}
+	}
+}
+
+// TestExplorer_HTML_MainScriptStillInline_Foundation4 confirms that:
+//
+//   - the three extracted-cache declarations are no longer in the
+//     inline IIFE body (`const serviceRecordCache = {};` etc.); and
+//   - the main app script is still inline (existing render functions,
+//     fetch wrappers, filter state, etc. all still present).
+//
+// Belt-and-braces guard tied to D27j-ui-foundation-4 so the protection
+// is grouped with the extraction.
+func TestExplorer_HTML_MainScriptStillInline_Foundation4(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	// Negative: original inline declarations must be gone.
+	for _, gone := range []string{
+		`  const serviceRecordCache = {};`,
+		`  const capabilityRecordCache = {};`,
+		`  let explorerEnvelopeDetailsById     = {};`,
+	} {
+		if strings.Contains(body, gone) {
+			t.Errorf("D27j-ui-foundation-4: extracted declaration must be removed: %q", gone)
+		}
+	}
+	// Positive: main app script remains inline (regression pin from
+	// D27j-ui-foundation-3 — confirms this tranche didn't move
+	// render/fetch/state code out of the IIFE).
+	for _, want := range []string{
+		"(function () {",
+		"'use strict';",
+		"})();",
+		"function renderGovernanceMap(data)",
+		"function renderExplorerEnvelopeDetailSections(env)",
+		"function loadExplorerRuntimeRecords()",
+		"const gmapVisibilityFilters",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("main inline script must still contain %q", want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// D27j-ui-foundation-5 — Governance Map module foundation
+//
+// Three plain-script files attach low-risk constants and pure helpers
+// to window.MIDASGovernanceMap. constants.js declares GMAP, GMAP_ZOOM,
+// GMAP_DRAG_THRESHOLD_PX, ROOT_VIEWPORT_OFFSET_RATIO. layout.js holds
+// pure layout/geometry helpers (4 anchors, GMAP_ANCHORS, distributeRow,
+// curvePath, gmapSafeArea). layers.js holds pure classification
+// helpers (gmapNodeCategoryFromKind, gmapConnectorKindFromCls). The
+// 404 case is already covered by TestExplorer_AssetsJS_NotFound_Returns404
+// from D27j-ui-foundation-3 (same /explorer/assets/js/ subtree).
+// ---------------------------------------------------------------------------
+
+func TestExplorer_AssetsJS_GMConstants_Served(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer/assets/js/governance-map/constants.js", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); !jsContentType(ct) {
+		t.Errorf("want JavaScript Content-Type, got %q", ct)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"window.MIDASGovernanceMap",
+		"window.MIDASGovernanceMap.GMAP",
+		"window.MIDASGovernanceMap.GMAP_ZOOM",
+		"window.MIDASGovernanceMap.GMAP_DRAG_THRESHOLD_PX",
+		"window.MIDASGovernanceMap.ROOT_VIEWPORT_OFFSET_RATIO",
+		"NODE_W: 220",
+		"NODE_GAP: 32",
+		"FIT_MIN: 0.20",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("constants.js must contain %q", want)
+		}
+	}
+}
+
+func TestExplorer_AssetsJS_GMLayout_Served(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer/assets/js/governance-map/layout.js", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); !jsContentType(ct) {
+		t.Errorf("want JavaScript Content-Type, got %q", ct)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"window.MIDASGovernanceMap",
+		"function distributeRow(",
+		"function topAnchor(",
+		"function bottomAnchor(",
+		"function leftAnchor(",
+		"function rightAnchor(",
+		"function curvePath(",
+		"function gmapSafeArea(",
+		"GMAP_ANCHORS",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("layout.js must contain %q", want)
+		}
+	}
+}
+
+func TestExplorer_AssetsJS_GMLayers_Served(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer/assets/js/governance-map/layers.js", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); !jsContentType(ct) {
+		t.Errorf("want JavaScript Content-Type, got %q", ct)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"window.MIDASGovernanceMap",
+		"function gmapNodeCategoryFromKind(",
+		"function gmapConnectorKindFromCls(",
+		"connector-service",
+		"connector-ai-binding",
+		"connector-authority",
+		"connector-evidence",
+		"connector-gap",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("layers.js must contain %q", want)
+		}
+	}
+}
+
+// TestExplorer_HTML_LinksGovernanceMapScripts pins that index.html
+// references the three governance-map module scripts in load order
+// (constants → layout → layers), AFTER the util/api/state tags AND
+// before the inline <script> opener.
+func TestExplorer_HTML_LinksGovernanceMapScripts(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	wantOrdered := []string{
+		`<script src="/explorer/assets/js/util-format.js"></script>`,
+		`<script src="/explorer/assets/js/util-time.js"></script>`,
+		`<script src="/explorer/assets/js/util-dom.js"></script>`,
+		`<script src="/explorer/assets/js/api.js"></script>`,
+		`<script src="/explorer/assets/js/state.js"></script>`,
+		`<script src="/explorer/assets/js/governance-map/constants.js"></script>`,
+		`<script src="/explorer/assets/js/governance-map/layout.js"></script>`,
+		`<script src="/explorer/assets/js/governance-map/layers.js"></script>`,
+	}
+	prevIdx := -1
+	for _, want := range wantOrdered {
+		idx := strings.Index(body, want)
+		if idx < 0 {
+			t.Errorf("missing JS <script> tag: %q", want)
+			continue
+		}
+		if idx <= prevIdx {
+			t.Errorf("JS <script> tag out of load order: %q at idx=%d previous=%d", want, idx, prevIdx)
+		}
+		prevIdx = idx
+	}
+	// All extracted-script tags must appear before the inline IIFE.
+	inlineIIFE := strings.Index(body, "(function () {\n  'use strict';\n\n  // D27j-ui-foundation-3")
+	if inlineIIFE < 0 {
+		t.Fatal("inline IIFE opener not found")
+	}
+	if prevIdx >= inlineIIFE {
+		t.Errorf("util/api/state/governance-map script tags must precede the inline IIFE; lastTagIdx=%d inlineIIFEIdx=%d", prevIdx, inlineIIFE)
+	}
+	// Negative pins on governance-map script tags — must remain plain.
+	for _, forbidden := range []string{
+		`<script type="module" src="/explorer/assets/js/governance-map/constants.js"`,
+		`<script defer src="/explorer/assets/js/governance-map/constants.js"`,
+		`<script async src="/explorer/assets/js/governance-map/constants.js"`,
+		`<script type="module" src="/explorer/assets/js/governance-map/layout.js"`,
+		`<script type="module" src="/explorer/assets/js/governance-map/layers.js"`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("D27j-ui-foundation-5: governance-map scripts must use plain <script src=…> tags; found %q", forbidden)
+		}
+	}
+}
+
+// TestExplorer_HTML_MainScriptStillInline_Foundation5 confirms that
+// the 4 extracted constant declarations and 8 extracted helper
+// functions are no longer in the inline IIFE body, and that the main
+// app script (renderGovernanceMap, addNode, applyGmapVisibilityFilters,
+// etc.) is still inline. Belt-and-braces guard tied to this tranche.
+func TestExplorer_HTML_MainScriptStillInline_Foundation5(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	// Negative: original inline declarations must be gone.
+	for _, gone := range []string{
+		"  const GMAP = {\n    NODE_W:",
+		"  const GMAP_ZOOM = {",
+		"  const GMAP_DRAG_THRESHOLD_PX = 4;",
+		"  const ROOT_VIEWPORT_OFFSET_RATIO = 0.25;",
+		"  const GMAP_ANCHORS = {",
+		"  function distributeRow(n, x0, x1)",
+		"  function topAnchor(p)",
+		"  function bottomAnchor(p)",
+		"  function leftAnchor(p)",
+		"  function rightAnchor(p)",
+		"  function curvePath(x1, y1, x2, y2)",
+		"  function gmapSafeArea(scrollEl)",
+		"  function gmapNodeCategoryFromKind(kind)",
+		"  function gmapConnectorKindFromCls(cls)",
+	} {
+		if strings.Contains(body, gone) {
+			t.Errorf("D27j-ui-foundation-5: extracted declaration must be removed from inline IIFE: %q", gone)
+		}
+	}
+	// Positive: main app script remains inline. None of the items
+	// below were touched by this tranche.
+	for _, want := range []string{
+		"(function () {",
+		"'use strict';",
+		"})();",
+		"function renderGovernanceMap(data)",
+		"function addNode(spec, pos)",
+		"function applyGmapVisibilityFilters()",
+		"function selectGovernanceMapNode(nodeId)",
+		"function effectiveGmapPosition(id)",
+		"const gmapVisibilityFilters",
+		"let gmapPositions",
+		"let gmapDragState",
+		"let gmapZoom",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("main inline script must still contain %q", want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// D27j-ui-foundation-6 — Records / Evidence module foundation
+//
+// Two plain-script files attach low-risk pure helpers to
+// window.MIDASExplorerRecords. envelope-summary.js exposes
+// mapExplorerEnvelopeToRecordRow + computeRecordsRuntimeMetrics.
+// evidence-helpers.js establishes window.MIDASExplorerRecords
+// .auditEvents = {} as a future-tranche namespace stub; it MUST NOT
+// fetch or render anything. The 404 case for /explorer/assets/js/
+// is already covered by TestExplorer_AssetsJS_NotFound_Returns404
+// from D27j-ui-foundation-3.
+// ---------------------------------------------------------------------------
+
+func TestExplorer_AssetsJS_RecordsEnvelopeSummary_Served(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer/assets/js/records/envelope-summary.js", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); !jsContentType(ct) {
+		t.Errorf("want JavaScript Content-Type, got %q", ct)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"window.MIDASExplorerRecords",
+		"function mapExplorerEnvelopeToRecordRow(item)",
+		"function computeRecordsRuntimeMetrics(rows)",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("envelope-summary.js must contain %q", want)
+		}
+	}
+}
+
+func TestExplorer_AssetsJS_RecordsEvidenceHelpers_Served(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer/assets/js/records/evidence-helpers.js", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); !jsContentType(ct) {
+		t.Errorf("want JavaScript Content-Type, got %q", ct)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"window.MIDASExplorerRecords",
+		"window.MIDASExplorerRecords.auditEvents",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("evidence-helpers.js must contain %q", want)
+		}
+	}
+	// Negative pins — D27j-ui-foundation-6 stub MUST NOT fetch,
+	// render audit events, or contain placeholder UI. Future
+	// tranches will add audit-event rendering; this tranche must
+	// stay free of it.
+	for _, forbidden := range []string{
+		"fetch(",
+		"audit-events", // disallowed endpoint reference
+		"/explorer/envelopes/",
+		"FAIL_MODE_POLICY_RESOLVED",
+		"function render",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("evidence-helpers.js must not contain %q (D27j-ui-foundation-6 is foundation-only)", forbidden)
+		}
+	}
+}
+
+// TestExplorer_HTML_LinksRecordsScripts pins that index.html
+// references the two records module scripts in load order
+// (envelope-summary → evidence-helpers), AFTER the governance-map
+// tags AND before the inline <script> opener. Plain script tags
+// only.
+func TestExplorer_HTML_LinksRecordsScripts(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	wantOrdered := []string{
+		`<script src="/explorer/assets/js/governance-map/constants.js"></script>`,
+		`<script src="/explorer/assets/js/governance-map/layout.js"></script>`,
+		`<script src="/explorer/assets/js/governance-map/layers.js"></script>`,
+		`<script src="/explorer/assets/js/records/envelope-summary.js"></script>`,
+		`<script src="/explorer/assets/js/records/evidence-helpers.js"></script>`,
+	}
+	prevIdx := -1
+	for _, want := range wantOrdered {
+		idx := strings.Index(body, want)
+		if idx < 0 {
+			t.Errorf("missing JS <script> tag: %q", want)
+			continue
+		}
+		if idx <= prevIdx {
+			t.Errorf("JS <script> tag out of load order: %q at idx=%d previous=%d", want, idx, prevIdx)
+		}
+		prevIdx = idx
+	}
+	// All extracted-script tags must appear before the inline IIFE.
+	inlineIIFE := strings.Index(body, "(function () {\n  'use strict';\n\n  // D27j-ui-foundation-3")
+	if inlineIIFE < 0 {
+		t.Fatal("inline IIFE opener not found")
+	}
+	if prevIdx >= inlineIIFE {
+		t.Errorf("records script tags must precede the inline IIFE; lastTagIdx=%d inlineIIFEIdx=%d", prevIdx, inlineIIFE)
+	}
+	// Negative pins on records script tags — must remain plain.
+	for _, forbidden := range []string{
+		`<script type="module" src="/explorer/assets/js/records/envelope-summary.js"`,
+		`<script defer src="/explorer/assets/js/records/envelope-summary.js"`,
+		`<script async src="/explorer/assets/js/records/envelope-summary.js"`,
+		`<script type="module" src="/explorer/assets/js/records/evidence-helpers.js"`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("D27j-ui-foundation-6: records scripts must use plain <script src=…> tags; found %q", forbidden)
+		}
+	}
+}
+
+// TestExplorer_HTML_MainScriptStillInline_Foundation6 confirms that
+// the 2 extracted helper declarations are no longer in the inline
+// IIFE body, and that all the load-bearing Records render / fetch /
+// state declarations remain inline. Belt-and-braces guard tied to
+// this tranche.
+func TestExplorer_HTML_MainScriptStillInline_Foundation6(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	// Negative: the 2 extracted helper bodies must be gone.
+	for _, gone := range []string{
+		"  function mapExplorerEnvelopeToRecordRow(item) {",
+		"  function computeRecordsRuntimeMetrics(rows) {",
+	} {
+		if strings.Contains(body, gone) {
+			t.Errorf("D27j-ui-foundation-6: extracted helper must be removed from inline IIFE: %q", gone)
+		}
+	}
+	// Positive: Records render functions, fetch wrappers, evidence-tray
+	// rendering, active state, and IIFE bookends must all still be inline.
+	for _, want := range []string{
+		// IIFE bookends.
+		"(function () {",
+		"'use strict';",
+		"})();",
+		// Records render functions.
+		"function renderRecordsView()",
+		"function renderRecordsTable(filter)",
+		"function renderRecordsDetail()",
+		"function renderExplorerEnvelopeDetailSections(env)",
+		"function renderRecordsRuntimeMetrics()",
+		// Records fetch wrappers.
+		"async function loadExplorerRuntimeRecords()",
+		"async function loadExplorerEnvelopeDetail(envelopeId, onResolved)",
+		// Evidence tray rendering (must remain inline).
+		"function renderGmapEvidenceTrayDriftPanel()",
+		"function renderGmapEvidenceTrayActivityPanel()",
+		"async function loadGmapEvidenceActivity()",
+		// Active Records state.
+		"let recordsRuntimeRows",
+		"let recordsLoading",
+		"let recordsError",
+		"let recordsLoadedOnce",
+		"let recordsSelectedId",
+		"let recordsSearchQuery",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("main inline script must still contain %q", want)
+		}
 	}
 }
 
@@ -822,11 +1760,15 @@ func TestExplorer_HTML_RecordsView_UsesRuntimeEnvelopes(t *testing.T) {
 	}
 
 	// ── 2. Loader + mapper exist ────────────────────────────────────────────
+	// loadExplorerRuntimeRecords stays inline (fetch + state mutation);
+	// the mapper was extracted to records/envelope-summary.js in
+	// D27j-ui-foundation-6.
 	if !strings.Contains(body, "function loadExplorerRuntimeRecords()") {
 		t.Error("Records view must declare async loader loadExplorerRuntimeRecords()")
 	}
-	if !strings.Contains(body, "function mapExplorerEnvelopeToRecordRow(item)") {
-		t.Error("Records view must declare mapper mapExplorerEnvelopeToRecordRow(item)")
+	envelopeSummaryJS := getExplorerAsset(t, srv, "/explorer/assets/js/records/envelope-summary.js")
+	if !strings.Contains(envelopeSummaryJS, "function mapExplorerEnvelopeToRecordRow(item)") {
+		t.Error("Records view must declare mapper mapExplorerEnvelopeToRecordRow(item) in envelope-summary.js")
 	}
 	// Module-level state pins
 	for _, decl := range []string{
@@ -843,7 +1785,8 @@ func TestExplorer_HTML_RecordsView_UsesRuntimeEnvelopes(t *testing.T) {
 	// Each summary field returned by GET /explorer/envelopes is read by the
 	// mapper. The pins here are on the right-hand side of property reads in
 	// the mapper body, so re-naming a field becomes a test failure rather
-	// than a silent regression to "—" in the UI.
+	// than a silent regression to "—" in the UI. After D27j-ui-foundation-6
+	// the mapper lives in records/envelope-summary.js.
 	for _, expr := range []string{
 		"item.id",
 		"item.state",
@@ -858,7 +1801,7 @@ func TestExplorer_HTML_RecordsView_UsesRuntimeEnvelopes(t *testing.T) {
 		"item.profile_id",
 		"item.grant_id",
 	} {
-		if !strings.Contains(body, expr) {
+		if !strings.Contains(envelopeSummaryJS, expr) {
 			t.Errorf("mapper must read D26a field %s", expr)
 		}
 	}
@@ -990,15 +1933,23 @@ func TestExplorer_HTML_RecordsView_RuntimeMetrics(t *testing.T) {
 	body := rec.Body.String()
 
 	// === 1. Helper exists with expected signature + reads runtime rows ===
-	if !strings.Contains(body, "function computeRecordsRuntimeMetrics(rows)") {
-		t.Fatal("D26d: computeRecordsRuntimeMetrics(rows) helper must exist")
+	// computeRecordsRuntimeMetrics moved to records/envelope-summary.js
+	// in D27j-ui-foundation-6; renderRecordsRuntimeMetrics stays
+	// inline. The two-marker slice that previously extracted the
+	// computeRecordsRuntimeMetrics body across the two adjacent
+	// declarations is replaced with a slice scoped to envelope-summary.js
+	// (the entire function body lives there, bracketed by the next
+	// namespace assignment line).
+	envelopeSummaryJSForMetrics := getExplorerAsset(t, srv, "/explorer/assets/js/records/envelope-summary.js")
+	if !strings.Contains(envelopeSummaryJSForMetrics, "function computeRecordsRuntimeMetrics(rows)") {
+		t.Fatal("D26d: computeRecordsRuntimeMetrics(rows) helper must exist in envelope-summary.js")
 	}
 	if !strings.Contains(body, "function renderRecordsRuntimeMetrics()") {
 		t.Fatal("D26d: renderRecordsRuntimeMetrics() helper must exist")
 	}
-	helperBody := extractBetween(t, body,
+	helperBody := extractBetween(t, envelopeSummaryJSForMetrics,
 		"function computeRecordsRuntimeMetrics(rows)",
-		"function renderRecordsRuntimeMetrics()")
+		"window.MIDASExplorerRecords.mapExplorerEnvelopeToRecordRow")
 	// Defensive normalisation pin — case is normalised before comparison.
 	if !strings.Contains(helperBody, ".toLowerCase()") {
 		t.Error("D26d: computeRecordsRuntimeMetrics must normalise outcome casing via .toLowerCase()")
@@ -1159,8 +2110,14 @@ func TestExplorer_HTML_RecordsView_EnvelopeDetailRail(t *testing.T) {
 	if !strings.Contains(body, "function renderExplorerEnvelopeDetailSections(env)") {
 		t.Fatal("D26e: renderExplorerEnvelopeDetailSections(env) helper must exist")
 	}
+	// explorerEnvelopeDetailsById was extracted to
+	// /explorer/assets/js/state.js (D27j-ui-foundation-4); the
+	// loading/error sibling primitives remain inline.
+	stateJS := getExplorerAsset(t, srv, "/explorer/assets/js/state.js")
+	if !strings.Contains(stateJS, "window.MIDASExplorerState.explorerEnvelopeDetailsById") {
+		t.Error("D26e: missing module-level state `explorerEnvelopeDetailsById` in state.js")
+	}
 	for _, decl := range []string{
-		"let explorerEnvelopeDetailsById",
 		"let explorerEnvelopeDetailLoadingId",
 		"let explorerEnvelopeDetailError",
 	} {
@@ -1352,15 +2309,25 @@ func TestExplorer_HTML_RecordsView_EnvelopeDetailRail(t *testing.T) {
 	}
 
 	// === 12. Regression — D26b/D26c/D26d/D25e prerequisites preserved ===
+	// mapExplorerEnvelopeToRecordRow and computeRecordsRuntimeMetrics
+	// were extracted to records/envelope-summary.js
+	// (D27j-ui-foundation-6); the rest of these pins remain inline.
+	envelopeSummaryJSReg12 := getExplorerAsset(t, srv, "/explorer/assets/js/records/envelope-summary.js")
+	for _, want := range []string{
+		"function mapExplorerEnvelopeToRecordRow(item)",
+		"function computeRecordsRuntimeMetrics(rows)",
+	} {
+		if !strings.Contains(envelopeSummaryJSReg12, want) {
+			t.Errorf("D26e: regression — missing prerequisite %q in envelope-summary.js", want)
+		}
+	}
 	for _, want := range []string{
 		// D26b runtime feed
 		"function loadExplorerRuntimeRecords()",
-		"function mapExplorerEnvelopeToRecordRow(item)",
 		"/explorer/envelopes?limit=50",
 		// D26c Activity provenance
 		"Activity uses real Explorer runtime envelopes",
 		// D26d metrics
-		"function computeRecordsRuntimeMetrics(rows)",
 		`id="records-metric-total"`,
 		// D25e drift semantics
 		"function getGmapEvidenceSignalSemantics(nodeId)",
@@ -1524,6 +2491,8 @@ func TestExplorer_HTML_GovernanceMap_WorkbenchToolbar(t *testing.T) {
 	}
 
 	// === 6. Toolbar CSS exists ===
+	// CSS lives in governance-map.css after D27j-ui-foundation-2.
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
 	for _, want := range []string{
 		"  .governance-map-toolbar,\n  .governance-map-legend {",
 		"  .governance-map-toolbar {",
@@ -1532,7 +2501,7 @@ func TestExplorer_HTML_GovernanceMap_WorkbenchToolbar(t *testing.T) {
 		"  .governance-map-toolbar-right {",
 		"  .governance-map-toolbar .gmap-search-input {",
 	} {
-		if !strings.Contains(body, want) {
+		if !strings.Contains(gmapCSS, want) {
 			t.Errorf("D26g-impl-1: toolbar CSS rule missing: %q", want)
 		}
 	}
@@ -1541,11 +2510,14 @@ func TestExplorer_HTML_GovernanceMap_WorkbenchToolbar(t *testing.T) {
 	// The toolbar element carries both `governance-map-toolbar` and
 	// `governance-map-legend` class tokens, so existing focus-mode
 	// rules that target .governance-map-legend keep working without
-	// migration.
+	// migration. The body.gmap-focus-mode .governance-map-legend rule
+	// lives in shell.css alongside the other body.gmap-focus-mode
+	// shell-integration selectors.
+	shellCSS := getExplorerAsset(t, srv, "/explorer/assets/css/shell.css")
 	for _, want := range []string{
 		"body.gmap-focus-mode .governance-map-legend",
 	} {
-		if !strings.Contains(body, want) {
+		if !strings.Contains(shellCSS, want) {
 			t.Errorf("D26g-impl-1: focus-mode legend rule must remain (alias-class continuity): %q", want)
 		}
 	}
@@ -1591,6 +2563,12 @@ func TestExplorer_HTML_GovernanceMap_WorkbenchToolbar(t *testing.T) {
 	}
 
 	// === 10. Tray + interaction regressions preserved ===
+	// computeRecordsRuntimeMetrics moved to records/envelope-summary.js
+	// (D27j-ui-foundation-6); other entries remain inline.
+	envelopeSummaryJSPanel10 := getExplorerAsset(t, srv, "/explorer/assets/js/records/envelope-summary.js")
+	if !strings.Contains(envelopeSummaryJSPanel10, "function computeRecordsRuntimeMetrics(rows)") {
+		t.Error("D26g-impl-1 must NOT remove existing affordance \"function computeRecordsRuntimeMetrics(rows)\" (records/envelope-summary.js)")
+	}
 	for _, want := range []string{
 		// D26f analytical tray layout.
 		"gmap-evidence-tray-analytic-layout",
@@ -1601,7 +2579,6 @@ func TestExplorer_HTML_GovernanceMap_WorkbenchToolbar(t *testing.T) {
 		// D26b/D26c/D26d/D26e prerequisites.
 		"function loadExplorerRuntimeRecords()",
 		"function loadGmapEvidenceActivity()",
-		"function computeRecordsRuntimeMetrics(rows)",
 		"async function loadExplorerEnvelopeDetail(envelopeId, onResolved)",
 		// D24i interaction state preserved.
 		"const gmapSelectedNodeIds = new Set()",
@@ -1648,9 +2625,15 @@ func TestExplorer_HTML_GovernanceMap_ModeRailAndCameraCluster(t *testing.T) {
 		t.Error("D26g-impl-2: unified .gmap-camera-bar must be replaced by the mode rail + camera cluster")
 	}
 	// CSS rule for the unified camera bar must be gone (the rule
-	// selector itself, not just the class on markup).
+	// selector itself, not just the class on markup). After
+	// D27j-ui-foundation-2 the CSS lives in governance-map.css; the
+	// assertion now also confirms the stale rule is absent there.
 	if strings.Contains(body, "  .gmap-camera-bar {") {
-		t.Error("D26g-impl-2: stale .gmap-camera-bar CSS rule must be removed")
+		t.Error("D26g-impl-2: stale .gmap-camera-bar CSS rule must be removed from index.html")
+	}
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+	if strings.Contains(gmapCSS, "  .gmap-camera-bar {") {
+		t.Error("D26g-impl-2: stale .gmap-camera-bar CSS rule must be removed from governance-map.css")
 	}
 
 	// === 2. ARIA labels distinguish the two clusters ===
@@ -1755,6 +2738,11 @@ func TestExplorer_HTML_GovernanceMap_ModeRailAndCameraCluster(t *testing.T) {
 	}
 
 	// === 7. CSS — both clusters declare absolute positioning + flex layout ===
+	// CSS lives in governance-map.css after D27j-ui-foundation-2. Note
+	// that the loop is scoped to the rule-block strings above (which
+	// are uniquely associated with these two clusters) and the property
+	// strings below; "position: absolute;" is generic so we re-scope it
+	// to the rule body extracted from the rail rule.
 	for _, want := range []string{
 		"  .gmap-mode-rail {",
 		"  .gmap-camera-cluster {",
@@ -1765,7 +2753,7 @@ func TestExplorer_HTML_GovernanceMap_ModeRailAndCameraCluster(t *testing.T) {
 		"bottom: 16px;",
 		"right: 16px;",
 	} {
-		if !strings.Contains(body, want) {
+		if !strings.Contains(gmapCSS, want) {
 			t.Errorf("D26g-impl-2: cluster CSS literal missing: %q", want)
 		}
 	}
@@ -1777,8 +2765,9 @@ func TestExplorer_HTML_GovernanceMap_ModeRailAndCameraCluster(t *testing.T) {
 	}
 
 	// === 8. Active mode-state styling lives on the mode rail ===
-	if !strings.Contains(body, ".gmap-mode-rail button.is-active") {
-		t.Error("D26g-impl-2: active Pan/Select styling must apply to .gmap-mode-rail button.is-active")
+	// CSS lives in governance-map.css after D27j-ui-foundation-2.
+	if !strings.Contains(gmapCSS, ".gmap-mode-rail button.is-active") {
+		t.Error("D26g-impl-2: active Pan/Select styling must apply to .gmap-mode-rail button.is-active (in governance-map.css)")
 	}
 	// Pan ships active by default; the markup-default reflects the
 	// 'pan' module-state default.
@@ -1832,6 +2821,12 @@ func TestExplorer_HTML_GovernanceMap_ModeRailAndCameraCluster(t *testing.T) {
 	}
 
 	// === 12. Other affordances regression preserved ===
+	// computeRecordsRuntimeMetrics moved to records/envelope-summary.js
+	// (D27j-ui-foundation-6); checked below the inline-pin loop.
+	envelopeSummaryJSPanel12 := getExplorerAsset(t, srv, "/explorer/assets/js/records/envelope-summary.js")
+	if !strings.Contains(envelopeSummaryJSPanel12, "function computeRecordsRuntimeMetrics(rows)") {
+		t.Error("must NOT remove existing affordance \"function computeRecordsRuntimeMetrics(rows)\" (records/envelope-summary.js)")
+	}
 	for _, want := range []string{
 		// Pan/Select interaction-mode helper.
 		`function setGmapInteractionMode(mode)`,
@@ -1844,7 +2839,6 @@ func TestExplorer_HTML_GovernanceMap_ModeRailAndCameraCluster(t *testing.T) {
 		"gmap-evidence-tray-analytic-layout",
 		"function loadExplorerRuntimeRecords()",
 		"function loadGmapEvidenceActivity()",
-		"function computeRecordsRuntimeMetrics(rows)",
 		"async function loadExplorerEnvelopeDetail(envelopeId, onResolved)",
 		// D24i multi-selection state.
 		"const gmapSelectedNodeIds = new Set()",
@@ -1894,12 +2888,14 @@ func TestExplorer_HTML_GovernanceMap_CompactEdgeLegend(t *testing.T) {
 	// unrelated declarations elsewhere on the page (e.g. the
 	// pre-D24e legacy left: 50% string in test-comment prose
 	// inside the rendered JS bundle is not present, but scoping
-	// keeps that future-proof).
-	overlayRuleIdx := strings.Index(body, "  .gmap-legend-overlay {")
+	// keeps that future-proof). CSS lives in governance-map.css
+	// after D27j-ui-foundation-2.
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+	overlayRuleIdx := strings.Index(gmapCSS, "  .gmap-legend-overlay {")
 	if overlayRuleIdx < 0 {
 		t.Fatal("D26g-impl-3: .gmap-legend-overlay CSS rule not found")
 	}
-	overlayRuleBody := body[overlayRuleIdx:]
+	overlayRuleBody := gmapCSS[overlayRuleIdx:]
 	overlayRuleEnd := strings.Index(overlayRuleBody, "}")
 	if overlayRuleEnd < 0 {
 		t.Fatal("D26g-impl-3: .gmap-legend-overlay rule end not found")
@@ -1943,11 +2939,12 @@ func TestExplorer_HTML_GovernanceMap_CompactEdgeLegend(t *testing.T) {
 	}
 
 	// === 4. Connection-key wrapper compactness ===
-	keyRuleIdx := strings.Index(body, "  .gmap-connection-key {")
+	// CSS lives in governance-map.css after D27j-ui-foundation-2.
+	keyRuleIdx := strings.Index(gmapCSS, "  .gmap-connection-key {")
 	if keyRuleIdx < 0 {
 		t.Fatal("D26g-impl-3: .gmap-connection-key CSS rule not found")
 	}
-	keyRuleBody := body[keyRuleIdx:]
+	keyRuleBody := gmapCSS[keyRuleIdx:]
 	keyRuleEnd := strings.Index(keyRuleBody, "}")
 	if keyRuleEnd < 0 {
 		t.Fatal("D26g-impl-3: .gmap-connection-key rule end not found")
@@ -2011,6 +3008,7 @@ func TestExplorer_HTML_GovernanceMap_CompactEdgeLegend(t *testing.T) {
 		}
 	}
 	// And the swatch CSS variants (colour assignments) are unchanged.
+	// CSS lives in governance-map.css after D27j-ui-foundation-2.
 	for _, want := range []string{
 		".gmap-legend-swatch {",
 		".gmap-legend-swatch.ai-binding",
@@ -2018,7 +3016,7 @@ func TestExplorer_HTML_GovernanceMap_CompactEdgeLegend(t *testing.T) {
 		".gmap-legend-swatch.evidence",
 		".gmap-legend-swatch.gap",
 	} {
-		if !strings.Contains(body, want) {
+		if !strings.Contains(gmapCSS, want) {
 			t.Errorf("D26g-impl-3: swatch CSS rule %q must remain", want)
 		}
 	}
@@ -2038,16 +3036,22 @@ func TestExplorer_HTML_GovernanceMap_CompactEdgeLegend(t *testing.T) {
 	}
 
 	// === 8. Focus mode does NOT hide the legend ===
+	// CSS lives in governance-map.css after D27j-ui-foundation-2 (the
+	// gmapCSS variable is already in scope from §2 above).
 	for _, hideRule := range []string{
 		"body.gmap-focus-mode .gmap-legend-overlay { display: none",
 		"body.gmap-focus-mode .gmap-legend-overlay{display:none",
 	} {
-		if strings.Contains(body, hideRule) {
+		if strings.Contains(gmapCSS, hideRule) {
 			t.Errorf("D26g-impl-3: focus mode must NOT hide the legend overlay: %q", hideRule)
 		}
 	}
 	// The pre-existing focus-mode key compression rule is preserved.
-	if !strings.Contains(body, "body.gmap-focus-mode .gmap-connection-key") {
+	// The body.gmap-focus-mode .gmap-connection-key rule lives in
+	// shell.css alongside the other body.gmap-focus-mode shell-
+	// integration selectors after D27j-ui-foundation-2.
+	allCSS := getExplorerAllCSS(t, srv)
+	if !strings.Contains(allCSS, "body.gmap-focus-mode .gmap-connection-key") {
 		t.Error("D26g-impl-3: focus-mode .gmap-connection-key rule must remain (compresses gap in focus mode)")
 	}
 
@@ -2115,10 +3119,15 @@ func TestExplorer_HTML_GovernanceMap_CompactEdgeLegend(t *testing.T) {
 	}
 
 	// === 12. Records / activity / detail flow regression ===
+	// computeRecordsRuntimeMetrics moved to records/envelope-summary.js
+	// in D27j-ui-foundation-6; checked separately.
+	envelopeSummaryJSImpl3 := getExplorerAsset(t, srv, "/explorer/assets/js/records/envelope-summary.js")
+	if !strings.Contains(envelopeSummaryJSImpl3, "function computeRecordsRuntimeMetrics(rows)") {
+		t.Error("D26g-impl-3 must NOT remove D26b–D26e affordance \"function computeRecordsRuntimeMetrics(rows)\" (records/envelope-summary.js)")
+	}
 	for _, want := range []string{
 		"function loadExplorerRuntimeRecords()",
 		"function loadGmapEvidenceActivity()",
-		"function computeRecordsRuntimeMetrics(rows)",
 		"async function loadExplorerEnvelopeDetail(envelopeId, onResolved)",
 	} {
 		if !strings.Contains(body, want) {
@@ -2265,13 +3274,15 @@ func TestExplorer_HTML_GovernanceMap_ViewModeIconToggle(t *testing.T) {
 	// === 8. Toggle CSS supports icon-only sizing ===
 	// The previous text-button padding (3px 10px) is replaced with
 	// fixed width/height so the toolbar's right edge does not jitter
-	// when the active segment swaps.
-	segRuleIdx := strings.Index(body, "  .gmap-view-mode-segment {")
+	// when the active segment swaps. CSS lives in governance-map.css
+	// after D27j-ui-foundation-2.
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+	segRuleIdx := strings.Index(gmapCSS, "  .gmap-view-mode-segment {")
 	if segRuleIdx < 0 {
-		t.Fatal("D26g-impl-4: .gmap-view-mode-segment CSS rule not found")
+		t.Fatal("D26g-impl-4: .gmap-view-mode-segment CSS rule not found in governance-map.css")
 	}
-	segRuleEnd := strings.Index(body[segRuleIdx:], "}")
-	segRuleBody := body[segRuleIdx : segRuleIdx+segRuleEnd]
+	segRuleEnd := strings.Index(gmapCSS[segRuleIdx:], "}")
+	segRuleBody := gmapCSS[segRuleIdx : segRuleIdx+segRuleEnd]
 	for _, want := range []string{
 		"width: 26px;",
 		"height: 22px;",
@@ -2290,7 +3301,7 @@ func TestExplorer_HTML_GovernanceMap_ViewModeIconToggle(t *testing.T) {
 	}
 
 	// === 9. Active state still visually distinct ===
-	if !strings.Contains(body, ".gmap-view-mode-segment.is-active") {
+	if !strings.Contains(gmapCSS, ".gmap-view-mode-segment.is-active") {
 		t.Error("D26g-impl-4: .gmap-view-mode-segment.is-active rule must remain so the active mode is visually obvious")
 	}
 
@@ -2312,8 +3323,10 @@ func TestExplorer_HTML_GovernanceMap_ViewModeIconToggle(t *testing.T) {
 			t.Errorf("D26g-impl-4: toolbar must still contain %q", want)
 		}
 	}
-	// Filter chips must NOT have been touched (brief explicitly
-	// excluded any chip redesign).
+	// Filter chips: data-kind values must remain stable so the existing
+	// gmapVisibilityFilters wiring keeps working; visible labels were
+	// updated to descriptive forms by D27j-ui-1 when the chips moved
+	// from a flat row into the grouped Layers popover.
 	for _, want := range []string{
 		`data-kind="all"`,
 		`data-kind="business"`,
@@ -2324,16 +3337,16 @@ func TestExplorer_HTML_GovernanceMap_ViewModeIconToggle(t *testing.T) {
 		`data-kind="bindings"`,
 		`data-kind="synthetic"`,
 		`>All<`,
-		`>Business<`,
+		`>Business services<`,
 		`>Capabilities<`,
 		`>Processes<`,
-		`>Surfaces<`,
-		`>AI Systems<`,
-		`>Bindings<`,
-		`>Synthetic<`,
+		`>Decision surfaces<`,
+		`>AI systems<`,
+		`>AI bindings<`,
+		`>Authority / Coverage<`,
 	} {
 		if !strings.Contains(toolbarBody, want) {
-			t.Errorf("D26g-impl-4: filter chip %q must remain unchanged (chip redesign explicitly out of scope)", want)
+			t.Errorf("D27j-ui-1: filter chip token %q must remain in toolbar markup", want)
 		}
 	}
 
@@ -2363,13 +3376,18 @@ func TestExplorer_HTML_GovernanceMap_ViewModeIconToggle(t *testing.T) {
 	}
 
 	// === 12. D26f tray + D26b–D26e records flow regression ===
+	// computeRecordsRuntimeMetrics moved to records/envelope-summary.js
+	// in D27j-ui-foundation-6; checked separately.
+	envelopeSummaryJSImpl4 := getExplorerAsset(t, srv, "/explorer/assets/js/records/envelope-summary.js")
+	if !strings.Contains(envelopeSummaryJSImpl4, "function computeRecordsRuntimeMetrics(rows)") {
+		t.Error("D26g-impl-4 must NOT remove prior D25e/D26b-f affordance \"function computeRecordsRuntimeMetrics(rows)\" (records/envelope-summary.js)")
+	}
 	for _, want := range []string{
 		"gmap-evidence-tray-analytic-layout",
 		"gmap-evidence-tray-signal-column",
 		"gmap-evidence-tray-chart-panel",
 		"function loadExplorerRuntimeRecords()",
 		"function loadGmapEvidenceActivity()",
-		"function computeRecordsRuntimeMetrics(rows)",
 		"async function loadExplorerEnvelopeDetail(envelopeId, onResolved)",
 	} {
 		if !strings.Contains(body, want) {
@@ -2565,6 +3583,12 @@ func TestExplorer_HTML_GovernanceMap_FocusMode_FitsOnEntry(t *testing.T) {
 	}
 
 	// === 5. Existing focus-mode CSS rules unchanged (regression) ===
+	// The body.gmap-focus-mode rules live in shell.css after
+	// D27j-ui-foundation-2 because they target shell-integration
+	// selectors (.shell-header, .governance-map-workbench, etc.) and
+	// were originally placed alongside the other shell-integration
+	// rules.
+	shellCSS := getExplorerAsset(t, srv, "/explorer/assets/css/shell.css")
 	for _, want := range []string{
 		"body.gmap-focus-mode .shell-header",
 		"body.gmap-focus-mode .governance-map-workbench",
@@ -2573,7 +3597,7 @@ func TestExplorer_HTML_GovernanceMap_FocusMode_FitsOnEntry(t *testing.T) {
 		// Pre-D26g-impl-1 legacy alias still applied.
 		"body.gmap-focus-mode .governance-map-legend",
 	} {
-		if !strings.Contains(body, want) {
+		if !strings.Contains(shellCSS, want) {
 			t.Errorf("D26i: focus-mode CSS rule %q must remain", want)
 		}
 	}
@@ -2616,8 +3640,16 @@ func TestExplorer_HTML_GovernanceMap_ConnectorHoverPreview(t *testing.T) {
 	body := rec.Body.String()
 
 	// === 1. Helper functions exist with the canonical signatures ===
+	// `gmapConnectorKindFromCls` is extracted to
+	// /explorer/assets/js/governance-map/layers.js
+	// (D27j-ui-foundation-5); the other connector-tooltip helpers
+	// remain inline because they read DOM and module state.
+	gmLayersJS := getExplorerAsset(t, srv, "/explorer/assets/js/governance-map/layers.js")
+	if !strings.Contains(gmLayersJS, "function gmapConnectorKindFromCls(cls)") {
+		t.Errorf("D26h-impl: missing helper declaration %q in layers.js",
+			"function gmapConnectorKindFromCls(cls)")
+	}
 	for _, want := range []string{
-		"function gmapConnectorKindFromCls(cls)",
 		"function gmapConnectorEndpointLabel(nodeId)",
 		"function hideGmapConnectorTooltip()",
 		"function showGmapConnectorTooltip(pathEl, clientX, clientY)",
@@ -2629,9 +3661,10 @@ func TestExplorer_HTML_GovernanceMap_ConnectorHoverPreview(t *testing.T) {
 	}
 
 	// === 2. Kind-mapping helper covers every existing connector kind ===
-	kindBody := extractBetween(t, body,
-		"function gmapConnectorKindFromCls(cls)",
-		"function gmapConnectorEndpointLabel(nodeId)")
+	// After D27j-ui-foundation-5 the entire layers.js file IS the
+	// kind-mapping helper's home, so the body slice is the file body
+	// itself (small file, simple grep).
+	kindBody := gmLayersJS
 	for _, want := range []string{
 		"connector-service",
 		"connector-ai-binding",
@@ -2822,6 +3855,8 @@ func TestExplorer_HTML_GovernanceMap_ConnectorHoverPreview(t *testing.T) {
 	}
 
 	// === 9. CSS rules — connector hoverability + halo + tooltip ===
+	// CSS lives in governance-map.css after D27j-ui-foundation-2.
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
 	for _, want := range []string{
 		"  .gmap-connector {",
 		"pointer-events: stroke;",
@@ -2840,7 +3875,7 @@ func TestExplorer_HTML_GovernanceMap_ConnectorHoverPreview(t *testing.T) {
 		"body.gmap-canvas-lassoing .gmap-connector",
 		"pointer-events: none;",
 	} {
-		if !strings.Contains(body, want) {
+		if !strings.Contains(gmapCSS, want) {
 			t.Errorf("D26h-impl: CSS literal missing %q", want)
 		}
 	}
@@ -2853,7 +3888,7 @@ func TestExplorer_HTML_GovernanceMap_ConnectorHoverPreview(t *testing.T) {
 		".connector-evidence",
 		".connector-gap",
 	} {
-		if !strings.Contains(body, want) {
+		if !strings.Contains(gmapCSS, want) {
 			t.Errorf("D26h-impl must NOT remove existing connector kind class %q", want)
 		}
 	}
@@ -2952,12 +3987,14 @@ func TestExplorer_HTML_GovernanceMap_ConnectorHoverPreview(t *testing.T) {
 	}
 	// CSS rule for the hit target — fill: none, stroke: transparent,
 	// stroke-width: 12, pointer-events: stroke, cursor: pointer.
-	hitCssIdx := strings.Index(body, "  .gmap-connector-hit-target {")
+	// CSS lives in governance-map.css after D27j-ui-foundation-2 (the
+	// gmapCSS variable is already in scope from §9 above).
+	hitCssIdx := strings.Index(gmapCSS, "  .gmap-connector-hit-target {")
 	if hitCssIdx < 0 {
 		t.Fatal("D26h-fix: .gmap-connector-hit-target CSS rule not found")
 	}
-	hitCssEnd := strings.Index(body[hitCssIdx:], "}")
-	hitCss := body[hitCssIdx : hitCssIdx+hitCssEnd]
+	hitCssEnd := strings.Index(gmapCSS[hitCssIdx:], "}")
+	hitCss := gmapCSS[hitCssIdx : hitCssIdx+hitCssEnd]
 	for _, want := range []string{
 		"fill: none;",
 		"stroke: transparent;",
@@ -2975,7 +4012,7 @@ func TestExplorer_HTML_GovernanceMap_ConnectorHoverPreview(t *testing.T) {
 		"body.gmap-canvas-panning .gmap-connector-hit-target",
 		"body.gmap-canvas-lassoing .gmap-connector-hit-target",
 	} {
-		if !strings.Contains(body, want) {
+		if !strings.Contains(gmapCSS, want) {
 			t.Errorf("D26h-fix: gesture gate must extend to %q", want)
 		}
 	}
@@ -3121,7 +4158,6 @@ func TestExplorer_HTML_GovernanceMap_InitialRenderFitsToView(t *testing.T) {
 		// D26h-fix hit target.
 		"function gmapVisibleConnectorForHoverTarget(el)",
 		"function addConnectorHitTarget(p1, p2, kindInfo, srcId, dstId, srcLabel, dstLabel)",
-		"  .gmap-connector-hit-target {",
 		// D26g toolbar / clusters / legend.
 		`class="governance-map-toolbar`,
 		`class="gmap-mode-rail"`,
@@ -3136,6 +4172,12 @@ func TestExplorer_HTML_GovernanceMap_InitialRenderFitsToView(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("D26h-fix must NOT remove prior affordance %q", want)
 		}
+	}
+	// CSS-only regression pin — the hit-target rule lives in
+	// governance-map.css after D27j-ui-foundation-2.
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+	if !strings.Contains(gmapCSS, "  .gmap-connector-hit-target {") {
+		t.Error(`D26h-fix must NOT remove prior affordance "  .gmap-connector-hit-target {" (governance-map.css)`)
 	}
 }
 
@@ -3162,11 +4204,15 @@ func TestExplorer_HTML_GovernanceMap_FitModeSuppressesResidualScrollbar(t *testi
 	// === 1. CSS rule that suppresses scrollbars in fit-mode ===
 	// The load-bearing rule already exists from D24i; pin it so a
 	// future change can't accidentally drop the scrollbar suppression.
-	if !strings.Contains(body, "body.gmap-fit-mode .governance-map-canvas-scroll {") {
+	// The body.gmap-fit-mode rule was originally placed in the shell
+	// region (alongside the other body.gmap-* shell-integration
+	// selectors) and so lives in shell.css after D27j-ui-foundation-2.
+	shellCSS := getExplorerAsset(t, srv, "/explorer/assets/css/shell.css")
+	if !strings.Contains(shellCSS, "body.gmap-fit-mode .governance-map-canvas-scroll {") {
 		t.Error("D26h-fix2: body.gmap-fit-mode .governance-map-canvas-scroll rule must exist (suppresses scrollbars during fit)")
 	}
-	fitModeRuleIdx := strings.Index(body, "body.gmap-fit-mode .governance-map-canvas-scroll {")
-	fitModeRuleBody := body[fitModeRuleIdx:]
+	fitModeRuleIdx := strings.Index(shellCSS, "body.gmap-fit-mode .governance-map-canvas-scroll {")
+	fitModeRuleBody := shellCSS[fitModeRuleIdx:]
 	fitModeRuleEnd := strings.Index(fitModeRuleBody, "}")
 	fitModeRuleBody = fitModeRuleBody[:fitModeRuleEnd]
 	for _, want := range []string{
@@ -3262,11 +4308,16 @@ func TestExplorer_HTML_GovernanceMap_FitModeSuppressesResidualScrollbar(t *testi
 	// fit-mode is active; the base rule survives. Identify the base
 	// rule by its overflow-declaring opener (the file has multiple
 	// .governance-map-canvas-scroll rules — cursor, fit-mode, pan,
-	// lasso — but only one declares overflow on its own).
-	if !strings.Contains(body, ".governance-map-canvas-scroll {\n    overflow-x: auto;") {
+	// lasso — but only one declares overflow on its own). The base
+	// rule lives in governance-map.css after D27j-ui-foundation-2;
+	// the body.gmap-fit-mode override (checked above) lives in
+	// shell.css alongside the other body.gmap-* shell-integration
+	// rules.
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+	if !strings.Contains(gmapCSS, ".governance-map-canvas-scroll {\n    overflow-x: auto;") {
 		t.Error("D26h-fix2: .governance-map-canvas-scroll base rule must keep overflow-x: auto (manual zoom-in past safe area must still scroll)")
 	}
-	if !strings.Contains(body, "overflow-x: auto;\n    overflow-y: auto;") {
+	if !strings.Contains(gmapCSS, "overflow-x: auto;\n    overflow-y: auto;") {
 		t.Error("D26h-fix2: .governance-map-canvas-scroll base rule must keep overflow-y: auto immediately after overflow-x: auto")
 	}
 
@@ -3282,7 +4333,6 @@ func TestExplorer_HTML_GovernanceMap_FitModeSuppressesResidualScrollbar(t *testi
 		// D26h-impl/fix connector hover preserved.
 		`class="gmap-connector-tooltip"`,
 		"function gmapVisibleConnectorForHoverTarget(el)",
-		"  .gmap-connector-hit-target {",
 		// D26g toolbar / clusters / legend.
 		`class="governance-map-toolbar`,
 		`class="gmap-mode-rail"`,
@@ -3297,6 +4347,11 @@ func TestExplorer_HTML_GovernanceMap_FitModeSuppressesResidualScrollbar(t *testi
 		if !strings.Contains(body, want) {
 			t.Errorf("D26h-fix2 must NOT remove prior affordance %q", want)
 		}
+	}
+	// CSS-only regression — the hit-target rule lives in
+	// governance-map.css after D27j-ui-foundation-2.
+	if !strings.Contains(gmapCSS, "  .gmap-connector-hit-target {") {
+		t.Error(`D26h-fix2 must NOT remove prior affordance "  .gmap-connector-hit-target {" (governance-map.css)`)
 	}
 }
 
@@ -3496,6 +4551,7 @@ func TestExplorer_HTML_GovernanceMap_RelatedServiceReframe(t *testing.T) {
 
 	// === 12. Regression — D26h-fix2, D26h-fix, D26h-impl, D26i, D26g,
 	//         D26f, D26b–D26e all preserved ===
+	allCSS := getExplorerAllCSS(t, srv)
 	for _, want := range []string{
 		// D26h-fix2 fit-mode synchronous entry.
 		"applyGmapFitMode(true);",
@@ -3503,7 +4559,6 @@ func TestExplorer_HTML_GovernanceMap_RelatedServiceReframe(t *testing.T) {
 		// D26h-fix hit-target.
 		`class="gmap-connector-tooltip"`,
 		"function gmapVisibleConnectorForHoverTarget(el)",
-		"  .gmap-connector-hit-target {",
 		// D26i toolbar context + Focus-mode.
 		"function applyGmapFocusMode()",
 		"el.setAttribute('title', 'View: ' + viewLabel + ' · Root: ' + display)",
@@ -3521,6 +4576,11 @@ func TestExplorer_HTML_GovernanceMap_RelatedServiceReframe(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("D26j must NOT remove prior affordance %q", want)
 		}
+	}
+	// CSS-only regression — the hit-target rule lives in
+	// governance-map.css after D27j-ui-foundation-2.
+	if !strings.Contains(allCSS, "  .gmap-connector-hit-target {") {
+		t.Error(`D26j must NOT remove prior affordance "  .gmap-connector-hit-target {" (governance-map.css)`)
 	}
 }
 
@@ -4385,6 +5445,11 @@ func TestExplorer_HTML_GovernanceMap_CameraPuck(t *testing.T) {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
 	body := rec.Body.String()
+	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
+	// `body` so existing CSS-rule-substring assertions continue to
+	// match. The HTML body content is unchanged at the start; the
+	// conceptual stylesheet is appended in cascade order.
+	body += "\n" + getExplorerAllCSS(t, srv)
 
 	// === Canvas control clusters markup ===
 	// D24c introduced .gmap-camera-bar (single vertical strip).
@@ -4627,6 +5692,11 @@ func TestExplorer_HTML_GovernanceMap_InspectorToggleHarmonisation(t *testing.T) 
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
 	body := rec.Body.String()
+	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
+	// `body` so existing CSS-rule-substring assertions continue to
+	// match. The HTML body content is unchanged at the start; the
+	// conceptual stylesheet is appended in cascade order.
+	body += "\n" + getExplorerAllCSS(t, srv)
 
 	// === 1. Toggle multi-classes the canonical sidebar pattern ===
 	// The toggle button carries BOTH .shell-sidebar-toggle (canonical
@@ -4774,6 +5844,11 @@ func TestExplorer_HTML_GovernanceMap_ToolbarRestructure(t *testing.T) {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
 	body := rec.Body.String()
+	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
+	// `body` so existing CSS-rule-substring assertions continue to
+	// match. The HTML body content is unchanged at the start; the
+	// conceptual stylesheet is appended in cascade order.
+	body += "\n" + getExplorerAllCSS(t, srv)
 
 	// === Move 1: Workbench-frame controls live in one toolbar above the canvas ===
 	// D26g-impl-1 superseded D24d's two-overlay scheme: search, view
@@ -4979,6 +6054,11 @@ func TestExplorer_HTML_GovernanceMap_ChromeReorganisation(t *testing.T) {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
 	body := rec.Body.String()
+	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
+	// `body` so existing CSS-rule-substring assertions continue to
+	// match. The HTML body content is unchanged at the start; the
+	// conceptual stylesheet is appended in cascade order.
+	body += "\n" + getExplorerAllCSS(t, srv)
 
 	// === Move 1: Back button as chevron icon ===
 	// D24c — chevron SVG matches the brief's exact specification:
@@ -5219,6 +6299,11 @@ func TestExplorer_HTML_GovernanceMap_FocusModePolish(t *testing.T) {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
 	body := rec.Body.String()
+	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
+	// `body` so existing CSS-rule-substring assertions continue to
+	// match. The HTML body content is unchanged at the start; the
+	// conceptual stylesheet is appended in cascade order.
+	body += "\n" + getExplorerAllCSS(t, srv)
 
 	// === 1. Focus toggle is in the camera bar, not the toolbar ===
 	// D23 → D24c → D24d: camera bar (renamed from puck) carries the
@@ -5299,18 +6384,21 @@ func TestExplorer_HTML_GovernanceMap_FocusModePolish(t *testing.T) {
 	// We check the focus-mode multi-selector hide rule (which
 	// targeted shell-header / footer / view-header / mode-toolbar
 	// in D21 and INCLUDED .governance-map-legend) no longer hides
-	// the legend.
-	hideIdx := strings.Index(body, "body.gmap-focus-mode .shell-header,")
+	// the legend. The body.gmap-focus-mode shell-integration rules
+	// live in shell.css after D27j-ui-foundation-2 (placed alongside
+	// the other shell layout selectors they affect).
+	shellCSS := getExplorerAsset(t, srv, "/explorer/assets/css/shell.css")
+	hideIdx := strings.Index(shellCSS, "body.gmap-focus-mode .shell-header,")
 	if hideIdx < 0 {
-		t.Fatal("focus-mode hide selector group not found")
+		t.Fatal("focus-mode hide selector group not found in shell.css")
 	}
-	hideRule := body[hideIdx : hideIdx+512]
+	hideRule := shellCSS[hideIdx : hideIdx+512]
 	if strings.Contains(hideRule, "body.gmap-focus-mode .governance-map-legend") &&
 		strings.Contains(hideRule, "display: none;") {
 		// More precise: scan the joined selector list for the
 		// legend literal. If still grouped with display:none,
 		// that's a regression of D23.
-		joinedSel := body[hideIdx : hideIdx+strings.Index(body[hideIdx:], "{")+1]
+		joinedSel := shellCSS[hideIdx : hideIdx+strings.Index(shellCSS[hideIdx:], "{")+1]
 		if strings.Contains(joinedSel, ".governance-map-legend") {
 			t.Error("D23: focus mode must NOT hide .governance-map-legend (it should compress instead)")
 		}
@@ -5451,6 +6539,11 @@ func TestExplorer_HTML_GovernanceMap_FocusMode(t *testing.T) {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
 	body := rec.Body.String()
+	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
+	// `body` so existing CSS-rule-substring assertions continue to
+	// match. The HTML body content is unchanged at the start; the
+	// conceptual stylesheet is appended in cascade order.
+	body += "\n" + getExplorerAllCSS(t, srv)
 
 	// === Toggle markup ===
 	// D24c — the focus toggle was restyled to icon-only SVG, so
@@ -5674,6 +6767,11 @@ func TestExplorer_HTML_GovernanceMap_CollapsibleInspector(t *testing.T) {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
 	body := rec.Body.String()
+	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
+	// `body` so existing CSS-rule-substring assertions continue to
+	// match. The HTML body content is unchanged at the start; the
+	// conceptual stylesheet is appended in cascade order.
+	body += "\n" + getExplorerAllCSS(t, srv)
 
 	// === Toggle markup ===
 	for _, want := range []string{
@@ -5699,7 +6797,14 @@ func TestExplorer_HTML_GovernanceMap_CollapsibleInspector(t *testing.T) {
 	if detailsIdx < 0 {
 		t.Fatal("#gmap-details not found in markup")
 	}
-	if !strings.Contains(body[detailsIdx:detailsIdx+4096], `id="gmap-inspector-toggle"`) {
+	// Window bumped from 4096 → 8192 in 5: the rail aside grew when
+	// the shared rail header (.gmap-right-rail-header) was added
+	// at the top of #gmap-details, pushing the bottom chevron
+	// further into the markup. The Step-23 contract here is that
+	// the chevron lives inside the rail aside; the test on line
+	// 5727 already uses 8192 for the equivalent check, so this is
+	// just bringing both windows into alignment.
+	if !strings.Contains(body[detailsIdx:detailsIdx+8192], `id="gmap-inspector-toggle"`) {
 		t.Error(`gmap-inspector-toggle must live inside #gmap-details (D24f harmonisation)`)
 	}
 
@@ -5865,10 +6970,12 @@ func TestExplorer_HTML_GovernanceMap_VisibilityFilters(t *testing.T) {
 			t.Errorf("Step 22 filter-chip markup missing data-kind=%q", kind)
 		}
 	}
-	// Visible labels — pin the user-facing tokens.
+	// Visible labels — pin the user-facing tokens. D27j-ui-1 updated
+	// the chip labels to descriptive forms when the chips moved into
+	// the grouped Layers popover.
 	for _, label := range []string{
-		`>All<`, `>Business<`, `>Capabilities<`, `>Processes<`,
-		`>Surfaces<`, `>AI Systems<`, `>Bindings<`, `>Synthetic<`,
+		`>All<`, `>Business services<`, `>Capabilities<`, `>Processes<`,
+		`>Decision surfaces<`, `>AI systems<`, `>AI bindings<`, `>Authority / Coverage<`,
 	} {
 		if !strings.Contains(body, label) {
 			t.Errorf("Step 22 chip label missing: %q", label)
@@ -5886,21 +6993,23 @@ func TestExplorer_HTML_GovernanceMap_VisibilityFilters(t *testing.T) {
 	}
 
 	// === CSS classes for the chips + visibility ===
+	// CSS lives in governance-map.css after D27j-ui-foundation-2.
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
 	for _, want := range []string{
 		".gmap-filter-chip",
 		".gmap-filter-chip.is-off",
 		".gmap-node.gmap-node-hidden",
 		"path.gmap-connector-hidden",
 	} {
-		if !strings.Contains(body, want) {
+		if !strings.Contains(gmapCSS, want) {
 			t.Errorf("Step 22 CSS class missing: %q", want)
 		}
 	}
 	// Both visibility classes must collapse the element via display:none.
-	if !strings.Contains(body, ".gmap-node.gmap-node-hidden { display: none; }") {
+	if !strings.Contains(gmapCSS, ".gmap-node.gmap-node-hidden { display: none; }") {
 		t.Error(".gmap-node-hidden must apply display:none")
 	}
-	if !strings.Contains(body, "path.gmap-connector-hidden  { display: none; }") {
+	if !strings.Contains(gmapCSS, "path.gmap-connector-hidden  { display: none; }") {
 		t.Error(".gmap-connector-hidden must apply display:none")
 	}
 
@@ -5921,9 +7030,17 @@ func TestExplorer_HTML_GovernanceMap_VisibilityFilters(t *testing.T) {
 	}
 
 	// === Helper presence ===
+	// `gmapNodeCategoryFromKind` is extracted to
+	// /explorer/assets/js/governance-map/layers.js
+	// (D27j-ui-foundation-5); the other entries remain inline because
+	// they read DOM and module state.
+	gmLayersJSForFilter := getExplorerAsset(t, srv, "/explorer/assets/js/governance-map/layers.js")
+	if !strings.Contains(gmLayersJSForFilter, "function gmapNodeCategoryFromKind(kind)") {
+		t.Errorf("Step 22 helper / wiring literal missing in layers.js: %q",
+			"function gmapNodeCategoryFromKind(kind)")
+	}
 	for _, want := range []string{
 		"function applyGmapVisibilityFilters()",
-		"function gmapNodeCategoryFromKind(kind)",
 		"wireGmapFilterChips",
 	} {
 		if !strings.Contains(body, want) {
@@ -6070,6 +7187,11 @@ func TestExplorer_HTML_GovernanceMap_SearchAndFocus(t *testing.T) {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
 	body := rec.Body.String()
+	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
+	// `body` so existing CSS-rule-substring assertions continue to
+	// match. The HTML body content is unchanged at the start; the
+	// conceptual stylesheet is appended in cascade order.
+	body += "\n" + getExplorerAllCSS(t, srv)
 
 	// === Markup pins ===
 	for _, want := range []string{
@@ -6476,18 +7598,29 @@ func TestExplorer_HTML_GovernanceMap_FitToBoundsButton(t *testing.T) {
 	// readability minimum (GMAP_ZOOM.MIN) when the operator
 	// explicitly asks for a full fit. Manual zoom paths still use
 	// MIN; only fit uses FIT_MIN.
+	// `function fitGmapToBounds()` and the `gmapSafeArea(scrollEl)`
+	// usage stay inline; only the GMAP_ZOOM literal moved to
+	// /explorer/assets/js/governance-map/constants.js
+	// (D27j-ui-foundation-5).
+	gmConstantsForZoom := getExplorerAsset(t, srv, "/explorer/assets/js/governance-map/constants.js")
 	for _, want := range []string{
 		"fitGmapToBounds",
 		"function fitGmapToBounds()",
 		"gmapSafeArea(scrollEl)",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("Step 19 helper / safe-area literal missing: %q", want)
+		}
+	}
+	for _, want := range []string{
 		// D24h-fix — both zoom floors must be declared and remain
 		// distinct. Manual zoom-out clamps at MIN; fit clamps at
 		// FIT_MIN. Pin both names; values may evolve.
 		"MIN:     0.50,",
 		"FIT_MIN: 0.20,",
 	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("Step 19 helper / safe-area literal missing: %q", want)
+		if !strings.Contains(gmConstantsForZoom, want) {
+			t.Errorf("Step 19 helper / safe-area literal missing in constants.js: %q", want)
 		}
 	}
 	// Negative pin — the retired constant must not reappear under
@@ -6682,6 +7815,11 @@ func TestExplorer_HTML_GovernanceMap_SafeAreaCameraModel(t *testing.T) {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
 	body := rec.Body.String()
+	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
+	// `body` so existing CSS-rule-substring assertions continue to
+	// match. The HTML body content is unchanged at the start; the
+	// conceptual stylesheet is appended in cascade order.
+	body += "\n" + getExplorerAllCSS(t, srv)
 
 	// === 1. Four overlay-inset CSS variables at :root ===
 	for _, want := range []string{
@@ -6696,6 +7834,13 @@ func TestExplorer_HTML_GovernanceMap_SafeAreaCameraModel(t *testing.T) {
 	}
 
 	// === 2. gmapSafeArea helper ===
+	// After D27j-ui-foundation-5 the helper lives in
+	// /explorer/assets/js/governance-map/layout.js as a pure
+	// parameter-driven function. The CSS variables it reads are
+	// declared in the extracted CSS files (D27j-ui-foundation-2) — the
+	// reads happen on the passed scrollEl element at runtime, not on
+	// any module-state object.
+	gmLayoutJSForSafeArea := getExplorerAsset(t, srv, "/explorer/assets/js/governance-map/layout.js")
 	for _, want := range []string{
 		"function gmapSafeArea(scrollEl)",
 		"getComputedStyle(scrollEl)",
@@ -6709,8 +7854,8 @@ func TestExplorer_HTML_GovernanceMap_SafeAreaCameraModel(t *testing.T) {
 		"Math.max(0, scrollEl.clientWidth  - left - right)",
 		"Math.max(0, scrollEl.clientHeight - top  - bottom)",
 	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D24g gmapSafeArea helper literal missing: %q", want)
+		if !strings.Contains(gmLayoutJSForSafeArea, want) {
+			t.Errorf("D24g gmapSafeArea helper literal missing in layout.js: %q", want)
 		}
 	}
 
@@ -7002,13 +8147,17 @@ func TestExplorer_HTML_GovernanceMap_SafeAreaCameraModel(t *testing.T) {
 	// --gmap-overlay-inset-left. Otherwise leftmost nodes sit behind
 	// the camera bar (the failure D24g-fix corrects).
 	//
-	// The pin extracts both values from the rendered HTML so future
-	// tuning of either side stays compatible as long as the
-	// invariant holds.
+	// The pin extracts both values from the rendered assets so future
+	// tuning of either side stays compatible as long as the invariant
+	// holds. After D27j-ui-foundation-5 the GMAP literal lives in
+	// /explorer/assets/js/governance-map/constants.js; the CSS
+	// variable lives in the extracted CSS files (already appended onto
+	// `body` via this test's foundation-2 fixup).
+	gmConstantsForEdgePad := getExplorerAsset(t, srv, "/explorer/assets/js/governance-map/constants.js")
 	edgePadRE := regexp.MustCompile(`EDGE_PAD:\s*(\d+),`)
-	edgePadMatch := edgePadRE.FindStringSubmatch(body)
+	edgePadMatch := edgePadRE.FindStringSubmatch(gmConstantsForEdgePad)
 	if edgePadMatch == nil {
-		t.Fatal("D24g-fix: GMAP.EDGE_PAD declaration not found")
+		t.Fatal("D24g-fix: GMAP.EDGE_PAD declaration not found in constants.js")
 	}
 	edgePad, err := strconv.Atoi(edgePadMatch[1])
 	if err != nil {
@@ -7194,9 +8343,12 @@ func TestExplorer_HTML_GovernanceMap_RootViewportFraming(t *testing.T) {
 	// === Rationale documented (substring match for the framing target) ===
 	// The constant's docstring must justify the 25% choice; future
 	// deliverables that adjust the ratio will surface here if the
-	// rationale text drifts.
-	if !strings.Contains(body, "top-quarter") && !strings.Contains(body, "Foundry/Bloom") {
-		t.Error("Step 17 rationale comment must mention `top-quarter` or `Foundry/Bloom` near the ROOT_VIEWPORT_OFFSET_RATIO declaration")
+	// rationale text drifts. After D27j-ui-foundation-5 the docstring
+	// lives in /explorer/assets/js/governance-map/constants.js
+	// alongside the constant declaration.
+	gmConstantsForRationale := getExplorerAsset(t, srv, "/explorer/assets/js/governance-map/constants.js")
+	if !strings.Contains(gmConstantsForRationale, "top-quarter") && !strings.Contains(gmConstantsForRationale, "Foundry/Bloom") {
+		t.Error("Step 17 rationale comment must mention `top-quarter` or `Foundry/Bloom` near the ROOT_VIEWPORT_OFFSET_RATIO declaration in constants.js")
 	}
 
 	// === Helper reads the right inputs ===
@@ -7267,8 +8419,11 @@ func TestExplorer_HTML_GovernanceMap_RootViewportFraming(t *testing.T) {
 		t.Error("Step 17 focusGmapOnRoot body must read ROOT_VIEWPORT_OFFSET_RATIO, not the literal 0.25")
 	}
 
-	// GMAP.LAYERS must not be touched in this deliverable.
-	// Confirm the pre-Step-17 layer Y values are unchanged.
+	// GMAP.LAYERS must not be touched in this deliverable. After
+	// D27j-ui-foundation-5 the GMAP literal lives in
+	// /explorer/assets/js/governance-map/constants.js; the layer Y
+	// values follow the move byte-identically.
+	gmConstantsForLayers := getExplorerAsset(t, srv, "/explorer/assets/js/governance-map/constants.js")
 	for _, want := range []string{
 		"RELATED:  { y:  24 }",
 		"BUSINESS: { y: 156 }",
@@ -7276,8 +8431,8 @@ func TestExplorer_HTML_GovernanceMap_RootViewportFraming(t *testing.T) {
 		"SURFACE:  { y: 432 }",
 		"AI:       { y: 568 }",
 	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("Step 17 must NOT change GMAP.LAYERS — missing pre-existing literal %q", want)
+		if !strings.Contains(gmConstantsForLayers, want) {
+			t.Errorf("Step 17 must NOT change GMAP.LAYERS — missing pre-existing literal %q in constants.js", want)
 		}
 	}
 
@@ -7358,6 +8513,11 @@ func TestExplorer_HTML_GovernanceMap_RightRailInspector(t *testing.T) {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
 	body := rec.Body.String()
+	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
+	// `body` so existing CSS-rule-substring assertions continue to
+	// match. The HTML body content is unchanged at the start; the
+	// conceptual stylesheet is appended in cascade order.
+	body += "\n" + getExplorerAllCSS(t, srv)
 
 	// === Body wrapper (workbench's only-canvas grid) ===
 	for _, want := range []string{
@@ -7425,11 +8585,13 @@ func TestExplorer_HTML_GovernanceMap_RightRailInspector(t *testing.T) {
 	// Pin the new flex-column shape. The internal 2-col grid of the
 	// pre-Step-16 layout (`grid-template-columns: 1fr 1fr;` on
 	// .governance-map-details) is gone — sections now stack
-	// vertically inside the rail.
-	if !strings.Contains(body, ".governance-map-details {") {
-		t.Fatal(".governance-map-details rule missing")
+	// vertically inside the rail. CSS lives in governance-map.css
+	// after D27j-ui-foundation-2.
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+	if !strings.Contains(gmapCSS, ".governance-map-details {") {
+		t.Fatal(".governance-map-details rule missing in governance-map.css")
 	}
-	if !strings.Contains(body, "overflow-y: auto;") {
+	if !strings.Contains(gmapCSS, "overflow-y: auto;") {
 		t.Error("Step 16 #gmap-details must scroll internally (overflow-y: auto)")
 	}
 	// New section wrapper class for vertical stacking.
@@ -7512,6 +8674,11 @@ func TestExplorer_HTML_GovernanceMap_InspectorTopLevelPane(t *testing.T) {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
 	body := rec.Body.String()
+	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
+	// `body` so existing CSS-rule-substring assertions continue to
+	// match. The HTML body content is unchanged at the start; the
+	// conceptual stylesheet is appended in cascade order.
+	body += "\n" + getExplorerAllCSS(t, srv)
 
 	// === 1. --inspector-width CSS variable + collapse override ===
 	for _, want := range []string{
@@ -7810,6 +8977,11 @@ func TestExplorer_HTML_GovernanceMap_EvidenceDriftTray(t *testing.T) {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
 	body := rec.Body.String()
+	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
+	// `body` so existing CSS-rule-substring assertions continue to
+	// match. The HTML body content is unchanged at the start; the
+	// conceptual stylesheet is appended in cascade order.
+	body += "\n" + getExplorerAllCSS(t, srv)
 
 	// === 1. Tray container exists, sits inside .governance-map-workbench ===
 	for _, want := range []string{
@@ -7851,7 +9023,9 @@ func TestExplorer_HTML_GovernanceMap_EvidenceDriftTray(t *testing.T) {
 	}
 	// Both height rules must exist in CSS. D25b-fix — expanded height
 	// bumped from 280 to 320 so the Drift tab fits without surfacing
-	// an internal scrollbar.
+	// an internal scrollbar. CSS lives in governance-map.css after
+	// D27j-ui-foundation-2.
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
 	for _, want := range []string{
 		".gmap-evidence-tray {",
 		"height: 36px;",
@@ -7859,7 +9033,7 @@ func TestExplorer_HTML_GovernanceMap_EvidenceDriftTray(t *testing.T) {
 		"height: 320px;",
 		"transition: height 0.18s ease-out",
 	} {
-		if !strings.Contains(body, want) {
+		if !strings.Contains(gmapCSS, want) {
 			t.Errorf("D25b/D25b-fix tray height/transition CSS literal missing: %q", want)
 		}
 	}
@@ -7868,20 +9042,20 @@ func TestExplorer_HTML_GovernanceMap_EvidenceDriftTray(t *testing.T) {
 	// 320px tray without scrolling; surfacing a scrollbar there was a
 	// UX regression. List-heavy tabs (Activity / Evidence) opt in via
 	// the .is-scrollable modifier rule, scoped to those tabs only.
-	panelIdx := strings.Index(body, ".gmap-evidence-tray-panel {")
+	panelIdx := strings.Index(gmapCSS, ".gmap-evidence-tray-panel {")
 	if panelIdx < 0 {
-		t.Fatal(".gmap-evidence-tray-panel rule not found")
+		t.Fatal(".gmap-evidence-tray-panel rule not found in governance-map.css")
 	}
-	panelRuleEnd := strings.Index(body[panelIdx:], "}")
+	panelRuleEnd := strings.Index(gmapCSS[panelIdx:], "}")
 	if panelRuleEnd < 0 {
 		t.Fatal(".gmap-evidence-tray-panel closing brace not found")
 	}
-	panelRule := body[panelIdx : panelIdx+panelRuleEnd]
+	panelRule := gmapCSS[panelIdx : panelIdx+panelRuleEnd]
 	if strings.Contains(panelRule, "overflow-y: auto") {
 		t.Error("D25b-fix: generic .gmap-evidence-tray-panel rule must NOT carry `overflow-y: auto` (Drift tab fits the 320px tray without internal scroll)")
 	}
 	// Opt-in modifier exists for future list-heavy tabs.
-	if !strings.Contains(body, ".gmap-evidence-tray-panel.is-scrollable {") {
+	if !strings.Contains(gmapCSS, ".gmap-evidence-tray-panel.is-scrollable {") {
 		t.Error("D25b-fix: .gmap-evidence-tray-panel.is-scrollable modifier rule must exist so future Activity/Evidence list tabs can opt in to internal scrolling")
 	}
 
@@ -7989,15 +9163,34 @@ func TestExplorer_HTML_GovernanceMap_EvidenceDriftTray(t *testing.T) {
 	}
 
 	// === 9. Negative pins — no external script / CDN / chart library ===
-	// Substring guard: only one <script> opens per the existing shell
-	// (the inline IIFE that wraps the entire JS bundle); D25b adds none.
+	// Substring guard: D25b's contract was "no <script src=...>" full
+	// stop. After D27j-ui-foundation-3 the shell is allowed to pull
+	// same-origin utility scripts from /explorer/assets/js/, but it
+	// still must NOT load any cross-origin CDN / chart library.
+	// We split the assertion accordingly: count <script src tags that
+	// do NOT start with /explorer/, and also pin that the inline IIFE
+	// is still present.
 	scriptOpenCount := strings.Count(body, "<script>")
-	scriptSrcCount := strings.Count(body, "<script src")
-	if scriptSrcCount > 0 {
-		t.Errorf("D25b: must NOT introduce <script src=...> external script tags (found %d)", scriptSrcCount)
+	for _, tagPrefix := range []string{
+		`<script src="http`,
+		`<script src='http`,
+		`<script src="//`,
+		`<script src='//`,
+	} {
+		if strings.Contains(body, tagPrefix) {
+			t.Errorf("D25b: must NOT load cross-origin scripts (found %q)", tagPrefix)
+		}
 	}
-	if scriptOpenCount != 1 {
-		t.Errorf("D25b: shell must keep its single inline <script>...</script> bundle (found %d <script> opens)", scriptOpenCount)
+	// D25b originally required exactly one inline bundle. D27j-ui-theme-6
+	// added a tiny pre-paint <head> script (~10 lines, fully local, no
+	// src) that reads the operator's stored theme preference and applies
+	// it before the CSS resolves to avoid a dark-flash on light-mode
+	// reload. It is a deliberate exception, not a multiplication of
+	// bundles. Allow exactly two inline opens (pre-paint + main); the
+	// negative pins above already guard against any cross-origin / CDN
+	// / chart-library script.
+	if scriptOpenCount != 2 {
+		t.Errorf("D25b: shell must keep two inline <script>...</script> blocks — the pre-paint head script + the main bundle (found %d <script> opens)", scriptOpenCount)
 	}
 	for _, illegal := range []string{
 		"cdn.jsdelivr",
@@ -8016,13 +9209,18 @@ func TestExplorer_HTML_GovernanceMap_EvidenceDriftTray(t *testing.T) {
 	}
 
 	// === 10. Safe-area variable still present (no D24g changes) ===
-	for _, want := range []string{
-		"--gmap-overlay-inset-bottom: 48px",
-		"function gmapSafeArea(scrollEl)",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D25b must NOT modify D24g safe-area model: %q missing", want)
-		}
+	// After D27j-ui-foundation-5 the gmapSafeArea helper lives in
+	// /explorer/assets/js/governance-map/layout.js; the CSS variable
+	// declaration was already moved by D27j-ui-foundation-2 into the
+	// extracted CSS files (and is appended to `body` above by this
+	// test's foundation-2 fixup, so the CSS-variable substring still
+	// matches against `body`).
+	gmLayoutForSafeArea2 := getExplorerAsset(t, srv, "/explorer/assets/js/governance-map/layout.js")
+	if !strings.Contains(body, "--gmap-overlay-inset-bottom: 48px") {
+		t.Errorf("D25b must NOT modify D24g safe-area model: %q missing", "--gmap-overlay-inset-bottom: 48px")
+	}
+	if !strings.Contains(gmLayoutForSafeArea2, "function gmapSafeArea(scrollEl)") {
+		t.Errorf("D25b must NOT modify D24g safe-area model: %q missing in layout.js", "function gmapSafeArea(scrollEl)")
 	}
 
 	// === 11. Regression — every prior camera/chrome/inspector affordance ===
@@ -8103,6 +9301,11 @@ func TestExplorer_HTML_GovernanceMap_EvidenceTraySemantics(t *testing.T) {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
 	body := rec.Body.String()
+	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
+	// `body` so existing CSS-rule-substring assertions continue to
+	// match. The HTML body content is unchanged at the start; the
+	// conceptual stylesheet is appended in cascade order.
+	body += "\n" + getExplorerAllCSS(t, srv)
 
 	// === 1. Semantic helper exists with the expected signature ===
 	if !strings.Contains(body, "function getGmapEvidenceSignalSemantics(nodeId)") {
@@ -8343,6 +9546,11 @@ func TestExplorer_HTML_GovernanceMap_EvidenceTrayAnalyticalLayout(t *testing.T) 
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
 	body := rec.Body.String()
+	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
+	// `body` so existing CSS-rule-substring assertions continue to
+	// match. The HTML body content is unchanged at the start; the
+	// conceptual stylesheet is appended in cascade order.
+	body += "\n" + getExplorerAllCSS(t, srv)
 
 	// === 1. Analytical-layout CSS rules exist ===
 	for _, want := range []string{
@@ -8572,10 +9780,20 @@ func TestExplorer_HTML_GovernanceMap_EvidenceTrayAnalyticalLayout(t *testing.T) 
 	}
 
 	// === 11. Records-runtime regression — D26b/D26d still in place ===
+	// mapExplorerEnvelopeToRecordRow and computeRecordsRuntimeMetrics
+	// moved to records/envelope-summary.js in D27j-ui-foundation-6;
+	// the others remain inline.
+	envelopeSummaryJSD26f := getExplorerAsset(t, srv, "/explorer/assets/js/records/envelope-summary.js")
 	for _, want := range []string{
-		"function loadExplorerRuntimeRecords()",
 		"function mapExplorerEnvelopeToRecordRow(item)",
 		"function computeRecordsRuntimeMetrics(rows)",
+	} {
+		if !strings.Contains(envelopeSummaryJSD26f, want) {
+			t.Errorf("D26f: D26b/D26d records affordance must remain: %q (in records/envelope-summary.js)", want)
+		}
+	}
+	for _, want := range []string{
+		"function loadExplorerRuntimeRecords()",
 		`>Explorer runtime<`,
 		`id="records-metric-total"`,
 	} {
@@ -8626,6 +9844,11 @@ func TestExplorer_HTML_GovernanceMap_EvidenceTrayActivityFromExplorerEnvelopes(t
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
 	body := rec.Body.String()
+	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
+	// `body` so existing CSS-rule-substring assertions continue to
+	// match. The HTML body content is unchanged at the start; the
+	// conceptual stylesheet is appended in cascade order.
+	body += "\n" + getExplorerAllCSS(t, srv)
 
 	// === 1. Activity-specific helpers exist with expected signatures ===
 	for _, want := range []string{
@@ -8701,11 +9924,16 @@ func TestExplorer_HTML_GovernanceMap_EvidenceTrayActivityFromExplorerEnvelopes(t
 	// Pins are on field reads in the row mapper / loader / filter helper.
 	// The test scopes mapper-field pins to the body of the existing
 	// mapExplorerEnvelopeToRecordRow, which D26c extends with process_id.
-	mapperIdx := strings.Index(body, "function mapExplorerEnvelopeToRecordRow(item)")
+	// After D27j-ui-foundation-6 the helper lives in
+	// /explorer/assets/js/records/envelope-summary.js; the closing-
+	// brace marker (\n  }\n) still matches because the function is
+	// indented 2 spaces inside its IIFE.
+	envelopeSummaryJSForMapping := getExplorerAsset(t, srv, "/explorer/assets/js/records/envelope-summary.js")
+	mapperIdx := strings.Index(envelopeSummaryJSForMapping, "function mapExplorerEnvelopeToRecordRow(item)")
 	if mapperIdx < 0 {
 		t.Fatal("D26c: mapExplorerEnvelopeToRecordRow not found — D26b helper must remain available")
 	}
-	mapperBody := body[mapperIdx:]
+	mapperBody := envelopeSummaryJSForMapping[mapperIdx:]
 	mapperEnd := strings.Index(mapperBody, "\n  }\n")
 	if mapperEnd < 0 {
 		t.Fatal("D26c: mapExplorerEnvelopeToRecordRow end marker not found")
@@ -8794,6 +10022,12 @@ func TestExplorer_HTML_GovernanceMap_EvidenceTrayActivityFromExplorerEnvelopes(t
 	// The Drift panel rebuilder, semantics helper, and key canonical
 	// titles must all still be present. This is a defensive guard
 	// against accidental regressions to the synthetic Drift surface.
+	// mapExplorerEnvelopeToRecordRow moved to records/envelope-summary.js
+	// in D27j-ui-foundation-6.
+	envelopeSummaryJSD26c := getExplorerAsset(t, srv, "/explorer/assets/js/records/envelope-summary.js")
+	if !strings.Contains(envelopeSummaryJSD26c, "function mapExplorerEnvelopeToRecordRow(item)") {
+		t.Error("D26c: regression — missing \"function mapExplorerEnvelopeToRecordRow(item)\" in records/envelope-summary.js")
+	}
 	for _, want := range []string{
 		"function renderGmapEvidenceTrayDriftPanel()",
 		"function getGmapEvidenceSignalSemantics(nodeId)",
@@ -8808,7 +10042,6 @@ func TestExplorer_HTML_GovernanceMap_EvidenceTrayActivityFromExplorerEnvelopes(t
 		"height: 320px;",
 		// D26a/D26b runtime feed prerequisites still in place.
 		"function loadExplorerRuntimeRecords()",
-		"function mapExplorerEnvelopeToRecordRow(item)",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("D26c: regression — missing %q (must NOT be removed)", want)
@@ -8852,6 +10085,11 @@ func TestExplorer_HTML_GovernanceMap_InteractionModeToggle(t *testing.T) {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
 	body := rec.Body.String()
+	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
+	// `body` so existing CSS-rule-substring assertions continue to
+	// match. The HTML body content is unchanged at the start; the
+	// conceptual stylesheet is appended in cascade order.
+	body += "\n" + getExplorerAllCSS(t, srv)
 
 	// === 1. Buttons exist with the canonical ids + ARIA + titles ===
 	for _, want := range []string{
@@ -9079,6 +10317,11 @@ func TestExplorer_HTML_GovernanceMap_CanvasInteraction(t *testing.T) {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
 	body := rec.Body.String()
+	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
+	// `body` so existing CSS-rule-substring assertions continue to
+	// match. The HTML body content is unchanged at the start; the
+	// conceptual stylesheet is appended in cascade order.
+	body += "\n" + getExplorerAllCSS(t, srv)
 
 	// === 1. Fit-mode CSS + helper ===
 	for _, want := range []string{
@@ -9953,9 +11196,15 @@ func TestExplorer_HTML_GovernanceMap_NoOverlapInvariant(t *testing.T) {
 
 	// 1. NODE_GAP constant present and >= 16. Tolerate any value 16..200
 	// so a future bump (e.g. 40px to match a wider design) doesn't break
-	// the test, but a deletion or a too-small value (e.g. 4) does.
+	// the test, but a deletion or a too-small value (e.g. 4) does. After
+	// D27j-ui-foundation-5 the GMAP literal lives in
+	// /explorer/assets/js/governance-map/constants.js; the distributeRow
+	// math literals live in
+	// /explorer/assets/js/governance-map/layout.js.
+	gmConstantsJS := getExplorerAsset(t, srv, "/explorer/assets/js/governance-map/constants.js")
+	gmLayoutJS := getExplorerAsset(t, srv, "/explorer/assets/js/governance-map/layout.js")
 	gapRe := regexp.MustCompile(`NODE_GAP:\s*(\d+)`)
-	m := gapRe.FindStringSubmatch(body)
+	m := gapRe.FindStringSubmatch(gmConstantsJS)
 	if m == nil {
 		t.Fatal("GMAP.NODE_GAP constant missing — distributeRow has no minimum-gap rule")
 	}
@@ -9969,18 +11218,18 @@ func TestExplorer_HTML_GovernanceMap_NoOverlapInvariant(t *testing.T) {
 	// 2. Required-vs-available branching present in distributeRow. The
 	// row-required formula is the discriminator between even-spread and
 	// packed-overflow paths.
-	if !strings.Contains(body, `n * GMAP.NODE_W + (n - 1) * GMAP.NODE_GAP`) {
+	if !strings.Contains(gmLayoutJS, `n * GMAP.NODE_W + (n - 1) * GMAP.NODE_GAP`) {
 		t.Error("distributeRow must compute row-required width as " +
 			"`n * GMAP.NODE_W + (n - 1) * GMAP.NODE_GAP` — without this branch " +
 			"the function cannot decide when to pack vs spread")
 	}
 
 	// 3. Both stride literals present.
-	if !strings.Contains(body, `GMAP.NODE_W + GMAP.NODE_GAP`) {
+	if !strings.Contains(gmLayoutJS, `GMAP.NODE_W + GMAP.NODE_GAP`) {
 		t.Error("distributeRow's packed-overflow path must use stride " +
 			"`GMAP.NODE_W + GMAP.NODE_GAP` (the minimum no-overlap stride)")
 	}
-	if !strings.Contains(body, `(available - GMAP.NODE_W) / (n - 1)`) {
+	if !strings.Contains(gmLayoutJS, `(available - GMAP.NODE_W) / (n - 1)`) {
 		t.Error("distributeRow's even-spread path must compute stride as " +
 			"`(available - GMAP.NODE_W) / (n - 1)` — this stride only meets " +
 			"the no-overlap rule when available >= required, which is the " +
@@ -10232,6 +11481,11 @@ func TestExplorer_HTML_GovernanceMap_ZoomControls(t *testing.T) {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
 	body := rec.Body.String()
+	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
+	// `body` so existing CSS-rule-substring assertions continue to
+	// match. The HTML body content is unchanged at the start; the
+	// conceptual stylesheet is appended in cascade order.
+	body += "\n" + getExplorerAllCSS(t, srv)
 
 	// Markup: surviving button IDs + accessible labels + the scene
 	// wrapper that the renderer injects nodes/SVG into. D24c
@@ -10517,13 +11771,17 @@ func TestExplorer_HTML_GovernanceMap_AISystemDetailsSurfaceReturnedFields(t *tes
 
 	// 1. Helper-function declarations. Pinning the literal `function name`
 	// form (not `name = function` or arrow) keeps the documented surface
-	// stable for the test and for callers that grep for them.
+	// stable for the test and for callers that grep for them. After
+	// D27j-ui-foundation-3 these helpers live in
+	// /explorer/assets/js/util-format.js; the test follows the move so
+	// the surface-stability invariant continues to hold.
+	utilFormatJS := getExplorerAsset(t, srv, "/explorer/assets/js/util-format.js")
 	for _, decl := range []string{
 		`function formatExternalRef`,
 		`function formatAIBindingScope`,
 		`function formatAIBindingDetail`,
 	} {
-		if !strings.Contains(body, decl) {
+		if !strings.Contains(utilFormatJS, decl) {
 			t.Errorf("AI detail polish: missing helper declaration %q", decl)
 		}
 	}
@@ -10547,6 +11805,8 @@ func TestExplorer_HTML_GovernanceMap_AISystemDetailsSurfaceReturnedFields(t *tes
 	// id must be referenced individually so the helper can resolve any
 	// binding regardless of which scope id is set. The order must match
 	// the connector-resolution code: surface > process > capability > BS.
+	// After D27j-ui-foundation-3 the helper lives in util-format.js;
+	// the scope-access pins follow.
 	for _, scopeAccess := range []string{
 		`b.role`,
 		`b.surface_id`,
@@ -10555,14 +11815,14 @@ func TestExplorer_HTML_GovernanceMap_AISystemDetailsSurfaceReturnedFields(t *tes
 		`b.business_service_id`,
 		`b.description`,
 	} {
-		if !strings.Contains(body, scopeAccess) {
-			t.Errorf("AI detail polish: missing binding-scope access %q", scopeAccess)
+		if !strings.Contains(utilFormatJS, scopeAccess) {
+			t.Errorf("AI detail polish: missing binding-scope access %q in util-format.js", scopeAccess)
 		}
 	}
 
 	// 4. Unscoped fallback — a binding with no scope id rendering as
 	// `unscoped` rather than throwing or leaving an empty scope row.
-	if !strings.Contains(body, `'unscoped'`) {
+	if !strings.Contains(utilFormatJS, `'unscoped'`) {
 		t.Error("AI detail polish: scope helper must return literal 'unscoped' " +
 			"when a binding has no scope id (defensive fallback)")
 	}
@@ -10622,9 +11882,11 @@ func TestExplorer_HTML_GovernanceMap_TruncationIndicators(t *testing.T) {
 	body := rec.Body.String()
 
 	// 1. CSS class exists. The styling block uses a dashed border to
-	// visually distinguish from semantic entity nodes.
-	if !strings.Contains(body, `.gmap-more-node {`) {
-		t.Error("Truncation: .gmap-more-node CSS rule missing")
+	// visually distinguish from semantic entity nodes. CSS lives in
+	// governance-map.css after D27j-ui-foundation-2.
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+	if !strings.Contains(gmapCSS, `.gmap-more-node {`) {
+		t.Error("Truncation: .gmap-more-node CSS rule missing in governance-map.css")
 	}
 
 	// 2. The cap remains in place for all five capped layers. A
@@ -10658,14 +11920,16 @@ func TestExplorer_HTML_GovernanceMap_TruncationIndicators(t *testing.T) {
 		}
 	}
 
-	// 4. Helper-function declarations.
-	for _, decl := range []string{
-		`function getTruncationInfo`,
-		`function addMoreNode`,
-	} {
-		if !strings.Contains(body, decl) {
-			t.Errorf("Truncation: helper declaration %q missing", decl)
-		}
+	// 4. Helper-function declarations. After D27j-ui-foundation-3
+	// `getTruncationInfo` lives in /explorer/assets/js/util-format.js
+	// (pure helper extraction); `addMoreNode` remains inline in the
+	// main script because it touches gmap render state.
+	utilFormatJS := getExplorerAsset(t, srv, "/explorer/assets/js/util-format.js")
+	if !strings.Contains(utilFormatJS, `function getTruncationInfo`) {
+		t.Errorf("Truncation: helper declaration %q missing in util-format.js", `function getTruncationInfo`)
+	}
+	if !strings.Contains(body, `function addMoreNode`) {
+		t.Errorf("Truncation: helper declaration %q missing", `function addMoreNode`)
 	}
 
 	// 5. Stable per-layer IDs. The renderer uses these as keys both
@@ -10805,6 +12069,11 @@ func TestExplorer_HTML_GovernanceMap_NodeDrillDownActions(t *testing.T) {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
 	body := rec.Body.String()
+	// D27j-ui-foundation-2: extracted CSS files are concatenated onto
+	// `body` so existing CSS-rule-substring assertions continue to
+	// match. The HTML body content is unchanged at the start; the
+	// conceptual stylesheet is appended in cascade order.
+	body += "\n" + getExplorerAllCSS(t, srv)
 
 	// 1. Action container exists in the details panel markup. Pinning
 	// both the id and the class keeps a refactor that renames either
@@ -11182,9 +12451,13 @@ func TestExplorer_HTML_GovernanceMap_NodeDragging(t *testing.T) {
 	// 7. Threshold literal. Pin both the named constant declaration
 	// and a representative occurrence of the comparison so a
 	// regression that drops the constant or compares with the wrong
-	// operand surfaces here.
-	if !strings.Contains(body, `const GMAP_DRAG_THRESHOLD_PX = 4`) {
-		t.Error("Drag threshold: must declare `const GMAP_DRAG_THRESHOLD_PX = 4`")
+	// operand surfaces here. After D27j-ui-foundation-5 the constant
+	// declaration lives in
+	// /explorer/assets/js/governance-map/constants.js; the comparison
+	// (which references the local const binding) stays inline.
+	gmConstantsForDrag := getExplorerAsset(t, srv, "/explorer/assets/js/governance-map/constants.js")
+	if !strings.Contains(gmConstantsForDrag, `GMAP_DRAG_THRESHOLD_PX = 4`) {
+		t.Error("Drag threshold: must declare `GMAP_DRAG_THRESHOLD_PX = 4` in constants.js")
 	}
 	if !strings.Contains(body, `Math.max(Math.abs(dx), Math.abs(dy)) <= GMAP_DRAG_THRESHOLD_PX`) {
 		t.Error("Drag threshold: must compare `Math.max(Math.abs(dx), Math.abs(dy)) <= GMAP_DRAG_THRESHOLD_PX` (≤4 stays a click)")
@@ -11406,6 +12679,8 @@ func TestExplorer_HTML_ServicesView_CatalogueRecordNavigation(t *testing.T) {
 	// 3. Sub-view state machine + transition functions. Pinning the
 	// `function name` form (not `name = function`) keeps the documented
 	// callable surface stable for the test and for future callers.
+	// serviceRecordCache was extracted to /explorer/assets/js/state.js
+	// (D27j-ui-foundation-4); other state declarations remain inline.
 	for _, decl := range []string{
 		`let servicesSubView`,
 		`function setServicesSubView`,
@@ -11415,13 +12690,16 @@ func TestExplorer_HTML_ServicesView_CatalogueRecordNavigation(t *testing.T) {
 		`function loadBusinessServiceRecord`,
 		`function renderBusinessServiceRecord`,
 		`function renderServicesCatalogue`,
-		`const serviceRecordCache`,
 		`let serviceRecordLoading`,
 		`let serviceRecordError`,
 	} {
 		if !strings.Contains(body, decl) {
 			t.Errorf("Catalogue/record nav JS: missing declaration %q", decl)
 		}
+	}
+	stateJSForServices := getExplorerAsset(t, srv, "/explorer/assets/js/state.js")
+	if !strings.Contains(stateJSForServices, "window.MIDASExplorerState.serviceRecordCache") {
+		t.Error("Catalogue/record nav JS: missing declaration `serviceRecordCache` in state.js")
 	}
 
 	// 4. Data plumbing — both fetches present, both via fetch().
@@ -11498,11 +12776,15 @@ func TestExplorer_HTML_ServicesView_CatalogueRecordNavigation(t *testing.T) {
 	// 8. The record page's field grid uses formatFieldValue so missing
 	// fields render as "—" (operator distinguishes "field exists, no
 	// value" from "field doesn't apply"). Pin the helper + the literal
-	// fallback string.
-	if !strings.Contains(body, `function formatFieldValue`) {
-		t.Error("Catalogue/record nav: formatFieldValue helper missing")
+	// fallback string. After D27j-ui-foundation-3 the helper lives in
+	// /explorer/assets/js/util-format.js; the literal fallback HTML
+	// string flows through to the helper's return value, so the
+	// markup pin moves there too.
+	utilFormatJS := getExplorerAsset(t, srv, "/explorer/assets/js/util-format.js")
+	if !strings.Contains(utilFormatJS, `function formatFieldValue`) {
+		t.Error("Catalogue/record nav: formatFieldValue helper missing in util-format.js")
 	}
-	if !strings.Contains(body, `services-record-field-val muted">—`) {
+	if !strings.Contains(utilFormatJS, `services-record-field-val muted">—`) {
 		t.Error("Catalogue/record nav: missing-field fallback must render as `—`")
 	}
 
@@ -11702,14 +12984,19 @@ func TestExplorer_HTML_CapabilitiesView_CatalogueRecordNavigation(t *testing.T) 
 	// for callable functions; the parentheses suffix prevents matches
 	// against e.g. comment mentions of the function name. The nine
 	// per-cap maps (children / business-services / ai-bindings × cache
-	// / loading / error) back the three sub-resource sections.
+	// / loading / error) back the three sub-resource sections. After
+	// D27j-ui-foundation-4 the parent `capabilityRecordCache` map lives
+	// in /explorer/assets/js/state.js; everything else remains inline.
+	stateJSForCaps := getExplorerAsset(t, srv, "/explorer/assets/js/state.js")
+	if !strings.Contains(stateJSForCaps, "window.MIDASExplorerState.capabilityRecordCache") {
+		t.Error("Capabilities view: state declaration `capabilityRecordCache` missing in state.js")
+	}
 	for _, decl := range []string{
 		`let capabilitiesSubView`,
 		`let currentSelectedCapability`,
 		`let liveCapabilityList`,
 		`let liveCapabilityError`,
 		`let liveCapabilityLoading`,
-		`const capabilityRecordCache`,
 		`let capabilityRecordLoading`,
 		`let capabilityRecordError`,
 		`const capabilityChildrenCache`,
@@ -12011,9 +13298,12 @@ func TestExplorer_HTML_Shell_CollapsibleSidebar(t *testing.T) {
 	}
 
 	// 2. The body-class hook the CSS uses to flip --sidebar-width. Pin
-	// the literal both in the CSS rule and as a string the JS toggles.
-	if !strings.Contains(body, `body.sidebar-collapsed`) {
-		t.Error("Collapsible sidebar: missing CSS rule scoped to `body.sidebar-collapsed`")
+	// the literal both in the CSS rule (now in shell.css after
+	// D27j-ui-foundation-2) and as a string the JS toggles (still in
+	// the index.html <script> block).
+	shellCSS := getExplorerAsset(t, srv, "/explorer/assets/css/shell.css")
+	if !strings.Contains(shellCSS, `body.sidebar-collapsed`) {
+		t.Error("Collapsible sidebar: missing CSS rule scoped to `body.sidebar-collapsed` in shell.css")
 	}
 	if !strings.Contains(body, `'sidebar-collapsed'`) {
 		t.Error("Collapsible sidebar: JS must toggle the literal class 'sidebar-collapsed' on document.body")
@@ -12089,6 +13379,4258 @@ func TestExplorer_HTML_Shell_CollapsibleSidebar(t *testing.T) {
 	} {
 		if !strings.Contains(body, decl) {
 			t.Errorf("Collapsible sidebar: view router declaration %q must remain", decl)
+		}
+	}
+}
+
+// =============================================================
+// D27j-ui-1 — Layers Control and Governance Overlay Foundation
+// =============================================================
+
+// LayersControl_StructureAndAccessibility pins the popover button +
+// panel skeleton and the three group titles. The Layers control
+// replaces the flat chip row that previously lived directly inside
+// .governance-map-toolbar-centre; the chips themselves move into a
+// grouped popover panel.
+func TestExplorer_HTML_LayersControl_StructureAndAccessibility(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// Button + panel skeleton.
+	for _, want := range []string{
+		`class="gmap-layers-control"`,
+		`class="gmap-layers-button"`,
+		`id="gmap-layers-button"`,
+		`aria-haspopup="true"`,
+		`aria-expanded="false"`,
+		`aria-controls="gmap-layers-panel"`,
+		`aria-label="Layers"`,
+		`<span>Layers</span>`,
+		`class="gmap-layers-panel"`,
+		`id="gmap-layers-panel"`,
+		`role="dialog"`,
+		`aria-label="Graph layers and visibility filters"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D27j-ui-1: layers control markup missing %q", want)
+		}
+	}
+
+	// The three group titles in their semantic order.
+	for _, title := range []string{
+		`<div class="gmap-layer-group-title" id="gmap-layer-group-structural">Structural</div>`,
+		`<div class="gmap-layer-group-title" id="gmap-layer-group-ai">AI Context</div>`,
+		`<div class="gmap-layer-group-title" id="gmap-layer-group-governance">Governance</div>`,
+	} {
+		if !strings.Contains(body, title) {
+			t.Errorf("D27j-ui-1: layer-group title markup missing %q", title)
+		}
+	}
+
+	// Group order: Structural before AI Context before Governance.
+	idxStructural := strings.Index(body, `id="gmap-layer-group-structural"`)
+	idxAI := strings.Index(body, `id="gmap-layer-group-ai"`)
+	idxGovernance := strings.Index(body, `id="gmap-layer-group-governance"`)
+	if idxStructural < 0 || idxAI < 0 || idxGovernance < 0 {
+		t.Fatalf("D27j-ui-1: layer-group title IDs missing (structural=%d, ai=%d, governance=%d)",
+			idxStructural, idxAI, idxGovernance)
+	}
+	if !(idxStructural < idxAI && idxAI < idxGovernance) {
+		t.Errorf("D27j-ui-1: layer groups out of order (structural=%d, ai=%d, governance=%d)",
+			idxStructural, idxAI, idxGovernance)
+	}
+
+	// The button + panel must live inside .governance-map-toolbar-centre,
+	// between the search input and the view-mode toggle.
+	idxSearch := strings.Index(body, `id="gmap-search-input"`)
+	idxLayersBtn := strings.Index(body, `id="gmap-layers-button"`)
+	idxViewToggle := strings.Index(body, `class="gmap-view-mode-toggle"`)
+	if idxSearch < 0 || idxLayersBtn < 0 || idxViewToggle < 0 {
+		t.Fatalf("D27j-ui-1: toolbar reading-order pins missing (search=%d, layers=%d, viewtoggle=%d)",
+			idxSearch, idxLayersBtn, idxViewToggle)
+	}
+	if !(idxSearch < idxLayersBtn && idxLayersBtn < idxViewToggle) {
+		t.Errorf("D27j-ui-1: layers button must sit between search input and view-mode toggle (search=%d, layers=%d, viewtoggle=%d)",
+			idxSearch, idxLayersBtn, idxViewToggle)
+	}
+
+	// Panel must default hidden.
+	idxPanel := strings.Index(body, `id="gmap-layers-panel"`)
+	if idxPanel < 0 {
+		t.Fatal("D27j-ui-1: gmap-layers-panel missing")
+	}
+	panelOpenTagEnd := strings.Index(body[idxPanel:], `>`)
+	if panelOpenTagEnd < 0 {
+		t.Fatal("D27j-ui-1: gmap-layers-panel open tag has no closing >")
+	}
+	openTag := body[idxPanel : idxPanel+panelOpenTagEnd+1]
+	if !strings.Contains(openTag, " hidden") {
+		t.Errorf("D27j-ui-1: gmap-layers-panel must default hidden, got open tag %q", openTag)
+	}
+}
+
+// LayersControl_ChipsPreserved verifies that every original chip
+// data-kind value is still rendered with class="gmap-filter-chip"
+// inside the new Layers popover. The chip wiring (wireGmapFilterChips)
+// queries by class, so preserving the class + data-kind keeps the
+// existing visibility-filter behaviour intact.
+func TestExplorer_HTML_LayersControl_ChipsPreserved(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// Locate the Layers panel slice — chips MUST live inside it.
+	panelStart := strings.Index(body, `id="gmap-layers-panel"`)
+	if panelStart < 0 {
+		t.Fatal("D27j-ui-1: gmap-layers-panel missing — cannot verify chip placement")
+	}
+	// The panel closes with </div> matching its opening <div>.
+	// Slice 4096 chars forward — the panel content fits comfortably.
+	end := panelStart + 4096
+	if end > len(body) {
+		end = len(body)
+	}
+	panelSlice := body[panelStart:end]
+
+	for _, kind := range []string{
+		"all", "business", "capability", "process",
+		"surface", "ai", "bindings", "synthetic",
+	} {
+		if !strings.Contains(panelSlice, `data-kind="`+kind+`"`) {
+			t.Errorf("D27j-ui-1: chip data-kind=%q must live inside the Layers panel", kind)
+		}
+	}
+
+	// Every chip retains the class hook used by wireGmapFilterChips.
+	// D27j-ui-theme-3 added a second visual class (gmap-layer-row) for
+	// the row-style treatment; the original .gmap-filter-chip class
+	// stays first so click wiring is unaffected.
+	if !strings.Contains(panelSlice, `class="gmap-filter-chip gmap-layer-row`) {
+		t.Error("D27j-ui-1: Layers panel must contain `class=\"gmap-filter-chip gmap-layer-row…\"` buttons (chip class preserved alongside the row visual class)")
+	}
+
+	// The grouped panel uses .gmap-filter-chips wrappers (same class
+	// as the legacy flat row) so the existing inline-flex CSS applies
+	// inside each group.
+	if !strings.Contains(panelSlice, `class="gmap-filter-chips"`) {
+		t.Error("D27j-ui-1: Layers panel must contain class=\"gmap-filter-chips\" group wrappers")
+	}
+
+	// gmapVisibilityFilters object literal must remain unchanged so
+	// that toggling chips still drives the same module state.
+	for _, want := range []string{
+		"const gmapVisibilityFilters",
+		"business:   true",
+		"capability: true",
+		"process:    true",
+		"surface:    true",
+		"ai:         true",
+		"bindings:   true",
+		"synthetic:  true",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D27j-ui-1: gmapVisibilityFilters literal %q must remain (chip wiring is preserved)", want)
+		}
+	}
+}
+
+// LayersControl_NoFailModePolicy guards against premature inclusion
+// of the dormant FailModePolicy toggle. That toggle ships in
+// D27j-ui-2b only — the current tranche is markup + popover
+// foundation, no fail-mode-policy UI.
+func TestExplorer_HTML_LayersControl_NoFailModePolicy(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// The D27j-ui-1 Layers control did not introduce any FailModePolicy
+	// chip or surface. D27j-ui-2b later landed compact FMP badges on
+	// node cards, but the Layers control itself still has no
+	// fail-mode-policy chip — that toggle remains deferred to a future
+	// tranche. The forbidden list therefore tracks Layers / chip
+	// affordances and any user-visible "Fail-mode policy" / "Fail mode
+	// policy" copy. The bare PascalCase token "FailModePolicy" is no
+	// longer forbidden body-wide because comments in the badge code
+	// path now reference it for context.
+	for _, forbidden := range []string{
+		`data-kind="failmode"`,
+		`data-kind="fail_mode_policy"`,
+		`data-kind="fail-mode-policy"`,
+		`Fail-mode policy`,
+		`Fail mode policy`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("D27j-ui-1: Layers control must not introduce chip/copy %q (still deferred)", forbidden)
+		}
+	}
+}
+
+// LayersControl_OpenCloseWiring pins the inline IIFE that toggles
+// the panel's hidden attribute and aria-expanded state. Three
+// affordances are required: button click, Escape key, outside click.
+func TestExplorer_HTML_LayersControl_OpenCloseWiring(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	for _, want := range []string{
+		`function wireGmapLayersButton`,
+		`document.getElementById('gmap-layers-button')`,
+		`document.getElementById('gmap-layers-panel')`,
+		`btn.setAttribute('aria-expanded'`,
+		`panel.removeAttribute('hidden')`,
+		`panel.setAttribute('hidden'`,
+		`'Escape'`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D27j-ui-1: layers wiring fragment %q missing", want)
+		}
+	}
+}
+
+// =============================================================
+// D27j-ui-2a — Authority-graph adapter carries fail_mode_policy_id
+// =============================================================
+
+// AuthorityGraphAdapter_CarriesFailModePolicyID pins the two adapter
+// pass-throughs added by D27j-ui-2a. The frontend adapter is the only
+// consumer that joins the projection's typed-data shape with the
+// renderer's expected gmap shape, so a regression here would silently
+// drop the field even though the backend still emits it.
+func TestExplorer_HTML_AuthorityGraphAdapter_CarriesFailModePolicyID(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	for _, want := range []string{
+		// business_service case in mapAuthorityGraphToGovernanceMapShape.
+		`fail_mode_policy_id: bs.fail_mode_policy_id || ''`,
+		// decision_surface case.
+		`fail_mode_policy_id: d.fail_mode_policy_id || ''`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D27j-ui-2a: adapter must carry fail_mode_policy_id through; missing %q", want)
+		}
+	}
+}
+
+// AuthorityGraphAdapter_NoFailModePolicyRendering guards against
+// premature UI work. D27j-ui-2a is data-only — no badges, no
+// data-kind="failmode" chip, no FAIL_MODE_POLICY_RESOLVED rendering,
+// no inspector section. The Layers popover must not include a
+// fail-mode toggle until D27j-ui-2b.
+func TestExplorer_HTML_AuthorityGraphAdapter_NoFailModePolicyRendering(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	for _, forbidden := range []string{
+		`data-kind="failmode"`,
+		`data-kind="fail_mode_policy"`,
+		`data-kind="fail-mode-policy"`,
+		`>FAIL_MODE_POLICY_RESOLVED<`,
+		`gmap-fmp-badge`,
+		`gmap-failmode-badge`,
+		`renderFailModePolicy`,
+		`fetchFailModePolicy`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("D27j-ui-2a: forbidden token %q must NOT appear (deferred to later tranches)", forbidden)
+		}
+	}
+}
+
+// LayersControl_CSSPresent pins the five new selectors in
+// governance-map.css. The legacy chip selectors must remain so the
+// chip visuals are unchanged inside the popover.
+func TestExplorer_AssetsCSS_LayersControl_Present(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+
+	for _, want := range []string{
+		".gmap-layers-control",
+		".gmap-layers-button",
+		".gmap-layers-panel",
+		".gmap-layer-group",
+		".gmap-layer-group-title",
+		// Legacy chip selectors must remain — the chips live inside
+		// the new panel and still rely on the original visual rules.
+		".gmap-filter-chip",
+		".gmap-filter-chip.is-off",
+		".gmap-filter-chips",
+	} {
+		if !strings.Contains(gmapCSS, want) {
+			t.Errorf("D27j-ui-1: governance-map.css missing selector %q", want)
+		}
+	}
+	// The panel must hide via [hidden] when closed.
+	if !strings.Contains(gmapCSS, ".gmap-layers-panel[hidden]") {
+		t.Error("D27j-ui-1: governance-map.css must include .gmap-layers-panel[hidden] rule")
+	}
+}
+
+// =============================================================
+// D27j-ui-2b — FailModePolicy badge rendering
+// =============================================================
+//
+// These tests pin the D27j-ui-2b badge logic at the source level. The
+// renderer is plain JS embedded in index.html, so the assertions are
+// substring pins on the rendered HTML body — same convention as every
+// other Explorer test. The pins anchor on the literal badge spec
+// fragments (`cls: 'fmp-...'` + `text: '...'`) so a regression in
+// badge text or CSS class fails fast.
+
+// TestExplorer_HTML_BusinessServiceNode_FMPDefaultBadge_RendersWhenConfigured
+// pins the BS root badge spec. The BS root card now carries a
+// `badges:` field (it didn't before D27j-ui-2b), so the gating
+// `if (bs.fail_mode_policy_id)` and the badge literal must both be
+// present on the same node-construction site.
+func TestExplorer_HTML_BusinessServiceNode_FMPDefaultBadge_RendersWhenConfigured(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	for _, want := range []string{
+		`if (bs.fail_mode_policy_id) {`,
+		`bsFmpBadges.push({ cls: 'fmp-default', text: 'FMP default' });`,
+		`badges: bsFmpBadges,`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D27j-ui-2b: BS root must wire FMP default badge; missing %q", want)
+		}
+	}
+}
+
+// TestExplorer_HTML_DecisionSurfaceNode_FMPOverrideAndInheritedBadges
+// pins the surface helper. Both the override branch and the inherited
+// branch must be present in the helper, AND the helper must be called
+// at both surface render sites (root + row) via .concat().
+func TestExplorer_HTML_DecisionSurfaceNode_FMPOverrideAndInheritedBadges(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	for _, want := range []string{
+		// Helper declaration.
+		`function failModePolicyBadgesForSurface(surf)`,
+		// Override branch (surface has its own policy).
+		`if (surf && surf.fail_mode_policy_id) {`,
+		`return [{ cls: 'fmp-override', text: 'FMP override' }];`,
+		// Inherited branch (no surface override + root BS has policy).
+		`if (data.business_service && data.business_service.fail_mode_policy_id) {`,
+		`return [{ cls: 'fmp-inherited', text: 'FMP inherited' }];`,
+		// Helper applied at the surface-root site.
+		`.concat(failModePolicyBadgesForSurface(surf)),`,
+		// Helper applied at the surface-row site (per-iteration `s`).
+		`.concat(failModePolicyBadgesForSurface(s)),`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D27j-ui-2b: surface FMP badge wiring missing %q", want)
+		}
+	}
+}
+
+// TestExplorer_HTML_FailModePolicyBadges_NoStatusVersionOrLifecycleStrings
+// pins the badge-text vocabulary. The brief explicitly forbids any
+// language that implies runtime resolution (status, version, soft/open,
+// resolved). The badge text must be exactly one of the three approved
+// literals — nothing in the renderer should leak a forbidden token
+// into a span carrying a `gmap-badge fmp-` class.
+func TestExplorer_HTML_FailModePolicyBadges_NoStatusVersionOrLifecycleStrings(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// The three approved badge texts must be the ONLY values rendered
+	// inside `text:` keys preceded by an `fmp-` cls. Pin them as the
+	// expected vocabulary.
+	for _, want := range []string{
+		`text: 'FMP default'`,
+		`text: 'FMP override'`,
+		`text: 'FMP inherited'`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D27j-ui-2b: approved FMP badge literal %q must be present", want)
+		}
+	}
+
+	// Forbidden tokens scoped to the fmp-* code path. The substring
+	// scan is over the whole body; the scope is enforced semantically
+	// (these tokens may appear elsewhere — e.g. surface.status renders
+	// 'active' as meta — but they must never be paired with an fmp-
+	// cls or appear inside any FMP-related code path). To check pairing
+	// without a parser, scan the source for the literal forbidden
+	// constructs that would only arise inside fmp- code.
+	for _, forbidden := range []string{
+		// Lifecycle / version / posture literals.
+		`cls: 'fmp-default', text: 'active'`,
+		`cls: 'fmp-default', text: 'review'`,
+		`cls: 'fmp-default', text: 'deprecated'`,
+		`cls: 'fmp-default', text: 'closed'`,
+		`cls: 'fmp-default', text: 'soft'`,
+		`cls: 'fmp-default', text: 'open'`,
+		`cls: 'fmp-override', text: 'active'`,
+		`cls: 'fmp-override', text: 'closed'`,
+		`cls: 'fmp-override', text: 'resolved'`,
+		`cls: 'fmp-inherited', text: 'active'`,
+		// Variant casings / common version-template foot-guns.
+		`text: 'FMP active'`,
+		`text: 'FMP closed'`,
+		`text: 'FMP soft'`,
+		`text: 'FMP open'`,
+		`text: 'FMP resolved'`,
+		// FailModePolicy id rendered inside the FMP badge text.
+		`text: 'FMP default ' + bs.fail_mode_policy_id`,
+		`text: 'FMP override ' + s.fail_mode_policy_id`,
+		`text: 'FMP override ' + surf.fail_mode_policy_id`,
+		// Active-version / effective-date templates.
+		`fmp-default v`,
+		`fmp-override v`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("D27j-ui-2b: forbidden FMP badge construction %q must not be present", forbidden)
+		}
+	}
+}
+
+// TestExplorer_HTML_FailModePolicyBadges_NoNodeOrEdgeOrInspectorIntroduced
+// guards the topology boundary. The badge tranche is visual-only; no
+// new node kind, no new connector class, no new inspector function
+// declaration may slip in.
+func TestExplorer_HTML_FailModePolicyBadges_NoNodeOrEdgeOrInspectorIntroduced(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	for _, forbidden := range []string{
+		// New node kinds.
+		`kind: 'fail_mode_policy'`,
+		`kind: 'failmode'`,
+		`kind: 'fmp'`,
+		// New connector class.
+		`connector-fail-mode-policy`,
+		`connector-failmode`,
+		`gmap-fmp-connector`,
+		// New addNode call referencing fail-mode.
+		`addNode({ id: 'fmp:`,
+		// Inspector / fetch helpers.
+		`function renderFailModePolicy`,
+		`function fetchFailModePolicy`,
+		`function loadFailModePolicy`,
+		`function resolveFailModePolicy`,
+		// Audit-event rendering.
+		`>FAIL_MODE_POLICY_RESOLVED<`,
+		`'FAIL_MODE_POLICY_RESOLVED'`,
+		`"FAIL_MODE_POLICY_RESOLVED"`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("D27j-ui-2b: forbidden token %q must not appear (topology / inspector / audit boundary)", forbidden)
+		}
+	}
+}
+
+// TestExplorer_HTML_LayersControl_StillNoFailModeChip_AfterBadges
+// re-asserts D27j-ui-1's negative pin. Defensive — explicit boundary
+// for reviewers diffing this PR. Adding a chip here would also break
+// LayersControl_NoFailModePolicy from D27j-ui-1.
+func TestExplorer_HTML_LayersControl_StillNoFailModeChip_AfterBadges(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, forbidden := range []string{
+		`data-kind="failmode"`,
+		`data-kind="fail_mode_policy"`,
+		`data-kind="fail-mode-policy"`,
+		`data-kind="fmp"`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("D27j-ui-2b: badge tranche must not introduce Layers chip %q", forbidden)
+		}
+	}
+}
+
+// TestExplorer_AssetsCSS_FailModePolicyBadges_Present pins the three
+// new selectors and the dashed-border treatment for the inherited
+// variant. The `.gmap-badge.fmp-none` rule must NOT exist (Step 0
+// decision: no-reference state shows no badge).
+func TestExplorer_AssetsCSS_FailModePolicyBadges_Present(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+
+	for _, want := range []string{
+		`.gmap-badge.fmp-default`,
+		`.gmap-badge.fmp-override`,
+		`.gmap-badge.fmp-inherited`,
+		`border-style: dashed`,
+	} {
+		if !strings.Contains(gmapCSS, want) {
+			t.Errorf("D27j-ui-2b: governance-map.css missing %q", want)
+		}
+	}
+	if strings.Contains(gmapCSS, `.gmap-badge.fmp-none`) {
+		t.Error("D27j-ui-2b: governance-map.css must NOT include .gmap-badge.fmp-none (Step 0 deferred 'No FMP' badge)")
+	}
+	// Legacy badge selectors must remain unchanged — this tranche is
+	// additive, not a redesign.
+	for _, want := range []string{
+		`.gmap-badge.ok`,
+		`.gmap-badge.warn`,
+		`.gmap-badge.bind`,
+	} {
+		if !strings.Contains(gmapCSS, want) {
+			t.Errorf("D27j-ui-2b: legacy badge selector %q must remain (no broad redesign)", want)
+		}
+	}
+}
+
+// =============================================================
+// D27j-ui-theme-1 — Light Mode Token Foundation
+// =============================================================
+//
+// These tests pin the token-only foundation. Dark remains the default
+// (the bare :root block carries every existing dark value). Light is
+// opt-in via :root[data-theme="light"] — no HTML attribute is set, no
+// JS toggle exists. Later tranches build component-level retheming
+// against the token surface introduced here.
+
+// TestExplorer_AssetsCSS_LightThemeTokens_Present pins the new light
+// override block and a representative subset of light values. The
+// subset covers all six surface tiers, both on-surface text tones,
+// outline + outline-variant, primary action colour, surface-tint, and
+// the slate-900 value-flip (sentinel that the slate scale really did
+// flip rather than being aliased to itself).
+func TestExplorer_AssetsCSS_LightThemeTokens_Present(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	tokensCSS := getExplorerAsset(t, srv, "/explorer/assets/css/tokens.css")
+
+	for _, want := range []string{
+		`:root[data-theme="light"]`,
+		`--bg:                          #f8f9fb`,
+		`--surface-container-lowest:    #ffffff`,
+		`--surface-container:           #eceef0`,
+		`--on-surface:                  #191c1e`,
+		`--on-surface-variant:          #424753`,
+		`--outline:                     #727784`,
+		`--outline-variant:             #c2c6d5`,
+		`--primary:                     #004aa2`,
+		`--surface-tint:                #005ac3`,
+		// Sentinel: value-flip happened in place, not aliased.
+		`--slate-900:                   #ffffff`,
+	} {
+		if !strings.Contains(tokensCSS, want) {
+			t.Errorf("D27j-ui-theme-1: light-mode token %q missing from tokens.css", want)
+		}
+	}
+}
+
+// TestExplorer_AssetsCSS_DarkThemeRemainsDefault pins the dark
+// posture: every key dark value is still in the bare :root block, the
+// new --surface-tint dark default was added, and the light override
+// block appears AFTER the dark block (CSS cascade depends on this).
+func TestExplorer_AssetsCSS_DarkThemeRemainsDefault(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	tokensCSS := getExplorerAsset(t, srv, "/explorer/assets/css/tokens.css")
+
+	for _, want := range []string{
+		`--bg:                          #111125`,
+		`--surface:                     #111125`,
+		`--on-surface:                  #e2e0fc`,
+		// New dark default added in this tranche so the light block has
+		// a matching token to override.
+		`--surface-tint:                #adc6ff`,
+	} {
+		if !strings.Contains(tokensCSS, want) {
+			t.Errorf("D27j-ui-theme-1: dark default token %q must remain in :root block", want)
+		}
+	}
+
+	// Order check: the bare ":root {" block must appear BEFORE the
+	// ":root[data-theme=\"light\"]" override block. CSS cascade rules
+	// depend on the override coming after the default.
+	idxDark := strings.Index(tokensCSS, `:root {`)
+	idxLight := strings.Index(tokensCSS, `:root[data-theme="light"]`)
+	if idxDark < 0 {
+		t.Fatal("D27j-ui-theme-1: bare :root block missing from tokens.css")
+	}
+	if idxLight < 0 {
+		t.Fatal("D27j-ui-theme-1: :root[data-theme=\"light\"] block missing from tokens.css")
+	}
+	if idxDark >= idxLight {
+		t.Errorf("D27j-ui-theme-1: dark :root block must precede light override (dark=%d, light=%d)", idxDark, idxLight)
+	}
+}
+
+// TestExplorer_AssetsCSS_TokenNamesUnchanged guards against accidental
+// rename or removal of any existing token. Theme-1 is purely additive
+// at the token level; theme-0 explicitly deferred --slate-* renaming
+// to a later cleanup tranche.
+func TestExplorer_AssetsCSS_TokenNamesUnchanged(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	tokensCSS := getExplorerAsset(t, srv, "/explorer/assets/css/tokens.css")
+
+	for _, want := range []string{
+		`--surface`,
+		`--surface-container-lowest`,
+		`--surface-container-low`,
+		`--surface-container`,
+		`--surface-container-high`,
+		`--surface-container-highest`,
+		`--surface-bright`,
+		`--surface-variant`,
+		`--on-surface`,
+		`--on-surface-variant`,
+		`--primary`,
+		`--primary-container`,
+		`--on-primary`,
+		`--on-primary-container`,
+		`--secondary`,
+		`--on-secondary`,
+		`--secondary-container`,
+		`--tertiary`,
+		`--tertiary-container`,
+		`--error`,
+		`--error-container`,
+		`--on-error`,
+		`--outline`,
+		`--outline-variant`,
+		`--slate-900`,
+		`--slate-800`,
+		`--slate-700`,
+		`--slate-500`,
+		`--slate-400`,
+		`--slate-300`,
+		`--slate-200`,
+		`--chain-surface`,
+		`--chain-profile`,
+		`--chain-grant`,
+		`--chain-agent`,
+	} {
+		if !strings.Contains(tokensCSS, want) {
+			t.Errorf("D27j-ui-theme-1: token name %q must still exist (no rename / removal in this tranche)", want)
+		}
+	}
+}
+
+// TestExplorer_HTML_DefaultHasNoThemeAttribute pins the dark-default
+// posture at the HTML level: nothing in the rendered Explorer body
+// sets the data-theme attribute or applies a theme-light class. The
+// light token block exists in CSS but is unactivated until a later
+// tranche introduces a Settings toggle.
+func TestExplorer_HTML_DefaultHasNoThemeAttribute(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	for _, forbidden := range []string{
+		`data-theme="light"`,
+		`data-theme='light'`,
+		`theme-light`,
+		`class="theme-light"`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("D27j-ui-theme-1: default Explorer must NOT preset theme; found %q", forbidden)
+		}
+	}
+}
+
+// TestExplorer_HTML_NoThemeToggleYet was the D27j-ui-theme-1 negative
+// pin that forbade theme/appearance UI. D27j-ui-theme-6 legitimately
+// introduces an Appearance card in Settings, so this test was retired.
+// Its intent (no global header / map toolbar toggle) lives on in
+// TestExplorer_HTML_ThemeToggle_NotInShellHeaderOrGraphToolbar below;
+// the dark-default posture lives on in
+// TestExplorer_HTML_DefaultHasNoThemeAttribute (theme-1) and
+// TestExplorer_HTML_DefaultRoot_StillNoThemeAttribute_Theme4 (theme-4).
+
+// =============================================================
+// D27j-ui-theme-2 — Engineering Workbench Shape & Border Tokens
+// =============================================================
+//
+// Theme-neutral shape, border, shadow, and spacing tokens land in
+// tokens.css; selected high-impact chrome migrates from raw values to
+// var(--token) references. These tests pin both surfaces: token
+// definitions plus the consumer migrations.
+
+// TestExplorer_AssetsCSS_ShapeAndElevationTokens_Present pins all 14
+// new tokens in the dark :root block.
+func TestExplorer_AssetsCSS_ShapeAndElevationTokens_Present(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	tokensCSS := getExplorerAsset(t, srv, "/explorer/assets/css/tokens.css")
+
+	for _, want := range []string{
+		`--radius-sharp:  0`,
+		`--radius-tight:  2px`,
+		`--radius-panel:  4px`,
+		`--radius-pip:    999px`,
+		`--border-hairline: 1px solid var(--outline-variant)`,
+		`--border-strong:   1px solid var(--outline)`,
+		`--shadow-overlay-tight: 0 2px 8px rgba(0,0,0,0.24)`,
+		`--shadow-overlay-light: 0 4px 16px rgba(0,0,0,0.16)`,
+		`--space-1: 4px`,
+		`--space-2: 8px`,
+		`--space-3: 12px`,
+		`--space-4: 16px`,
+		`--space-5: 24px`,
+		`--space-6: 32px`,
+	} {
+		if !strings.Contains(tokensCSS, want) {
+			t.Errorf("D27j-ui-theme-2: dark :root must define %q", want)
+		}
+	}
+}
+
+// TestExplorer_AssetsCSS_LightThemeShadowOverrides_Present pins the
+// shadow-only light overrides. The :root[data-theme="light"] block
+// must redefine the two overlay shadows with cool slate alphas
+// instead of dark-mode black.
+func TestExplorer_AssetsCSS_LightThemeShadowOverrides_Present(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	tokensCSS := getExplorerAsset(t, srv, "/explorer/assets/css/tokens.css")
+
+	idxLight := strings.Index(tokensCSS, `:root[data-theme="light"]`)
+	if idxLight < 0 {
+		t.Fatal("D27j-ui-theme-2: :root[data-theme=\"light\"] block missing")
+	}
+	// Slice from the light selector to end of file — every override
+	// must live inside that block.
+	lightSlice := tokensCSS[idxLight:]
+
+	for _, want := range []string{
+		`--shadow-overlay-tight: 0 2px 8px rgba(15,23,42,0.10)`,
+		`--shadow-overlay-light: 0 4px 16px rgba(15,23,42,0.06)`,
+	} {
+		if !strings.Contains(lightSlice, want) {
+			t.Errorf("D27j-ui-theme-2: light shadow override %q must live inside :root[data-theme=\"light\"]", want)
+		}
+	}
+}
+
+// TestExplorer_AssetsCSS_ShapeTokenMigrations_Applied pins each
+// selector→token consumer migration. Existing class/id pins in other
+// tests already prove the selectors render and behave; these
+// assertions only check that the radius / shadow declaration inside
+// each rule body now reads the new token.
+func TestExplorer_AssetsCSS_ShapeTokenMigrations_Applied(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+	iamCSS := getExplorerAsset(t, srv, "/explorer/assets/css/iam.css")
+	evaluateCSS := getExplorerAsset(t, srv, "/explorer/assets/css/evaluate.css")
+	settingsCSS := getExplorerAsset(t, srv, "/explorer/assets/css/settings.css")
+	recordsCSS := getExplorerAsset(t, srv, "/explorer/assets/css/records.css")
+
+	// sliceRule returns the body slice between `selector {` and the
+	// next `}` so substring assertions stay scoped to that rule and
+	// don't false-match content from a neighbouring rule.
+	sliceRule := func(t *testing.T, css, selector string) string {
+		t.Helper()
+		needle := selector + " {"
+		i := strings.Index(css, needle)
+		if i < 0 {
+			needle = selector + "  {"
+			i = strings.Index(css, needle)
+		}
+		if i < 0 {
+			t.Fatalf("D27j-ui-theme-2: selector %q not found", selector)
+		}
+		end := strings.Index(css[i:], "}")
+		if end < 0 {
+			t.Fatalf("D27j-ui-theme-2: rule body for %q missing closing brace", selector)
+		}
+		return css[i : i+end]
+	}
+
+	type ruleCheck struct {
+		css      string
+		selector string
+		want     []string
+		forbid   []string
+	}
+	checks := []ruleCheck{
+		{gmapCSS, ".governance-map-workbench", []string{`border-radius: var(--radius-panel)`}, []string{`border-radius: 8px`}},
+		{gmapCSS, ".gmap-filter-chip", []string{`border-radius: var(--radius-tight)`}, []string{`border-radius: 999px`}},
+		{gmapCSS, ".gmap-badge", []string{`border-radius: var(--radius-tight)`}, []string{`border-radius: 3px`}},
+		{gmapCSS, ".gmap-layers-button", []string{`border-radius: var(--radius-tight)`}, []string{`border-radius: 4px`}},
+		{gmapCSS, ".gmap-layers-panel", []string{
+			`border-radius: var(--radius-panel)`,
+			// D27j-ui-theme-3 tightened the panel shadow from -light to
+			// -tight as part of the command-panel hardening; the panel
+			// still uses a tokenised overlay shadow, just a smaller one.
+			`box-shadow: var(--shadow-overlay-tight)`,
+		}, []string{
+			`border-radius: 6px`,
+			`box-shadow: 0 6px 20px rgba(0, 0, 0, 0.32)`,
+		}},
+		{iamCSS, ".iam-card", []string{
+			`border-radius: var(--radius-panel)`,
+			`box-shadow: var(--shadow-overlay-light)`,
+		}, []string{
+			`border-radius: 8px`,
+			`box-shadow: 0 24px 64px rgba(0,0,0,0.4)`,
+		}},
+		{evaluateCSS, ".evaluate-col", []string{`border-radius: var(--radius-panel)`}, []string{`border-radius: 8px`}},
+		{settingsCSS, ".settings-card", []string{`border-radius: var(--radius-panel)`}, []string{`border-radius: 8px`}},
+		{recordsCSS, ".records-table-card", []string{`box-shadow: var(--shadow-overlay-light)`}, []string{`box-shadow: 0 12px 32px rgba(0,0,0,0.20)`}},
+		{recordsCSS, ".records-detail", []string{`box-shadow: var(--shadow-overlay-light)`}, []string{`box-shadow: 0 16px 40px rgba(0,0,0,0.30)`}},
+	}
+	for _, c := range checks {
+		body := sliceRule(t, c.css, c.selector)
+		for _, want := range c.want {
+			if !strings.Contains(body, want) {
+				t.Errorf("D27j-ui-theme-2: %s rule must contain %q\n--- rule body:\n%s", c.selector, want, body)
+			}
+		}
+		for _, forbidden := range c.forbid {
+			if strings.Contains(body, forbidden) {
+				t.Errorf("D27j-ui-theme-2: %s rule must no longer contain raw value %q (migrated to token)", c.selector, forbidden)
+			}
+		}
+	}
+}
+
+// TestExplorer_AssetsCSS_TokenScope_NoBroaderRedesign sentinels the
+// items deferred by Step 0 — they must keep their existing raw values
+// so this tranche stays scoped. Selected-node glows, focus rings,
+// camera/mode rail, and the four out-of-scope 999px pills are all
+// preserved.
+func TestExplorer_AssetsCSS_TokenScope_NoBroaderRedesign(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+	settingsCSS := getExplorerAsset(t, srv, "/explorer/assets/css/settings.css")
+	capabilitiesCSS := getExplorerAsset(t, srv, "/explorer/assets/css/capabilities.css")
+
+	// Camera rail / mode rail still 8px + raw shadow (deferred to a
+	// later tranche per Step 0).
+	for _, want := range []string{
+		`box-shadow: 0 4px 12px rgba(0, 0, 0, 0.30)`,
+	} {
+		if !strings.Contains(gmapCSS, want) {
+			t.Errorf("D27j-ui-theme-2: camera/mode rail shadow %q must remain (deferred)", want)
+		}
+	}
+
+	// Settings version chip pill stays 999px (deferred per brief — only
+	// .gmap-filter-chip migrates in this tranche).
+	if !strings.Contains(settingsCSS, `border-radius: 999px`) {
+		t.Error("D27j-ui-theme-2: settings.css must still contain a 999px pill (deferred to a later tranche)")
+	}
+
+	// Capabilities pill chip likewise stays 999px.
+	if !strings.Contains(capabilitiesCSS, `border-radius: 999px`) {
+		t.Error("D27j-ui-theme-2: capabilities.css must still contain a 999px pill (deferred)")
+	}
+
+	// Selected-node treatment was theme-4 territory and was further
+	// refined in D27j-ui-theme-4d, which collapsed the dual-shadow
+	// (ring + diffuse glow) on .gmap-node.gmap-root-node into a clean
+	// single 2px primary ring. The theme-2 sentinel here originally
+	// pinned the dual-shadow as "theme-4 territory"; theme-4d
+	// deliberately changed it. Pin the new clean-ring treatment.
+	for _, want := range []string{
+		`.gmap-node.gmap-root-node {`,
+		`box-shadow: 0 0 0 2px var(--primary);`,
+	} {
+		if !strings.Contains(gmapCSS, want) {
+			t.Errorf("D27j-ui-theme-4d: clean-ring root-node treatment %q must remain", want)
+		}
+	}
+	// Negative pin: the pre-theme-4d dual-shadow must NOT remain.
+	if strings.Contains(gmapCSS, `box-shadow: 0 0 0 2px var(--primary, #4ea1ff), 0 4px 16px rgba(78,161,255,0.20)`) {
+		t.Error("D27j-ui-theme-4d: pre-refinement root-node dual-shadow must NOT remain (theme-4d collapsed it to a single 2px ring)")
+	}
+}
+
+// =============================================================
+// D27j-ui-theme-3 — Layers Control Visual Hardening
+// =============================================================
+//
+// The Layers panel was converted from rounded-chip pills to dense
+// command rows. The original .gmap-filter-chip class stays on every
+// button so wireGmapFilterChips wiring is unchanged; a second visual
+// class .gmap-layer-row drives the row geometry, plus indicator and
+// label spans for the technical workbench look.
+
+// TestExplorer_HTML_LayersControl_RowMarkup_Present pins the new
+// row classes and indicator/label spans for at least one toggle row
+// (business) and the reset row (all). The aria + data-kind invariants
+// still come from earlier tests; this one is scoped to the new visual
+// markup.
+func TestExplorer_HTML_LayersControl_RowMarkup_Present(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	for _, want := range []string{
+		// Toggle row: chip class first, row class second, then aria.
+		`class="gmap-filter-chip gmap-layer-row" data-kind="business" aria-pressed="true"`,
+		// Reset row: chip class + row class + reset modifier.
+		`class="gmap-filter-chip gmap-layer-row gmap-layer-row-reset" data-kind="all"`,
+		// Indicator and label spans must wrap each row's content.
+		`<span class="gmap-layer-row-indicator" aria-hidden="true"></span>`,
+		`<span class="gmap-layer-row-label">Business services</span>`,
+		`<span class="gmap-layer-row-label">All</span>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D27j-ui-theme-3: row markup fragment %q missing", want)
+		}
+	}
+
+	// Sanity: every existing data-kind button must now also carry the
+	// row class. Loop over the data-kind values to ensure no toggle
+	// was missed when migrating the markup.
+	for _, kind := range []string{"all", "business", "capability", "process", "surface", "ai", "bindings", "synthetic"} {
+		// Any of the two class compositions is acceptable: with or
+		// without the gmap-layer-row-reset modifier (only `all` carries
+		// it). The substring just proves the row class was added.
+		if !strings.Contains(body, `gmap-layer-row" data-kind="`+kind+`"`) &&
+			!strings.Contains(body, `gmap-layer-row-reset" data-kind="`+kind+`"`) {
+			t.Errorf("D27j-ui-theme-3: data-kind=%q toggle missing the gmap-layer-row visual class", kind)
+		}
+	}
+}
+
+// TestExplorer_AssetsCSS_LayersRowControl_Present pins the new
+// selectors and confirms they consume the D27j-ui-theme-2 tokens.
+// Also confirms the previously-pinned legacy selectors still exist —
+// theme-3 is additive on top of D27j-ui-1 / D27j-ui-theme-2.
+func TestExplorer_AssetsCSS_LayersRowControl_Present(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+
+	for _, want := range []string{
+		// New row-control selectors.
+		`.gmap-layer-row {`,
+		`.gmap-layer-row.is-off {`,
+		`.gmap-layer-row-indicator {`,
+		`.gmap-layer-row-label {`,
+		`.gmap-layer-row-reset .gmap-layer-row-indicator {`,
+		// Group divider added in this tranche.
+		`.gmap-layer-group + .gmap-layer-group {`,
+		// Token usage on the new row block.
+		`border-radius: var(--radius-tight)`,
+		`gap: var(--space-2)`,
+		`gap: var(--space-1)`,
+		// Layers panel migrated to the tighter overlay shadow + hairline
+		// border in this tranche.
+		`box-shadow: var(--shadow-overlay-tight)`,
+		`border: var(--border-hairline)`,
+		// Legacy selectors must still exist (D27j-ui-1 + theme-2).
+		`.gmap-layers-control`,
+		`.gmap-layers-button`,
+		`.gmap-layers-panel`,
+		`.gmap-layer-group`,
+		`.gmap-layer-group-title`,
+	} {
+		if !strings.Contains(gmapCSS, want) {
+			t.Errorf("D27j-ui-theme-3: governance-map.css missing %q", want)
+		}
+	}
+
+	// The Layers panel must no longer carry the larger overlay shadow
+	// from theme-2 — it migrated to the tighter token in this tranche.
+	// Scope the negative pin to the panel rule body so we do not false-
+	// match on .records-table-card or other consumers of -light.
+	panelStart := strings.Index(gmapCSS, `.gmap-layers-panel {`)
+	if panelStart < 0 {
+		t.Fatal("D27j-ui-theme-3: .gmap-layers-panel rule missing")
+	}
+	panelEnd := strings.Index(gmapCSS[panelStart:], "}")
+	if panelEnd < 0 {
+		t.Fatal("D27j-ui-theme-3: .gmap-layers-panel rule has no closing brace")
+	}
+	panelBody := gmapCSS[panelStart : panelStart+panelEnd]
+	if strings.Contains(panelBody, `box-shadow: var(--shadow-overlay-light)`) {
+		t.Error("D27j-ui-theme-3: .gmap-layers-panel must use --shadow-overlay-tight (smaller, sharper) — not --shadow-overlay-light")
+	}
+}
+
+// =============================================================
+// D27j-ui-theme-4 — Governance Map Light Mode
+// =============================================================
+//
+// A single :root[data-theme="light"] override block at the end of
+// governance-map.css retones the workbench, canvas, graph nodes,
+// connectors, badges, local controls, connector tooltip, and a
+// minimum-viable right-inspector pass for light mode. Dark mode
+// remains the default; every dark base rule is preserved.
+
+// TestExplorer_AssetsCSS_GovernanceMap_LightModeOverrides_Present
+// pins the light-mode block existence and a representative subset of
+// override selectors across the major surfaces.
+func TestExplorer_AssetsCSS_GovernanceMap_LightModeOverrides_Present(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+
+	for _, want := range []string{
+		// Workbench / canvas.
+		`:root[data-theme="light"] .governance-map-workbench`,
+		`:root[data-theme="light"] .governance-map-toolbar`,
+		`:root[data-theme="light"] .governance-map-canvas-scroll`,
+		// Graph nodes.
+		`:root[data-theme="light"] .gmap-node`,
+		`:root[data-theme="light"] .gmap-node:hover`,
+		`:root[data-theme="light"] .gmap-node.selected`,
+		`:root[data-theme="light"] .gmap-node.gmap-root-node`,
+		`:root[data-theme="light"] .gmap-node.gmap-search-match`,
+		`:root[data-theme="light"] .gmap-node.gmap-search-active`,
+		`:root[data-theme="light"] .gmap-node-label`,
+		`:root[data-theme="light"] .gmap-node-name`,
+		`:root[data-theme="light"] .gmap-node-meta`,
+		// Per-type accents.
+		`:root[data-theme="light"] .business-service-node`,
+		`:root[data-theme="light"] .related-service-node`,
+		`:root[data-theme="light"] .capability-node`,
+		`:root[data-theme="light"] .process-node`,
+		`:root[data-theme="light"] .decision-surface-node`,
+		`:root[data-theme="light"] .ai-system-node`,
+		`:root[data-theme="light"] .authority-node`,
+		`:root[data-theme="light"] .coverage-node`,
+		// Connectors.
+		`:root[data-theme="light"] .connector-service`,
+		`:root[data-theme="light"] .connector-ai-binding`,
+		`:root[data-theme="light"] .connector-authority`,
+		`:root[data-theme="light"] .connector-evidence`,
+		`:root[data-theme="light"] .connector-gap`,
+		`:root[data-theme="light"] .gmap-connector.is-hovered`,
+		// Connector tooltip.
+		`:root[data-theme="light"] .gmap-connector-tooltip`,
+		// Badges (general + FMP).
+		`:root[data-theme="light"] .gmap-badge`,
+		`:root[data-theme="light"] .gmap-badge.ok`,
+		`:root[data-theme="light"] .gmap-badge.warn`,
+		`:root[data-theme="light"] .gmap-badge.bind`,
+		`:root[data-theme="light"] .gmap-badge.fmp-default`,
+		`:root[data-theme="light"] .gmap-badge.fmp-override`,
+		`:root[data-theme="light"] .gmap-badge.fmp-inherited`,
+		// Local graph controls.
+		`:root[data-theme="light"] .gmap-mode-rail`,
+		`:root[data-theme="light"] .gmap-camera-cluster`,
+		`:root[data-theme="light"] .gmap-view-mode-segment`,
+		`:root[data-theme="light"] .gmap-layers-button`,
+		`:root[data-theme="light"] .gmap-layers-panel`,
+		`:root[data-theme="light"] .gmap-layer-row`,
+		`:root[data-theme="light"] .gmap-filter-chip`,
+		// Right inspector (minimum viable).
+		`:root[data-theme="light"] #gmap-details`,
+		`:root[data-theme="light"] .gmap-details-key`,
+		`:root[data-theme="light"] .gmap-details-val`,
+	} {
+		if !strings.Contains(gmapCSS, want) {
+			t.Errorf("D27j-ui-theme-4: light-mode selector %q missing from governance-map.css", want)
+		}
+	}
+}
+
+// TestExplorer_AssetsCSS_GovernanceMap_DarkBaseRulesPreserved guards
+// every dark-mode invariant: surface tokens on nodes, primary border
+// on selected, deferred connector colours, hover stroke-width, badge
+// warn colour, and the per-type accent stripes. A regression that
+// mass-replaced dark values with light ones would fail this test.
+//
+// D27j-ui-theme-4b retoned the per-type accents and four typed
+// connectors onto the new --gmap-type-* identity tokens, so the
+// raw-hex / interaction-token assertions for those rules were
+// replaced with token-consumption assertions. The remaining raw
+// values (connector-service stroke, hover stroke-width, badge warn
+// text) are deferred to D27j-ui-theme-4d or are not part of this
+// tranche.
+func TestExplorer_AssetsCSS_GovernanceMap_DarkBaseRulesPreserved(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+
+	for _, want := range []string{
+		// Node base — bare .gmap-node block uses dark surface token.
+		`background: var(--surface-container);`,
+		`border: 1px solid var(--outline-variant);`,
+		// D27j-ui-theme-4d replaced the diffuse-glow box-shadow on
+		// .gmap-node.selected with a clean 2px primary ring. The new
+		// dark-base treatment is `0 0 0 2px var(--primary);`.
+		`box-shadow: 0 0 0 2px var(--primary);`,
+		// connector-service migrated to --gmap-conn-neutral in
+		// D27j-ui-theme-4d.
+		`stroke: var(--gmap-conn-neutral);`,
+		// Typed connectors continue to consume identity tokens.
+		`stroke: var(--gmap-type-ai);`,
+		`stroke: var(--gmap-type-authority);`,
+		`stroke: var(--gmap-type-surface);`,
+		`stroke: var(--gmap-type-risk);`,
+		// Hover bumped stroke-width is pinned by D26h-impl tests; verify
+		// it's still here as a sanity defence.
+		`stroke-width: 3.5;`,
+		// Hit-target stroke-width is preserved for click targeting.
+		`stroke-width: 12;`,
+		// Badge warn text colour stays raw (not a node-identity token).
+		`color: #f0b67a;`,
+		// Per-type accents now consume identity tokens. Authority keeps
+		// its dashed border style; the colour token flips per theme.
+		`border-left: 4px solid var(--gmap-type-business);`,
+		`border-left: 4px solid var(--gmap-type-related);`,
+		`border-left: 4px solid var(--gmap-type-capability);`,
+		`border-left: 4px solid var(--gmap-type-process);`,
+		`border-left: 4px solid var(--gmap-type-surface);`,
+		`border-left: 4px solid var(--gmap-type-ai);`,
+		`border-left: 4px dashed var(--gmap-type-authority);`,
+		`border-left: 4px solid var(--gmap-type-coverage);`,
+	} {
+		if !strings.Contains(gmapCSS, want) {
+			t.Errorf("D27j-ui-theme-4: dark base invariant %q must remain in governance-map.css", want)
+		}
+	}
+
+	// Negative pins: the old raw-hex / interaction-token values that
+	// theme-4b deliberately migrated must NOT remain anywhere in the
+	// per-type accent or typed-connector source. Catches accidental
+	// duplicate rule resurrection. D27j-ui-theme-4d also forbids the
+	// pre-refinement diffuse-glow shadow on .gmap-node.selected.
+	for _, forbidden := range []string{
+		// Old per-type accents.
+		`border-left: 4px solid var(--primary);`,
+		`border-left: 4px solid #8aa7d6;`,
+		`border-left: 4px solid #c2c6d6;`,
+		`border-left: 4px solid var(--secondary);`,
+		`border-left: 4px solid #6fb7e6;`,
+		`border-left: 4px dashed #6fb7e6;`,
+		`border-left: 4px solid #d6c46f;`,
+		// Old typed-connector strokes.
+		`stroke: #6fb7e6;`,
+		`stroke: #4edea3;`,
+		`stroke: #f0b67a;`,
+		// Pre-D27j-ui-theme-4d diffuse glows (selected, root, search-
+		// active, multi-selected). All replaced with clean 2px rings.
+		`box-shadow: 0 4px 16px rgba(173,198,255,0.18);`,
+		`0 4px 16px rgba(78,161,255,0.20)`,
+		`0 4px 16px rgba(173,198,255,0.28)`,
+		`0 4px 16px rgba(78, 222, 163, 0.30)`,
+		// Pre-theme-4d service connector raw stroke.
+		`stroke: #8b949c;`,
+	} {
+		if strings.Contains(gmapCSS, forbidden) {
+			t.Errorf("D27j-ui-theme-4b/4d: pre-tokenisation literal %q must NOT remain (rule should consume --gmap-type-* / --gmap-conn-neutral / clean-ring token)", forbidden)
+		}
+	}
+}
+
+// TestExplorer_AssetsCSS_GovernanceMap_LightSelectedUsesBorderNotGlow
+// pins the design decision: under light mode, the selected node
+// drops the dark diffuse glow in favour of a clean primary border +
+// primary-container fill. The 2px-ring on the root marker stays
+// because it is structural (single-ring identifier, no diffuse glow).
+func TestExplorer_AssetsCSS_GovernanceMap_LightSelectedUsesBorderNotGlow(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+
+	// Locate the light-mode .gmap-node.selected rule body.
+	needle := `:root[data-theme="light"] .gmap-node.selected {`
+	i := strings.Index(gmapCSS, needle)
+	if i < 0 {
+		t.Fatalf("D27j-ui-theme-4: light-mode .gmap-node.selected rule missing")
+	}
+	end := strings.Index(gmapCSS[i:], "}")
+	if end < 0 {
+		t.Fatalf("D27j-ui-theme-4: light-mode .gmap-node.selected rule has no closing brace")
+	}
+	body := gmapCSS[i : i+end]
+
+	// Border + primary-container fill present, diffuse glow dropped.
+	for _, want := range []string{
+		`border-color: var(--primary)`,
+		`background: var(--primary-container)`,
+		`box-shadow: none`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D27j-ui-theme-4: light-mode .gmap-node.selected must contain %q\n--- rule body:\n%s", want, body)
+		}
+	}
+	// Negative pin: no diffuse glow leaks via a 16px shadow.
+	if strings.Contains(body, `0 4px 16px`) {
+		t.Errorf("D27j-ui-theme-4: light-mode .gmap-node.selected must not carry a diffuse glow; got %s", body)
+	}
+}
+
+// TestExplorer_AssetsCSS_GovernanceMap_HiddenInvariantsPreserved
+// re-pins the universal visibility-filter invariants. Light-mode
+// overrides must not redefine them.
+func TestExplorer_AssetsCSS_GovernanceMap_HiddenInvariantsPreserved(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+
+	for _, want := range []string{
+		`.gmap-node.gmap-node-hidden { display: none; }`,
+		`path.gmap-connector-hidden  { display: none; }`,
+	} {
+		if !strings.Contains(gmapCSS, want) {
+			t.Errorf("D27j-ui-theme-4: hidden invariant %q must remain", want)
+		}
+	}
+	// The light-mode block must not redefine either rule.
+	idxLight := strings.Index(gmapCSS, `D27j-ui-theme-4 — Governance Map light-mode overrides`)
+	if idxLight < 0 {
+		t.Fatal("D27j-ui-theme-4: light-mode block marker comment missing")
+	}
+	lightSlice := gmapCSS[idxLight:]
+	for _, forbidden := range []string{
+		`.gmap-node.gmap-node-hidden`,
+		`path.gmap-connector-hidden`,
+	} {
+		if strings.Contains(lightSlice, forbidden) {
+			t.Errorf("D27j-ui-theme-4: light-mode block must not redefine hidden rule %q", forbidden)
+		}
+	}
+}
+
+// TestExplorer_AssetsCSS_GovernanceMap_NoFailModePolicyAdditions guards
+// scope creep. The theme-4 light-mode block must not introduce new
+// FailModePolicy nodes/edges, layer chips, or audit-event renderings.
+// Bounded by markers so subsequent theme-N light blocks (theme-5
+// added inspector + evidence-tray retoning right after this one) are
+// not swept into the negative pin — each later block is guarded by
+// its own scoped test.
+func TestExplorer_AssetsCSS_GovernanceMap_NoFailModePolicyAdditions(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+
+	idxLight := strings.Index(gmapCSS, `D27j-ui-theme-4 — Governance Map light-mode overrides`)
+	if idxLight < 0 {
+		t.Fatal("D27j-ui-theme-4: light-mode block marker comment missing")
+	}
+	idxEnd := strings.Index(gmapCSS[idxLight:], `end-of-theme-4-light-block`)
+	if idxEnd < 0 {
+		t.Fatal("D27j-ui-theme-4: end-of-theme-4-light-block sentinel missing — required to scope this negative pin away from later theme-N blocks")
+	}
+	lightSlice := gmapCSS[idxLight : idxLight+idxEnd]
+
+	for _, forbidden := range []string{
+		`data-kind="failmode"`,
+		`data-kind="fail_mode_policy"`,
+		`.gmap-fmp-node`,
+		`.gmap-fmp-edge`,
+		`.gmap-failmode-`,
+		`FAIL_MODE_POLICY_RESOLVED`,
+	} {
+		if strings.Contains(lightSlice, forbidden) {
+			t.Errorf("D27j-ui-theme-4: light-mode block must not contain %q (out of scope for theme-4)", forbidden)
+		}
+	}
+}
+
+// TestExplorer_HTML_DefaultRoot_StillNoThemeAttribute_Theme4 re-pins
+// dark-default posture at the HTML level. Theme-1 already enforces
+// this; this defensive duplicate makes the boundary explicit when
+// reviewers diff this PR.
+func TestExplorer_HTML_DefaultRoot_StillNoThemeAttribute_Theme4(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	for _, forbidden := range []string{
+		`data-theme="light"`,
+		`data-theme='light'`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("D27j-ui-theme-4: default Explorer must not preset theme; found %q", forbidden)
+		}
+	}
+}
+
+// =============================================================
+// D27j-ui-theme-5 — Records / Inspector / Evidence Light Mode
+// =============================================================
+//
+// Theme-5 retones Records (shell, table, detail, envelope detail),
+// the right inspector (full pass on top of theme-4's minimum-viable
+// retoning), the bottom evidence tray, and the shared envelope /
+// runtime / coverage / copy-btn components used by these surfaces.
+// CSS-only; dark mode remains the default.
+
+// TestExplorer_AssetsCSS_RecordsLightModeOverrides_Present pins the
+// Records light-mode block existence and a representative subset of
+// override selectors across the records shell, table, detail, and
+// envelope detail.
+func TestExplorer_AssetsCSS_RecordsLightModeOverrides_Present(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	recordsCSS := getExplorerAsset(t, srv, "/explorer/assets/css/records.css")
+
+	for _, want := range []string{
+		// Shell + summary metrics.
+		`:root[data-theme="light"] .records-page-title h2`,
+		`:root[data-theme="light"] .records-page-title-badge`,
+		`:root[data-theme="light"] .records-metric`,
+		`:root[data-theme="light"] .records-metric.escalate`,
+		`:root[data-theme="light"] .records-metric.clarify`,
+		// Table card + toolbar.
+		`:root[data-theme="light"] .records-table-card`,
+		`:root[data-theme="light"] .records-table-toolbar`,
+		`:root[data-theme="light"] .records-search`,
+		`:root[data-theme="light"] .records-toolbar-btn`,
+		// Table.
+		`:root[data-theme="light"] .records-table thead th`,
+		`:root[data-theme="light"] .records-table tbody tr`,
+		`:root[data-theme="light"] .records-table tbody tr:hover`,
+		`:root[data-theme="light"] .records-table tbody tr.selected`,
+		`:root[data-theme="light"] .records-table .col-mono-primary`,
+		`:root[data-theme="light"] .records-table .col-integrity`,
+		// Outcome badges.
+		`:root[data-theme="light"] .records-outcome-badge.accept`,
+		`:root[data-theme="light"] .records-outcome-badge.escalate`,
+		`:root[data-theme="light"] .records-outcome-badge.reject`,
+		`:root[data-theme="light"] .records-outcome-badge.clarify`,
+		// Detail card.
+		`:root[data-theme="light"] .records-detail`,
+		`:root[data-theme="light"] .records-detail-header`,
+		`:root[data-theme="light"] .records-detail-id`,
+		`:root[data-theme="light"] .records-detail-grid`,
+		`:root[data-theme="light"] .records-detail-cell-key`,
+		`:root[data-theme="light"] .records-detail-section-label`,
+		// Authority chain dots.
+		`:root[data-theme="light"] .records-authority-node.grant   .records-authority-node-dot`,
+		`:root[data-theme="light"] .records-authority-node.profile .records-authority-node-dot`,
+		`:root[data-theme="light"] .records-authority-node.surface .records-authority-node-dot`,
+		`:root[data-theme="light"] .records-authority-node.bs .records-authority-node-dot`,
+		// Evidence rows.
+		`:root[data-theme="light"] .records-evidence-row`,
+		`:root[data-theme="light"] .records-evidence-key`,
+		`:root[data-theme="light"] .records-evidence-val`,
+		// Envelope detail (lazy-loaded inspector).
+		`:root[data-theme="light"] .records-envelope-detail-key`,
+		`:root[data-theme="light"] .records-envelope-detail-val`,
+		`:root[data-theme="light"] .records-envelope-detail-json`,
+		`:root[data-theme="light"] .records-resource-action`,
+	} {
+		if !strings.Contains(recordsCSS, want) {
+			t.Errorf("D27j-ui-theme-5: light-mode selector %q missing from records.css", want)
+		}
+	}
+}
+
+// TestExplorer_AssetsCSS_InspectorLightModeOverrides_Present pins the
+// theme-5 right-inspector full pass selectors. Theme-4 retoned the
+// surface/border; theme-5 covers section title, name, action button.
+func TestExplorer_AssetsCSS_InspectorLightModeOverrides_Present(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+
+	// Bound the search to the theme-5 block so we don't false-match on
+	// theme-4's minimum-viable inspector retoning.
+	idxTheme5 := strings.Index(gmapCSS, `D27j-ui-theme-5 — Records / Inspector / Evidence Light Mode`)
+	if idxTheme5 < 0 {
+		t.Fatal("D27j-ui-theme-5: governance-map.css block marker missing")
+	}
+	theme5Slice := gmapCSS[idxTheme5:]
+
+	for _, want := range []string{
+		`:root[data-theme="light"] .gmap-details-title`,
+		`:root[data-theme="light"] .gmap-details-name`,
+		`:root[data-theme="light"] .gmap-action-view-record`,
+	} {
+		if !strings.Contains(theme5Slice, want) {
+			t.Errorf("D27j-ui-theme-5: inspector light-mode selector %q missing", want)
+		}
+	}
+}
+
+// TestExplorer_AssetsCSS_EvidenceTrayLightModeOverrides_Present pins
+// the bottom evidence tray light-mode coverage. Tray was deferred by
+// theme-4 and is fully retoned here.
+func TestExplorer_AssetsCSS_EvidenceTrayLightModeOverrides_Present(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+
+	idxTheme5 := strings.Index(gmapCSS, `D27j-ui-theme-5 — Records / Inspector / Evidence Light Mode`)
+	if idxTheme5 < 0 {
+		t.Fatal("D27j-ui-theme-5: governance-map.css block marker missing")
+	}
+	theme5Slice := gmapCSS[idxTheme5:]
+
+	for _, want := range []string{
+		// Container + header.
+		`:root[data-theme="light"] .gmap-evidence-tray`,
+		`:root[data-theme="light"] .gmap-evidence-tray-header`,
+		`:root[data-theme="light"] .gmap-evidence-tray-title`,
+		`:root[data-theme="light"] .gmap-evidence-tray-node`,
+		`:root[data-theme="light"] .gmap-evidence-tray-node-kind`,
+		`:root[data-theme="light"] .gmap-evidence-tray-demo-badge`,
+		`:root[data-theme="light"] .gmap-evidence-tray-toggle`,
+		// Tabs.
+		`:root[data-theme="light"] .gmap-evidence-tray-tabs`,
+		`:root[data-theme="light"] .gmap-evidence-tray-tab`,
+		`:root[data-theme="light"] .gmap-evidence-tray-tab.is-active`,
+		// Drift tiles + chart.
+		`:root[data-theme="light"] .gmap-evidence-tray-tile`,
+		`:root[data-theme="light"] .gmap-evidence-tray-tile-status-stable`,
+		`:root[data-theme="light"] .gmap-evidence-tray-tile-status-drifting`,
+		`:root[data-theme="light"] .gmap-evidence-tray-tile-status-critical`,
+		`:root[data-theme="light"] .gmap-evidence-tray-chart-axis-label`,
+		// Activity rows.
+		`:root[data-theme="light"] .gmap-evidence-tray-activity-row`,
+		`:root[data-theme="light"] .gmap-evidence-tray-activity-time`,
+		// Signals + provenance.
+		`:root[data-theme="light"] .gmap-evidence-tray-signal-item`,
+		`:root[data-theme="light"] .gmap-evidence-tray-signal-label`,
+		`:root[data-theme="light"] .gmap-evidence-tray-signal-value`,
+		`:root[data-theme="light"] .gmap-evidence-tray-provenance-compact`,
+	} {
+		if !strings.Contains(theme5Slice, want) {
+			t.Errorf("D27j-ui-theme-5: evidence-tray light-mode selector %q missing", want)
+		}
+	}
+}
+
+// TestExplorer_AssetsCSS_ComponentsLightModeOverrides_Present pins
+// the shared component light-mode block in components.css. Coverage
+// is scoped to envelope summary, runtime card, coverage card, and
+// copy-btn — Evaluate-only sections (simulate-cta, decision-panel,
+// chain-flow, comparison-card, curl-tabs) stay deferred.
+func TestExplorer_AssetsCSS_ComponentsLightModeOverrides_Present(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	componentsCSS := getExplorerAsset(t, srv, "/explorer/assets/css/components.css")
+
+	for _, want := range []string{
+		`:root[data-theme="light"] .envelope-summary`,
+		`:root[data-theme="light"] .envelope-summary-key`,
+		`:root[data-theme="light"] .envelope-summary-val`,
+		`:root[data-theme="light"] .runtime-card`,
+		`:root[data-theme="light"] .runtime-key`,
+		`:root[data-theme="light"] .runtime-val`,
+		`:root[data-theme="light"] .coverage-card`,
+		`:root[data-theme="light"] .coverage-status.covered`,
+		`:root[data-theme="light"] .coverage-status.gap`,
+		`:root[data-theme="light"] .coverage-status.partial`,
+		`:root[data-theme="light"] .copy-btn`,
+		`:root[data-theme="light"] .copy-btn.copied`,
+	} {
+		if !strings.Contains(componentsCSS, want) {
+			t.Errorf("D27j-ui-theme-5: components light-mode selector %q missing", want)
+		}
+	}
+	// Evaluate-only sections must NOT have been retoned in this tranche.
+	for _, forbidden := range []string{
+		`:root[data-theme="light"] .simulate-cta`,
+		`:root[data-theme="light"] .decision-panel`,
+		`:root[data-theme="light"] .chain-flow`,
+		`:root[data-theme="light"] .comparison-card`,
+		`:root[data-theme="light"] .curl-tab`,
+	} {
+		if strings.Contains(componentsCSS, forbidden) {
+			t.Errorf("D27j-ui-theme-5: %q is Evaluate-only and out of scope; defer to a later tranche", forbidden)
+		}
+	}
+}
+
+// TestExplorer_AssetsCSS_RecordsAndComponents_DarkBaseRulesPreserved
+// asserts the dark base rules in records.css and components.css were
+// not touched. Adding token-aware overrides under :root[data-theme=
+// "light"] is additive; the dark default rules must remain.
+func TestExplorer_AssetsCSS_RecordsAndComponents_DarkBaseRulesPreserved(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	recordsCSS := getExplorerAsset(t, srv, "/explorer/assets/css/records.css")
+	componentsCSS := getExplorerAsset(t, srv, "/explorer/assets/css/components.css")
+
+	// Records dark-base invariants.
+	for _, want := range []string{
+		`background: var(--surface-container-low);`, // .records-table-card
+		`background: var(--surface-container-high);`, // .records-detail
+		`color: var(--slate-300);`,                    // .col-mono
+		// Outcome badge dark tints.
+		`background: rgba(78, 222, 163, 0.10);`,
+		`background: rgba(252, 211, 77, 0.10);`,
+	} {
+		if !strings.Contains(recordsCSS, want) {
+			t.Errorf("D27j-ui-theme-5: records.css dark base invariant %q must remain", want)
+		}
+	}
+	// Components dark-base invariants.
+	for _, want := range []string{
+		`.envelope-summary {`,
+		`.runtime-card {`,
+		`.coverage-card {`,
+		`.copy-btn {`,
+		`background: rgba(78, 222, 163, 0.12);`, // .coverage-status.covered dark
+	} {
+		if !strings.Contains(componentsCSS, want) {
+			t.Errorf("D27j-ui-theme-5: components.css dark base invariant %q must remain", want)
+		}
+	}
+}
+
+// TestExplorer_AssetsCSS_Theme5_NoFailModePolicyAdditions guards
+// scope creep across all three CSS files touched by theme-5. None of
+// the new light-mode blocks may introduce FailModePolicy nodes /
+// edges / inspector sections / audit-event renderings.
+func TestExplorer_AssetsCSS_Theme5_NoFailModePolicyAdditions(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+
+	// Helper: slice between "D27j-ui-theme-5" marker and the
+	// corresponding end-of-block sentinel.
+	sliceTheme5 := func(t *testing.T, css, marker, endSentinel string) string {
+		t.Helper()
+		i := strings.Index(css, marker)
+		if i < 0 {
+			t.Fatalf("D27j-ui-theme-5: marker %q missing", marker)
+		}
+		end := strings.Index(css[i:], endSentinel)
+		if end < 0 {
+			t.Fatalf("D27j-ui-theme-5: end sentinel %q missing", endSentinel)
+		}
+		return css[i : i+end]
+	}
+
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+	recordsCSS := getExplorerAsset(t, srv, "/explorer/assets/css/records.css")
+	componentsCSS := getExplorerAsset(t, srv, "/explorer/assets/css/components.css")
+
+	slices := []string{
+		sliceTheme5(t, gmapCSS, `D27j-ui-theme-5 — Records / Inspector / Evidence Light Mode`, `end-of-theme-5-light-block`),
+		sliceTheme5(t, recordsCSS, `D27j-ui-theme-5 — Records light-mode overrides`, `end-of-theme-5-records-light-block`),
+		sliceTheme5(t, componentsCSS, `D27j-ui-theme-5 — shared component light-mode overrides`, `end-of-theme-5-components-light-block`),
+	}
+	for _, slice := range slices {
+		for _, forbidden := range []string{
+			`data-kind="failmode"`,
+			`data-kind="fail_mode_policy"`,
+			`.gmap-fmp-node`,
+			`.gmap-fmp-edge`,
+			`.gmap-failmode-`,
+			`FAIL_MODE_POLICY_RESOLVED`,
+			`renderFailModePolicy`,
+			`fetchFailModePolicy`,
+			`/audit-events`,
+			`audit-event-endpoint`,
+		} {
+			if strings.Contains(slice, forbidden) {
+				t.Errorf("D27j-ui-theme-5: light-mode block must not contain %q (out of scope)", forbidden)
+			}
+		}
+	}
+}
+
+// TestExplorer_HTML_RecordsAndEvidence_RendererFunctionsStillInline
+// is a JS-unchanged sanity check: every renderer function the brief
+// names must remain inline in index.html. Source pins, not behaviour.
+func TestExplorer_HTML_RecordsAndEvidence_RendererFunctionsStillInline(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	for _, want := range []string{
+		`function renderRecordsView`,
+		`function renderRecordsTable`,
+		`function renderRecordsDetail`,
+		`function renderExplorerEnvelopeDetailSections`,
+		`function renderGmapEvidenceTrayDriftPanel`,
+		`function renderGmapEvidenceTrayActivityPanel`,
+		`function loadExplorerRuntimeRecords`,
+		`function loadExplorerEnvelopeDetail`,
+		`function loadGmapEvidenceActivity`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D27j-ui-theme-5: renderer/loader %q must remain inline (no JS changes)", want)
+		}
+	}
+}
+
+// =============================================================
+// D27j-ui-theme-6 — Optional Theme Toggle / Settings Integration
+// =============================================================
+//
+// An Appearance card in Settings lets the operator switch between
+// Dark (default) and Light. The selected theme is persisted via
+// localStorage under the key 'midas.explorer.theme' and applied
+// pre-paint by a tiny <head> script so returning operators don't see
+// a dark flash. Dark remains the static default; first-time users
+// see no data-theme attribute on <html>.
+
+// TestExplorer_HTML_ThemeToggle_LivesInSettingsOnly pins the
+// Appearance card markup and the two theme-choice buttons.
+func TestExplorer_HTML_ThemeToggle_LivesInSettingsOnly(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	for _, want := range []string{
+		`class="settings-card settings-appearance-card"`,
+		`aria-label="Appearance"`,
+		`Appearance`,
+		`Choose the Explorer workbench theme. Dark remains the default.`,
+		`class="settings-theme-toggle"`,
+		`role="group"`,
+		`aria-label="Explorer theme"`,
+		`data-theme-choice="dark"`,
+		`data-theme-choice="light"`,
+		`aria-pressed="true"`,
+		`aria-pressed="false"`,
+		`>Dark<`,
+		`>Light<`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D27j-ui-theme-6: Appearance card markup missing %q", want)
+		}
+	}
+}
+
+// TestExplorer_HTML_ThemeToggle_NotInShellHeaderOrGraphToolbar pins
+// the placement boundary: the theme toggle only lives in Settings.
+// Bounded slices over the shell header and the governance-map
+// toolbar prove neither carries data-theme-choice buttons.
+func TestExplorer_HTML_ThemeToggle_NotInShellHeaderOrGraphToolbar(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// Slice between the shell header opening and its closing </header>.
+	headerStart := strings.Index(body, `class="shell-header"`)
+	if headerStart < 0 {
+		t.Fatal("D27j-ui-theme-6: shell-header marker missing")
+	}
+	headerEnd := strings.Index(body[headerStart:], `</header>`)
+	if headerEnd < 0 {
+		t.Fatal("D27j-ui-theme-6: shell-header closing tag missing")
+	}
+	headerSlice := body[headerStart : headerStart+headerEnd]
+	for _, forbidden := range []string{
+		`data-theme-choice`,
+		`settings-theme-option`,
+		`settings-theme-toggle`,
+		`class="settings-appearance-card"`,
+	} {
+		if strings.Contains(headerSlice, forbidden) {
+			t.Errorf("D27j-ui-theme-6: shell header must not carry theme toggle %q (Settings only)", forbidden)
+		}
+	}
+
+	// Governance-map toolbar slice. Same boundary pattern.
+	tbStart := strings.Index(body, `class="governance-map-toolbar`)
+	if tbStart < 0 {
+		t.Fatal("D27j-ui-theme-6: governance-map-toolbar marker missing")
+	}
+	tbEnd := strings.Index(body[tbStart:], `<div class="governance-map-body"`)
+	if tbEnd < 0 {
+		t.Fatal("D27j-ui-theme-6: governance-map-body closing boundary missing")
+	}
+	toolbarSlice := body[tbStart : tbStart+tbEnd]
+	for _, forbidden := range []string{
+		`data-theme-choice`,
+		`settings-theme-option`,
+		`settings-theme-toggle`,
+	} {
+		if strings.Contains(toolbarSlice, forbidden) {
+			t.Errorf("D27j-ui-theme-6: governance-map toolbar must not carry theme toggle %q (Settings only)", forbidden)
+		}
+	}
+}
+
+// TestExplorer_HTML_ThemeJS_DataThemeSetAndRemoveLogic pins the JS
+// source for applying / removing data-theme on <html>, the storage
+// key constant, and the normalisation helper.
+func TestExplorer_HTML_ThemeJS_DataThemeSetAndRemoveLogic(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	for _, want := range []string{
+		// Storage key constant.
+		`EXPLORER_THEME_STORAGE_KEY = 'midas.explorer.theme'`,
+		// Normalisation helper — only 'light' or 'dark' allowed.
+		`function normaliseExplorerTheme(value)`,
+		`return value === 'light' ? 'light' : 'dark';`,
+		// Apply / set / load functions.
+		`function applyExplorerTheme(theme)`,
+		`function setExplorerTheme(theme)`,
+		`function loadExplorerThemePreference()`,
+		// data-theme set + remove on the <html> element.
+		`document.documentElement.setAttribute('data-theme', 'light')`,
+		`document.documentElement.removeAttribute('data-theme')`,
+		// Wire IIFE.
+		`function wireExplorerThemeControls()`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D27j-ui-theme-6: theme JS literal %q missing", want)
+		}
+	}
+}
+
+// TestExplorer_HTML_ThemeJS_PreferencePersistenceSource pins the
+// localStorage persistence pattern. localStorage access is wrapped
+// in try/catch (silent failure under private mode); invalid stored
+// values fall back to dark via normaliseExplorerTheme.
+func TestExplorer_HTML_ThemeJS_PreferencePersistenceSource(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	for _, want := range []string{
+		// Storage I/O on the configured key.
+		`window.localStorage.setItem(EXPLORER_THEME_STORAGE_KEY, next)`,
+		`window.localStorage.getItem(EXPLORER_THEME_STORAGE_KEY)`,
+		// try/catch silent-failure pattern.
+		`} catch (_) { /* localStorage unavailable; persistence skipped */ }`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D27j-ui-theme-6: persistence source %q missing", want)
+		}
+	}
+
+	// Pre-paint head script — small inline <script> in <head> reads
+	// the stored value and applies data-theme="light" before CSS
+	// resolves. The literal storage-key string is duplicated in the
+	// pre-paint script so that script can run before the main inline
+	// IIFE has defined the EXPLORER_THEME_STORAGE_KEY constant.
+	for _, want := range []string{
+		`window.localStorage.getItem('midas.explorer.theme')`,
+		`if (v === 'light')`,
+		`document.documentElement.setAttribute('data-theme', 'light')`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D27j-ui-theme-6: pre-paint head script literal %q missing", want)
+		}
+	}
+}
+
+// TestExplorer_HTML_ThemeJS_NoPrefersColorScheme negative-pins
+// system mode. The brief defers prefers-color-scheme; theme-6
+// implements only the explicit Dark / Light operator choice.
+func TestExplorer_HTML_ThemeJS_NoPrefersColorScheme(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	tokensCSS := getExplorerAsset(t, srv, "/explorer/assets/css/tokens.css")
+	settingsCSS := getExplorerAsset(t, srv, "/explorer/assets/css/settings.css")
+
+	for label, src := range map[string]string{
+		"index.html":   body,
+		"tokens.css":   tokensCSS,
+		"settings.css": settingsCSS,
+	} {
+		for _, forbidden := range []string{
+			`prefers-color-scheme`,
+			`data-theme="auto"`,
+			`data-theme-choice="auto"`,
+			`data-theme-choice="system"`,
+		} {
+			if strings.Contains(src, forbidden) {
+				t.Errorf("D27j-ui-theme-6: %s must not include %q (system mode deferred)", label, forbidden)
+			}
+		}
+	}
+}
+
+// TestExplorer_AssetsCSS_SettingsThemeToggle_Present pins the new
+// Settings CSS selectors and confirms they consume the theme-2
+// shape tokens.
+func TestExplorer_AssetsCSS_SettingsThemeToggle_Present(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	settingsCSS := getExplorerAsset(t, srv, "/explorer/assets/css/settings.css")
+
+	for _, want := range []string{
+		`.settings-appearance-card`,
+		`.settings-appearance-copy`,
+		`.settings-theme-toggle`,
+		`.settings-theme-option`,
+		`.settings-theme-option.is-active`,
+		`.settings-theme-option:focus-visible`,
+		`.settings-theme-option + .settings-theme-option`,
+		// Token usage.
+		`border-radius: var(--radius-tight)`,
+		`border: var(--border-hairline)`,
+		`background: var(--primary-container)`,
+		`color: var(--on-primary-container)`,
+		`gap: var(--space-2)`,
+	} {
+		if !strings.Contains(settingsCSS, want) {
+			t.Errorf("D27j-ui-theme-6: settings.css missing %q", want)
+		}
+	}
+}
+
+// TestExplorer_HTML_ThemeToggle_DefaultDarkPosturePreserved
+// confirms the static HTML carries no data-theme attribute by
+// default. The theme-1 / theme-4 negative pins already cover this
+// at the body level; this scoped re-pin makes the boundary explicit
+// in the theme-6 PR diff and proves the new <head> pre-paint script
+// is gated on a stored-light value (it does not unconditionally set
+// data-theme).
+func TestExplorer_HTML_ThemeToggle_DefaultDarkPosturePreserved(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// Static HTML must not preset data-theme.
+	for _, forbidden := range []string{
+		`<html lang="en" data-theme`,
+		`<html data-theme`,
+		`<body data-theme`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("D27j-ui-theme-6: static HTML must not preset %q", forbidden)
+		}
+	}
+	// The Dark button must default to is-active + aria-pressed=true,
+	// matching the dark-default posture.
+	if !strings.Contains(body, `class="settings-theme-option is-active" data-theme-choice="dark" aria-pressed="true"`) {
+		t.Error("D27j-ui-theme-6: Dark button must default to is-active / aria-pressed=true")
+	}
+	// The Light button must default to non-pressed.
+	if !strings.Contains(body, `class="settings-theme-option" data-theme-choice="light" aria-pressed="false"`) {
+		t.Error("D27j-ui-theme-6: Light button must default to aria-pressed=false")
+	}
+}
+
+// =============================================================
+// D27j-ui-theme-4b — Shared Governance Map Semantic Colour Tokens
+// =============================================================
+//
+// Nine --gmap-type-* identity tokens land in tokens.css; per-type
+// node accent rails and four typed connector strokes migrate to
+// consume them; FailModePolicy badge identity aligns to Business
+// Service / Decision Surface hues. The tokens are deliberately
+// separate from interaction tokens (--primary / --secondary /
+// --error) so action state and object identity stop colliding.
+
+// TestExplorer_AssetsCSS_GraphSemanticColourTokens_Present pins all
+// nine tokens in the dark :root and the six per-theme overrides in
+// the light block (business / related / surface stay unified).
+func TestExplorer_AssetsCSS_GraphSemanticColourTokens_Present(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	tokensCSS := getExplorerAsset(t, srv, "/explorer/assets/css/tokens.css")
+
+	// Dark :root values.
+	for _, want := range []string{
+		`--gmap-type-business:   #3a7bd9`,
+		`--gmap-type-related:    #7a8398`,
+		`--gmap-type-capability: #1e9059`,
+		`--gmap-type-process:    #a8753a`,
+		`--gmap-type-surface:    #0f766e`,
+		`--gmap-type-ai:         #0ea5e0`,
+		`--gmap-type-authority:  #a78bfa`,
+		`--gmap-type-coverage:   #c98a3e`,
+		`--gmap-type-risk:       #ef4444`,
+	} {
+		if !strings.Contains(tokensCSS, want) {
+			t.Errorf("D27j-ui-theme-4b: dark :root must define %q", want)
+		}
+	}
+
+	// Light overrides — only the six tokens that flip per theme; pin
+	// them inside the :root[data-theme="light"] slice so the test
+	// proves they live in the override block, not in the dark root.
+	idxLight := strings.Index(tokensCSS, `:root[data-theme="light"]`)
+	if idxLight < 0 {
+		t.Fatal("D27j-ui-theme-4b: :root[data-theme=\"light\"] block missing")
+	}
+	lightSlice := tokensCSS[idxLight:]
+	for _, want := range []string{
+		`--gmap-type-capability: #15803d`,
+		`--gmap-type-process:    #8b5e26`,
+		`--gmap-type-ai:         #0277b3`,
+		`--gmap-type-authority:  #7c4ad6`,
+		`--gmap-type-coverage:   #a06324`,
+		`--gmap-type-risk:       #dc2626`,
+	} {
+		if !strings.Contains(lightSlice, want) {
+			t.Errorf("D27j-ui-theme-4b: light override %q must live inside :root[data-theme=\"light\"]", want)
+		}
+	}
+
+	// Three tokens are deliberately unified across themes — they must
+	// NOT appear in the light override slice (would indicate an
+	// accidental redundant override).
+	for _, forbidden := range []string{
+		`--gmap-type-business:`,
+		`--gmap-type-related:`,
+		`--gmap-type-surface:`,
+	} {
+		if strings.Contains(lightSlice, forbidden) {
+			t.Errorf("D27j-ui-theme-4b: %q is theme-unified; light override must not redeclare it", forbidden)
+		}
+	}
+}
+
+// TestExplorer_AssetsCSS_GraphPerTypeNodes_ConsumeTokens confirms the
+// 8 per-type node accent rails consume their semantic identity
+// tokens. Negative-pin guards against any old raw value sneaking
+// back in (covered in DarkBaseRulesPreserved too — duplicated here
+// for tranche-local clarity).
+func TestExplorer_AssetsCSS_GraphPerTypeNodes_ConsumeTokens(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+
+	type rule struct {
+		selector string
+		want     string
+	}
+	// sliceRule locates the next occurrence of selector followed by any
+	// whitespace then `{`, and returns the slice from selector to the
+	// closing `}`. The per-type rails are aligned with variable
+	// whitespace (e.g. `.related-service-node  {`) so a fixed
+	// `selector + " {"` lookup misses; this helper scans forward
+	// past whitespace.
+	sliceRule := func(css, selector string) (string, bool) {
+		i := strings.Index(css, selector)
+		for i >= 0 {
+			j := i + len(selector)
+			// Skip whitespace.
+			for j < len(css) && (css[j] == ' ' || css[j] == '\t') {
+				j++
+			}
+			if j < len(css) && css[j] == '{' {
+				end := strings.Index(css[j:], "}")
+				if end < 0 {
+					return "", false
+				}
+				return css[i : j+end], true
+			}
+			// Not a match here; advance and keep scanning.
+			next := strings.Index(css[i+1:], selector)
+			if next < 0 {
+				return "", false
+			}
+			i = i + 1 + next
+		}
+		return "", false
+	}
+	for _, r := range []rule{
+		{".business-service-node", `border-left: 4px solid var(--gmap-type-business);`},
+		{".related-service-node",  `border-left: 4px solid var(--gmap-type-related);`},
+		{".capability-node",       `border-left: 4px solid var(--gmap-type-capability);`},
+		{".process-node",          `border-left: 4px solid var(--gmap-type-process);`},
+		{".decision-surface-node", `border-left: 4px solid var(--gmap-type-surface);`},
+		{".ai-system-node",        `border-left: 4px solid var(--gmap-type-ai);`},
+		// Authority keeps its dashed style; only the colour token swap
+		// matters here.
+		{".authority-node",        `border-left: 4px dashed var(--gmap-type-authority);`},
+		{".coverage-node",         `border-left: 4px solid var(--gmap-type-coverage);`},
+	} {
+		body, ok := sliceRule(gmapCSS, r.selector)
+		if !ok {
+			t.Errorf("D27j-ui-theme-4b: %s rule missing", r.selector)
+			continue
+		}
+		if !strings.Contains(body, r.want) {
+			t.Errorf("D27j-ui-theme-4b: %s rule must contain %q\n--- rule body:\n%s", r.selector, r.want, body)
+		}
+	}
+}
+
+// TestExplorer_AssetsCSS_GraphConnectors_ConsumeTokens confirms the
+// four typed connectors consume identity tokens. .connector-service
+// is intentionally excluded — it stays on a raw neutral grey until
+// D27j-ui-theme-4d introduces --gmap-conn-neutral.
+func TestExplorer_AssetsCSS_GraphConnectors_ConsumeTokens(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+
+	type rule struct {
+		selector string
+		want     string
+	}
+	// Connector rules are aligned with variable whitespace before `{`;
+	// scan forward past whitespace like the per-type-node test does.
+	sliceConnector := func(css, selector string) (string, bool) {
+		i := strings.Index(css, selector)
+		for i >= 0 {
+			j := i + len(selector)
+			for j < len(css) && (css[j] == ' ' || css[j] == '\t') {
+				j++
+			}
+			if j < len(css) && css[j] == '{' {
+				end := strings.Index(css[j:], "}")
+				if end < 0 {
+					return "", false
+				}
+				return css[i : j+end], true
+			}
+			next := strings.Index(css[i+1:], selector)
+			if next < 0 {
+				return "", false
+			}
+			i = i + 1 + next
+		}
+		return "", false
+	}
+	for _, r := range []rule{
+		{".connector-ai-binding", `stroke: var(--gmap-type-ai);`},
+		{".connector-authority",  `stroke: var(--gmap-type-authority);`},
+		{".connector-evidence",   `stroke: var(--gmap-type-surface);`},
+		{".connector-gap",        `stroke: var(--gmap-type-risk);`},
+	} {
+		body, ok := sliceConnector(gmapCSS, r.selector)
+		if !ok {
+			t.Errorf("D27j-ui-theme-4b: %s rule missing", r.selector)
+			continue
+		}
+		if !strings.Contains(body, r.want) {
+			t.Errorf("D27j-ui-theme-4b: %s rule must contain %q\n--- rule body:\n%s", r.selector, r.want, body)
+		}
+	}
+
+	// .connector-service migrated to --gmap-conn-neutral in
+	// D27j-ui-theme-4d (the deferred work theme-4b flagged). Pin the
+	// new tokenised treatment.
+	if !strings.Contains(gmapCSS, `.connector-service     { fill: none; stroke: var(--gmap-conn-neutral);`) {
+		t.Error("D27j-ui-theme-4d: .connector-service must consume var(--gmap-conn-neutral) (migration completed)")
+	}
+}
+
+// TestExplorer_AssetsCSS_FMPBadges_AlignedToIdentityTokens pins the
+// theme-4b badge retoning: fmp-default reads as Business Service
+// (structural identity), fmp-override reads as Decision Surface
+// (surface-scoped policy), fmp-inherited stays muted + dashed.
+func TestExplorer_AssetsCSS_FMPBadges_AlignedToIdentityTokens(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+
+	// Dark base.
+	for _, want := range []string{
+		`.gmap-badge.fmp-default   { color: var(--gmap-type-business);`,
+		`.gmap-badge.fmp-override  { color: var(--gmap-type-surface);`,
+		// fmp-inherited stays slate + dashed — verify both bits.
+		`.gmap-badge.fmp-inherited { color: var(--slate-400);`,
+		`border-style: dashed;`,
+	} {
+		if !strings.Contains(gmapCSS, want) {
+			t.Errorf("D27j-ui-theme-4b: dark FMP badge declaration %q missing", want)
+		}
+	}
+
+	// Light overrides — same identity-token alignment with light-bg
+	// alphas.
+	for _, want := range []string{
+		`:root[data-theme="light"] .gmap-badge.fmp-default   { color: var(--gmap-type-business);`,
+		`:root[data-theme="light"] .gmap-badge.fmp-override  { color: var(--gmap-type-surface);`,
+	} {
+		if !strings.Contains(gmapCSS, want) {
+			t.Errorf("D27j-ui-theme-4b: light FMP badge override %q missing", want)
+		}
+	}
+
+	// Negative pins: the dark base rule must NOT use the old --secondary
+	// / --slate-300 colour for fmp-override / fmp-default — those caused
+	// the "all-clear green" / "muted text" misreads the design plan
+	// flagged.
+	for _, forbidden := range []string{
+		`.gmap-badge.fmp-default   { color: var(--slate-300);`,
+		`.gmap-badge.fmp-override  { color: var(--secondary);`,
+	} {
+		if strings.Contains(gmapCSS, forbidden) {
+			t.Errorf("D27j-ui-theme-4b: pre-retoning FMP badge declaration %q must NOT remain", forbidden)
+		}
+	}
+}
+
+// =============================================================
+// D27j-ui-theme-4c — Node Type Marker Treatment
+// =============================================================
+//
+// CSS-only markers using .gmap-node-label::before with semantic
+// identity tokens from theme-4b. No HTML changes, no JS changes, no
+// new node markup. Each kind gets a compact geometric glyph before
+// its uppercase label text.
+
+// TestExplorer_AssetsCSS_GraphNodeTypeMarkers_Present pins the new
+// per-kind ::before rules and the base label-layout extension.
+func TestExplorer_AssetsCSS_GraphNodeTypeMarkers_Present(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+
+	// .gmap-node-label gained inline-flex + gap so the ::before glyph
+	// sits inline with the uppercase kind text.
+	for _, want := range []string{
+		`display: inline-flex`,
+		`align-items: center`,
+		`gap: 4px`,
+		// Base pseudo-element rule.
+		`.gmap-node-label::before {`,
+		// Per-kind selectors + token consumption.
+		`.business-service-node .gmap-node-label::before`,
+		`.related-service-node  .gmap-node-label::before`,
+		`.capability-node       .gmap-node-label::before`,
+		`.process-node          .gmap-node-label::before`,
+		`.decision-surface-node .gmap-node-label::before`,
+		`.ai-system-node        .gmap-node-label::before`,
+		`.authority-node        .gmap-node-label::before`,
+		`.coverage-node         .gmap-node-label::before`,
+		// Each marker pulls the matching identity token.
+		`color: var(--gmap-type-business)`,
+		`color: var(--gmap-type-related)`,
+		`color: var(--gmap-type-capability)`,
+		`color: var(--gmap-type-process)`,
+		`color: var(--gmap-type-surface)`,
+		`color: var(--gmap-type-ai)`,
+		`color: var(--gmap-type-authority)`,
+		`color: var(--gmap-type-coverage)`,
+	} {
+		if !strings.Contains(gmapCSS, want) {
+			t.Errorf("D27j-ui-theme-4c: marker declaration %q missing from governance-map.css", want)
+		}
+	}
+}
+
+// TestExplorer_AssetsCSS_GraphNodeTypeMarkers_GlyphMapping pins the
+// exact Unicode glyph mapping. If a glyph is renamed or swapped, this
+// test forces a deliberate update — the design plan referenced these
+// specific shapes and they should not drift silently.
+func TestExplorer_AssetsCSS_GraphNodeTypeMarkers_GlyphMapping(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+
+	// Each per-kind rule must contain its specific marker glyph + the
+	// matching colour token. Substring scan over the whole file is
+	// safe because each (selector, content, color) triple is unique.
+	type marker struct {
+		selector string
+		content  string
+		token    string
+	}
+	for _, m := range []marker{
+		{".business-service-node .gmap-node-label::before", `content: "■"`, `var(--gmap-type-business)`},
+		{".related-service-node  .gmap-node-label::before", `content: "▢"`, `var(--gmap-type-related)`},
+		{".capability-node       .gmap-node-label::before", `content: "◧"`, `var(--gmap-type-capability)`},
+		{".process-node          .gmap-node-label::before", `content: "▶"`, `var(--gmap-type-process)`},
+		{".decision-surface-node .gmap-node-label::before", `content: "◆"`, `var(--gmap-type-surface)`},
+		{".ai-system-node        .gmap-node-label::before", `content: "◉"`, `var(--gmap-type-ai)`},
+		{".authority-node        .gmap-node-label::before", `content: "❖"`, `var(--gmap-type-authority)`},
+		{".coverage-node         .gmap-node-label::before", `content: "◐"`, `var(--gmap-type-coverage)`},
+	} {
+		// Locate the rule and slice between selector and the closing }
+		// so the assertion is scoped strictly to this rule body.
+		i := strings.Index(gmapCSS, m.selector)
+		if i < 0 {
+			t.Errorf("D27j-ui-theme-4c: rule %q missing", m.selector)
+			continue
+		}
+		end := strings.Index(gmapCSS[i:], "}")
+		if end < 0 {
+			t.Errorf("D27j-ui-theme-4c: rule %q has no closing brace", m.selector)
+			continue
+		}
+		body := gmapCSS[i : i+end]
+		if !strings.Contains(body, m.content) {
+			t.Errorf("D27j-ui-theme-4c: %s must contain %q\n--- rule body:\n%s", m.selector, m.content, body)
+		}
+		if !strings.Contains(body, m.token) {
+			t.Errorf("D27j-ui-theme-4c: %s must consume %s\n--- rule body:\n%s", m.selector, m.token, body)
+		}
+	}
+}
+
+// TestExplorer_HTML_GraphNodeMarkup_NoMarkerSpanIntroduced re-pins the
+// no-markup-change boundary. addNode still renders <span class="gmap-
+// node-label">…</span> with no sibling marker span — markers are
+// pseudo-elements only.
+func TestExplorer_HTML_GraphNodeMarkup_NoMarkerSpanIntroduced(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// addNode source must still emit the existing label span.
+	if !strings.Contains(body, `'<span class="gmap-node-label">' + escHtml(spec.label) + '</span>'`) {
+		t.Error("D27j-ui-theme-4c: addNode must still emit `<span class=\"gmap-node-label\">…</span>` (markup unchanged)")
+	}
+
+	// Negative pins: no marker-span class introduced.
+	for _, forbidden := range []string{
+		`gmap-node-marker`,
+		`class="gmap-node-marker"`,
+		`<span class="gmap-node-marker"`,
+		`gmap-marker-`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("D27j-ui-theme-4c: marker span class %q must NOT exist (CSS pseudo-element only)", forbidden)
+		}
+	}
+}
+
+// TestExplorer_HTML_GraphRenderingFunctions_StillInline_Theme4c is a
+// JS-unchanged sanity check scoped to this tranche. The marker work
+// is CSS-only, so renderGovernanceMap, addNode, addLiveConnector,
+// applyGmapVisibilityFilters must all remain inline source-of-truth
+// in index.html.
+//
+// D29g scoping update: the forbidden-substring guard is scoped to
+// each named graph-rendering function's body slice rather than the
+// full HTML body. D29g legitimately wires the Records detail rail
+// to fetch /explorer/envelopes/{id}/audit-events, which is outside
+// the graph-rendering surface that this theme-4c pin guards. The
+// intent of the original pin (no graph-rendering function leaks
+// into marker-tranche scope) is preserved by the narrower slice.
+func TestExplorer_HTML_GraphRenderingFunctions_StillInline_Theme4c(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	for _, want := range []string{
+		`function renderGovernanceMap(data)`,
+		`function addNode(spec, pos)`,
+		`function addLiveConnector`,
+		`function applyGmapVisibilityFilters()`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D27j-ui-theme-4c: %q must remain inline (no JS changes in this tranche)", want)
+		}
+	}
+
+	// Negative pins scoped to each named graph-rendering function's
+	// body slice. The slice runs from the function declaration to
+	// either the next top-level `function ` declaration in the
+	// inline IIFE or a fixed 8000-byte bound, whichever is shorter
+	// — comfortable for all four functions while keeping the slice
+	// bounded so we don't accidentally cover unrelated code.
+	graphFnDecls := []string{
+		`function renderGovernanceMap(data)`,
+		`function addNode(spec, pos)`,
+		`function addLiveConnector`,
+		`function applyGmapVisibilityFilters()`,
+	}
+	forbidden := []string{
+		`kind: 'failmode'`,
+		`kind: 'fail_mode_policy'`,
+		`'FAIL_MODE_POLICY_RESOLVED'`,
+		`"FAIL_MODE_POLICY_RESOLVED"`,
+		`/audit-events`,
+	}
+	for _, decl := range graphFnDecls {
+		start := strings.Index(body, decl)
+		if start < 0 {
+			continue
+		}
+		end := start + 8000
+		if next := strings.Index(body[start+1:], "\n  function "); next >= 0 && start+1+next < end {
+			end = start + 1 + next
+		}
+		if end > len(body) {
+			end = len(body)
+		}
+		slice := body[start:end]
+		for _, f := range forbidden {
+			if strings.Contains(slice, f) {
+				t.Errorf("D27j-ui-theme-4c: %q must NOT appear in %q body slice (out of scope for marker tranche)", f, decl)
+			}
+		}
+	}
+}
+
+// =============================================================
+// D27j-ui-theme-4d — Connector Hierarchy and Selected-State
+// =============================================================
+//
+// Connector strokes thinned for hierarchy; .connector-service moved
+// onto --gmap-conn-neutral. Selected / root / search-active /
+// multi-selected nodes drop diffuse glow in favour of clean 2px
+// rings. Selected node-name weight bumped to compound emphasis
+// without changing layout. CSS-only; no JS, no markup, no
+// connector generation changes.
+
+// TestExplorer_AssetsCSS_GraphConnectorNeutralToken_Present pins the
+// new --gmap-conn-neutral token in dark :root and confirms it is NOT
+// redeclared in the light override block (value works on both
+// surfaces).
+func TestExplorer_AssetsCSS_GraphConnectorNeutralToken_Present(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	tokensCSS := getExplorerAsset(t, srv, "/explorer/assets/css/tokens.css")
+
+	if !strings.Contains(tokensCSS, `--gmap-conn-neutral:    #7a8398;`) {
+		t.Error("D27j-ui-theme-4d: dark :root must define --gmap-conn-neutral: #7a8398")
+	}
+
+	idxLight := strings.Index(tokensCSS, `:root[data-theme="light"]`)
+	if idxLight < 0 {
+		t.Fatal("D27j-ui-theme-4d: :root[data-theme=\"light\"] block missing")
+	}
+	if strings.Contains(tokensCSS[idxLight:], `--gmap-conn-neutral`) {
+		t.Error("D27j-ui-theme-4d: --gmap-conn-neutral is theme-unified; light override must not redeclare it")
+	}
+}
+
+// TestExplorer_AssetsCSS_ConnectorHierarchy_TokensConsumed pins the
+// new connector hierarchy: each connector consumes the right token
+// AND the new stroke-width / opacity values. Authority and gap
+// dasharrays are preserved verbatim. Hover stroke-width 3.5 and
+// hit-target stroke-width 12 are preserved at file scope.
+func TestExplorer_AssetsCSS_ConnectorHierarchy_TokensConsumed(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+
+	// sliceRule scans past variable whitespace between selector and
+	// the rule's `{` (connector lines are aligned with extra spaces
+	// for readability).
+	sliceRule := func(css, selector string) (string, bool) {
+		i := strings.Index(css, selector)
+		for i >= 0 {
+			j := i + len(selector)
+			for j < len(css) && (css[j] == ' ' || css[j] == '\t') {
+				j++
+			}
+			if j < len(css) && css[j] == '{' {
+				end := strings.Index(css[j:], "}")
+				if end < 0 {
+					return "", false
+				}
+				return css[i : j+end], true
+			}
+			next := strings.Index(css[i+1:], selector)
+			if next < 0 {
+				return "", false
+			}
+			i = i + 1 + next
+		}
+		return "", false
+	}
+
+	type rule struct {
+		selector  string
+		strokeTok string
+		width     string
+		opacity   string
+		dash      string // empty = no dasharray expected
+	}
+	for _, r := range []rule{
+		{".connector-service",     `stroke: var(--gmap-conn-neutral);`,   `stroke-width: 1.6;`, `opacity: 0.78;`, ""},
+		{".connector-ai-binding",  `stroke: var(--gmap-type-ai);`,        `stroke-width: 1.8;`, `opacity: 0.92;`, ""},
+		{".connector-authority",   `stroke: var(--gmap-type-authority);`, `stroke-width: 1.7;`, `opacity: 0.88;`, `stroke-dasharray: 6 4;`},
+		{".connector-evidence",    `stroke: var(--gmap-type-surface);`,   `stroke-width: 1.7;`, `opacity: 0.88;`, ""},
+		{".connector-gap",         `stroke: var(--gmap-type-risk);`,      `stroke-width: 1.8;`, `opacity: 0.95;`, `stroke-dasharray: 5 5;`},
+	} {
+		body, ok := sliceRule(gmapCSS, r.selector)
+		if !ok {
+			t.Errorf("D27j-ui-theme-4d: %s rule missing", r.selector)
+			continue
+		}
+		for _, want := range []string{r.strokeTok, r.width, r.opacity} {
+			if !strings.Contains(body, want) {
+				t.Errorf("D27j-ui-theme-4d: %s rule must contain %q\n--- rule body:\n%s", r.selector, want, body)
+			}
+		}
+		if r.dash != "" && !strings.Contains(body, r.dash) {
+			t.Errorf("D27j-ui-theme-4d: %s must preserve dash array %q\n--- rule body:\n%s", r.selector, r.dash, body)
+		}
+	}
+
+	// Hover stroke-width preserved (D26h pin).
+	if !strings.Contains(gmapCSS, `stroke-width: 3.5;`) {
+		t.Error("D27j-ui-theme-4d: hover stroke-width: 3.5 must remain")
+	}
+	// Hit-target preserved.
+	if !strings.Contains(gmapCSS, `stroke-width: 12;`) {
+		t.Error("D27j-ui-theme-4d: hit-target stroke-width: 12 must remain")
+	}
+	// Hidden-connector invariant preserved.
+	if !strings.Contains(gmapCSS, `path.gmap-connector-hidden  { display: none; }`) {
+		t.Error("D27j-ui-theme-4d: hidden-connector invariant must remain")
+	}
+}
+
+// TestExplorer_AssetsCSS_SelectedNode_BorderNotGlow pins the dark-base
+// clean-ring treatment for .gmap-node.selected and .gmap-node.gmap-
+// root-node{,.selected} and .gmap-node.gmap-search-active. Negative
+// pins on each rule body confirm the diffuse 16px shadow layer was
+// removed. .gmap-node.gmap-search-match was already clean (1px ring,
+// no diffuse) and is re-pinned defensively.
+func TestExplorer_AssetsCSS_SelectedNode_BorderNotGlow(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+	shellCSS := getExplorerAsset(t, srv, "/explorer/assets/css/shell.css")
+
+	sliceRule := func(css, selector string) (string, bool) {
+		i := strings.Index(css, selector+" {")
+		if i < 0 {
+			return "", false
+		}
+		end := strings.Index(css[i:], "}")
+		if end < 0 {
+			return "", false
+		}
+		return css[i : i+end], true
+	}
+
+	type ruleCheck struct {
+		css      string
+		selector string
+		want     string
+	}
+	for _, c := range []ruleCheck{
+		{gmapCSS, `.gmap-node.selected`, `box-shadow: 0 0 0 2px var(--primary);`},
+		{gmapCSS, `.gmap-node.gmap-root-node`, `box-shadow: 0 0 0 2px var(--primary);`},
+		{gmapCSS, `.gmap-node.gmap-root-node.selected`, `box-shadow: 0 0 0 2px var(--primary);`},
+		// Search-match was already clean (1px ring); re-pin defensively.
+		{gmapCSS, `.gmap-node.gmap-search-match`, `box-shadow: 0 0 0 1px var(--secondary, #4edea3);`},
+		{gmapCSS, `.gmap-node.gmap-search-active`, `box-shadow: 0 0 0 2px var(--secondary, #4edea3);`},
+		{shellCSS, `.gmap-node.gmap-multi-selected`, `box-shadow: 0 0 0 2px var(--primary);`},
+	} {
+		body, ok := sliceRule(c.css, c.selector)
+		if !ok {
+			t.Errorf("D27j-ui-theme-4d: %s rule missing", c.selector)
+			continue
+		}
+		if !strings.Contains(body, c.want) {
+			t.Errorf("D27j-ui-theme-4d: %s must contain clean-ring %q\n--- rule body:\n%s", c.selector, c.want, body)
+		}
+		// Negative pin: no diffuse 16px glow inside the rule body.
+		if strings.Contains(body, `0 4px 16px`) {
+			t.Errorf("D27j-ui-theme-4d: %s must not carry a diffuse 16px glow\n--- rule body:\n%s", c.selector, body)
+		}
+	}
+
+	// Selected node-name weight bumped to 700 — compound emphasis
+	// without layout shift.
+	if !strings.Contains(gmapCSS, `.gmap-node.selected .gmap-node-name {`) {
+		t.Error("D27j-ui-theme-4d: .gmap-node.selected .gmap-node-name rule missing (label-weight bump)")
+	}
+	if !strings.Contains(gmapCSS, `font-weight: 700;`) {
+		t.Error("D27j-ui-theme-4d: selected node-name must bump to font-weight: 700")
+	}
+}
+
+// TestExplorer_HTML_Theme4d_NoSelectedPathJSIntroduced asserts that
+// theme-4d ships zero JavaScript / markup changes. No selected-path
+// classes, no source/target data attributes, no path-tracing helper
+// names.
+func TestExplorer_HTML_Theme4d_NoSelectedPathJSIntroduced(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	for _, forbidden := range []string{
+		`is-on-selected-path`,
+		`'is-suppressed'`,
+		`"is-suppressed"`,
+		`data-src-node-id`,
+		`data-dst-node-id`,
+		`function applySelectedPath`,
+		`function clearSelectedPath`,
+		`function highlightSelectedPath`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("D27j-ui-theme-4d: selected-path JS hook %q must NOT appear (deferred)", forbidden)
+		}
+	}
+
+	// Existing render functions remain inline (CSS-only sanity check).
+	for _, want := range []string{
+		`function renderGovernanceMap(data)`,
+		`function addNode(spec, pos)`,
+		`function addLiveConnector`,
+		`function applyGmapVisibilityFilters()`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D27j-ui-theme-4d: %q must remain inline (no JS changes)", want)
+		}
+	}
+}
+
+// =============================================================
+// D27j-ui-3a — Right Rail Three-Tab Shell
+// =============================================================
+//
+// The right rail (#gmap-details) becomes a tabbed workbench with
+// Inspector / Evidence / Config tabs. Inspector wraps the existing
+// selected-node detail content (IDs preserved); Evidence and Config
+// render placeholder copy until later tranches. Tab switching is
+// client-side only; collapse behaviour reuses the existing
+// gmapInspectorCollapsed state.
+
+// TestExplorer_HTML_RightRail_Markup_Present pins the new shell
+// markup: rail class composition, all three tab declarations, all
+// three panel declarations, ARIA attributes.
+func TestExplorer_HTML_RightRail_Markup_Present(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	for _, want := range []string{
+		// Rail container — additive class composition; legacy class
+		// preserved alongside the new gmap-right-rail hook.
+		`class="governance-map-details gmap-right-rail"`,
+		// Tab strip.
+		`class="gmap-right-rail-tabs"`,
+		`role="tablist"`,
+		`aria-label="Governance map rail sections"`,
+		// All three tab buttons.
+		`data-rail-tab="inspector"`,
+		`data-rail-tab="evidence"`,
+		`data-rail-tab="config"`,
+		`role="tab"`,
+		`aria-controls="gmap-rail-panel-inspector"`,
+		`aria-controls="gmap-rail-panel-evidence"`,
+		`aria-controls="gmap-rail-panel-config"`,
+		// All three tabpanels.
+		`id="gmap-rail-panel-inspector"`,
+		`id="gmap-rail-panel-evidence"`,
+		`id="gmap-rail-panel-config"`,
+		`data-rail-panel="inspector"`,
+		`data-rail-panel="evidence"`,
+		`data-rail-panel="config"`,
+		`role="tabpanel"`,
+		// Visible tab labels.
+		`>Inspector<`,
+		`>Evidence<`,
+		`>Config<`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D27j-ui-3a: rail markup fragment %q missing", want)
+		}
+	}
+}
+
+// TestExplorer_HTML_RightRail_PreservesExistingDetailIDs is a
+// defensive duplicate of the existing-element pins. The rail
+// restructure must not rename or drop any of the IDs that
+// setGovernanceMapDetailsName / Fields / Actions / Summary look up
+// via getElementById.
+func TestExplorer_HTML_RightRail_PreservesExistingDetailIDs(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	for _, want := range []string{
+		`id="gmap-details"`,
+		`id="gmap-details-name"`,
+		`id="gmap-details-fields"`,
+		`id="gmap-details-actions"`,
+		`id="gmap-details-summary"`,
+		`id="gmap-inspector-toggle"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D27j-ui-3a: legacy detail id %q must remain (existing setters resolve via getElementById)", want)
+		}
+	}
+}
+
+// TestExplorer_HTML_RightRail_InspectorIsDefaultActive pins the
+// initial active state: Inspector tab carries is-active +
+// aria-selected="true"; Evidence and Config carry
+// aria-selected="false" and their panels carry the hidden attribute.
+func TestExplorer_HTML_RightRail_InspectorIsDefaultActive(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// Inspector: active class + aria-selected=true.
+	if !strings.Contains(body, `class="gmap-right-rail-tab is-active" data-rail-tab="inspector" role="tab" aria-selected="true"`) {
+		t.Error("D27j-ui-3a: Inspector tab must default to is-active + aria-selected=\"true\"")
+	}
+	// Evidence + Config: aria-selected=false, no is-active class on
+	// the tab button.
+	if !strings.Contains(body, `data-rail-tab="evidence" role="tab" aria-selected="false"`) {
+		t.Error("D27j-ui-3a: Evidence tab must default to aria-selected=\"false\"")
+	}
+	if !strings.Contains(body, `data-rail-tab="config" role="tab" aria-selected="false"`) {
+		t.Error("D27j-ui-3a: Config tab must default to aria-selected=\"false\"")
+	}
+	// Inspector panel: is-active class, no hidden attribute on the
+	// section.
+	if !strings.Contains(body, `class="gmap-right-rail-panel is-active" data-rail-panel="inspector"`) {
+		t.Error("D27j-ui-3a: Inspector panel must default to is-active without hidden")
+	}
+	// Evidence + Config panels carry the hidden attribute.
+	for _, want := range []string{
+		`data-rail-panel="evidence" role="tabpanel" hidden`,
+		`data-rail-panel="config" role="tabpanel" hidden`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D27j-ui-3a: panel %q must default to hidden", want)
+		}
+	}
+}
+
+// TestExplorer_HTML_RightRail_PlaceholdersInert pins the placeholder
+// copy in Evidence and Config and negative-pins anything that would
+// suggest runtime evidence rendering, audit-event fetching, or new
+// FailModePolicy UI inside the rail.
+func TestExplorer_HTML_RightRail_PlaceholdersInert(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// Positive pins — placeholder copy lives in the Evidence and
+	// Config panels.
+	for _, want := range []string{
+		`Runtime evidence facts will appear here.`,
+		`Local graph configuration will appear here.`,
+		`<p class="gmap-right-rail-placeholder">`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D27j-ui-3a: placeholder copy %q missing", want)
+		}
+	}
+
+	// Slice the rail container so negative pins don't false-match on
+	// other parts of the body (e.g. existing handler functions).
+	railIdx := strings.Index(body, `id="gmap-details"`)
+	if railIdx < 0 {
+		t.Fatal("D27j-ui-3a: rail container missing — cannot scope negative pins")
+	}
+	railEnd := strings.Index(body[railIdx:], `</aside>`)
+	if railEnd < 0 {
+		t.Fatal("D27j-ui-3a: rail closing </aside> missing")
+	}
+	railSlice := body[railIdx : railIdx+railEnd]
+	for _, forbidden := range []string{
+		`FAIL_MODE_POLICY_RESOLVED`,
+		`/audit-events`,
+		`fetch(`,
+		`data-kind="failmode"`,
+		`renderFailModePolicy`,
+		`fetchFailModePolicy`,
+	} {
+		if strings.Contains(railSlice, forbidden) {
+			t.Errorf("D27j-ui-3a: rail must not contain %q (placeholders are inert)", forbidden)
+		}
+	}
+}
+
+// TestExplorer_HTML_RightRail_TabSwitchingJS_Present pins the new
+// inline JS for tab switching and re-pins the existing setters that
+// continue to target the legacy IDs.
+func TestExplorer_HTML_RightRail_TabSwitchingJS_Present(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	for _, want := range []string{
+		`function setGmapRightRailTab(tab)`,
+		`function wireGmapRightRailTabs()`,
+		`document.querySelectorAll('[data-rail-tab]')`,
+		`document.querySelectorAll('[data-rail-panel]')`,
+		`btn.classList.toggle('is-active', active)`,
+		`btn.setAttribute('aria-selected', String(active))`,
+		// Existing setters must still exist and use their legacy IDs.
+		`function setGovernanceMapDetailsName(name)`,
+		`function setGovernanceMapDetailsFields(rows)`,
+		`function setGovernanceMapDetailsActions(actions)`,
+		`function setGovernanceMapSummary(rows)`,
+		`getElementById('gmap-details-name')`,
+		`getElementById('gmap-details-fields')`,
+		`getElementById('gmap-details-actions')`,
+		`getElementById('gmap-details-summary')`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D27j-ui-3a: tab-switching / legacy-setter source %q missing", want)
+		}
+	}
+}
+
+// TestExplorer_AssetsCSS_RightRailShell_Present pins the new CSS
+// selectors and confirms they consume theme tokens.
+//
+// D27j-ui-3a-refine updates: full-height-strip pins removed.
+// D27j-ui-3a-refine-2 updates: tab strip became chromeless. The
+// background, perimeter border, radius, shadow, and overflow are
+// stripped. The light-mode override on .gmap-right-rail-tabs is
+// also removed because the only remaining border consumes
+// var(--border-hairline) which is theme-aware via composition. The
+// vertical-direction pin moved into the dedicated direction test;
+// active-state and chromeless geometry assertions live in their
+// own dedicated tests.
+func TestExplorer_AssetsCSS_RightRailShell_Present(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+
+	for _, want := range []string{
+		// Selector existence.
+		`.gmap-right-rail {`,
+		`.gmap-right-rail-tabs {`,
+		`.gmap-right-rail-tab {`,
+		`.gmap-right-rail-tab.is-active {`,
+		`.gmap-right-rail-panel {`,
+		`.gmap-right-rail-placeholder {`,
+		// text-orientation pinned here as a stable invariant; the
+		// either-approach writing-mode pin lives in the dedicated
+		// direction test.
+		`text-orientation: mixed;`,
+		// Token-consumption sentinel: the .gmap-right-rail-tab rule
+		// continues to set inactive text colour from the theme-aware
+		// on-surface-variant token.
+		`color: var(--on-surface-variant)`,
+	} {
+		if !strings.Contains(gmapCSS, want) {
+			t.Errorf("D27j-ui-3a: governance-map.css missing %q", want)
+		}
+	}
+}
+
+// TestExplorer_AssetsCSS_RightRailTabs_Chromeless pins the
+// D27j-ui-3a-refine-2 chromeless geometry: the tab strip has NO
+// background, NO perimeter border, NO radius, NO shadow, NO
+// overflow:hidden. Only position, dimensions, layout, and a single
+// border-right hairline (the right-edge vertical divider) remain.
+//
+// Positioning stays `fixed` to escape the rail's overflow-y: auto
+// (which CSS auto-promotes to overflow-x: auto). Right anchor sits
+// at exactly --inspector-width — no extra gap — so the strip
+// presses flush against the rail seam, with the visible right-edge
+// hairline reading as the rail boundary.
+//
+// All five floating-card properties from the previous tranche are
+// converted to NEGATIVE pins so a regression to the card pattern
+// fails fast.
+// TestExplorer_AssetsCSS_RightRailTabs_Handle pins the
+// D27j-ui-3a-refine-4 single-side-mounted-handle treatment. The tab
+// strip used to be fully chromeless (no background, no border, no
+// radius); 4 promotes it to one continuous drawer-handle surface
+// while keeping it visually quiet:
+//   - quiet canvas-token background (--surface-container-lowest)
+//   - hairline outline on the three EXPOSED sides (top, left, bottom)
+//   - NO border on the drawer-attached side (border-right: 0)
+//   - softened radii on the two outside corners only
+//   - no box-shadow (it must not read as a floating card)
+//
+// Box-shadow, the all-sides border shorthand, and the prior outside-
+// rail / clipped-by-overflow positioning patterns remain forbidden.
+func TestExplorer_AssetsCSS_RightRailTabs_Handle(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+
+	// Slice the .gmap-right-rail-tabs rule body so the assertions are
+	// scoped strictly to that rule.
+	i := strings.Index(gmapCSS, `.gmap-right-rail-tabs {`)
+	if i < 0 {
+		t.Fatal("D27j-ui-3a-refine-4: .gmap-right-rail-tabs rule missing")
+	}
+	end := strings.Index(gmapCSS[i:], "}")
+	if end < 0 {
+		t.Fatal("D27j-ui-3a-refine-4: .gmap-right-rail-tabs rule has no closing brace")
+	}
+	body := gmapCSS[i : i+end]
+
+	// Positive pins — geometry preserved from prior tranches PLUS the
+	// new handle-chrome declarations.
+	for _, want := range []string{
+		// Geometry / state-dependent positioning carried forward.
+		`position: fixed`,
+		`right: 0`,
+		`bottom: auto`,
+		`width: var(--gmap-right-rail-handle-width)`,
+		`transition: right 0.18s ease-out`,
+		// Handle chrome (4).
+		`background: var(--surface-container-lowest)`,
+		`border-top: var(--border-hairline)`,
+		`border-left: var(--border-hairline)`,
+		`border-bottom: var(--border-hairline)`,
+		`border-right: 0`,
+		`border-radius: var(--radius-panel) 0 0 var(--radius-panel)`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D27j-ui-3a-refine-4: .gmap-right-rail-tabs must contain %q\n--- rule body:\n%s", want, body)
+		}
+	}
+
+	// Strip /* ... */ comment blocks from the rule body before
+	// running negative-pin substring checks: the rule's own comment
+	// text legitimately mentions some forbidden tokens (e.g. "No
+	// box-shadow: ...") to document why they are forbidden, and
+	// those mentions must not trip the assertions.
+	bodyNoComments := stripCSSBlockComments(body)
+
+	// Negative pins — properties that must NOT appear in the rule's
+	// declarations.
+	for _, forbidden := range []string{
+		// No box-shadow: the handle is tactile, not a floating card.
+		`box-shadow`,
+		// All-sides shorthand would override the asymmetric three-
+		// sided declaration. Must use individual sides.
+		`border: var(--border-hairline)`,
+		// The drawer-attached side carries no border. The literal
+		// hairline form is the only one likely to creep back in,
+		// pin it explicitly.
+		`border-right: var(--border-hairline)`,
+		// Prior-tranche shapes that must not return.
+		`overflow: hidden`,
+		`top: 0;`,
+		`bottom: 40px;`,
+		`position: absolute`,
+		`left: calc(-1 * (32px + var(--space-2)))`,
+		`right: calc(var(--inspector-width) + var(--space-2))`,
+		`right: var(--inspector-width);`,
+	} {
+		if strings.Contains(bodyNoComments, forbidden) {
+			t.Errorf("D27j-ui-3a-refine-4: .gmap-right-rail-tabs must not contain %q (handle target forbids floating-card shadow, all-sides borders, drawer-side borders, prior-tranche shapes)\n--- rule body (comments stripped):\n%s", forbidden, bodyNoComments)
+		}
+	}
+}
+
+// stripCSSBlockComments removes every /* ... */ block from src.
+// Used by negative-pin tests that need to ignore documentation-
+// inside-rule mentions of forbidden tokens.
+func stripCSSBlockComments(src string) string {
+	var b strings.Builder
+	for {
+		i := strings.Index(src, "/*")
+		if i < 0 {
+			b.WriteString(src)
+			return b.String()
+		}
+		b.WriteString(src[:i])
+		j := strings.Index(src[i:], "*/")
+		if j < 0 {
+			// Unterminated comment — drop the rest.
+			return b.String()
+		}
+		src = src[i+j+2:]
+	}
+}
+
+// TestExplorer_AssetsCSS_RightRailTab_LabelsCentred pins the
+// D27j-ui-3a-refine-3b centring treatment. The .gmap-right-rail-tab
+// rule must declare display: flex with align-items: center and
+// justify-content: center so the rotated text sits in the visual
+// middle of the 32px-wide tab box. Without these the rotated label
+// anchored to the inline-start edge, biasing the labels visually
+// to one side.
+func TestExplorer_AssetsCSS_RightRailTab_LabelsCentred(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+
+	i := strings.Index(gmapCSS, `.gmap-right-rail-tab {`)
+	if i < 0 {
+		t.Fatal("D27j-ui-3a-refine-3b: .gmap-right-rail-tab rule missing")
+	}
+	end := strings.Index(gmapCSS[i:], "}")
+	if end < 0 {
+		t.Fatal("D27j-ui-3a-refine-3b: .gmap-right-rail-tab rule has no closing brace")
+	}
+	body := gmapCSS[i : i+end]
+
+	for _, want := range []string{
+		`display: flex`,
+		`align-items: center`,
+		`justify-content: center`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D27j-ui-3a-refine-3b: .gmap-right-rail-tab must contain %q\n--- rule body:\n%s", want, body)
+		}
+	}
+}
+
+// TestExplorer_AssetsCSS_RightRail_CollapsedStateChromeless pins
+// the collapsed-state chrome treatment introduced in 3b and updated
+// in 3e. The rail's left border still drops to transparent under
+// body.inspector-collapsed, but its panel background no longer goes
+// transparent (which exposed --bg, a different shade from the
+// canvas) — instead it paints the canvas token directly so the
+// collapsed strip reads as a continuation of the canvas surface.
+// Only the centred vertical labels and their pseudo-element dividers
+// remain visually distinct.
+func TestExplorer_AssetsCSS_RightRail_CollapsedStateChromeless(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+
+	// Slice the collapsed .governance-map-details rule body so the
+	// background pin can be scoped (the canvas-scroll rule elsewhere
+	// in the file also declares `background: var(--surface-container-
+	// lowest);`, which would otherwise satisfy a global substring
+	// match).
+	collapseSel := `body.inspector-collapsed .governance-map-details {`
+	collapseStart := strings.Index(gmapCSS, collapseSel)
+	if collapseStart < 0 {
+		t.Fatalf("D27j-ui-3a-refine-3e: %q rule missing", collapseSel)
+	}
+	collapseEnd := strings.Index(gmapCSS[collapseStart:], "}")
+	if collapseEnd < 0 {
+		t.Fatalf("D27j-ui-3a-refine-3e: %q rule has no closing brace", collapseSel)
+	}
+	collapseBody := gmapCSS[collapseStart : collapseStart+collapseEnd]
+
+	// 3e: collapsed panel surface paints the canvas token.
+	if !strings.Contains(collapseBody, `background: var(--surface-container-lowest);`) {
+		t.Errorf("D27j-ui-3a-refine-3e: collapsed .governance-map-details must paint var(--surface-container-lowest)\n--- rule body:\n%s", collapseBody)
+	}
+	// 3e: the prior 3b `background: transparent` declaration must be
+	// gone from this scoped rule. Negative pin against the rule
+	// body (not the whole file — the legend/etc may still use
+	// transparent backgrounds elsewhere).
+	if strings.Contains(collapseBody, `background: transparent`) {
+		t.Errorf("D27j-ui-3a-refine-3e: collapsed .governance-map-details must not declare `background: transparent`\n--- rule body:\n%s", collapseBody)
+	}
+
+	// Left-border collapse remains.
+	for _, want := range []string{
+		`body.inspector-collapsed #gmap-details {`,
+		`border-left-color: transparent;`,
+	} {
+		if !strings.Contains(gmapCSS, want) {
+			t.Errorf("D27j-ui-3a-refine-3b/3e: governance-map.css missing %q", want)
+		}
+	}
+
+	// Sanity: the EXPANDED-state rail still carries the panel
+	// background and left border. The collapsed overrides above must
+	// not leak into the always-on rules.
+	for _, want := range []string{
+		`background: var(--surface-container-low);`,                   // .governance-map-details base
+		`border-left: 1px solid var(--outline-variant);`,              // #gmap-details base
+	} {
+		if !strings.Contains(gmapCSS, want) {
+			t.Errorf("D27j-ui-3a-refine-3b: expanded-state rail chrome %q must remain on the base rule", want)
+		}
+	}
+}
+
+// TestExplorer_AssetsCSS_RightRailTabs_StateDependentPosition pins
+// the D27j-ui-3a-refine-3e state-dependent tab-strip position. In
+// collapsed state the strip stays flush at the viewport's right
+// edge (right: 0). In expanded state it moves to the panel's left
+// edge (panel-canvas seam) via right: calc(var(--inspector-width) -
+// 32px). The strip animates between the two via `transition: right
+// 0.18s ease-out;` so labels glide with the rail's width
+// transition rather than jump-cutting.
+//
+// Together with the existing `right: 0` base rule, the override
+// fires only on body.gmap-mode:not(.inspector-collapsed), i.e.
+// while the rail is open AND the operator is on the map sub-view.
+// All other states (non-map views, collapsed map view) inherit the
+// base `right: 0`.
+func TestExplorer_AssetsCSS_RightRailTabs_StateDependentPosition(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+
+	// Slice the base .gmap-right-rail-tabs rule body so the right:0
+	// + transition pins are scoped to it (the file has many other
+	// rules that also declare `right: 0` and `transition: ...`).
+	baseSel := `.gmap-right-rail-tabs {`
+	baseStart := strings.Index(gmapCSS, baseSel)
+	if baseStart < 0 {
+		t.Fatalf("D27j-ui-3a-refine-3e: %q rule missing", baseSel)
+	}
+	baseEnd := strings.Index(gmapCSS[baseStart:], "}")
+	if baseEnd < 0 {
+		t.Fatalf("D27j-ui-3a-refine-3e: %q rule has no closing brace", baseSel)
+	}
+	baseBody := gmapCSS[baseStart : baseStart+baseEnd]
+
+	for _, want := range []string{
+		`right: 0;`,                          // collapsed-state default position
+		`transition: right 0.18s ease-out;`,  // animate the strip
+		`width: var(--gmap-right-rail-handle-width);`, // strip width via 5 token
+	} {
+		if !strings.Contains(baseBody, want) {
+			t.Errorf("D27j-ui-3a-refine-3e/5: base .gmap-right-rail-tabs must contain %q\n--- rule body:\n%s", want, baseBody)
+		}
+	}
+
+	// Expanded-state override — the strip moves to the panel-canvas
+	// seam. Pin the full literal so the calc expression is exact.
+	expandedRule := `body.gmap-mode:not(.inspector-collapsed) .gmap-right-rail-tabs {`
+	if !strings.Contains(gmapCSS, expandedRule) {
+		t.Errorf("D27j-ui-3a-refine-3e: expanded-state tab-strip rule %q missing", expandedRule)
+	}
+	expandedStart := strings.Index(gmapCSS, expandedRule)
+	if expandedStart >= 0 {
+		expandedEnd := strings.Index(gmapCSS[expandedStart:], "}")
+		if expandedEnd < 0 {
+			t.Fatalf("D27j-ui-3a-refine-3e: expanded-state tab-strip rule has no closing brace")
+		}
+		expandedBody := gmapCSS[expandedStart : expandedStart+expandedEnd]
+		if !strings.Contains(expandedBody, `right: calc(var(--inspector-width) - var(--gmap-right-rail-handle-width));`) {
+			t.Errorf("D27j-ui-3a-refine-3e/5: expanded-state tab-strip rule must declare right: calc(var(--inspector-width) - var(--gmap-right-rail-handle-width))\n--- rule body:\n%s", expandedBody)
+		}
+	}
+}
+
+// TestExplorer_AssetsCSS_RightRailPanel_LeftPaddingAllowance pins
+// the D27j-ui-3a-refine-3e panel padding flip. The chromeless tab
+// strip now lives at the panel-canvas seam in expanded state (i.e.
+// at the panel's LEFT edge), so panel content needs its 44px
+// (32px strip + var(--space-3)=12px breathing room) allowance on
+// the LEFT instead of the right. Collapsed panels are display:none
+// so the change is a no-op there.
+func TestExplorer_AssetsCSS_RightRailPanel_LeftPaddingAllowance(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+
+	panelSel := `.gmap-right-rail-panel {`
+	panelStart := strings.Index(gmapCSS, panelSel)
+	if panelStart < 0 {
+		t.Fatalf("D27j-ui-3a-refine-3e: %q rule missing", panelSel)
+	}
+	panelEnd := strings.Index(gmapCSS[panelStart:], "}")
+	if panelEnd < 0 {
+		t.Fatalf("D27j-ui-3a-refine-3e: %q rule has no closing brace", panelSel)
+	}
+	panelBody := gmapCSS[panelStart : panelStart+panelEnd]
+
+	// Padding shorthand: top right bottom left. Left value carries
+	// the handle-width allowance via the 5 token.
+	wantPadding := `padding: var(--space-3) var(--space-3) var(--space-3) calc(var(--gmap-right-rail-handle-width) + var(--space-3));`
+	if !strings.Contains(panelBody, wantPadding) {
+		t.Errorf("D27j-ui-3a-refine-3e/5: .gmap-right-rail-panel must declare %q\n--- rule body:\n%s", wantPadding, panelBody)
+	}
+
+	// Negative pin: the prior right-side allowance must NOT remain.
+	wrongPadding := `padding: var(--space-3) calc(32px + var(--space-3)) var(--space-3) var(--space-3);`
+	if strings.Contains(panelBody, wrongPadding) {
+		t.Errorf("D27j-ui-3a-refine-3e: .gmap-right-rail-panel must not declare the prior right-side allowance %q\n--- rule body:\n%s", wrongPadding, panelBody)
+	}
+}
+
+// TestExplorer_AssetsCSS_RightRail_NoBehaviourExpansion is a
+// belt-and-braces negative pin: the right-rail-related slices must
+// not introduce runtime evidence rendering, FAIL_MODE_POLICY_RESOLVED
+// surfaces, or new audit-event fetches in this tranche. Tabs +
+// styling + state-dependent positioning only.
+func TestExplorer_AssetsCSS_RightRail_NoBehaviourExpansion(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+
+	for _, banned := range []string{
+		`FAIL_MODE_POLICY_RESOLVED`,
+		`/audit-events`,
+		`fetch(`,
+		`data-kind="failmode"`,
+	} {
+		if strings.Contains(gmapCSS, banned) {
+			t.Errorf("D27j-ui-3a-refine-3e: governance-map.css must not contain %q (no behaviour expansion in this tranche)", banned)
+		}
+	}
+}
+
+// TestExplorer_AssetsCSS_RightRail_CollapsedShellReservation pins
+// the D27j-ui-3a-refine-3d collapsed-state shell-level reservation
+// fix. Three shell elements (.shell-header right inset, .shell-footer
+// right inset, .shell-main margin-right) reserve horizontal space for
+// the inspector rail in body.gmap-mode. Pre-3d the same reservation
+// applied in collapsed mode (56px), exposing the 24px gap between the
+// 32px tab strip and the 56px rail as a visible dark strip. The 3d
+// fix narrows the collapsed reservation to exactly 32px so it matches
+// the visible label column — no leftover background.
+//
+// Expanded-state rules (var(--inspector-width)) must remain
+// unchanged so the 320px reservation still applies when the rail is
+// expanded.
+func TestExplorer_AssetsCSS_RightRail_CollapsedShellReservation(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	shellCSS := getExplorerAsset(t, srv, "/explorer/assets/css/shell.css")
+
+	// Collapsed-state reservation — handle-width token, matching
+	// the visible tab strip width. Token-driven via 5 (was 32px
+	// literal in 3d).
+	for _, want := range []string{
+		`body.gmap-mode.inspector-collapsed .shell-header { right: var(--gmap-right-rail-handle-width); }`,
+		`body.gmap-mode.inspector-collapsed .shell-footer { right: var(--gmap-right-rail-handle-width); }`,
+		`body.gmap-mode.inspector-collapsed .shell-main   { margin-right: var(--gmap-right-rail-handle-width); }`,
+	} {
+		if !strings.Contains(shellCSS, want) {
+			t.Errorf("D27j-ui-3a-refine-3d/5: shell.css missing collapsed-state reservation %q", want)
+		}
+	}
+
+	// Sanity: the EXPANDED-state rules still consume the variable
+	// so the 320px reservation continues to apply when the rail is
+	// expanded. The 3d fix must not regress these.
+	for _, want := range []string{
+		`body.gmap-mode .shell-header { right: var(--inspector-width); }`,
+		`body.gmap-mode .shell-footer { right: var(--inspector-width); }`,
+		`body.gmap-mode .shell-main   { margin-right: var(--inspector-width); }`,
+	} {
+		if !strings.Contains(shellCSS, want) {
+			t.Errorf("D27j-ui-3a-refine-3d: shell.css must preserve expanded-state reservation %q", want)
+		}
+	}
+
+	// Sanity: --inspector-width itself is NOT changed in this
+	// tranche — the rail's own width (#gmap-details consumes the
+	// variable) stays at 56px in collapsed state.
+	if !strings.Contains(shellCSS, `body.inspector-collapsed { --inspector-width: 56px; }`) {
+		t.Errorf("D27j-ui-3a-refine-3d: --inspector-width 56px collapsed override must remain unchanged")
+	}
+}
+
+// TestExplorer_AssetsCSS_RightRailTab_NoBetweenTabsDivider negative-
+// pins the D27j-ui-3a-refine-4 removal of the inter-tab pseudo-
+// element divider. The earlier 3a-refine-2 rule placed a short
+// horizontal hairline between adjacent tabs (`.gmap-right-rail-tab +
+// .gmap-right-rail-tab::before`), which reinforced the "menu rows"
+// reading. The single-handle target requires the three labels to
+// belong to one continuous drawer surface; row dividers contradict
+// that, so the selector is removed entirely.
+func TestExplorer_AssetsCSS_RightRailTab_NoBetweenTabsDivider(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+
+	// The selector itself must be gone — not just the rule body.
+	forbiddenSelector := `.gmap-right-rail-tab + .gmap-right-rail-tab::before`
+	if strings.Contains(gmapCSS, forbiddenSelector) {
+		t.Errorf("D27j-ui-3a-refine-4: governance-map.css must not contain %q (the inter-tab divider was removed because it broke the single-handle reading)", forbiddenSelector)
+	}
+}
+
+// TestExplorer_AssetsCSS_RightRailTab_VerticalDirection accepts
+// EITHER Approach A (writing-mode: vertical-lr alone) OR
+// Approach B (writing-mode: vertical-rl AND transform: rotate(180deg)
+// together). It must NOT pass on writing-mode: vertical-rl alone —
+// that combination produces outward-facing labels.
+//
+// In all cases text-orientation: mixed must be present.
+func TestExplorer_AssetsCSS_RightRailTab_VerticalDirection(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+
+	// Slice the .gmap-right-rail-tab rule body (note: the {.is-active}
+	// rule has the same prefix; locate the bare tab rule precisely).
+	i := strings.Index(gmapCSS, `.gmap-right-rail-tab {`)
+	if i < 0 {
+		t.Fatal("D27j-ui-3a-refine: .gmap-right-rail-tab rule missing")
+	}
+	end := strings.Index(gmapCSS[i:], "}")
+	if end < 0 {
+		t.Fatal("D27j-ui-3a-refine: .gmap-right-rail-tab rule has no closing brace")
+	}
+	body := gmapCSS[i : i+end]
+
+	hasLR := strings.Contains(body, `writing-mode: vertical-lr`)
+	hasRL := strings.Contains(body, `writing-mode: vertical-rl`)
+	hasRot := strings.Contains(body, `transform: rotate(180deg)`)
+
+	approachA := hasLR
+	approachB := hasRL && hasRot
+
+	if !approachA && !approachB {
+		t.Errorf("D27j-ui-3a-refine: .gmap-right-rail-tab must use Approach A "+
+			"(writing-mode: vertical-lr) OR Approach B "+
+			"(writing-mode: vertical-rl AND transform: rotate(180deg)). "+
+			"Neither was found.\n--- rule body:\n%s", body)
+	}
+
+	// Negative pin: writing-mode: vertical-rl WITHOUT transform: rotate
+	// is the outward-facing failure mode and must never pass.
+	if hasRL && !hasRot {
+		t.Errorf("D27j-ui-3a-refine: .gmap-right-rail-tab uses writing-mode: vertical-rl "+
+			"without transform: rotate(180deg) — produces OUTWARD-facing labels. "+
+			"Either remove the rl rule or add the rotate(180deg) transform.\n--- rule body:\n%s", body)
+	}
+
+	// text-orientation: mixed must be present in either approach.
+	if !strings.Contains(body, `text-orientation: mixed`) {
+		t.Errorf("D27j-ui-3a-refine: .gmap-right-rail-tab must declare text-orientation: mixed\n--- rule body:\n%s", body)
+	}
+}
+
+// TestExplorer_AssetsCSS_RightRailTab_ActiveStateChromeless pins
+// the D27j-ui-3a-refine-2 text-colour-only active treatment. The
+// rule must contain ONLY color: var(--primary). All forms of
+// chrome are forbidden: no background fill (loud or muted), no
+// inset accent bar, no border-color toggle.
+//
+// This replaces D27j-ui-3a-refine's accent-bar treatment which
+// the user rejected as still being card-like chrome.
+func TestExplorer_AssetsCSS_RightRailTab_ActiveStateChromeless(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+
+	i := strings.Index(gmapCSS, `.gmap-right-rail-tab.is-active {`)
+	if i < 0 {
+		t.Fatal("D27j-ui-3a-refine-2: .gmap-right-rail-tab.is-active rule missing")
+	}
+	end := strings.Index(gmapCSS[i:], "}")
+	if end < 0 {
+		t.Fatal("D27j-ui-3a-refine-2: .gmap-right-rail-tab.is-active rule has no closing brace")
+	}
+	body := gmapCSS[i : i+end]
+
+	// Positive pin: text-colour-only active state.
+	if !strings.Contains(body, `color: var(--primary)`) {
+		t.Errorf("D27j-ui-3a-refine-2: active tab must carry color: var(--primary)\n--- rule body:\n%s", body)
+	}
+
+	// Negative pins: every flavour of chrome is forbidden.
+	for _, forbidden := range []string{
+		// High-emphasis fills.
+		`background: var(--primary);`,
+		`background: var(--primary)`,
+		`background: var(--primary-container)`,
+		// The inset-accent treatment from D27j-ui-3a-refine.
+		`box-shadow: inset 3px 0 0 var(--primary)`,
+		`box-shadow:`,
+		// Any border-color toggle.
+		`border-color:`,
+		// Any explicit background declaration (chromeless model
+		// inherits transparent from the base rule).
+		`background:`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("D27j-ui-3a-refine-2: chromeless active tab must not contain %q (text-colour-only treatment)\n--- rule body:\n%s", forbidden, body)
+		}
+	}
+
+	// Negative pin: any raw hex colour value inside this rule body.
+	if strings.Contains(body, `#`) {
+		t.Errorf("D27j-ui-3a-refine-2: active tab must use tokens only — raw colour found\n--- rule body:\n%s", body)
+	}
+}
+
+// TestExplorer_AssetsCSS_RightRailTab_NoUppercase pins the
+// D27j-ui-3a-refine label casing: the tab labels render in sentence
+// case (Inspector / Evidence / Config), not all-caps. The CSS rule
+// must NOT carry text-transform: uppercase.
+func TestExplorer_AssetsCSS_RightRailTab_NoUppercase(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// HTML labels in sentence case.
+	for _, want := range []string{
+		`>Inspector<`,
+		`>Evidence<`,
+		`>Config<`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D27j-ui-3a-refine: tab label %q must remain (sentence case)", want)
+		}
+	}
+
+	// Negative pin: no text-transform: uppercase inside the bare
+	// .gmap-right-rail-tab rule. Slice the rule body to scope the
+	// assertion (other unrelated rules in the file may legitimately
+	// use uppercase elsewhere).
+	i := strings.Index(gmapCSS, `.gmap-right-rail-tab {`)
+	if i < 0 {
+		t.Fatal("D27j-ui-3a-refine: .gmap-right-rail-tab rule missing")
+	}
+	end := strings.Index(gmapCSS[i:], "}")
+	if end < 0 {
+		t.Fatal("D27j-ui-3a-refine: .gmap-right-rail-tab rule has no closing brace")
+	}
+	tabRule := gmapCSS[i : i+end]
+	if strings.Contains(tabRule, `text-transform: uppercase`) {
+		t.Errorf("D27j-ui-3a-refine: .gmap-right-rail-tab must not force uppercase\n--- rule body:\n%s", tabRule)
+	}
+}
+
+// TestExplorer_HTML_GovernanceMap_RailLabels_Independent pins the
+// D27j-ui-3a-refine-4 single-handle requirement that the three
+// labels (Inspector, Evidence, Config) appear as three discrete
+// element text nodes — never as a slash-separated string.
+//
+// The drawer-handle metaphor is one handle with three selectable
+// labels, NOT a slash-joined caption like "Inspector / Evidence /
+// Config". This test guards both halves: (a) each label exists
+// independently inside the rail aside, and (b) no slash-joined
+// rendering of all three exists anywhere in the markup.
+func TestExplorer_HTML_GovernanceMap_RailLabels_Independent(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	html := rec.Body.String()
+
+	// Slice the rail aside so the label-individuality assertions are
+	// scoped to the rail container itself (and so nearby unrelated
+	// markup cannot mask a regression here).
+	railStart := strings.Index(html, `<aside id="gmap-details"`)
+	if railStart < 0 {
+		t.Fatal("D27j-ui-3a-refine-4: <aside id=\"gmap-details\"> not found")
+	}
+	railEnd := strings.Index(html[railStart:], `</aside>`)
+	if railEnd < 0 {
+		t.Fatal("D27j-ui-3a-refine-4: rail aside has no closing tag")
+	}
+	railHTML := html[railStart : railStart+railEnd]
+
+	// (a) Each label must appear independently as a text node.
+	for _, want := range []string{
+		`>Inspector<`,
+		`>Evidence<`,
+		`>Config<`,
+	} {
+		if !strings.Contains(railHTML, want) {
+			t.Errorf("D27j-ui-3a-refine-4: rail aside must contain %q (each label rendered independently)", want)
+		}
+	}
+
+	// (b) No slash-joined rendering anywhere in the rail markup.
+	for _, forbidden := range []string{
+		`Inspector / Evidence / Config`,
+		`Inspector/Evidence/Config`,
+	} {
+		if strings.Contains(railHTML, forbidden) {
+			t.Errorf("D27j-ui-3a-refine-4: rail aside must not contain %q (the labels belong to one handle, but they are not a slash-joined caption)", forbidden)
+		}
+	}
+}
+
+// TestExplorer_InlineJS_SetGmapRightRailTab_ClickToOpen pins the
+// D27j-ui-3a-refine-4 click-to-open behaviour. setGmapRightRailTab
+// now expands the drawer when called while collapsed, matching the
+// file-drawer metaphor (one handle, one drawer, three labelled
+// positions; selecting a label pulls the drawer open at that
+// section). The branch reuses the existing collapse state, the
+// existing storage key, and the existing applier — no new state,
+// no new storage key, no new helper.
+//
+// The assertion is a source-substring pin against the body of
+// setGmapRightRailTab in the inline Explorer script.
+func TestExplorer_InlineJS_SetGmapRightRailTab_ClickToOpen(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	html := rec.Body.String()
+
+	// Slice the setGmapRightRailTab function body so the substring
+	// pins are scoped strictly to it (other helpers in the file may
+	// reference gmapInspectorCollapsed for unrelated reasons).
+	fnStart := strings.Index(html, `function setGmapRightRailTab(tab) {`)
+	if fnStart < 0 {
+		t.Fatal("D27j-ui-3a-refine-4: function setGmapRightRailTab not found")
+	}
+	// Find the function's closing brace by walking from the opening
+	// brace and matching depth — the function contains nested
+	// blocks (forEach callbacks, the new if branch).
+	openIdx := strings.Index(html[fnStart:], "{")
+	if openIdx < 0 {
+		t.Fatal("D27j-ui-3a-refine-4: setGmapRightRailTab has no opening brace")
+	}
+	depth := 0
+	end := -1
+	for i := fnStart + openIdx; i < len(html); i++ {
+		switch html[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				end = i
+				break
+			}
+		}
+		if end >= 0 {
+			break
+		}
+	}
+	if end < 0 {
+		t.Fatal("D27j-ui-3a-refine-4: setGmapRightRailTab has no balanced closing brace")
+	}
+	fnBody := html[fnStart : end+1]
+
+	// Click-to-open branch must be present and reuse the existing
+	// state, key, and applier.
+	for _, want := range []string{
+		`if (gmapInspectorCollapsed)`,
+		`gmapInspectorCollapsed = false`,
+		`window.localStorage.setItem(GMAP_INSPECTOR_LS_KEY, '0')`,
+		`applyGmapInspectorCollapsed()`,
+	} {
+		if !strings.Contains(fnBody, want) {
+			t.Errorf("D27j-ui-3a-refine-4: setGmapRightRailTab must contain %q (click-to-open branch)\n--- function body:\n%s", want, fnBody)
+		}
+	}
+
+	// Negative pins — no new state variable, no new storage key.
+	for _, forbidden := range []string{
+		`gmapRightRailOpen`,
+		`gmapDrawerOpen`,
+		`gmapInspectorOpen`,
+		`midas.explorer.rightRail`,
+		`midas.explorer.drawer`,
+	} {
+		if strings.Contains(fnBody, forbidden) {
+			t.Errorf("D27j-ui-3a-refine-4: setGmapRightRailTab must not introduce a new state variable / storage key (%q)\n--- function body:\n%s", forbidden, fnBody)
+		}
+	}
+}
+
+// TestExplorer_AssetsCSS_RightRail_HandleWidthToken pins the
+// D27j-ui-3a-refine-5 single-source-of-truth token for the rail
+// handle width. Declared in tokens.css alongside the other sizing
+// tokens; theme-neutral (no light-mode override). Value is 28px —
+// tighter than the prior 32px literal so the handle reads as a
+// drawer pull rather than a menu strip.
+func TestExplorer_AssetsCSS_RightRail_HandleWidthToken(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	tokensCSS := getExplorerAsset(t, srv, "/explorer/assets/css/tokens.css")
+
+	wantDecl := `--gmap-right-rail-handle-width: 28px;`
+	if !strings.Contains(tokensCSS, wantDecl) {
+		t.Errorf("D27j-ui-3a-refine-5: tokens.css must declare %q", wantDecl)
+	}
+
+	// Sanity: the declaration must live in the bare :root block (so
+	// it is theme-neutral). Negative pin: it must NOT also appear in
+	// the :root[data-theme="light"] override block.
+	lightStart := strings.Index(tokensCSS, `:root[data-theme="light"]`)
+	if lightStart < 0 {
+		t.Fatal("D27j-ui-3a-refine-5: light-mode :root block not found in tokens.css")
+	}
+	lightEnd := strings.Index(tokensCSS[lightStart:], "}")
+	if lightEnd < 0 {
+		t.Fatal("D27j-ui-3a-refine-5: light-mode :root block has no closing brace")
+	}
+	lightBlock := tokensCSS[lightStart : lightStart+lightEnd]
+	if strings.Contains(lightBlock, `--gmap-right-rail-handle-width`) {
+		t.Errorf("D27j-ui-3a-refine-5: --gmap-right-rail-handle-width must be theme-neutral, must not appear in the light-mode override block")
+	}
+}
+
+// TestExplorer_AssetsCSS_RightRail_HandleWidthTokenConsumption
+// asserts the handle-width token is the single source of truth at
+// every consumer site introduced in 5: the strip width, the
+// expanded-state strip inset, the panel padding allowance, and
+// the three collapsed-state shell reservation rules.
+func TestExplorer_AssetsCSS_RightRail_HandleWidthTokenConsumption(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+	shellCSS := getExplorerAsset(t, srv, "/explorer/assets/css/shell.css")
+
+	for _, want := range []string{
+		`width: var(--gmap-right-rail-handle-width);`,
+		`right: calc(var(--inspector-width) - var(--gmap-right-rail-handle-width));`,
+		`calc(var(--gmap-right-rail-handle-width) + var(--space-3));`,
+	} {
+		if !strings.Contains(gmapCSS, want) {
+			t.Errorf("D27j-ui-3a-refine-5: governance-map.css must consume the handle-width token via %q", want)
+		}
+	}
+
+	for _, want := range []string{
+		`body.gmap-mode.inspector-collapsed .shell-header { right: var(--gmap-right-rail-handle-width); }`,
+		`body.gmap-mode.inspector-collapsed .shell-footer { right: var(--gmap-right-rail-handle-width); }`,
+		`body.gmap-mode.inspector-collapsed .shell-main   { margin-right: var(--gmap-right-rail-handle-width); }`,
+	} {
+		if !strings.Contains(shellCSS, want) {
+			t.Errorf("D27j-ui-3a-refine-5: shell.css must consume the handle-width token via %q", want)
+		}
+	}
+}
+
+// TestExplorer_HTML_RightRail_HeaderCloseButton pins the new
+// drawer header markup: a single shared header sits inside the
+// rail aside (immediately after the tabs nav) and contains a
+// title element plus the close button. The close button replaces
+// the bottom chevron as the canonical close affordance. Tab
+// labels (Inspector / Evidence / Config) remain rendered as
+// independent buttons, never as a slash-joined caption.
+func TestExplorer_HTML_RightRail_HeaderCloseButton(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	html := rec.Body.String()
+
+	// Slice the rail aside so the assertions are scoped to it.
+	railStart := strings.Index(html, `<aside id="gmap-details"`)
+	if railStart < 0 {
+		t.Fatal("D27j-ui-3a-refine-5: <aside id=\"gmap-details\"> not found")
+	}
+	railEnd := strings.Index(html[railStart:], `</aside>`)
+	if railEnd < 0 {
+		t.Fatal("D27j-ui-3a-refine-5: rail aside has no closing tag")
+	}
+	railHTML := html[railStart : railStart+railEnd]
+
+	// Header structure + close button markup.
+	for _, want := range []string{
+		`class="gmap-right-rail-header"`,
+		`id="gmap-right-rail-title"`,
+		`id="gmap-right-rail-close"`,
+		`class="gmap-right-rail-close"`,
+		`aria-label="Close right rail"`,
+	} {
+		if !strings.Contains(railHTML, want) {
+			t.Errorf("D27j-ui-3a-refine-5: rail aside must contain %q", want)
+		}
+	}
+
+	// Tab labels remain rendered independently (regression of the
+	// 3a-refine-4 label-individuality test, but scoped to this
+	// tranche so failures here surface against 5).
+	for _, want := range []string{
+		`>Inspector<`,
+		`>Evidence<`,
+		`>Config<`,
+	} {
+		if !strings.Contains(railHTML, want) {
+			t.Errorf("D27j-ui-3a-refine-5: rail aside must contain %q (label rendered independently)", want)
+		}
+	}
+
+	// No slash-joined captions anywhere in the rail markup.
+	for _, forbidden := range []string{
+		`Inspector / Evidence / Config`,
+		`Inspector/Evidence/Config`,
+	} {
+		if strings.Contains(railHTML, forbidden) {
+			t.Errorf("D27j-ui-3a-refine-5: rail aside must not contain %q", forbidden)
+		}
+	}
+}
+
+// TestExplorer_AssetsCSS_RightRail_BottomChevronHiddenInGmapMode
+// pins the 5 hide rule for the bottom chevron toggle. The
+// element and its JS wiring remain in the DOM (so the existing
+// id="gmap-inspector-toggle" tests still resolve), but the
+// element is hidden in gmap-mode because the new header close
+// button supersedes it as the canonical close affordance.
+func TestExplorer_AssetsCSS_RightRail_BottomChevronHiddenInGmapMode(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+
+	want := `body.gmap-mode #gmap-inspector-toggle {`
+	if !strings.Contains(gmapCSS, want) {
+		t.Errorf("D27j-ui-3a-refine-5: governance-map.css must hide the bottom chevron in gmap-mode via %q", want)
+	}
+	// Slice the rule body and pin the display: none declaration.
+	idx := strings.Index(gmapCSS, want)
+	end := strings.Index(gmapCSS[idx:], "}")
+	if end < 0 {
+		t.Fatal("D27j-ui-3a-refine-5: bottom-chevron hide rule has no closing brace")
+	}
+	body := gmapCSS[idx : idx+end]
+	if !strings.Contains(body, `display: none`) {
+		t.Errorf("D27j-ui-3a-refine-5: bottom-chevron hide rule must declare display: none\n--- rule body:\n%s", body)
+	}
+}
+
+// TestExplorer_InlineJS_CloseGmapRightRail pins the close-side of
+// the click-to-open / Escape-to-close mirror. closeGmapRightRail
+// reuses the existing collapse state (gmapInspectorCollapsed),
+// the existing storage key (GMAP_INSPECTOR_LS_KEY), and the
+// existing applier (applyGmapInspectorCollapsed). No new state,
+// no new storage key. The header close button is wired to call
+// it on click.
+func TestExplorer_InlineJS_CloseGmapRightRail(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	html := rec.Body.String()
+
+	for _, want := range []string{
+		`function closeGmapRightRail`,
+		`gmapInspectorCollapsed = true`,
+		`window.localStorage.setItem(GMAP_INSPECTOR_LS_KEY, '1')`,
+		`applyGmapInspectorCollapsed()`,
+		// Click-button wiring.
+		`gmap-right-rail-close`,
+		`addEventListener('click', closeGmapRightRail)`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("D27j-ui-3a-refine-5: explorer inline JS must contain %q", want)
+		}
+	}
+
+	// Negative pins — no new state variable / storage key.
+	for _, forbidden := range []string{
+		`gmapRightRailOpen`,
+		`gmapDrawerOpen`,
+		`midas.explorer.rightRail`,
+		`midas.explorer.drawer`,
+	} {
+		if strings.Contains(html, forbidden) {
+			t.Errorf("D27j-ui-3a-refine-5: explorer inline JS must not introduce %q (state/storage stays single-source)", forbidden)
+		}
+	}
+}
+
+// TestExplorer_InlineJS_RightRail_EscapeToClose pins the Escape-
+// to-close listener. Conditions: body in gmap-mode, drawer open,
+// focus not in an editable element. Click-outside-to-close is
+// explicitly NOT introduced — the workbench is operational, not
+// modal. The negative pins guard against a future "outside click"
+// listener being added inside the listener block.
+func TestExplorer_InlineJS_RightRail_EscapeToClose(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	html := rec.Body.String()
+
+	// Slice the wireGmapRightRailEscapeClose IIFE so the substring
+	// pins are scoped to the listener body (the file has many
+	// other Escape-related listeners that would false-positive a
+	// global match).
+	startSel := `(function wireGmapRightRailEscapeClose() {`
+	startIdx := strings.Index(html, startSel)
+	if startIdx < 0 {
+		t.Fatal("D27j-ui-3a-refine-5: wireGmapRightRailEscapeClose IIFE not found")
+	}
+	// Walk to balanced closing brace + ); for the IIFE.
+	depth := 0
+	end := -1
+	for i := startIdx; i < len(html); i++ {
+		switch html[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				end = i
+				break
+			}
+		}
+		if end >= 0 {
+			break
+		}
+	}
+	if end < 0 {
+		t.Fatal("D27j-ui-3a-refine-5: wireGmapRightRailEscapeClose IIFE has no balanced closing brace")
+	}
+	listenerBody := html[startIdx : end+1]
+
+	for _, want := range []string{
+		`event.key !== 'Escape'`,
+		`document.body.classList.contains('gmap-mode')`,
+		`gmapInspectorCollapsed`,
+		`isEditableTarget`,
+		`closeGmapRightRail()`,
+	} {
+		if !strings.Contains(listenerBody, want) {
+			t.Errorf("D27j-ui-3a-refine-5: Escape-close listener must contain %q\n--- listener body:\n%s", want, listenerBody)
+		}
+	}
+
+	// Negative pins (scoped to the listener body): no click-
+	// outside-to-close mechanism inside this listener.
+	for _, forbidden := range []string{
+		`mousedown`,
+		`pointerdown`,
+		`outside`,
+		`addEventListener('click'`,
+	} {
+		if strings.Contains(listenerBody, forbidden) {
+			t.Errorf("D27j-ui-3a-refine-5: Escape-close listener must not contain %q (no click-outside-to-close in this tranche)\n--- listener body:\n%s", forbidden, listenerBody)
+		}
+	}
+}
+
+// TestExplorer_InlineJS_IsEditableTargetHelper pins the
+// isEditableTarget helper introduced in 5 to guard the Escape-
+// to-close listener against firing while the user is typing in
+// an input, textarea, select, or contenteditable element. The
+// helper is required by the Escape-close listener, but is also
+// generally useful and lives at module scope.
+func TestExplorer_InlineJS_IsEditableTargetHelper(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	html := rec.Body.String()
+
+	for _, want := range []string{
+		`function isEditableTarget(target)`,
+		`input, textarea, select, [contenteditable="true"]`,
+		`[contenteditable="true"]`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("D27j-ui-3a-refine-5: explorer inline JS must contain %q (isEditableTarget helper)", want)
+		}
+	}
+}
+
+// TestExplorer_AssetsCSS_RightRail_CollapsedRailWidthOverride pins
+// the D27j-ui-3a-refine-6 collapsed-state rail-width override.
+// Pre-6, #gmap-details consumed var(--inspector-width) for its
+// width in every state, which resolves to 56px in collapsed state
+// while the shell reservation is only 28px (the handle-width
+// token). The 28px mismatch caused the rail to paint over canvas
+// pixels in the difference. The 6 fix overrides the rail width
+// to the handle-width token in collapsed state so rail width =
+// handle width = shell reservation, with no overlap.
+//
+// The base #gmap-details rule must still declare width:
+// var(--inspector-width) so the expanded-state 320px is
+// untouched.
+func TestExplorer_AssetsCSS_RightRail_CollapsedRailWidthOverride(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+
+	// Slice the collapsed-state width override rule body and pin
+	// the width declaration. Multiple body.inspector-collapsed
+	// #gmap-details {...} rules exist (border-left-color and the
+	// new width override), so locate the one that contains width.
+	const sel = `body.inspector-collapsed #gmap-details {`
+	cursor := 0
+	matched := false
+	for {
+		idx := strings.Index(gmapCSS[cursor:], sel)
+		if idx < 0 {
+			break
+		}
+		start := cursor + idx
+		end := strings.Index(gmapCSS[start:], "}")
+		if end < 0 {
+			t.Fatalf("D27j-ui-3a-refine-6: %q rule has no closing brace at offset %d", sel, start)
+		}
+		body := gmapCSS[start : start+end]
+		if strings.Contains(body, `width: var(--gmap-right-rail-handle-width);`) {
+			matched = true
+			break
+		}
+		cursor = start + end + 1
+	}
+	if !matched {
+		t.Errorf("D27j-ui-3a-refine-6: governance-map.css must contain a body.inspector-collapsed #gmap-details rule that declares width: var(--gmap-right-rail-handle-width);")
+	}
+
+	// Base #gmap-details rule must still consume --inspector-width
+	// so the expanded state continues to resolve to 320px. The
+	// file contains multiple selectors ending in "#gmap-details {"
+	// (the bare base rule plus several body.inspector-collapsed
+	// #gmap-details overrides), so iterate until we find the one
+	// uniquely identified by `position: fixed;` in its body — only
+	// the base rule declares positioning.
+	baseSel := `#gmap-details {`
+	baseCursor := 0
+	baseMatched := false
+	for {
+		idx := strings.Index(gmapCSS[baseCursor:], baseSel)
+		if idx < 0 {
+			break
+		}
+		start := baseCursor + idx
+		end := strings.Index(gmapCSS[start:], "}")
+		if end < 0 {
+			t.Fatalf("D27j-ui-3a-refine-6: %q rule has no closing brace at offset %d", baseSel, start)
+		}
+		body := gmapCSS[start : start+end]
+		if strings.Contains(body, `position: fixed;`) {
+			baseMatched = true
+			if !strings.Contains(body, `width: var(--inspector-width);`) {
+				t.Errorf("D27j-ui-3a-refine-6: base #gmap-details must still declare width: var(--inspector-width); (expanded-state width unchanged)\n--- rule body:\n%s", body)
+			}
+			break
+		}
+		baseCursor = start + end + 1
+	}
+	if !baseMatched {
+		t.Fatal("D27j-ui-3a-refine-6: base #gmap-details rule (with position: fixed;) not found")
+	}
+}
+
+// TestExplorer_AssetsCSS_RightRail_HandleStateTunedBackground pins
+// the D27j-ui-3a-refine-6 state-tuned handle background. Both
+// states keep the three-sided border and rounded outside corners
+// (visible silhouette), but the surface adopts whichever
+// surrounding context sits behind the handle:
+//
+//	collapsed → --surface-container-lowest (canvas colour) — base rule
+//	expanded  → --surface-container-low    (drawer panel colour) — override
+//
+// This eliminates the contrast band that made the handle read as a
+// separate stripe over the drawer in expanded state.
+func TestExplorer_AssetsCSS_RightRail_HandleStateTunedBackground(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+
+	// Base rule body — collapsed-state background (canvas).
+	baseStart := strings.Index(gmapCSS, `.gmap-right-rail-tabs {`)
+	if baseStart < 0 {
+		t.Fatal("D27j-ui-3a-refine-6: base .gmap-right-rail-tabs rule missing")
+	}
+	baseEnd := strings.Index(gmapCSS[baseStart:], "}")
+	if baseEnd < 0 {
+		t.Fatal("D27j-ui-3a-refine-6: base rule has no closing brace")
+	}
+	baseBody := gmapCSS[baseStart : baseStart+baseEnd]
+	if !strings.Contains(baseBody, `background: var(--surface-container-lowest);`) {
+		t.Errorf("D27j-ui-3a-refine-6: base .gmap-right-rail-tabs must declare background: var(--surface-container-lowest); (collapsed-state default)\n--- rule body:\n%s", baseBody)
+	}
+
+	// Expanded-state companion rule — paints drawer panel surface.
+	const expandedSel = `body.gmap-mode:not(.inspector-collapsed) .gmap-right-rail-tabs {`
+	cursor := 0
+	matched := false
+	for {
+		idx := strings.Index(gmapCSS[cursor:], expandedSel)
+		if idx < 0 {
+			break
+		}
+		start := cursor + idx
+		end := strings.Index(gmapCSS[start:], "}")
+		if end < 0 {
+			t.Fatalf("D27j-ui-3a-refine-6: %q rule has no closing brace at offset %d", expandedSel, start)
+		}
+		body := gmapCSS[start : start+end]
+		if strings.Contains(body, `background: var(--surface-container-low);`) {
+			matched = true
+			break
+		}
+		cursor = start + end + 1
+	}
+	if !matched {
+		t.Errorf("D27j-ui-3a-refine-6: governance-map.css must contain a body.gmap-mode:not(.inspector-collapsed) .gmap-right-rail-tabs rule that declares background: var(--surface-container-low);")
+	}
+}
+
+// TestExplorer_HTML_RightRail_NoBehaviourExpansion negative-pins any
+// runtime evidence / audit-event / failmode behaviour leaking into
+// the right rail. Defensive guard so future tranches stay scoped.
+//
+// D29g scoping update: the forbidden substrings are scoped to the
+// right-rail Evidence panel slice (between data-rail-panel="evidence"
+// and the next </section>) so the Records detail rail's D29g
+// audit-events surfacing — which legitimately fetches
+// /explorer/envelopes/{id}/audit-events — does not trip this guard.
+// The intent of the original pin (rail Evidence tab stays a
+// placeholder until purposefully expanded) is preserved by the
+// narrower slice. Forbidden tab-kind strings remain pinned against
+// the full body since they're tab declarations, not behaviour.
+func TestExplorer_HTML_RightRail_NoBehaviourExpansion(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// Slice the right-rail Evidence panel from its opening
+	// data-rail-panel="evidence" marker to the next </section>. The
+	// Evidence tab must stay a placeholder; behaviour strings inside
+	// this slice represent in-rail expansion the brief forbids.
+	panelStart := strings.Index(body, `data-rail-panel="evidence"`)
+	if panelStart < 0 {
+		t.Fatal("D27j-ui-3a: right-rail Evidence panel marker missing")
+	}
+	panelEnd := strings.Index(body[panelStart:], `</section>`)
+	if panelEnd < 0 {
+		t.Fatal("D27j-ui-3a: right-rail Evidence panel closing tag missing")
+	}
+	evidencePanelSlice := body[panelStart : panelStart+panelEnd]
+
+	for _, forbidden := range []string{
+		`function renderRailEvidence`,
+		`function renderRailFailModePolicy`,
+		`function loadRailEvidence`,
+		`function fetchRailEvidence`,
+		`/v1/audit-events`,
+		`/explorer/audit-events`,
+	} {
+		if strings.Contains(evidencePanelSlice, forbidden) {
+			t.Errorf("D27j-ui-3a: %q must NOT appear in right-rail Evidence panel slice (rail shell tranche only)", forbidden)
+		}
+	}
+
+	// Tab kinds beyond the three approved are pinned against the
+	// full body — these are tablist declarations rooted elsewhere
+	// in the HTML.
+	for _, forbidden := range []string{
+		`data-rail-tab="failmode"`,
+		`data-rail-tab="audit"`,
+		`data-rail-tab="lifecycle"`,
+		`data-rail-panel="failmode"`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("D27j-ui-3a: %q must NOT appear (rail shell tranche only)", forbidden)
+		}
+	}
+}
+
+// =============================================================
+// D27j-ui-3b — Inspector Governance / FailModePolicy Reference
+// =============================================================
+//
+// Inspector tab gains a Governance section that consumes the
+// frontend graph model only — no fetches, no policy resource
+// lookup, no audit-event rendering. BusinessService and
+// DecisionSurface kinds get a Fail Mode Policy subsection;
+// other kinds render nothing.
+
+// TestExplorer_HTML_RightRail_GovernanceContainer_Present pins the
+// new container inside the Inspector tabpanel.
+func TestExplorer_HTML_RightRail_GovernanceContainer_Present(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// Container exists with the expected id + class.
+	if !strings.Contains(body, `id="gmap-details-governance" class="gmap-details-governance"`) {
+		t.Error("D27j-ui-3b: #gmap-details-governance container missing")
+	}
+
+	// Lives inside the Inspector tabpanel slice (between the panel's
+	// data-rail-panel="inspector" attribute and the next </section>).
+	panelStart := strings.Index(body, `data-rail-panel="inspector"`)
+	if panelStart < 0 {
+		t.Fatal("D27j-ui-3b: Inspector tabpanel marker missing")
+	}
+	panelEnd := strings.Index(body[panelStart:], `</section>`)
+	if panelEnd < 0 {
+		t.Fatal("D27j-ui-3b: Inspector tabpanel closing tag missing")
+	}
+	panelSlice := body[panelStart : panelStart+panelEnd]
+	if !strings.Contains(panelSlice, `id="gmap-details-governance"`) {
+		t.Error("D27j-ui-3b: governance container must live inside the Inspector tabpanel")
+	}
+}
+
+// TestExplorer_HTML_RightRail_GovernanceJS_Present pins the new
+// helpers + the field-filter integration in selectGovernanceMapNode.
+func TestExplorer_HTML_RightRail_GovernanceJS_Present(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	for _, want := range []string{
+		`function setGovernanceMapDetailsGovernance(html)`,
+		`function buildFailModePolicyInspectorSection(nodeKind, details, data)`,
+		// Filter governance-only keys out of the generic field render.
+		`const GOVERNANCE_KEYS = ['fail_mode_policy_id'];`,
+		`.filter(k => GOVERNANCE_KEYS.indexOf(k) < 0)`,
+		// selectGovernanceMapNode invokes the helper + setter.
+		`setGovernanceMapDetailsGovernance(`,
+		`buildFailModePolicyInspectorSection(selectedNode.dataset.nodeKind || '', details, gmapData)`,
+		// Detail propagation: BS root, surface root, surface row each
+		// carry fail_mode_policy_id in their details payload.
+		`'fail_mode_policy_id': bs.fail_mode_policy_id || ''`,
+		`'fail_mode_policy_id': surf.fail_mode_policy_id || ''`,
+		`'fail_mode_policy_id': s.fail_mode_policy_id || ''`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D27j-ui-3b: governance JS source %q missing", want)
+		}
+	}
+}
+
+// TestExplorer_HTML_RightRail_FMPSemantics_Present pins all five
+// branches of buildFailModePolicyInspectorSection: BS-with / BS-
+// without / surface-override / surface-inherited / surface-none.
+// Allowed wording vocabulary.
+func TestExplorer_HTML_RightRail_FMPSemantics_Present(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// Branch dispatch.
+	for _, want := range []string{
+		// BS branches.
+		`if (nodeKind === 'business')`,
+		`rows.push(['Default policy', '<code class="gmap-fmp-reference-code">'`,
+		`rows.push(['Source', 'Business service default']);`,
+		`rows.push(['Default policy', 'None configured']);`,
+		// Surface branches.
+		`} else if (nodeKind === 'surface')`,
+		`rows.push(['Surface override', '<code class="gmap-fmp-reference-code">'`,
+		`rows.push(['Effective source', 'Surface override']);`,
+		`rows.push(['Inherited default', '<code class="gmap-fmp-reference-code">'`,
+		`rows.push(['Effective source', 'Business service default']);`,
+		`rows.push(['Surface override', 'None']);`,
+		`rows.push(['Inherited default', 'None configured']);`,
+		// Always-present runtime-effect rows.
+		`rows.push(['Runtime effect', 'Evidence only']);`,
+		`rows.push(['Soft/open', 'Not enabled']);`,
+		// Section title.
+		`<div class="gmap-details-title">Fail Mode Policy</div>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D27j-ui-3b: FMP semantics source %q missing", want)
+		}
+	}
+}
+
+// TestExplorer_HTML_RightRail_FMPNoForbiddenLanguage scopes a
+// negative pin to the buildFailModePolicyInspectorSection source so
+// the inspector can never claim policy state it has not fetched.
+func TestExplorer_HTML_RightRail_FMPNoForbiddenLanguage(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// Locate the helper body. Slice from the function declaration
+	// to a fixed 2000-byte bound — comfortably covers the ~1100-byte
+	// helper without spilling into neighbouring functions whose
+	// strings would false-match the negative pin.
+	start := strings.Index(body, `function buildFailModePolicyInspectorSection`)
+	if start < 0 {
+		t.Fatal("D27j-ui-3b: buildFailModePolicyInspectorSection function missing")
+	}
+	end := start + 2000
+	if end > len(body) {
+		end = len(body)
+	}
+	helperSlice := body[start:end]
+
+	for _, forbidden := range []string{
+		`approved`,
+		` active'`,
+		` review'`,
+		` deprecated'`,
+		` retired'`,
+		`'version'`,
+		`effective date`,
+		`'owner'`,
+		`'rules'`,
+		`closed'`,
+		`soft enabled`,
+		`open enabled`,
+		`resolved version`,
+		`runtime resolved`,
+		`'active'`,
+	} {
+		if strings.Contains(helperSlice, forbidden) {
+			t.Errorf("D27j-ui-3b: FMP helper must not contain %q (reference-level only)", forbidden)
+		}
+	}
+}
+
+// TestExplorer_HTML_RightRail_FMPNoFetchOrEndpoint scopes a negative
+// pin to the FMP helper source: no fetch, no FailModePolicy
+// endpoint, no audit-event endpoint, no FAIL_MODE_POLICY_RESOLVED.
+func TestExplorer_HTML_RightRail_FMPNoFetchOrEndpoint(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	start := strings.Index(body, `function buildFailModePolicyInspectorSection`)
+	if start < 0 {
+		t.Fatal("D27j-ui-3b: buildFailModePolicyInspectorSection function missing")
+	}
+	// The helper body is ~1100 bytes. A 2000-byte cap comfortably
+	// covers it without spilling into neighbouring functions whose
+	// `function ` declarations would otherwise terminate a regex-based
+	// slice. The fixed bound keeps the negative pin scoped strictly
+	// to the helper.
+	end := start + 2000
+	if end > len(body) {
+		end = len(body)
+	}
+	helperSlice := body[start:end]
+
+	for _, forbidden := range []string{
+		`fetch(`,
+		`/v1/fail_mode_policies`,
+		`/controlplane/fail_mode_policies`,
+		`/audit-events`,
+		`FAIL_MODE_POLICY_RESOLVED`,
+		`XMLHttpRequest`,
+	} {
+		if strings.Contains(helperSlice, forbidden) {
+			t.Errorf("D27j-ui-3b: FMP helper must not contain %q (no fetch / no endpoint / no runtime evidence)", forbidden)
+		}
+	}
+
+	// Also confirm the existing right-rail tab structure remains.
+	for _, want := range []string{
+		`data-rail-tab="inspector"`,
+		`data-rail-tab="evidence"`,
+		`data-rail-tab="config"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D27j-ui-3b: right-rail tab %q must remain", want)
+		}
+	}
+}
+
+// TestExplorer_AssetsCSS_RightRailGovernance_Present pins the new
+// inspector CSS selectors and confirms token consumption.
+func TestExplorer_AssetsCSS_RightRailGovernance_Present(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+
+	for _, want := range []string{
+		`.gmap-details-governance:empty { display: none; }`,
+		`.gmap-fmp-reference {`,
+		`.gmap-fmp-reference-row {`,
+		`.gmap-fmp-reference-key {`,
+		`.gmap-fmp-reference-val {`,
+		`.gmap-fmp-reference-code {`,
+		// Token consumption.
+		`color: var(--on-surface-variant);`,
+		`color: var(--on-surface);`,
+		`background: var(--surface-container-low);`,
+		`border: var(--border-hairline);`,
+		`border-radius: var(--radius-tight);`,
+	} {
+		if !strings.Contains(gmapCSS, want) {
+			t.Errorf("D27j-ui-3b: governance-map.css missing %q", want)
 		}
 	}
 }

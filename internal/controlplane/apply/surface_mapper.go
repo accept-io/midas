@@ -64,16 +64,6 @@ func mapSurfaceDocumentToDecisionSurface(
 		return nil, fmt.Errorf("minimum_confidence must be in range [0.0, 1.0], got: %f", ds.MinimumConfidence)
 	}
 
-	failureMode := strings.TrimSpace(doc.Spec.FailureMode)
-	if failureMode != "" {
-		if !isValidFailureMode(failureMode) {
-			return nil, fmt.Errorf("invalid failure_mode: %s", doc.Spec.FailureMode)
-		}
-		ds.FailureMode = surface.FailureMode(failureMode)
-	} else {
-		ds.FailureMode = surface.FailureModeClosed
-	}
-
 	ds.BusinessOwner = valueOrDefault(doc.Spec.BusinessOwner, "unassigned")
 	ds.TechnicalOwner = valueOrDefault(doc.Spec.TechnicalOwner, "unassigned")
 
@@ -125,16 +115,6 @@ func isValidReversibilityClass(s string) bool {
 	case surface.ReversibilityReversible,
 		surface.ReversibilityConditionallyReversible,
 		surface.ReversibilityIrreversible:
-		return true
-	default:
-		return false
-	}
-}
-
-func isValidFailureMode(s string) bool {
-	switch surface.FailureMode(s) {
-	case surface.FailureModeOpen,
-		surface.FailureModeClosed:
 		return true
 	default:
 		return false

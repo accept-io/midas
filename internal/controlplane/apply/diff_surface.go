@@ -47,7 +47,6 @@ func computeSurfaceDiff(latest *surface.DecisionSurface, doc types.SurfaceDocume
 	addScalar("spec.minimum_confidence", latest.MinimumConfidence, proposed.MinimumConfidence)
 	addScalar("spec.decision_type", string(latest.DecisionType), string(proposed.DecisionType))
 	addScalar("spec.reversibility_class", string(latest.ReversibilityClass), string(proposed.ReversibilityClass))
-	addScalar("spec.failure_mode", string(latest.FailureMode), string(proposed.FailureMode))
 	addScalar("spec.policy_package", latest.PolicyPackage, proposed.PolicyPackage)
 	addScalar("spec.policy_version", latest.PolicyVersion, proposed.PolicyVersion)
 	addScalar("spec.business_owner", latest.BusinessOwner, proposed.BusinessOwner)

@@ -141,3 +141,4 @@ curl http://localhost:8080/explorer/envelopes/<envelope_id> | jq .
 - [`docs/core/runtime-evaluation.md`](runtime-evaluation.md) — evaluation flow that produces the envelope
 - [`docs/operations/escalations.md`](../operations/escalations.md) — escalation and review workflow
 - [`docs/api/http-api.md`](../api/http-api.md) — full envelope API reference
+- [`docs/operations/runtime-evidence-api.md`](../operations/runtime-evidence-api.md) — operator guide to the `/v1/evidence/*` audit-event chain, search, integrity verification, and evidence packet endpoints

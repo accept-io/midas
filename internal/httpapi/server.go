@@ -30,6 +30,7 @@ import (
 	"github.com/accept-io/midas/internal/controlplane/approval"
 	cpTypes "github.com/accept-io/midas/internal/controlplane/types"
 	"github.com/accept-io/midas/internal/decision"
+	"github.com/accept-io/midas/internal/drift"
 	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/eval"
 	"github.com/accept-io/midas/internal/externalref"
@@ -83,6 +84,14 @@ type approvalService interface {
 	// dedicated DeprecationReason field.
 	ApproveFailModePolicy(ctx context.Context, policyID string, version int, approvedBy string) (*failmode.FailModePolicy, error)
 	DeprecateFailModePolicy(ctx context.Context, policyID string, version int, deprecatedBy string, reason string) (*failmode.FailModePolicy, error)
+	// DriftDefinition lifecycle (Drift-1e). Five actions covering the
+	// full lifecycle graph (draft → review → active → deprecated →
+	// retired). Maker-checker is enforced at the service layer.
+	SubmitDriftDefinition(ctx context.Context, id string, version int, submittedBy string, reason string) (*drift.DriftDefinition, error)
+	ApproveDriftDefinition(ctx context.Context, id string, version int, approvedBy string) (*drift.DriftDefinition, error)
+	RejectDriftDefinition(ctx context.Context, id string, version int, rejectedBy string, reason string) (*drift.DriftDefinition, error)
+	DeprecateDriftDefinition(ctx context.Context, id string, version int, deprecatedBy string, reason string, successorDefinitionID string, successorVersion int) (*drift.DriftDefinition, error)
+	RetireDriftDefinition(ctx context.Context, id string, version int, retiredBy string, reason string) (*drift.DriftDefinition, error)
 }
 
 // introspectionService defines the read-only operator visibility contract.
@@ -240,6 +249,9 @@ type Server struct {
 	coverageRead         coverageReadService         // nil when coverage read service is not wired (Issue #56)
 	governanceMap        governanceMapReadService    // nil when governance map read service is not wired (Epic 1, PR 4)
 	authorityGraph       authorityGraphService       // nil when authority-graph projection service is not wired (Phase 1)
+	driftRead            driftReadService            // nil when the Drift-1d read service is not wired
+	failModePolicyRead   failModePolicyReadService   // nil when the D29d FailModePolicy read service is not wired
+	evidenceRead         evidenceReadService         // nil when the D30b runtime evidence read service is not wired
 	metricsHandler       http.Handler                // nil when metrics are disabled; registered at metricsPath when set
 	metricsPath          string                      // configured path for the metrics endpoint (e.g. "/metrics")
 	handlerTimeout       time.Duration               // per-handler wall-clock deadline; 0 disables (D27d)
@@ -1397,6 +1409,37 @@ func (s *Server) WithStructural(svc structuralService) *Server {
 	return s
 }
 
+// WithDriftReadService attaches the read-only Drift service that backs
+// the /v1/drift/* endpoints (Drift-1d). When nil, every drift route
+// returns 501 Not Implemented. The service may be partially wired —
+// individual reader fields (definitions, series, points, observations,
+// annotations) can be nil and the corresponding routes will return 501.
+func (s *Server) WithDriftReadService(svc driftReadService) *Server {
+	s.driftRead = svc
+	return s
+}
+
+// WithFailModePolicyReadService attaches the read-only FailModePolicy
+// service that backs the /v1/fail_mode_policies/* endpoints (D29d).
+// When nil, every route returns 501 Not Implemented. The mutating
+// /v1/controlplane/fail_mode_policies/* lifecycle handlers are
+// unaffected — they remain backed by the approval service.
+func (s *Server) WithFailModePolicyReadService(svc failModePolicyReadService) *Server {
+	s.failModePolicyRead = svc
+	return s
+}
+
+// WithEvidenceReadService attaches the read-only runtime evidence
+// service that backs GET /v1/evidence/envelopes/{id}/audit-events
+// (D30b). When nil — or when constructed with nil envelope/audit
+// readers — every evidence route returns 501 Not Implemented. The
+// production /v1/envelopes/{id} route and the Explorer route
+// /explorer/envelopes/{id}/audit-events are both unaffected.
+func (s *Server) WithEvidenceReadService(svc evidenceReadService) *Server {
+	s.evidenceRead = svc
+	return s
+}
+
 // WithStructuralMode sets the structural enforcement mode. In permissive mode
 // (the default when not called), process_id is optional on /v1/evaluate.
 // In enforced mode, process_id is required.
@@ -1529,6 +1572,19 @@ func (s *Server) routes() {
 	// Runtime read — platform.viewer or above.
 	s.mux.HandleFunc("/v1/envelopes/", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleGetEnvelope)))
 	s.mux.HandleFunc("/v1/envelopes", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleListEnvelopes)))
+	// D30b — runtime evidence read API. Production-grade equivalent of
+	// the Explorer audit-events route, backed by the production
+	// envelope + audit repositories and gated at viewer+ like
+	// /v1/envelopes/{id}. The prefix dispatcher accepts only the
+	// {id}/audit-events sub-path today; D30d/D30e add their own
+	// arms when those tranches ship.
+	s.mux.HandleFunc("/v1/evidence/envelopes/", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleEvidenceEnvelopesPrefix)))
+	// D30c — cross-envelope audit-event search. Fixed-path route (no
+	// {id} placeholder). Same auth floor as the D30b envelope-scoped
+	// route. Uses the existing audit.ListFilter primitive that also
+	// backs /v1/coverage; payload_contains is intentionally not
+	// exposed on the URL surface.
+	s.mux.HandleFunc("/v1/evidence/audit-events", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleSearchEvidenceAuditEvents)))
 	s.mux.HandleFunc("/v1/escalations", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleListEscalations)))
 	s.mux.HandleFunc("/v1/decisions/request/", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleGetDecisionByRequestID)))
 
@@ -1553,6 +1609,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/v1/controlplane/profiles/", s.requireAuth(s.handleProfileActions))
 	s.mux.HandleFunc("/v1/controlplane/expectations/", s.requireAuth(s.handleExpectationActions))
 	s.mux.HandleFunc("/v1/controlplane/fail_mode_policies/", s.requireAuth(s.handleFailModePolicyActions))
+	s.mux.HandleFunc("/v1/controlplane/drift_definitions/", s.requireAuth(s.handleDriftDefinitionActions))
 	s.mux.HandleFunc("/v1/controlplane/grants/", s.requireAuth(s.handleGrantActions))
 
 	// Operator introspection — platform.viewer or above.
@@ -1580,6 +1637,25 @@ func (s *Server) routes() {
 	// rooted at a single business service (view=service); reuses the
 	// governance-map read service rather than re-querying repositories.
 	s.mux.HandleFunc("/v1/authority-graph", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleGetAuthorityGraph)))
+
+	// Drift read endpoints (Drift-1d). Six prefix dispatchers cover the
+	// 13 GET routes that back the upcoming Explorer drift workbench.
+	// Same auth posture as the rest of the read surface.
+	driftRoleGate := s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)
+	s.mux.HandleFunc("/v1/drift/definitions/", s.requireAuth(driftRoleGate(s.handleDriftDefinitionsPrefix)))
+	s.mux.HandleFunc("/v1/drift/series/", s.requireAuth(driftRoleGate(s.handleDriftSeriesPrefix)))
+	s.mux.HandleFunc("/v1/drift/series-points/", s.requireAuth(driftRoleGate(s.handleDriftSeriesPointsPrefix)))
+	s.mux.HandleFunc("/v1/drift/observations/", s.requireAuth(driftRoleGate(s.handleDriftObservationsPrefix)))
+	s.mux.HandleFunc("/v1/drift/annotations/", s.requireAuth(driftRoleGate(s.handleDriftAnnotationsPrefix)))
+	s.mux.HandleFunc("/v1/drift/entities/", s.requireAuth(driftRoleGate(s.handleDriftEntitiesPrefix)))
+
+	// FailModePolicy read endpoints (D29d). Single prefix dispatcher
+	// covers three GET routes ({id}, /versions, /versions/{version}).
+	// Same viewer/operator/admin posture as the rest of the read
+	// surface and Drift-1d. The mutating lifecycle handler at
+	// /v1/controlplane/fail_mode_policies/ is unaffected — Go's
+	// ServeMux picks the longest matching prefix.
+	s.mux.HandleFunc("/v1/fail_mode_policies/", s.requireAuth(s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)(s.handleFailModePoliciesPrefix)))
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -4054,6 +4130,21 @@ func mapApprovalError(err error) (int, map[string]string) {
 		return http.StatusConflict, map[string]string{"error": err.Error()}
 	case errors.Is(err, approval.ErrFailModePolicyNotActive):
 		return http.StatusConflict, map[string]string{"error": err.Error()}
+	// DriftDefinition lifecycle sentinels (Drift-1e).
+	case errors.Is(err, approval.ErrDriftDefinitionNotFound):
+		return http.StatusNotFound, map[string]string{"error": "drift definition not found"}
+	case errors.Is(err, approval.ErrDriftDefinitionNotInDraft):
+		return http.StatusConflict, map[string]string{"error": err.Error()}
+	case errors.Is(err, approval.ErrDriftDefinitionNotInReview):
+		return http.StatusConflict, map[string]string{"error": err.Error()}
+	case errors.Is(err, approval.ErrDriftDefinitionNotActive):
+		return http.StatusConflict, map[string]string{"error": err.Error()}
+	case errors.Is(err, approval.ErrDriftDefinitionAlreadyRetired):
+		return http.StatusConflict, map[string]string{"error": err.Error()}
+	case errors.Is(err, approval.ErrDriftDefinitionInvalidTransition):
+		return http.StatusConflict, map[string]string{"error": err.Error()}
+	case errors.Is(err, approval.ErrDriftDefinitionMakerChecker):
+		return http.StatusForbidden, map[string]string{"error": err.Error()}
 	default:
 		return http.StatusInternalServerError, map[string]string{"error": err.Error()}
 	}

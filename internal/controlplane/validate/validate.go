@@ -8,6 +8,7 @@ import (
 
 	"github.com/accept-io/midas/internal/controlplane/parser"
 	"github.com/accept-io/midas/internal/controlplane/types"
+	"github.com/accept-io/midas/internal/drift"
 	"github.com/accept-io/midas/internal/failmode"
 )
 
@@ -112,6 +113,8 @@ func ValidateDocument(doc parser.ParsedDocument) []types.ValidationError {
 		errs = append(errs, validateAISystemBinding(d)...)
 	case types.FailModePolicyDocument:
 		errs = append(errs, validateFailModePolicy(d)...)
+	case types.DriftDefinitionDocument:
+		errs = append(errs, validateDriftDefinition(d)...)
 	default:
 		errs = append(errs, types.ValidationError{
 			Kind:    doc.Kind,
@@ -1195,6 +1198,8 @@ func validateFailModePolicyRules(doc types.FailModePolicyDocument) []types.Valid
 		rules = append(rules, failmode.FailModePolicyRule{
 			CorrectnessClass: failmode.CorrectnessClass(strings.TrimSpace(r.CorrectnessClass)),
 			PermittedMode:    failmode.PermittedMode(strings.TrimSpace(r.PermittedMode)),
+			EnforcementState: failmode.EnforcementState(strings.TrimSpace(r.EnforcementState)),
+			Outcome:          failmode.Outcome(strings.TrimSpace(r.Outcome)),
 			Reason:           strings.TrimSpace(r.Reason),
 		})
 	}
@@ -1238,13 +1243,22 @@ func validateFailModePolicyRules(doc types.FailModePolicyDocument) []types.Valid
 // value). The rule errors are the only ones that should be surfaced into
 // the control-plane validator output, since metadata/owner/timestamp errors
 // are independently checked at the document level.
+//
+// D29b broadened the rule-error vocabulary to cover the three-axis matrix:
+// EnforcementState, Outcome, and the cross-axis "not permitted for
+// PermittedMode … under EnforcementState …" message. The closed-only
+// "not admitted" wording is retained as a substring match for any
+// historic error path that still uses it.
 func isFailModeRuleError(msg string) bool {
 	switch {
 	case strings.Contains(msg, "rule"),
 		strings.Contains(msg, "rules"),
 		strings.Contains(msg, "CorrectnessClass"),
 		strings.Contains(msg, "PermittedMode"),
-		strings.Contains(msg, "not admitted"):
+		strings.Contains(msg, "EnforcementState"),
+		strings.Contains(msg, "Outcome"),
+		strings.Contains(msg, "not admitted"),
+		strings.Contains(msg, "not permitted"):
 		return true
 	}
 	return false
@@ -1282,6 +1296,242 @@ func contains(slice []string, value string) bool {
 		if v == value {
 			return true
 		}
+	}
+	return false
+}
+
+// ---------------------------------------------------------------------------
+// DriftDefinition (Drift-1c)
+// ---------------------------------------------------------------------------
+
+// ValidDriftDefinitionStatuses mirrors the 5-element DriftDefinitionStatus
+// enum in internal/drift. Apply forces 'review' regardless of what the
+// document declares; this list is used only for shape validation of an
+// explicitly-supplied lifecycle.status field. Mirrors
+// ValidFailModePolicyStatuses posture.
+var ValidDriftDefinitionStatuses = []string{"draft", "review", "active", "deprecated", "retired"}
+
+// ValidDriftDefinitionOrigins mirrors the chk_drift_def_origin schema
+// CHECK in internal/store/postgres/schema.sql.
+var ValidDriftDefinitionOrigins = []string{"manual", "inferred", "auto_instrumented"}
+
+// ValidDriftTargetEntityKinds mirrors the chk_drift_def_target_entity_kind
+// CHECK. Drift-1a's TargetEntityKind enum has exactly these nine values.
+var ValidDriftTargetEntityKinds = []string{
+	"business_service", "capability", "process",
+	"decision_surface", "ai_system", "ai_system_binding",
+	"agent", "authority_profile", "authority_grant",
+}
+
+// validateDriftDefinition validates a DriftDefinition document. It performs
+// document-shape checks and then reuses internal/drift.Validate via a
+// synthetic-domain strategy so the document validator and the domain
+// validator share the same V1 invariants — including the explicit
+// rejection of population/data/prediction/performance/concept drift types
+// and the rejection of champion_challenger / seasonality_aware baseline
+// strategies.
+//
+// Persisted status is always "review"; an explicit lifecycle.status in
+// the document is accepted (when one of the canonical values) but does
+// not influence persistence.
+func validateDriftDefinition(doc types.DriftDefinitionDocument) []types.ValidationError {
+	var errs []types.ValidationError
+
+	if len(doc.Metadata.Name) > MaxNameLength {
+		errs = append(errs, fieldErr(doc, "metadata.name",
+			fmt.Sprintf("exceeds maximum length of %d characters", MaxNameLength)))
+	}
+
+	specName := strings.TrimSpace(doc.Spec.Name)
+	if specName == "" {
+		errs = append(errs, requiredFieldErr(doc, "spec.name"))
+	} else if len(doc.Spec.Name) > MaxNameLength {
+		errs = append(errs, fieldErr(doc, "spec.name",
+			fmt.Sprintf("exceeds maximum length of %d characters", MaxNameLength)))
+	}
+
+	if strings.TrimSpace(doc.Spec.BusinessOwner) == "" {
+		errs = append(errs, requiredFieldErr(doc, "spec.business_owner"))
+	} else if len(doc.Spec.BusinessOwner) > MaxFieldLength {
+		errs = append(errs, fieldErr(doc, "spec.business_owner",
+			fmt.Sprintf("exceeds maximum length of %d characters", MaxFieldLength)))
+	}
+
+	if strings.TrimSpace(doc.Spec.TechnicalOwner) == "" {
+		errs = append(errs, requiredFieldErr(doc, "spec.technical_owner"))
+	} else if len(doc.Spec.TechnicalOwner) > MaxFieldLength {
+		errs = append(errs, fieldErr(doc, "spec.technical_owner",
+			fmt.Sprintf("exceeds maximum length of %d characters", MaxFieldLength)))
+	}
+
+	if len(doc.Spec.Description) > MaxFieldLength {
+		errs = append(errs, fieldErr(doc, "spec.description",
+			fmt.Sprintf("exceeds maximum length of %d characters", MaxFieldLength)))
+	}
+
+	if origin := strings.TrimSpace(doc.Spec.Origin); origin != "" {
+		if !contains(ValidDriftDefinitionOrigins, origin) {
+			errs = append(errs, enumErr(doc, "spec.origin", origin, ValidDriftDefinitionOrigins))
+		}
+	}
+
+	if replaces := strings.TrimSpace(doc.Spec.Replaces); replaces != "" {
+		if replaces == strings.TrimSpace(doc.Metadata.ID) {
+			errs = append(errs, fieldErr(doc, "spec.replaces",
+				"must not equal metadata.id (no self-reference)"))
+		}
+	}
+
+	// spec.target — discriminated reference. Both fields required;
+	// kind must be one of the nine V1 entity kinds.
+	targetKind := strings.TrimSpace(doc.Spec.Target.Kind)
+	targetID := strings.TrimSpace(doc.Spec.Target.ID)
+	if targetKind == "" {
+		errs = append(errs, requiredFieldErr(doc, "spec.target.kind"))
+	} else if !contains(ValidDriftTargetEntityKinds, targetKind) {
+		errs = append(errs, enumErr(doc, "spec.target.kind", targetKind, ValidDriftTargetEntityKinds))
+	}
+	if targetID == "" {
+		errs = append(errs, requiredFieldErr(doc, "spec.target.id"))
+	}
+
+	// spec.metrics — closed V1 invariants. Delegate to drift.Validate
+	// via the synthetic-domain strategy so the validator and the domain
+	// stay in sync. Metric-shape errors are surfaced under spec.metrics.
+	errs = append(errs, validateDriftDefinitionMetrics(doc)...)
+
+	// lifecycle.status: optional shape check; apply forces 'review'.
+	if status := strings.TrimSpace(doc.Lifecycle.Status); status != "" {
+		if !contains(ValidDriftDefinitionStatuses, status) {
+			errs = append(errs, enumErr(doc, "lifecycle.status", status, ValidDriftDefinitionStatuses))
+		}
+	}
+
+	// lifecycle dates: RFC3339 strings; if both present, until > from.
+	var effectiveFrom, effectiveUntil time.Time
+	var effectiveFromOK, effectiveUntilOK bool
+
+	if s := strings.TrimSpace(doc.Lifecycle.EffectiveFrom); s != "" {
+		parsed, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			errs = append(errs, fieldErr(doc, "lifecycle.effective_from",
+				"must be a valid RFC3339 timestamp"))
+		} else {
+			effectiveFrom = parsed
+			effectiveFromOK = true
+		}
+	}
+
+	if s := strings.TrimSpace(doc.Lifecycle.EffectiveUntil); s != "" {
+		parsed, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			errs = append(errs, fieldErr(doc, "lifecycle.effective_until",
+				"must be a valid RFC3339 timestamp"))
+		} else {
+			effectiveUntil = parsed
+			effectiveUntilOK = true
+		}
+	}
+
+	if effectiveFromOK && effectiveUntilOK && !effectiveUntil.After(effectiveFrom) {
+		errs = append(errs, fieldErr(doc, "lifecycle.effective_until",
+			"must be after lifecycle.effective_from"))
+	}
+
+	// lifecycle.version: optional; informational. Negative values are an
+	// obvious operator mistake — reject them. Zero is treated as
+	// "unspecified" (yaml.v3 cannot distinguish from omitempty). The
+	// planner is authoritative on the persisted version; mirroring
+	// FailModePolicy posture.
+	if doc.Lifecycle.Version < 0 {
+		errs = append(errs, fieldErr(doc, "lifecycle.version",
+			"must be ≥ 0 (informational; planner authors persisted version)"))
+	}
+
+	return errs
+}
+
+// validateDriftDefinitionMetrics constructs a synthetic
+// drift.DriftDefinition populated with the document's metric set and
+// runs drift.Validate so the document validator and the domain
+// validator share the V1 invariants — including the explicit
+// rejection of V2-deferred drift types and baseline strategies, the
+// no-duplicate-metric-id check, the threshold-band coherence check,
+// and the at-least-one-metric check.
+//
+// Errors emitted by drift.Validate that originate in placeholder
+// metadata fields are filtered out so only metric-shape errors reach
+// the document validator output.
+func validateDriftDefinitionMetrics(doc types.DriftDefinitionDocument) []types.ValidationError {
+	metrics := make([]drift.DriftMetricDefinition, 0, len(doc.Spec.Metrics))
+	for _, m := range doc.Spec.Metrics {
+		metrics = append(metrics, drift.DriftMetricDefinition{
+			MetricID:                 strings.TrimSpace(m.MetricID),
+			DriftType:                drift.DriftType(strings.TrimSpace(m.DriftType)),
+			BaselineStrategy:         drift.BaselineStrategy(strings.TrimSpace(m.BaselineStrategy)),
+			BaselineWindowSeconds:    m.BaselineWindowSeconds,
+			WindowSeconds:            m.WindowSeconds,
+			Cadence:                  drift.Cadence(strings.TrimSpace(m.Cadence)),
+			WarningThreshold:         m.WarningThreshold,
+			BreachedThreshold:        m.BreachedThreshold,
+			ThresholdDirection:       drift.ThresholdDirection(strings.TrimSpace(m.ThresholdDirection)),
+			GovernanceExpectationRef: strings.TrimSpace(m.GovernanceExpectationRef),
+			GovernanceExpectationVer: m.GovernanceExpectationVer,
+			Description:              strings.TrimSpace(m.Description),
+		})
+	}
+
+	now := time.Now()
+	synthetic := &drift.DriftDefinition{
+		ID:               "x",
+		Version:          1,
+		Name:             "x",
+		Status:           drift.DriftDefinitionStatusReview,
+		EffectiveDate:    now,
+		BusinessOwner:    "x",
+		TechnicalOwner:   "x",
+		TargetEntityKind: drift.TargetEntityKindDecisionSurface,
+		TargetEntityID:   "x",
+		Origin:           drift.DriftOriginManual,
+		Managed:          true,
+		Metrics:          metrics,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+		CreatedBy:        "x",
+	}
+	domainErrs := drift.Validate(synthetic)
+
+	var errs []types.ValidationError
+	for _, e := range domainErrs {
+		msg := e.Error()
+		if isDriftMetricError(msg) {
+			errs = append(errs, fieldErr(doc, "spec.metrics", msg))
+		}
+	}
+	return errs
+}
+
+// isDriftMetricError reports whether a drift.Validate error message is
+// metric-related. The placeholder-field errors (metadata, owner,
+// target_entity_*) are independently checked at the document layer
+// and are filtered out here so only metric-shape errors reach the
+// document validator output.
+func isDriftMetricError(msg string) bool {
+	switch {
+	case strings.Contains(msg, "Metrics"),
+		strings.Contains(msg, "MetricID"),
+		strings.Contains(msg, "DriftType"),
+		strings.Contains(msg, "BaselineStrategy"),
+		strings.Contains(msg, "WindowSeconds"),
+		strings.Contains(msg, "BaselineWindowSeconds"),
+		strings.Contains(msg, "Cadence"),
+		strings.Contains(msg, "ThresholdDirection"),
+		strings.Contains(msg, "GovernanceExpectationVer"),
+		strings.Contains(msg, "duplicate MetricID"),
+		strings.Contains(msg, "deferred to V2"),
+		strings.Contains(msg, "not admitted by Drift-1a"),
+		strings.Contains(msg, "at least one"):
+		return true
 	}
 	return false
 }

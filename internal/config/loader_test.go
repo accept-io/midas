@@ -496,6 +496,74 @@ func TestLoad_StructuralModeFromEnv(t *testing.T) {
 	}
 }
 
+// TestLoad_FailModeDeploymentDefaultDefaultIsEmpty verifies that
+// fail_mode.deployment_default_policy_id defaults to empty (D29d) so
+// pre-D29d behaviour is preserved unless the operator opts in.
+func TestLoad_FailModeDeploymentDefaultDefaultIsEmpty(t *testing.T) {
+	result, err := Load(LoadOptions{
+		SearchPaths: noDiscovery,
+		EnvOverride: env(),
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if result.Config.FailMode.DeploymentDefaultPolicyID != "" {
+		t.Errorf("fail_mode.deployment_default_policy_id: want empty (default), got %q",
+			result.Config.FailMode.DeploymentDefaultPolicyID)
+	}
+	if result.Sources["fail_mode"] != SourceDefault {
+		t.Errorf("fail_mode source: want default, got %s", result.Sources["fail_mode"])
+	}
+}
+
+// TestLoad_FailModeDeploymentDefaultFromEnv verifies that
+// MIDAS_FAIL_MODE_DEPLOYMENT_DEFAULT_POLICY_ID overrides the default.
+func TestLoad_FailModeDeploymentDefaultFromEnv(t *testing.T) {
+	result, err := Load(LoadOptions{
+		SearchPaths: noDiscovery,
+		EnvOverride: env("MIDAS_FAIL_MODE_DEPLOYMENT_DEFAULT_POLICY_ID", "fmp-cluster-default"),
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if result.Config.FailMode.DeploymentDefaultPolicyID != "fmp-cluster-default" {
+		t.Errorf("fail_mode.deployment_default_policy_id: want %q (env override), got %q",
+			"fmp-cluster-default", result.Config.FailMode.DeploymentDefaultPolicyID)
+	}
+	if result.Sources["fail_mode"] != SourceEnv {
+		t.Errorf("fail_mode source: want env, got %s", result.Sources["fail_mode"])
+	}
+}
+
+// TestLoad_FailModeDeploymentDefaultFromYAML verifies the value parses
+// from a YAML config file.
+func TestLoad_FailModeDeploymentDefaultFromYAML(t *testing.T) {
+	cfgPath := writeConfig(t, `
+version: 1
+profile: dev
+store:
+  backend: memory
+auth:
+  mode: open
+fail_mode:
+  deployment_default_policy_id: fmp-yaml-default
+`)
+	result, err := Load(LoadOptions{
+		ConfigFile:  cfgPath,
+		EnvOverride: env(),
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if result.Config.FailMode.DeploymentDefaultPolicyID != "fmp-yaml-default" {
+		t.Errorf("fail_mode.deployment_default_policy_id: want %q (from YAML), got %q",
+			"fmp-yaml-default", result.Config.FailMode.DeploymentDefaultPolicyID)
+	}
+	if result.Sources["fail_mode"] != SourceFile {
+		t.Errorf("fail_mode source: want file, got %s", result.Sources["fail_mode"])
+	}
+}
+
 // TestLoad_StructuralModeFromYAML verifies that structural.mode is parsed from a YAML config file.
 func TestLoad_StructuralModeFromYAML(t *testing.T) {
 	cfgPath := writeConfig(t, `
@@ -1108,5 +1176,224 @@ func TestLoad_MIDAS_DEV_SEED_DEMO_USER_DefaultTrue(t *testing.T) {
 	}
 	if !result.Config.Dev.SeedDemoUser {
 		t.Error("dev.seed_demo_user: want true by default, got false")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Drift-2a-fix — SeedSyntheticDrift effective-value precedence
+//
+// Tri-state pointer field semantics:
+//   - SeedSyntheticDrift==nil → inherit from SeedDemoData
+//   - SeedSyntheticDrift==&v  → use *v verbatim (env or YAML explicit)
+//
+// Env precedence over YAML is preserved from the existing loader
+// behaviour; assertions are on EffectiveSeedSyntheticDrift() (the
+// helper that resolves the decision), not on Sources (the per-section
+// attribution does not gain a new entry for derived values).
+// ---------------------------------------------------------------------------
+
+func TestLoad_SyntheticDrift_DefaultsInheritFromSeedDemoData(t *testing.T) {
+	// Pure defaults — demo data on (default), synthetic drift unset
+	// (default nil). EffectiveSeedSyntheticDrift should follow
+	// SeedDemoData.
+	result, err := Load(LoadOptions{
+		SearchPaths: noDiscovery,
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if !result.Config.Dev.SeedDemoData {
+		t.Fatal("precondition: default dev.seed_demo_data must be true")
+	}
+	if result.Config.Dev.SeedSyntheticDrift != nil {
+		t.Errorf("dev.seed_synthetic_drift: want nil (unset) by default, got non-nil (%v)",
+			*result.Config.Dev.SeedSyntheticDrift)
+	}
+	if !result.Config.Dev.EffectiveSeedSyntheticDrift() {
+		t.Error("EffectiveSeedSyntheticDrift(): want true under defaults (inherits seed_demo_data=true), got false")
+	}
+}
+
+func TestLoad_SyntheticDrift_DemoOn_ExplicitEnvFalse_SuppressesDrift(t *testing.T) {
+	// Demo data on (default), env explicitly disables synthetic drift.
+	// The explicit operator opt-out must win over the inheritance.
+	result, err := Load(LoadOptions{
+		SearchPaths: noDiscovery,
+		EnvOverride: env(
+			"MIDAS_DEV_SEED_DEMO_DATA", "true",
+			"MIDAS_DEV_SEED_SYNTHETIC_DRIFT", "false",
+		),
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if result.Config.Dev.SeedSyntheticDrift == nil {
+		t.Fatal("dev.seed_synthetic_drift: want non-nil pointer after explicit env, got nil")
+	}
+	if *result.Config.Dev.SeedSyntheticDrift != false {
+		t.Errorf("dev.seed_synthetic_drift: want explicit false, got *ptr=%v",
+			*result.Config.Dev.SeedSyntheticDrift)
+	}
+	if result.Config.Dev.EffectiveSeedSyntheticDrift() {
+		t.Error("EffectiveSeedSyntheticDrift(): explicit env false must suppress synthetic drift even with demo on")
+	}
+}
+
+func TestLoad_SyntheticDrift_DemoOff_ExplicitEnvTrue_SeedsAnyway(t *testing.T) {
+	// Demo data off, env explicitly enables synthetic drift. The
+	// effective decision honours the explicit opt-in; the caller
+	// (cmd/midas/main.go) is responsible for the no-demo-data
+	// warning.
+	result, err := Load(LoadOptions{
+		SearchPaths: noDiscovery,
+		EnvOverride: env(
+			"MIDAS_DEV_SEED_DEMO_DATA", "false",
+			"MIDAS_DEV_SEED_SYNTHETIC_DRIFT", "true",
+		),
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if result.Config.Dev.SeedDemoData {
+		t.Fatal("precondition: env MIDAS_DEV_SEED_DEMO_DATA=false must turn demo off")
+	}
+	if result.Config.Dev.SeedSyntheticDrift == nil {
+		t.Fatal("dev.seed_synthetic_drift: want non-nil pointer after explicit env true, got nil")
+	}
+	if *result.Config.Dev.SeedSyntheticDrift != true {
+		t.Errorf("dev.seed_synthetic_drift: want explicit true, got *ptr=%v",
+			*result.Config.Dev.SeedSyntheticDrift)
+	}
+	if !result.Config.Dev.EffectiveSeedSyntheticDrift() {
+		t.Error("EffectiveSeedSyntheticDrift(): explicit env true must seed synthetic drift even with demo off")
+	}
+}
+
+func TestLoad_SyntheticDrift_DemoOff_UnsetInheritsFalse(t *testing.T) {
+	// Demo off, synthetic-drift env unset. Effective must be false —
+	// inheritance carries through.
+	result, err := Load(LoadOptions{
+		SearchPaths: noDiscovery,
+		EnvOverride: env("MIDAS_DEV_SEED_DEMO_DATA", "false"),
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if result.Config.Dev.SeedSyntheticDrift != nil {
+		t.Errorf("dev.seed_synthetic_drift: want nil when env unset, got non-nil (%v)",
+			*result.Config.Dev.SeedSyntheticDrift)
+	}
+	if result.Config.Dev.EffectiveSeedSyntheticDrift() {
+		t.Error("EffectiveSeedSyntheticDrift(): demo off + synthetic unset must be false")
+	}
+}
+
+func TestLoad_SyntheticDrift_YAMLExplicitFalse_SuppressesDrift(t *testing.T) {
+	// YAML explicitly sets seed_synthetic_drift: false while leaving
+	// seed_demo_data at the default. The explicit YAML opt-out must
+	// be honoured (the *bool field decodes to a non-nil pointer).
+	cfgPath := writeConfig(t, `version: 1
+dev:
+  seed_demo_data: true
+  seed_synthetic_drift: false
+`)
+	result, err := Load(LoadOptions{
+		ConfigFile:  cfgPath,
+		EnvOverride: env(),
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if result.Config.Dev.SeedSyntheticDrift == nil {
+		t.Fatal("dev.seed_synthetic_drift: YAML explicit false must produce a non-nil pointer, got nil")
+	}
+	if *result.Config.Dev.SeedSyntheticDrift != false {
+		t.Errorf("dev.seed_synthetic_drift: want explicit false from YAML, got *ptr=%v",
+			*result.Config.Dev.SeedSyntheticDrift)
+	}
+	if result.Config.Dev.EffectiveSeedSyntheticDrift() {
+		t.Error("EffectiveSeedSyntheticDrift(): YAML explicit false must suppress synthetic drift even with demo on")
+	}
+}
+
+func TestLoad_SyntheticDrift_YAMLTrue_EnvFalse_EnvWins(t *testing.T) {
+	// Layered: YAML opts in, env opts out. Env precedence is part of
+	// the loader contract; the env-explicit false wins and effective
+	// is false.
+	cfgPath := writeConfig(t, `version: 1
+dev:
+  seed_demo_data: true
+  seed_synthetic_drift: true
+`)
+	result, err := Load(LoadOptions{
+		ConfigFile:  cfgPath,
+		EnvOverride: env("MIDAS_DEV_SEED_SYNTHETIC_DRIFT", "false"),
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if result.Config.Dev.SeedSyntheticDrift == nil {
+		t.Fatal("dev.seed_synthetic_drift: env override must keep the pointer non-nil")
+	}
+	if *result.Config.Dev.SeedSyntheticDrift != false {
+		t.Errorf("dev.seed_synthetic_drift: env false must override YAML true, got *ptr=%v",
+			*result.Config.Dev.SeedSyntheticDrift)
+	}
+	if result.Config.Dev.EffectiveSeedSyntheticDrift() {
+		t.Error("EffectiveSeedSyntheticDrift(): env opt-out must win over YAML opt-in")
+	}
+}
+
+func TestLoad_SyntheticDrift_YAMLOmitted_InheritsSeedDemoData(t *testing.T) {
+	// YAML provides seed_demo_data but OMITS seed_synthetic_drift.
+	// The pointer must stay nil and the effective value must follow
+	// seed_demo_data — this is the "demo on by default seeds synthetic
+	// drift" path that motivated Drift-2a-fix.
+	cfgPath := writeConfig(t, `version: 1
+dev:
+  seed_demo_data: true
+`)
+	result, err := Load(LoadOptions{
+		ConfigFile:  cfgPath,
+		EnvOverride: env(),
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if result.Config.Dev.SeedSyntheticDrift != nil {
+		t.Errorf("dev.seed_synthetic_drift: YAML omitted must leave pointer nil, got non-nil (%v)",
+			*result.Config.Dev.SeedSyntheticDrift)
+	}
+	if !result.Config.Dev.EffectiveSeedSyntheticDrift() {
+		t.Error("EffectiveSeedSyntheticDrift(): YAML omitted + seed_demo_data=true must inherit true")
+	}
+}
+
+func TestDevConfig_EffectiveSeedSyntheticDrift_UnitMatrix(t *testing.T) {
+	// Direct unit-level matrix on the helper. Decouples the
+	// precedence rule from the loader so a future refactor of either
+	// side fails the right test.
+	ptrTrue := true
+	ptrFalse := false
+	cases := []struct {
+		name     string
+		demoData bool
+		ptr      *bool
+		want     bool
+	}{
+		{"nil pointer, demo on  → effective true", true, nil, true},
+		{"nil pointer, demo off → effective false", false, nil, false},
+		{"explicit true,  demo on  → effective true", true, &ptrTrue, true},
+		{"explicit true,  demo off → effective true", false, &ptrTrue, true},
+		{"explicit false, demo on  → effective false", true, &ptrFalse, false},
+		{"explicit false, demo off → effective false", false, &ptrFalse, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := DevConfig{SeedDemoData: tc.demoData, SeedSyntheticDrift: tc.ptr}
+			if got := d.EffectiveSeedSyntheticDrift(); got != tc.want {
+				t.Errorf("EffectiveSeedSyntheticDrift(): want %v, got %v", tc.want, got)
+			}
+		})
 	}
 }

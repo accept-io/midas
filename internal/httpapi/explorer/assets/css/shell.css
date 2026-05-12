@@ -1,0 +1,649 @@
+  /* ──────────────────────────────────────────────────────────────────────
+     Shell — sidebar + header + main + footer
+     ────────────────────────────────────────────────────────────────────── */
+
+  .shell-sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    height: 100vh;
+    width: var(--sidebar-width);
+    background: var(--slate-900);
+    border-right: 1px solid rgba(255,255,255,0.05);
+    display: flex;
+    flex-direction: column;
+    z-index: 40;
+    font-family: var(--font-display);
+  }
+  .shell-brand {
+    padding: 24px 24px 16px;
+  }
+  .shell-brand-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .shell-brand-title {
+    color: var(--primary);
+    font-size: 20px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    color: #ffffff;
+  }
+  .shell-subtitle {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: var(--slate-500);
+    margin-top: 4px;
+    white-space: nowrap;       /* "Decision Authority Workbench" stays on one line */
+  }
+  .shell-control-plane-card {
+    margin-top: 16px;
+    padding: 8px 12px;
+    background: var(--surface-container-low);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .shell-control-plane-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    background: var(--primary-container);
+    color: var(--on-primary-container);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 700;
+  }
+  .shell-control-plane-text {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.25;
+  }
+  .shell-control-plane-name {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--slate-200);
+  }
+  .shell-control-plane-version {
+    font-size: 10px;
+    color: var(--slate-500);
+    font-family: var(--font-mono);
+  }
+
+  /* MIDAS logo: four equal white bars; bars 2 & 3 translated down 2px */
+  .midas-logo-mark {
+    height: 24px;
+    display: inline-flex;
+    align-items: flex-start;
+    gap: 4px;
+  }
+  .midas-logo-mark span {
+    width: 5px;
+    height: 20px;
+    background: #ffffff;
+    border-radius: 1px;
+    display: block;
+  }
+  .midas-logo-mark span:nth-child(2),
+  .midas-logo-mark span:nth-child(3) {
+    transform: translateY(2px);
+  }
+
+  .shell-nav {
+    flex: 1;
+    padding: 0 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    overflow-y: auto;
+  }
+  .shell-nav-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 11px 16px;
+    color: var(--slate-400);
+    text-decoration: none;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    border-right: 2px solid transparent;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+    background: transparent;
+    border-top: none;
+    border-bottom: none;
+    border-left: none;
+    width: 100%;
+    text-align: left;
+    font-family: inherit;
+  }
+  .shell-nav-item:hover {
+    background: rgba(30,41,59,0.4);
+    color: var(--slate-200);
+  }
+  .shell-nav-item.active {
+    background: rgba(59,130,246,0.10);
+    color: #3b82f6;
+    border-right-color: #3b82f6;
+  }
+  .shell-nav-glyph {
+    display: inline-block;
+    width: 18px;
+    text-align: center;
+    font-size: 14px;
+    line-height: 1;
+    color: inherit;
+  }
+
+  .shell-sidebar-footer {
+    padding: 18px 24px;
+    border-top: 1px solid rgba(255,255,255,0.05);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    color: var(--secondary);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .shell-sidebar-footer .pulse {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--secondary);
+    animation: midas-pulse 2s ease-in-out infinite;
+  }
+  @keyframes midas-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.4; }
+  }
+
+  /* ──────────────────────────────────────────────────────────────────────
+     Collapsible sidebar
+     ────────────────────────────────────────────────────────────────────── */
+
+  /* The toggle button lives at the foot of the .shell-brand block so it
+     sits below the brand text in expanded mode and below the bare logo
+     in collapsed mode. Right-aligned when expanded; centre-aligned when
+     collapsed (the brand row no longer carries text in collapsed state). */
+  .shell-sidebar-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 22px;
+    margin-top: 12px;
+    margin-left: auto;
+    background: var(--surface-container-low);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 4px;
+    color: var(--slate-400);
+    cursor: pointer;
+    font-family: inherit;
+    padding: 0;
+    font-size: 14px;
+    line-height: 1;
+  }
+  .shell-sidebar-toggle:hover {
+    background: var(--surface-container);
+    color: var(--on-surface);
+  }
+  .shell-sidebar-toggle:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 1px;
+  }
+
+  /* Smooth transition so the layout shift looks intentional rather than
+     a jump-cut. Width / margin-left / left are the four properties that
+     read --sidebar-width via var() and animate when the variable flips.
+     Phase 2B Step 31 (D24e) — also transition right / margin-right so
+     the inspector-rail collapse + gmap-mode entry/exit animate
+     symmetrically with the sidebar's. */
+  .shell-sidebar { transition: width 0.18s ease-out; }
+  .shell-header  { transition: left 0.18s ease-out, right 0.18s ease-out; }
+  .shell-footer  { transition: left 0.18s ease-out, right 0.18s ease-out; }
+  .shell-main    { transition: margin-left 0.18s ease-out, margin-right 0.18s ease-out; }
+
+  /* Collapsed-state activation. Setting the class on <body> overrides
+     the :root --sidebar-width so all four shell elements (sidebar,
+     header, main, footer) shrink in lockstep. Header chips, the
+     execution-mode toggle, and the rest of the workbench are unaffected
+     because they sit INSIDE .shell-main, which simply gains extra
+     horizontal room when the variable shrinks. */
+  body.sidebar-collapsed { --sidebar-width: 56px; }
+
+  /* Phase 2B Step 31 (D24e) — inspector rail promoted to a top-level
+     pane (sibling of .shell-sidebar). Setting the class on <body>
+     overrides --inspector-width so the inspector rail and the three
+     shell elements that reserve horizontal space for it (.shell-header
+     right inset, .shell-footer right inset, .shell-main margin-right)
+     all shrink in lockstep. Mirror of the body.sidebar-collapsed
+     pattern; same single source of truth (a CSS variable) drives every
+     dependent rule. */
+  body.inspector-collapsed { --inspector-width: 56px; }
+
+  /* Phase 2B Step 31 (D24e) — graph workspace mode. Toggled on <body>
+     by setServicesSubView whenever servicesSubView === 'map'. Three
+     shell elements (header, footer, main) reserve horizontal space for
+     the inspector rail ONLY in this mode; on every other view (services
+     catalogue / record, capabilities, evaluate, records, settings) the
+     header/footer extend full width and the main pane has no
+     margin-right, exactly as before D24e. The inspector rail itself is
+     hidden by default (display:none on #gmap-details) and revealed
+     here. */
+  body.gmap-mode .shell-header { right: var(--inspector-width); }
+  body.gmap-mode .shell-footer { right: var(--inspector-width); }
+  body.gmap-mode .shell-main   { margin-right: var(--inspector-width); }
+
+  /* D27j-ui-3a-refine-3d / refine-5 — collapsed-state shell
+     reservation matches the visible label column. The 3b tranche
+     made the rail itself transparent in collapsed state
+     (.governance-map-details background, #gmap-details border-
+     left), but the shell-level reservation above still inset the
+     chrome by --inspector-width (56px). The gap between the
+     handle-width tab strip and the 56px rail width exposed the
+     body / shell background as a visible dark vertical strip.
+     Reserving exactly the handle width in collapsed state aligns
+     the right-edge reservation with the label column so there is
+     no leftover background to expose. The expanded-state rules
+     above continue to consume var(--inspector-width) (320px)
+     unchanged. The collapsed --inspector-width itself stays at
+     56px so #gmap-details (which still consumes the variable for
+     its width) keeps a 56px hit-box — only the shell reservation
+     is narrowed to the handle width. The 5 tranche replaced the
+     literal 32px with var(--gmap-right-rail-handle-width) so the
+     reservation tracks the token (currently 28px). */
+  body.gmap-mode.inspector-collapsed .shell-header { right: var(--gmap-right-rail-handle-width); }
+  body.gmap-mode.inspector-collapsed .shell-footer { right: var(--gmap-right-rail-handle-width); }
+  body.gmap-mode.inspector-collapsed .shell-main   { margin-right: var(--gmap-right-rail-handle-width); }
+
+  /* Phase 2B Step 24 — graph focus mode (D21).
+     A workspace-level CSS class on <body> that aggressively
+     compresses non-essential chrome so the canvas claims ~95% of a
+     1920x1080 viewport. The renderer is unaware: applyGmapFocusMode
+     never calls focusGmapOnRoot / fitGmapToBounds / setGmapZoom.
+     Camera helpers read scrollEl.clientWidth/Height at fire time,
+     so the next operator-triggered camera action naturally adapts.
+     Sidebar + inspector collapse are driven imperatively by
+     applyGmapFocusMode (it calls setSidebarCollapsed and flips
+     gmapInspectorCollapsed) so prior states can be restored on
+     exit. */
+  body.gmap-focus-mode .shell-header,
+  body.gmap-focus-mode .shell-footer,
+  body.gmap-focus-mode .services-map-view-header,
+  body.gmap-focus-mode .services-mode-toolbar {
+    display: none;
+  }
+  body.gmap-focus-mode .shell-main {
+    margin-top: 0;
+    margin-bottom: 0;
+    min-height: 100vh;
+  }
+  body.gmap-focus-mode .services-view {
+    padding: 0;
+  }
+  body.gmap-focus-mode .governance-map-workbench {
+    height: 100vh;
+    border: none;
+    border-radius: 0;
+  }
+  body.gmap-focus-mode .governance-map-toolbar {
+    padding: 6px 12px;
+  }
+  /* Phase 2B Step 26 (D23) — graph canvas purity in focus mode.
+     The base .governance-map-canvas carries a border-bottom that
+     looks like a card divider in focus mode (where the workbench
+     border itself is removed). Drop it so the canvas merges into
+     the workspace cleanly. */
+  body.gmap-focus-mode .governance-map-canvas {
+    border-bottom: none;
+  }
+  /* Phase 2B Step 26 (D23) — keep the legend visible in focus mode
+     but compress it. Connection key + filter chips both stay
+     reachable without re-introducing the full normal-mode block.
+     Smaller padding + font + gap. The legend's own border-bottom is
+     dropped so the canvas above it is not visually clipped. */
+  body.gmap-focus-mode .governance-map-legend {
+    padding: 4px 12px;
+    gap: 10px;
+    font-size: 10px;
+    border-bottom: none;
+  }
+  body.gmap-focus-mode .gmap-connection-key {
+    gap: 8px;
+  }
+  body.gmap-focus-mode .gmap-filter-chip {
+    padding: 1px 7px;
+    font-size: 10px;
+  }
+
+  /* Phase 2B Step 35 (D24i) — transient fit-mode scrollbar suppression.
+     After Fit Graph to View, the canvas-scroll wrapper's content can
+     overflow by a small amount (the empty left/top padding inside the
+     canvas — extent.width includes the EDGE_PAD-wide left margin from
+     canvas-x 0 to the first rendered node). Those scrollbars expose
+     only empty space, not graph content, which violates the brief's
+     no-scrollbar-after-Fit invariant. body.gmap-fit-mode hides the
+     scrollbars until the operator's first manual pan/zoom interaction
+     re-engages them for free navigation.
+     Manual exit points:
+       - wheel zoom
+       - +/- button zoom
+       - canvas pan (D24i Part 2)
+       - group drag (D24i Part 4)
+     Lasso selection does NOT exit fit-mode (selection is not
+     navigation). Fit re-entry restores fit-mode. */
+  body.gmap-fit-mode .governance-map-canvas-scroll {
+    overflow-x: hidden;
+    overflow-y: hidden;
+  }
+
+  /* Phase 2B Step 35 (D24i) — canvas pan affordance. Empty-canvas
+     drag pans the viewport. The grab cursor signals the affordance;
+     grabbing while pan is active mirrors common analytical-canvas UX. */
+  .governance-map-canvas-scroll {
+    cursor: grab;
+  }
+  body.gmap-canvas-panning .governance-map-canvas-scroll {
+    cursor: grabbing;
+    user-select: none;
+  }
+  body.gmap-canvas-lassoing .governance-map-canvas-scroll {
+    cursor: crosshair;
+    user-select: none;
+  }
+  /* Phase 2B Step 39 (D24i-fix3) — Select-mode cursor. When the
+     operator has chosen Select via the camera-bar mode toggle (and
+     no gesture is in flight), empty canvas shows the crosshair
+     cursor so the lasso affordance is visually obvious. Pan-mode
+     cursor stays `grab` (the .governance-map-canvas-scroll rule
+     above) and panning flips to `grabbing` mid-gesture. The two
+     active-gesture body classes (.gmap-canvas-panning,
+     .gmap-canvas-lassoing) win over the mode-cursor rule because
+     they're more specific selectors. */
+  body.gmap-mode-select .governance-map-canvas-scroll {
+    cursor: crosshair;
+  }
+  /* Override grab cursor on interactive children — node cards, the
+     camera bar, the legend, the search input, etc. Each has its own
+     cursor (pointer / text / default) that should win. */
+  .governance-map-canvas-scroll .gmap-node,
+  .governance-map-canvas-scroll button {
+    cursor: pointer;
+  }
+  .governance-map-canvas-scroll input,
+  .governance-map-canvas-scroll textarea {
+    cursor: text;
+  }
+
+  /* Phase 2B Step 35 (D24i) — lasso multi-selection visual + state.
+     The lasso rectangle is rendered as a child of the scene so it
+     scales with the graph's zoom transform and stays anchored in
+     scene coordinates while the user drags. .gmap-lasso-rect is
+     hidden by default and revealed by the lasso helper while a lasso
+     gesture is active. The .gmap-multi-selected class is applied to
+     every node in the gmapSelectedNodeIds set; it differs from the
+     existing single-primary .selected class so the inspector target
+     and the multi-selection set can co-exist. */
+  .gmap-lasso-rect {
+    position: absolute;
+    pointer-events: none;
+    background: rgba(78, 161, 255, 0.10);
+    border: 1px dashed var(--primary, #4ea1ff);
+    z-index: 4;
+    display: none;
+  }
+  .gmap-lasso-rect.is-active {
+    display: block;
+  }
+  /* Phase 2B Step 37 (D24i-fix) introduced a 2px ring + diffuse glow
+     so a multi-selected card was unmistakable against an unselected
+     graph. D27j-ui-theme-4d drops the diffuse second layer in favour
+     of a clean 2px ring — the ring alone is now adequate because the
+     surrounding nodes have lighter connector strokes (theme-4d
+     hierarchy refinement) and the technical-workbench direction
+     prefers no SaaS glow. The 2px ring still differentiates from
+     .gmap-node.selected (also a 2px ring, but on the inspector
+     target only) because lasso multi-selection and click-selection
+     are mutually distinct interaction modes. */
+  .gmap-node.gmap-multi-selected {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px var(--primary);
+  }
+
+  /* Hide decorative elements entirely in collapsed mode — they have no
+     accessible content to preserve. */
+  body.sidebar-collapsed .shell-subtitle,
+  body.sidebar-collapsed .shell-control-plane-card,
+  body.sidebar-collapsed .shell-sidebar-footer span:not(.pulse) {
+    display: none;
+  }
+
+  /* Visually hide elements whose text is the accessible name (brand
+     title; nav-item label spans). Standard visually-hidden technique
+     keeps screen-reader access while reclaiming visual space. */
+  body.sidebar-collapsed .shell-brand-title,
+  body.sidebar-collapsed .shell-nav-item > span:not(.shell-nav-glyph) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  /* Collapsed-mode padding + alignment: brand block tightens, brand row
+     centres the logo bars, nav items centre their glyph, footer centres
+     the pulse, sidebar toggle moves to centre. */
+  body.sidebar-collapsed .shell-brand        { padding: 14px 8px; }
+  body.sidebar-collapsed .shell-brand-row    { justify-content: center; gap: 0; }
+  body.sidebar-collapsed .shell-nav-item     { justify-content: center; padding: 11px 0; }
+  body.sidebar-collapsed .shell-sidebar-footer { padding: 18px 0; justify-content: center; }
+  body.sidebar-collapsed .shell-sidebar-toggle { margin-left: auto; margin-right: auto; }
+
+  .shell-header {
+    position: fixed;
+    top: 0;
+    left: var(--sidebar-width);
+    right: 0;
+    height: var(--header-height);
+    background: var(--slate-900);
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    /* Polish PR: three-zone grid keeps the centre cluster centred on
+       the canvas regardless of the right-zone width. The left zone is
+       intentionally empty (and aria-hidden in markup) — MIDAS branding
+       lives in the sidebar. */
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    padding: 0 24px;
+    z-index: 30;
+    font-family: var(--font-display);
+  }
+  .shell-header-left  { min-width: 0; }
+  .shell-header-center {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    justify-self: center;
+    min-width: 0;
+  }
+  .shell-header-chips {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: nowrap;
+    min-width: 0;
+  }
+  .shell-header-chip {
+    color: var(--slate-400);
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    white-space: nowrap;
+    padding: 4px 8px;
+    border-radius: 4px;
+    background: transparent;
+    border: 0;
+    font-family: inherit;
+  }
+  .shell-header-chip strong {
+    color: var(--on-surface);
+    font-weight: 600;
+  }
+  .shell-header-right {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    justify-self: end; /* right-align inside the header grid cell */
+  }
+  #iam-user-pill {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--slate-400);
+  }
+  #iam-user-pill.visible { display: flex; }
+  #iam-username-display { font-family: var(--font-mono); font-size: 12px; }
+  #iam-logout-btn {
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.12);
+    color: var(--slate-300);
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  #iam-logout-btn:hover { background: rgba(255,255,255,0.06); }
+  #runtime-badge {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--slate-400);
+  }
+
+  .shell-main {
+    margin-left: var(--sidebar-width);
+    margin-top: var(--header-height);
+    margin-bottom: var(--footer-height);
+    min-height: calc(100vh - var(--header-height) - var(--footer-height));
+    background: var(--bg);
+    color: var(--on-surface);
+  }
+
+  .shell-footer {
+    position: fixed;
+    bottom: 0;
+    left: var(--sidebar-width);
+    right: 0;
+    height: var(--footer-height);
+    background: var(--surface-container-lowest);
+    border-top: 1px solid rgba(255,255,255,0.05);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 24px;
+    z-index: 30;
+    font-family: var(--font-mono);
+    font-size: 10px;
+  }
+  .shell-footer-cluster {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+  }
+  .shell-footer-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--slate-500);
+  }
+  .shell-footer-item.ok    { color: var(--secondary); }
+  .shell-footer-item.brand { color: var(--primary); }
+  .shell-footer-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--slate-700);
+  }
+  .shell-footer-item.ok .shell-footer-dot { background: var(--secondary); }
+
+  /* View containers */
+  .app-view { display: none; }
+  .app-view.active { display: block; }
+
+  .view-stub {
+    padding: 48px 32px;
+    color: var(--on-surface-variant);
+    text-align: center;
+  }
+  .view-stub h2 {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    color: var(--on-surface);
+    margin-bottom: 6px;
+    font-family: var(--font-display);
+  }
+  .view-stub p {
+    font-size: 13px;
+    max-width: 520px;
+    margin: 0 auto;
+    color: var(--slate-400);
+  }
+
+  /* Exec mode toggle (Evaluate | Simulate) — header */
+  .exec-mode-tabs {
+    display: inline-flex;
+    background: var(--surface-container);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 6px;
+    padding: 3px;
+    gap: 0;
+  }
+  .exec-mode-tab {
+    padding: 5px 16px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--slate-400);
+    cursor: pointer;
+    font-family: inherit;
+    transition: background 0.12s, color 0.12s;
+  }
+  .exec-mode-tab:hover { color: var(--slate-200); }
+  .exec-mode-tab.active {
+    background: var(--primary-container);
+    color: var(--on-primary-container);
+  }
+
+  /* Banner rules removed in the Explorer Shell Polish PR.
+     The .warning-bar, .demo-banner*, .mode-banner*, and .mode-bar-hint
+     classes no longer exist anywhere; their related DOM nodes and JS
+     hooks were removed in the same PR. The execution-mode toggle in the
+     header remains the source of truth for evaluate vs simulate. */
+
+  /* Auth-gate blur — toggled on .shell-main when an overlay is shown */
+  .layout-gated {
+    filter: blur(3px);
+    pointer-events: none;
+    user-select: none;
+  }
+

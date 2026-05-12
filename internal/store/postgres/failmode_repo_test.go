@@ -232,6 +232,16 @@ func TestPostgresFailModePolicyRepo_RulesJSONBRoundTrip(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
 	original := makePostgresTestPolicy("policy-a", 1, failmode.FailModePolicyStatusActive, now)
+	// D29b — explicitly set the three-axis fields on one rule so we can
+	// assert both the legacy (omitted) and the new (explicit) paths
+	// round-trip correctly in the same fixture.
+	for i := range original.Rules {
+		if original.Rules[i].CorrectnessClass == failmode.CorrectnessClassResource {
+			original.Rules[i].PermittedMode = failmode.PermittedModeSoft
+			original.Rules[i].EnforcementState = failmode.EnforcementStateEnforced
+			original.Rules[i].Outcome = failmode.OutcomePermitWithEvidence
+		}
+	}
 	if err := r.Create(ctx, original); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -264,6 +274,95 @@ func TestPostgresFailModePolicyRepo_RulesJSONBRoundTrip(t *testing.T) {
 		if gotRule.Reason != want.Reason {
 			t.Errorf("class %q: Reason want %q, got %q", want.CorrectnessClass, want.Reason, gotRule.Reason)
 		}
+		// D29b — the read path applies axis-aware defaults when the
+		// JSON keys are missing. For rules whose original had explicit
+		// values, the read result equals the original. For rules whose
+		// original left axis fields empty, the read result is the
+		// effective value (evidence_only + posture-implied outcome).
+		wantState := want.EnforcementState
+		if wantState == "" {
+			wantState = failmode.EnforcementStateEvidenceOnly
+		}
+		if gotRule.EnforcementState != wantState {
+			t.Errorf("class %q: EnforcementState want %q, got %q", want.CorrectnessClass, wantState, gotRule.EnforcementState)
+		}
+		wantOutcome := want.Outcome
+		if wantOutcome == "" {
+			wantOutcome = failmode.ApplyRuleAxisDefaults(want).Outcome
+		}
+		if gotRule.Outcome != wantOutcome {
+			t.Errorf("class %q: Outcome want %q, got %q", want.CorrectnessClass, wantOutcome, gotRule.Outcome)
+		}
+	}
+}
+
+// TestPostgresFailModePolicyRepo_LegacyJSONBShapeReadsWithDefaults pins
+// the D29b backward-compat guarantee: a row whose JSONB rules predate
+// D29b (no enforcement_state / outcome keys) loads with the axis-aware
+// effective values applied by deserialiseRules. The test writes JSON
+// directly to bypass serialiseRules's new explicit serialisation so we
+// can simulate the legacy shape.
+func TestPostgresFailModePolicyRepo_LegacyJSONBShapeReadsWithDefaults(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+	cleanupFailModePolicies(t, db)
+
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	// Pre-D29b JSONB shape: no enforcement_state / outcome keys.
+	legacyRules := `[
+		{"correctness_class":"governance_integrity","permitted_mode":"closed"},
+		{"correctness_class":"persistence","permitted_mode":"closed"},
+		{"correctness_class":"input","permitted_mode":"not_applicable"},
+		{"correctness_class":"resource","permitted_mode":"closed","reason":"legacy"},
+		{"correctness_class":"consistency","permitted_mode":"closed"}
+	]`
+	const insertSQL = `
+		INSERT INTO fail_mode_policies (
+			id, version, name, status, effective_date, rules,
+			business_owner, technical_owner, origin, managed,
+			created_at, updated_at, created_by
+		) VALUES (
+			$1, $2, $3, $4, $5, $6::jsonb,
+			$7, $8, $9, $10,
+			$11, $12, $13
+		)
+	`
+	if _, err := db.ExecContext(ctx, insertSQL,
+		"legacy-policy", 1, "Legacy", string(failmode.FailModePolicyStatusActive), now, legacyRules,
+		"owner@example.com", "platform-team", "manual", true,
+		now, now, "test",
+	); err != nil {
+		t.Fatalf("insert legacy row: %v", err)
+	}
+
+	r, _ := NewFailModePolicyRepo(db)
+	got, err := r.FindByIDAndVersion(ctx, "legacy-policy", 1)
+	if err != nil {
+		t.Fatalf("FindByIDAndVersion: %v", err)
+	}
+	if got == nil {
+		t.Fatal("legacy row not found")
+	}
+	if len(got.Rules) != 5 {
+		t.Fatalf("Rules: want 5, got %d", len(got.Rules))
+	}
+	for _, rule := range got.Rules {
+		if rule.EnforcementState != failmode.EnforcementStateEvidenceOnly {
+			t.Errorf("class %q: legacy row must load with EnforcementState=evidence_only; got %q",
+				rule.CorrectnessClass, rule.EnforcementState)
+		}
+		// closed posture defaults to escalate; not_applicable also
+		// defaults to escalate.
+		if rule.Outcome != failmode.OutcomeEscalate {
+			t.Errorf("class %q: legacy row must load with Outcome=escalate (closed/not_applicable default); got %q",
+				rule.CorrectnessClass, rule.Outcome)
+		}
+	}
+	// Domain-level Validate must pass on the defaulted legacy shape.
+	if errs := failmode.Validate(got); len(errs) != 0 {
+		t.Errorf("legacy row with defaulted axes must validate; got %v", errs)
 	}
 }
 

@@ -152,6 +152,13 @@ func (s *Server) handleExplorerConfig(w http.ResponseWriter, r *http.Request) {
 // handleExplorerGetEnvelope handles GET /explorer/envelopes/{id} using the
 // Explorer's isolated in-memory orchestrator so that envelope lookups are
 // consistent with evaluations run via POST /explorer.
+//
+// D29g: also dispatches GET /explorer/envelopes/{id}/audit-events to the
+// audit-event list handler. The route is registered with prefix
+// matching at /explorer/envelopes/, so this single handler owns both
+// the single-envelope and the audit-events sub-path. Adding a
+// dedicated /audit-events route is unnecessary — the prefix already
+// catches all sub-paths.
 func (s *Server) handleExplorerGetEnvelope(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		methodNotAllowed(w, http.MethodGet)
@@ -165,11 +172,28 @@ func (s *Server) handleExplorerGetEnvelope(w http.ResponseWriter, r *http.Reques
 	}
 
 	const prefix = "/explorer/envelopes/"
-	id := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, prefix))
-	if id == "" {
+	tail := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, prefix))
+	if tail == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing envelope id"})
 		return
 	}
+
+	// D29g — dispatch the audit-events sub-path. Path shape:
+	//   /explorer/envelopes/{id}/audit-events
+	// Anything else with a slash in the tail is an unknown sub-path
+	// and returns 404 so the route surface stays explicit.
+	if idx := strings.Index(tail, "/"); idx >= 0 {
+		id := tail[:idx]
+		rest := tail[idx+1:]
+		if rest == "audit-events" {
+			s.handleExplorerListEnvelopeAuditEvents(w, r, id)
+			return
+		}
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+
+	id := tail
 	if !isValidIdentifier(id) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid envelope id"})
 		return
@@ -186,6 +210,131 @@ func (s *Server) handleExplorerGetEnvelope(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, http.StatusOK, env)
+}
+
+// auditEventResponse is the wire format for one audit event in the
+// /explorer/envelopes/{id}/audit-events response. Mirrors the
+// internal audit.AuditEvent shape but uses snake_case JSON keys.
+// Payload is included verbatim — D29g surfaces audit events for
+// operator inspection, including the FAIL_MODE_POLICY_ENFORCED
+// payload's previous_outcome / enforced_outcome / configured_outcome
+// fields that drive the Records detail rail's enforcement-delta
+// visibility.
+type auditEventResponse struct {
+	ID            string         `json:"id"`
+	EnvelopeID    string         `json:"envelope_id"`
+	RequestSource string         `json:"request_source"`
+	RequestID     string         `json:"request_id"`
+	SequenceNo    int            `json:"sequence_no"`
+	EventType     string         `json:"event_type"`
+	PerformerType string         `json:"performer_type"`
+	PerformerID   string         `json:"performer_id"`
+	Payload       map[string]any `json:"payload"`
+	OccurredAt    time.Time      `json:"occurred_at"`
+	Hash          string         `json:"hash"`
+	PrevHash      string         `json:"prev_hash,omitempty"`
+}
+
+// explorerAuditEventsListResponse is the wire format for
+// GET /explorer/envelopes/{id}/audit-events. items is always present
+// (never null) — empty list is an empty array. count reflects the
+// number of events for the envelope; it equals len(items) since this
+// endpoint does not paginate (audit chains are bounded by the
+// number of evaluation steps).
+type explorerAuditEventsListResponse struct {
+	EnvelopeID string               `json:"envelope_id"`
+	Items      []auditEventResponse `json:"items"`
+	Count      int                  `json:"count"`
+}
+
+// handleExplorerListEnvelopeAuditEvents serves
+// GET /explorer/envelopes/{id}/audit-events against the
+// Explorer-isolated audit repository, returning the full audit
+// event chain for one envelope including each event's payload.
+//
+// Read-only. D29g surfaces audit events in the Records detail rail
+// so operators can inspect FAIL_MODE_POLICY_ENFORCED and the rest of
+// the audit chain. The Explorer-isolated audit repo is wired via
+// initExplorerRuntime → s.explorerAudit; it is disjoint from the
+// production runtime audit (s.audit). The two repositories share no
+// state — events recorded by Explorer evaluations are not visible to
+// production /v1/* reads and vice versa.
+//
+// Error contract mirrors handleExplorerGetEnvelope:
+//   - 400 when envelopeID is empty or fails isValidIdentifier
+//   - 404 when the envelope is not present in the Explorer runtime
+//   - 500 when the audit repository returns an error
+//   - 503 when the Explorer audit repo is not wired (initExplorerRuntime
+//     failed earlier)
+//   - 200 with the (possibly empty) audit-event list otherwise
+func (s *Server) handleExplorerListEnvelopeAuditEvents(w http.ResponseWriter, r *http.Request, envelopeID string) {
+	if s.explorerAudit == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "explorer audit not available",
+		})
+		return
+	}
+	if envelopeID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing envelope id"})
+		return
+	}
+	if !isValidIdentifier(envelopeID) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid envelope id"})
+		return
+	}
+
+	// Confirm the envelope exists in the Explorer runtime before
+	// returning any audit data. Without this, a request for a
+	// non-existent envelope would return an empty list and look
+	// indistinguishable from an envelope with no audit events —
+	// which is an operationally-impossible state for the Explorer
+	// orchestrator (every persisted envelope has at least lifecycle
+	// events).
+	if s.explorerOrchestrator != nil {
+		env, err := s.explorerOrchestrator.GetEnvelopeByID(r.Context(), envelopeID)
+		if err != nil {
+			statusCode, errResp := mapDomainError(err, entityEnvelope, false)
+			writeJSON(w, statusCode, errResp)
+			return
+		}
+		if env == nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "envelope not found"})
+			return
+		}
+	}
+
+	events, err := s.explorerAudit.ListByEnvelopeID(r.Context(), envelopeID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	items := make([]auditEventResponse, 0, len(events))
+	for _, ev := range events {
+		if ev == nil {
+			continue
+		}
+		items = append(items, auditEventResponse{
+			ID:            ev.ID,
+			EnvelopeID:    ev.EnvelopeID,
+			RequestSource: ev.RequestSource,
+			RequestID:     ev.RequestID,
+			SequenceNo:    ev.SequenceNo,
+			EventType:     string(ev.EventType),
+			PerformerType: string(ev.PerformedByType),
+			PerformerID:   ev.PerformedByID,
+			Payload:       ev.Payload,
+			OccurredAt:    ev.OccurredAt,
+			Hash:          ev.Hash,
+			PrevHash:      ev.PrevHash,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, explorerAuditEventsListResponse{
+		EnvelopeID: envelopeID,
+		Items:      items,
+		Count:      len(items),
+	})
 }
 
 // handleExplorerEvaluate handles POST /explorer using the Explorer's isolated

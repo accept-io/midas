@@ -42,7 +42,6 @@ spec:
   decision_type: operational
   reversibility_class: conditionally_reversible
   minimum_confidence: 0.80
-  failure_mode: closed
   business_owner: Head of Payments
   technical_owner: payments-platform-team
   process_id: proc-payment-release
@@ -79,7 +78,7 @@ Key `spec` fields:
 | `decision_type` | string | `strategic`, `tactical`, or `operational`. Default: `operational`. |
 | `reversibility_class` | string | `reversible`, `conditionally_reversible`, or `irreversible`. Default: `conditionally_reversible`. |
 | `minimum_confidence` | float64 | Floor confidence for this surface (0.0–1.0). |
-| `failure_mode` | string | `closed` (fail-safe) or `open`. Default: `closed`. |
+| `fail_mode_policy_id` | string | Optional surface-level reference to an active FailModePolicy. Acts as the surface override in the resolution hierarchy (Surface → BusinessService → deployment default). |
 | `required_context.fields` | array | Context keys that all profiles on this surface must receive. |
 
 ### Agent
@@ -606,7 +605,7 @@ The parser rejects any document with:
 
 Structural validation also checks:
 - `minimum_confidence` must be in `[0.0, 1.0]` (Surface)
-- Enum fields (`decision_type`, `reversibility_class`, `failure_mode`, etc.) must contain valid values if provided
+- Enum fields (`decision_type`, `reversibility_class`, etc.) must contain valid values if provided
 - `spec.surface_id` on Profile must reference a known surface (either in the store or within the same bundle)
 - `spec.agent_id` and `spec.profile_id` on Grant must reference known agents and profiles
 - `spec.process_id` on Surface is required and must be a valid ID format; the referenced process must exist in the store or in the same bundle

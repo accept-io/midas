@@ -35,6 +35,24 @@ const (
 	// WarningRefCapabilityTerminal fires when a Process references a
 	// Capability whose status is deprecated.
 	WarningRefCapabilityTerminal WarningCode = "REF_CAPABILITY_TERMINAL"
+
+	// WarningFailModePolicyAuthorityTension fires when a FailModePolicy
+	// document, a DecisionSurface document, or a BusinessService
+	// document references an enforced FailModePolicy whose resource-
+	// class rule would override the behaviour an authority profile's
+	// FailMode value would otherwise produce on a policy_evaluator_error
+	// trigger (D29h).
+	//
+	// Scope is intentionally narrow: only enforcement_state=enforced
+	// rules for correctness_class=resource on the policy_evaluator_error
+	// trigger are analysed. evidence_only and dry_run rules never
+	// produce this warning because they do not change runtime
+	// outcomes. The five tension cases are documented in
+	// failmode_authority_analysis.go.
+	//
+	// The warning never blocks apply. Operators see it before approval
+	// so they can audit whether the override is intentional.
+	WarningFailModePolicyAuthorityTension WarningCode = "FAIL_MODE_POLICY_AUTHORITY_TENSION"
 )
 
 // WarningSeverity classifies the urgency of a warning. This PR uses a single

@@ -145,6 +145,26 @@ type EvaluationResult struct {
 	// will plumb the policy through to evaluation logic; for now the
 	// resolver runs purely for observability and regression-pinning.
 	EffectiveFailModePolicy *failmode.EffectiveFailModePolicy
+
+	// FailModePolicyResolutionPath is the D29c-1 hierarchy walk that
+	// produced (or failed to produce) EffectiveFailModePolicy. The slice
+	// is fixed-length-3 ordered by precedence:
+	//
+	//   [0] = surface
+	//   [1] = business_service
+	//   [2] = deployment_default
+	//
+	// Nil means the resolver was not invoked (FailModePolicies repo is
+	// unwired, or the evaluation finished before fail-mode resolution).
+	// Non-nil length 3 means the resolver was invoked and recorded the
+	// hierarchy walk regardless of whether an effective policy was found.
+	//
+	// Like EffectiveFailModePolicy, this field is a Go-only test
+	// observable: intentionally NOT serialised on the /v1/evaluate
+	// response (proven by TestEvaluate_HTTPResponse_NoResolutionPathLeakage
+	// in orchestrator_failmode_resolution_path_test.go), NOT included in
+	// audit-event payloads, and NOT consulted to compute outcomes.
+	FailModePolicyResolutionPath []failmode.ResolutionPathEntry
 }
 
 // RepositoryStore abstracts transactional repository access.
@@ -185,6 +205,17 @@ type Orchestrator struct {
 	// have not opted in. Coverage emission is observational and never
 	// alters the evaluation outcome.
 	coverage *governancecoverage.Service
+
+	// failModeDeploymentDefaultPolicyID is the deployment-level
+	// FailModePolicy id consulted by failmode.ResolveWithPath when
+	// neither the Surface nor its BusinessService declares a fail-mode
+	// override (D29d). Empty (the default) preserves the pre-D29d
+	// behaviour where the orchestrator passes "" — i.e. no deployment
+	// default and no level-3 resolution. The runtime resolver remains
+	// evidence-only; this field only changes the frequency of
+	// FAIL_MODE_POLICY_RESOLVED / FAIL_MODE_POLICY_TRIGGER_FIRED
+	// emission, never the evaluation outcome.
+	failModeDeploymentDefaultPolicyID string
 }
 
 // NewOrchestrator constructs an Orchestrator with a real clock.
@@ -245,6 +276,18 @@ func NewOrchestratorWithClock(
 // matches all leave the evaluation outcome and reason code unchanged.
 func (o *Orchestrator) WithCoverageService(svc *governancecoverage.Service) *Orchestrator {
 	o.coverage = svc
+	return o
+}
+
+// WithFailModeDeploymentDefaultPolicyID injects the deployment-level
+// FailModePolicy id (D29d). The orchestrator passes this value as the
+// fifth argument to failmode.ResolveWithPath; an empty string keeps
+// the pre-D29d behaviour. Builder semantics: mutates and returns the
+// receiver for chaining. The runtime resolver continues to be
+// evidence-only — the resolved policy never branches Outcome,
+// ReasonCode, POLICY_EVALUATED, or OUTCOME_RECORDED payloads.
+func (o *Orchestrator) WithFailModeDeploymentDefaultPolicyID(id string) *Orchestrator {
+	o.failModeDeploymentDefaultPolicyID = id
 	return o
 }
 
@@ -440,7 +483,10 @@ func (o *Orchestrator) simulateEvaluate(
 	}
 
 	// Step 7: Policy
-	policyOutcome, policyReason, err := o.evaluatePolicy(ctx, req, p)
+	// Simulate has no audit accumulator, so the evaluatorErrored flag
+	// (used by Evaluate to emit FAIL_MODE_POLICY_TRIGGER_FIRED) is
+	// discarded here — Simulate is read-only and emits no events.
+	policyOutcome, policyReason, _, err := o.evaluatePolicy(ctx, req, p)
 	if err != nil {
 		return EvaluationResult{}, err
 	}
@@ -617,9 +663,21 @@ func (o *Orchestrator) evaluate(
 	// timestamps, and never carries rules, permitted modes, or any
 	// decision-outcome fields. The event participates in the standard
 	// hash chain via acc.recordObservation → persistNew → Audit.Append.
+	// D29c-1: call ResolveWithPath so the hierarchy walk is captured on
+	// EvaluationResult alongside the (unchanged) effective policy. The
+	// path is recorded whether or not an effective policy resolves, and
+	// whether or not an error occurs. The error-handling and audit-
+	// emission paths are unchanged from D27j-impl-3.
 	var effectiveFailMode *failmode.EffectiveFailModePolicy
+	var failModePolicyResolutionPath []failmode.ResolutionPathEntry
+	// D29c-2 — capture the full resolved policy (with Rules) so the
+	// downstream trigger-event helper can select the per-correctness-
+	// class rule without invoking FindActiveAt a second time. The
+	// pointer is nil when no policy resolves or when resolution errors.
+	var resolvedFailModePolicy *failmode.FailModePolicy
 	if repos.FailModePolicies != nil {
-		effective, resolveErr := failmode.Resolve(ctx, repos.FailModePolicies, s, bs, now, "")
+		resolveResult, resolveErr := failmode.ResolveWithPath(ctx, repos.FailModePolicies, s, bs, now, o.failModeDeploymentDefaultPolicyID)
+		failModePolicyResolutionPath = resolveResult.Path
 		if resolveErr != nil {
 			slog.Warn("fail_mode_policy_resolution_failed",
 				"request_id", req.RequestID,
@@ -627,9 +685,10 @@ func (o *Orchestrator) evaluate(
 				"business_service_id", bsSnap.ID,
 				"error", resolveErr,
 			)
-		} else if effective.Source != failmode.ResolutionSourceNone {
-			eff := effective
+		} else if resolveResult.Effective.Source != failmode.ResolutionSourceNone {
+			eff := resolveResult.Effective
 			effectiveFailMode = &eff
+			resolvedFailModePolicy = resolveResult.Policy
 			if err := o.appendFailModePolicyResolvedEvent(acc, env, s, bsSnap.ID, eff, now); err != nil {
 				return EvaluationResult{}, err
 			}
@@ -637,13 +696,20 @@ func (o *Orchestrator) evaluate(
 	}
 
 	// withFailModeMeta attaches the effective FailModePolicy resolver result
-	// to any EvaluationResult produced after structural resolution. It is a
-	// no-op on error paths and when no policy was resolved at any level. The
-	// field is intentionally Go-only (not part of the HTTP response) — see
-	// EvaluationResult.EffectiveFailModePolicy doc for rationale.
+	// (D27j-impl-2) and the D29c-1 hierarchy-walk path to any EvaluationResult
+	// produced after structural resolution. The path is attached whenever
+	// the resolver was invoked, regardless of whether an effective policy
+	// resolved. Both fields are intentionally Go-only (not part of the HTTP
+	// response) — see EvaluationResult.EffectiveFailModePolicy and
+	// FailModePolicyResolutionPath docs for rationale.
 	withFailModeMeta := func(res EvaluationResult, finishErr error) (EvaluationResult, error) {
-		if finishErr == nil && effectiveFailMode != nil {
-			res.EffectiveFailModePolicy = effectiveFailMode
+		if finishErr == nil {
+			if effectiveFailMode != nil {
+				res.EffectiveFailModePolicy = effectiveFailMode
+			}
+			if failModePolicyResolutionPath != nil {
+				res.FailModePolicyResolutionPath = failModePolicyResolutionPath
+			}
 		}
 		return res, finishErr
 	}
@@ -690,6 +756,98 @@ func (o *Orchestrator) evaluate(
 		return EvaluationResult{}, err
 	}
 	if outcome != "" {
+		// D29j — when authority chain resolution produced a deterministic
+		// Reject (NO_ACTIVE_GRANT, PROFILE_NOT_FOUND, or
+		// GRANT_PROFILE_SURFACE_MISMATCH) and a FailModePolicy resolved
+		// for this evaluation, emit FAIL_MODE_POLICY_TRIGGER_FIRED with
+		// the authority_resolution_failure trigger condition.
+		//
+		// When the matched resource rule's enforcement_state is dry_run,
+		// emit FAIL_MODE_POLICY_DRY_RUN_DECISION evidence — the actual
+		// outcome remains the authority-chain Reject.
+		//
+		// When the matched resource rule's enforcement_state is enforced,
+		// emit FAIL_MODE_POLICY_ENFORCED and apply the FailModePolicy
+		// outcome via finish(); the authority-chain Reject is overridden.
+		// dry_run and enforced are mutually exclusive. evidence_only and
+		// any rule-missing path fall through to the authority-chain
+		// Reject preserved exactly.
+		//
+		// The profile pointer passed to the event helpers is nil here —
+		// authority resolution failed, so no profile is in hand. The
+		// helpers guard the nil pointer and simply omit
+		// authority_profile_id / policy_reference from the payload.
+		if effectiveFailMode != nil {
+			// Correctness class is resolved through the central
+			// FailModePolicy trigger taxonomy (D29k). Every supported
+			// trigger constant returns ok=true; the defensive
+			// no-trigger branch is unreachable from this call site but
+			// kept to make a future unsupported-trigger introduction
+			// fail loud rather than silently emit with a zero class.
+			trigger := failmode.FailModePolicyTriggerAuthorityResolutionFailure
+			correctnessClass, ok := failmode.CorrectnessClassForTrigger(trigger)
+			if !ok {
+				return withFailModeMeta(o.finish(ctx, repos, acc, env, outcome, reason))
+			}
+			if err := o.appendFailModePolicyTriggerFiredEvent(
+				acc, env, s, bsSnap.ID, nil, a.ID,
+				*effectiveFailMode, resolvedFailModePolicy,
+				trigger,
+				correctnessClass,
+				now,
+			); err != nil {
+				return EvaluationResult{}, err
+			}
+
+			rule, ruleFound := failmode.SelectRuleForClass(resolvedFailModePolicy, correctnessClass)
+			if ruleFound {
+				previousOutcome, previousReason := outcome, reason
+
+				switch rule.EnforcementState {
+				case failmode.EnforcementStateDryRun:
+					dryRunOutcome, dryRunReason, divergent := computeFailModePolicyDryRunDecision(
+						rule, previousOutcome, previousReason,
+					)
+					if err := o.appendFailModePolicyDryRunDecisionEvent(
+						acc, env, s, bsSnap.ID, nil, a.ID,
+						*effectiveFailMode, rule,
+						trigger,
+						correctnessClass,
+						dryRunOutcome, dryRunReason,
+						previousOutcome, previousReason,
+						divergent,
+						now,
+					); err != nil {
+						return EvaluationResult{}, err
+					}
+
+				case failmode.EnforcementStateEnforced:
+					// permit_with_evidence's enforced outcome is Accept
+					// regardless of the authority-chain Reject — the
+					// documented operator-surprise case where an enforced
+					// FailModePolicy overrides a deterministic authority
+					// failure. The shared mapping helper is the same one
+					// used on the D29f policy-evaluator-error path.
+					enforcedOutcome, enforcedReason := failmode.ComputeFailModePolicyDecisionFromOutcome(
+						rule, eval.OutcomeAccept,
+					)
+					if err := o.appendFailModePolicyEnforcedEvent(
+						acc, env, s, bsSnap.ID, nil, a.ID,
+						*effectiveFailMode, rule,
+						trigger,
+						correctnessClass,
+						enforcedOutcome, enforcedReason,
+						previousOutcome, previousReason,
+						now,
+					); err != nil {
+						return EvaluationResult{}, err
+					}
+					return withFailModeMeta(o.finish(ctx, repos, acc, env, enforcedOutcome, enforcedReason))
+				}
+				// evidence_only and unexpected EnforcementState values
+				// fall through to the preserved authority-chain Reject.
+			}
+		}
 		return withFailModeMeta(o.finish(ctx, repos, acc, env, outcome, reason))
 	}
 	slog.Debug("authority_chain_resolved", "request_id", req.RequestID, "grant_id", g.ID, "profile_id", p.ID)
@@ -706,16 +864,19 @@ func (o *Orchestrator) evaluate(
 	profilePolicyRef := p.PolicyReference
 	policySkipped := o.policyMode == policy.PolicyModeNoop && profilePolicyRef != ""
 
-	// withPolicyMeta attaches policy transparency fields and the
-	// resolver-derived effective FailModePolicy (D27j-impl-2) to any
-	// EvaluationResult produced after the profile has been resolved. It is
-	// a no-op on error paths.
+	// withPolicyMeta attaches policy transparency fields, the
+	// resolver-derived effective FailModePolicy (D27j-impl-2), and the
+	// D29c-1 hierarchy-walk path to any EvaluationResult produced after
+	// the profile has been resolved. It is a no-op on error paths.
 	withPolicyMeta := func(res EvaluationResult, finishErr error) (EvaluationResult, error) {
 		if finishErr == nil {
 			res.PolicyReference = profilePolicyRef
 			res.PolicySkipped = policySkipped
 			if effectiveFailMode != nil {
 				res.EffectiveFailModePolicy = effectiveFailMode
+			}
+			if failModePolicyResolutionPath != nil {
+				res.FailModePolicyResolutionPath = failModePolicyResolutionPath
 			}
 		}
 		return res, finishErr
@@ -827,13 +988,130 @@ func (o *Orchestrator) evaluate(
 	}
 
 	// Step 7: Policy
-	policyOutcome, policyReason, err := o.evaluatePolicy(ctx, req, p)
+	policyOutcome, policyReason, evaluatorErrored, err := o.evaluatePolicy(ctx, req, p)
 	if err != nil {
 		return EvaluationResult{}, err
 	}
 	if p.PolicyReference != "" {
 		if err := o.appendPolicyEvaluatedEvent(acc, env, p.PolicyReference, policyOutcome, policyReason); err != nil {
 			return EvaluationResult{}, err
+		}
+	}
+	// D29c-2 — emit FAIL_MODE_POLICY_TRIGGER_FIRED when the policy
+	// evaluator returned an error AND a FailModePolicy had resolved
+	// for this evaluation. The event is evidence-only.
+	//
+	// D29e — emit FAIL_MODE_POLICY_DRY_RUN_DECISION immediately after
+	// the trigger-fired event when the matched rule's enforcement_state
+	// is dry_run. Dry-run is evidence-only and does NOT apply the
+	// outcome — authority.FailMode continues to drive the dispatch.
+	//
+	// D29f — when the matched rule's enforcement_state is enforced,
+	// emit FAIL_MODE_POLICY_ENFORCED and apply the FailModePolicy
+	// configured outcome via finish(). This is the FIRST FailModePolicy
+	// path that branches the runtime decision; authority.FailMode is
+	// NOT consulted on the enforced path. dry_run and enforced are
+	// mutually exclusive — at most one of the two follow-up events is
+	// emitted per evaluation. evidence_only rules emit trigger-fired
+	// only and preserve authority.FailMode behaviour exactly.
+	if evaluatorErrored && effectiveFailMode != nil {
+		// Correctness class is resolved through the central
+		// FailModePolicy trigger taxonomy (D29k). The defensive
+		// no-trigger branch is unreachable from this call site —
+		// every supported trigger constant returns ok=true — but
+		// kept so a future unsupported-trigger introduction fails
+		// loud rather than silently emitting with a zero class.
+		trigger := failmode.FailModePolicyTriggerPolicyEvaluatorError
+		correctnessClass, ok := failmode.CorrectnessClassForTrigger(trigger)
+		if !ok {
+			if policyOutcome != "" {
+				return withPolicyMeta(o.finish(ctx, repos, acc, env, policyOutcome, policyReason))
+			}
+			return withPolicyMeta(o.finish(ctx, repos, acc, env, eval.OutcomeAccept, eval.ReasonWithinAuthority))
+		}
+		if err := o.appendFailModePolicyTriggerFiredEvent(
+			acc, env, s, bsSnap.ID, p, a.ID,
+			*effectiveFailMode, resolvedFailModePolicy,
+			trigger,
+			correctnessClass,
+			now,
+		); err != nil {
+			return EvaluationResult{}, err
+		}
+
+		rule, ruleFound := failmode.SelectRuleForClass(resolvedFailModePolicy, correctnessClass)
+		if ruleFound {
+			// previousOutcome / previousReason is the authority.FailMode-
+			// driven outcome the orchestrator would apply WITHOUT
+			// enforcement. Computed identically to the dispatch below:
+			// FailModeOpen returns empty → fall through to Accept /
+			// WithinAuthority; FailModeClosed returns
+			// Escalate / POLICY_ERROR directly. Recorded as evidence
+			// on the enforced event so operators can see the
+			// counterfactual.
+			previousOutcome, previousReason := policyOutcome, policyReason
+			if previousOutcome == "" {
+				previousOutcome = eval.OutcomeAccept
+				previousReason = eval.ReasonWithinAuthority
+			}
+
+			switch rule.EnforcementState {
+			case failmode.EnforcementStateDryRun:
+				// D29e: compute the would-be outcome using the
+				// authority.FailMode-driven outcome as fallback for
+				// permit_with_evidence. Recorded as evidence only.
+				dryRunOutcome, dryRunReason, divergent := computeFailModePolicyDryRunDecision(
+					rule, previousOutcome, previousReason,
+				)
+				if err := o.appendFailModePolicyDryRunDecisionEvent(
+					acc, env, s, bsSnap.ID, p, a.ID,
+					*effectiveFailMode, rule,
+					trigger,
+					correctnessClass,
+					dryRunOutcome, dryRunReason,
+					previousOutcome, previousReason,
+					divergent,
+					now,
+				); err != nil {
+					return EvaluationResult{}, err
+				}
+
+			case failmode.EnforcementStateEnforced:
+				// D29f: compute the enforced outcome using the
+				// FailModeOpen-continuation (Accept / WITHIN_AUTHORITY)
+				// as fallback for permit_with_evidence. The enforced
+				// permit-with-evidence path proceeds regardless of
+				// the profile's authority.FailMode — this is the
+				// documented operator-surprise case where an enforced
+				// FailModePolicy overrides FailModeClosed. The
+				// mapping helper itself was lifted to internal/failmode
+				// in D29h so the control-plane apply-time analyzer
+				// can call the same code.
+				enforcedOutcome, enforcedReason := failmode.ComputeFailModePolicyDecisionFromOutcome(
+					rule, eval.OutcomeAccept,
+				)
+				if err := o.appendFailModePolicyEnforcedEvent(
+					acc, env, s, bsSnap.ID, p, a.ID,
+					*effectiveFailMode, rule,
+					trigger,
+					correctnessClass,
+					enforcedOutcome, enforcedReason,
+					previousOutcome, previousReason,
+					now,
+				); err != nil {
+					return EvaluationResult{}, err
+				}
+				// Override the dispatch: finish() receives the enforced
+				// values. authority.FailMode is NOT consulted on this
+				// branch — the FailModePolicy outcome wins. The
+				// FAIL_MODE_POLICY_* reason code intentionally leaks
+				// into OUTCOME_RECORDED here; it is the only path that
+				// allows that leak.
+				return withPolicyMeta(o.finish(ctx, repos, acc, env, enforcedOutcome, enforcedReason))
+			}
+			// evidence_only (and any unexpected EnforcementState value):
+			// fall through to the authority.FailMode-driven dispatch
+			// below. No extra event, no outcome branch.
 		}
 	}
 	if policyOutcome != "" {
@@ -1536,6 +1814,312 @@ func (o *Orchestrator) appendFailModePolicyResolvedEvent(
 		audit.AuditEventFailModePolicyResolved, payload)
 }
 
+// appendFailModePolicyTriggerFiredEvent records that a configured
+// FailModePolicy trigger condition fired during an evaluation while a
+// FailModePolicy had resolved (D29c-2). The event is evidence-only:
+// it names the resolved policy identity, the trigger condition, the
+// relevant correctness class, and the matched rule's declared posture
+// / enforcement_state / outcome. The orchestrator's outcome path is
+// driven entirely by authority.FailMode at the call site; this helper
+// reads rule data solely to populate the audit payload.
+//
+// Emission contract:
+//
+//   - Caller invokes this only when (a) a FailModePolicy resolved
+//     successfully (effective.Source != ResolutionSourceNone) and
+//     (b) a supported trigger condition fired. Trigger conditions
+//     are enumerated in the failmode trigger taxonomy
+//     (internal/failmode/triggers.go); call sites resolve the
+//     correctness class through failmode.CorrectnessClassForTrigger
+//     rather than naming CorrectnessClass* constants directly.
+//   - The event is queued via acc.recordObservation, so it
+//     participates in the audit hash chain and Integrity.AuditEventIDs
+//     identically to FAIL_MODE_POLICY_RESOLVED.
+//   - The correctness class is supplied by the caller and is the
+//     value the taxonomy returns for the trigger; this helper does
+//     no class resolution itself. Adding or remapping a trigger
+//     must be done in the taxonomy, not at this helper.
+//   - When the matched rule is not found on the resolved policy (a
+//     defensive path that should not occur under healthy validated
+//     data), the helper emits stable empty rule fields and a
+//     rule_status="not_found" marker so the event is still useful as
+//     evidence without panicking.
+//
+// Forbidden payload fields (must never appear): rules, raw_policy_error,
+// error, stack_trace, sql, dsn, degraded, allowed, fail_open, fail_soft,
+// decision_changed, dry_run, enforced.
+func (o *Orchestrator) appendFailModePolicyTriggerFiredEvent(
+	acc *evaluationAccumulator,
+	env *envelope.Envelope,
+	sur *surface.DecisionSurface,
+	businessServiceID string,
+	prof *authority.AuthorityProfile,
+	agentID string,
+	effective failmode.EffectiveFailModePolicy,
+	resolvedPolicy *failmode.FailModePolicy,
+	trigger failmode.TriggerCondition,
+	correctnessClass failmode.CorrectnessClass,
+	evaluationTime time.Time,
+) error {
+	rule, ruleFound := failmode.SelectRuleForClass(resolvedPolicy, correctnessClass)
+
+	payload := map[string]any{
+		"fail_mode_policy_id":      effective.PolicyID,
+		"fail_mode_policy_version": effective.Version,
+		"source":                   string(effective.Source),
+		"trigger_condition":        string(trigger),
+		"correctness_class":        string(correctnessClass),
+		"permitted_mode":           string(rule.PermittedMode),
+		"enforcement_state":        string(rule.EnforcementState),
+		"outcome":                  string(rule.Outcome),
+		"triggered_at":             evaluationTime.UTC().Format(time.RFC3339Nano),
+		"evaluation_time":          evaluationTime.UTC().Format(time.RFC3339Nano),
+	}
+	if !ruleFound {
+		// Defensive: a healthy validated policy carries exhaustive
+		// correctness-class coverage. The not-found marker is only
+		// added on the missing-rule path so the normal payload stays
+		// minimal.
+		payload["rule_status"] = "not_found"
+		slog.Warn("fail_mode_policy_trigger_fired_rule_not_found",
+			"fail_mode_policy_id", effective.PolicyID,
+			"fail_mode_policy_version", effective.Version,
+			"correctness_class", string(correctnessClass),
+			"trigger_condition", string(trigger),
+		)
+	}
+	if sur != nil {
+		if sur.ID != "" {
+			payload["surface_id"] = sur.ID
+		}
+		if sur.Version != 0 {
+			payload["surface_version"] = sur.Version
+		}
+	}
+	if businessServiceID != "" {
+		payload["business_service_id"] = businessServiceID
+	}
+	if prof != nil {
+		if prof.ID != "" {
+			payload["authority_profile_id"] = prof.ID
+		}
+		if prof.PolicyReference != "" {
+			payload["policy_reference"] = prof.PolicyReference
+		}
+	}
+	if agentID != "" {
+		payload["agent_id"] = agentID
+	}
+	return acc.recordObservation(env.RequestSource(), env.RequestID(),
+		audit.AuditEventFailModePolicyTriggerFired, payload)
+}
+
+// computeFailModePolicyDryRunDecision is a thin D29e wrapper around
+// the shared failmode helper. It maps the rule's configured Outcome
+// to a would-be (eval.Outcome, eval.ReasonCode) pair using the actual
+// outcome the orchestrator is about to apply as the fallback, and
+// reports whether the mapped outcome diverges from the actual.
+//
+// The shared mapping helper was lifted to internal/failmode in D29h
+// so both the runtime orchestrator and the control-plane apply-time
+// analyzer call the same code. This wrapper preserves D29e's
+// divergence computation as the only decision-package-local
+// behaviour.
+//
+// The return values are recorded in the FAIL_MODE_POLICY_DRY_RUN_DECISION
+// audit event payload only — D29e never applies them.
+//
+// Divergence is computed on outcome equality only — reason-code
+// divergence under the same outcome (e.g. actual escalate / POLICY_ERROR
+// vs dry-run escalate / FAIL_MODE_POLICY_ESCALATED) is not a decision
+// change and is recorded as a separate payload field.
+func computeFailModePolicyDryRunDecision(
+	rule failmode.FailModePolicyRule,
+	actualOutcome eval.Outcome,
+	actualReasonCode eval.ReasonCode,
+) (eval.Outcome, eval.ReasonCode, bool) {
+	_ = actualReasonCode // recorded separately in the event payload; not used in mapping.
+	dryRunOutcome, dryRunReason := failmode.ComputeFailModePolicyDecisionFromOutcome(rule, actualOutcome)
+	divergent := dryRunOutcome != actualOutcome
+	return dryRunOutcome, dryRunReason, divergent
+}
+
+// appendFailModePolicyDryRunDecisionEvent records the dry-run outcome
+// MIDAS would have applied for the matched FailModePolicy rule
+// (D29e). The event is evidence-only: it captures the resolved policy
+// identity, the trigger condition, the matched rule's three-axis
+// declaration, the would-be outcome / reason code, the actual outcome /
+// reason code the orchestrator did apply, and a boolean divergence
+// flag. The runtime decision path is unchanged.
+//
+// Emission contract:
+//
+//   - Caller invokes this only when (a) FAIL_MODE_POLICY_TRIGGER_FIRED
+//     would be emitted for this evaluation (per D29c-2 conditions),
+//     (b) the matching rule for the correctness class was found, and
+//     (c) the matching rule's enforcement_state == dry_run.
+//   - The event is queued via acc.recordObservation, so it
+//     participates in the audit hash chain and
+//     Integrity.AuditEventIDs identically to FAIL_MODE_POLICY_RESOLVED
+//     and FAIL_MODE_POLICY_TRIGGER_FIRED.
+//   - The event MUST be appended after the trigger-fired event and
+//     before OUTCOME_RECORDED — the call sequence inside evaluate
+//     guarantees this since the accumulator preserves queue order.
+//
+// Forbidden payload fields (must never appear): rules, raw_policy_error,
+// error, stack_trace, sql, dsn, allowed, fail_open, fail_soft,
+// decision_changed, enforced, applied.
+func (o *Orchestrator) appendFailModePolicyDryRunDecisionEvent(
+	acc *evaluationAccumulator,
+	env *envelope.Envelope,
+	sur *surface.DecisionSurface,
+	businessServiceID string,
+	prof *authority.AuthorityProfile,
+	agentID string,
+	effective failmode.EffectiveFailModePolicy,
+	rule failmode.FailModePolicyRule,
+	trigger failmode.TriggerCondition,
+	correctnessClass failmode.CorrectnessClass,
+	dryRunOutcome eval.Outcome,
+	dryRunReasonCode eval.ReasonCode,
+	actualOutcome eval.Outcome,
+	actualReasonCode eval.ReasonCode,
+	divergent bool,
+	evaluationTime time.Time,
+) error {
+	payload := map[string]any{
+		"fail_mode_policy_id":      effective.PolicyID,
+		"fail_mode_policy_version": effective.Version,
+		"source":                   string(effective.Source),
+		"trigger_condition":        string(trigger),
+		"correctness_class":        string(correctnessClass),
+		"permitted_mode":           string(rule.PermittedMode),
+		"enforcement_state":        string(rule.EnforcementState),
+		"configured_outcome":       string(rule.Outcome),
+		"dry_run_outcome":          string(dryRunOutcome),
+		"dry_run_reason_code":      string(dryRunReasonCode),
+		"actual_outcome":           string(actualOutcome),
+		"actual_reason_code":       string(actualReasonCode),
+		"divergent":                divergent,
+		"computed_at":              evaluationTime.UTC().Format(time.RFC3339Nano),
+		"evaluation_time":          evaluationTime.UTC().Format(time.RFC3339Nano),
+	}
+	if sur != nil {
+		if sur.ID != "" {
+			payload["surface_id"] = sur.ID
+		}
+		if sur.Version != 0 {
+			payload["surface_version"] = sur.Version
+		}
+	}
+	if businessServiceID != "" {
+		payload["business_service_id"] = businessServiceID
+	}
+	if prof != nil {
+		if prof.ID != "" {
+			payload["authority_profile_id"] = prof.ID
+		}
+		if prof.PolicyReference != "" {
+			payload["policy_reference"] = prof.PolicyReference
+		}
+	}
+	if agentID != "" {
+		payload["agent_id"] = agentID
+	}
+	return acc.recordObservation(env.RequestSource(), env.RequestID(),
+		audit.AuditEventFailModePolicyDryRunDecision, payload)
+}
+
+// appendFailModePolicyEnforcedEvent records that an effective
+// FailModePolicy rule with enforcement_state=enforced applied its
+// configured Outcome to the actual runtime decision (D29f). Unlike
+// the trigger-fired and dry-run events — both evidence-only —
+// emission of this event corresponds to a real outcome change:
+// OUTCOME_RECORDED's outcome and reason_code reflect the enforced
+// values rather than authority.FailMode's fallback.
+//
+// Emission contract:
+//
+//   - Caller invokes this only when all of the following hold (the
+//     enforcement gate from D29f §2):
+//     (a) the policy evaluator returned an error,
+//     (b) a FailModePolicy resolved successfully,
+//     (c) the resolved policy entity is available for rule inspection,
+//     (d) a matching rule for correctness_class=resource exists, AND
+//     (e) the matching rule's enforcement_state == enforced.
+//   - The event is queued via acc.recordObservation, so it
+//     participates in the audit hash chain and
+//     Integrity.AuditEventIDs identically to the other
+//     FAIL_MODE_POLICY_* observational events.
+//   - The event MUST be appended after FAIL_MODE_POLICY_TRIGGER_FIRED
+//     and before OUTCOME_RECORDED. The call sequence inside evaluate
+//     guarantees this since the accumulator preserves queue order.
+//   - FAIL_MODE_POLICY_DRY_RUN_DECISION must NOT be emitted in the
+//     same evaluation — dry_run and enforced are mutually exclusive
+//     values of enforcement_state.
+//
+// Forbidden payload fields (must never appear): rules, raw_policy_error,
+// error, stack_trace, sql, dsn, allowed, fail_open, fail_soft,
+// decision_changed, dry_run, dry_run_outcome, applied.
+func (o *Orchestrator) appendFailModePolicyEnforcedEvent(
+	acc *evaluationAccumulator,
+	env *envelope.Envelope,
+	sur *surface.DecisionSurface,
+	businessServiceID string,
+	prof *authority.AuthorityProfile,
+	agentID string,
+	effective failmode.EffectiveFailModePolicy,
+	rule failmode.FailModePolicyRule,
+	trigger failmode.TriggerCondition,
+	correctnessClass failmode.CorrectnessClass,
+	enforcedOutcome eval.Outcome,
+	enforcedReasonCode eval.ReasonCode,
+	previousOutcome eval.Outcome,
+	previousReasonCode eval.ReasonCode,
+	evaluationTime time.Time,
+) error {
+	payload := map[string]any{
+		"fail_mode_policy_id":      effective.PolicyID,
+		"fail_mode_policy_version": effective.Version,
+		"source":                   string(effective.Source),
+		"trigger_condition":        string(trigger),
+		"correctness_class":        string(correctnessClass),
+		"permitted_mode":           string(rule.PermittedMode),
+		"enforcement_state":        string(rule.EnforcementState),
+		"configured_outcome":       string(rule.Outcome),
+		"enforced_outcome":         string(enforcedOutcome),
+		"enforced_reason_code":     string(enforcedReasonCode),
+		"previous_outcome":         string(previousOutcome),
+		"previous_reason_code":     string(previousReasonCode),
+		"applied_at":               evaluationTime.UTC().Format(time.RFC3339Nano),
+		"evaluation_time":          evaluationTime.UTC().Format(time.RFC3339Nano),
+	}
+	if sur != nil {
+		if sur.ID != "" {
+			payload["surface_id"] = sur.ID
+		}
+		if sur.Version != 0 {
+			payload["surface_version"] = sur.Version
+		}
+	}
+	if businessServiceID != "" {
+		payload["business_service_id"] = businessServiceID
+	}
+	if prof != nil {
+		if prof.ID != "" {
+			payload["authority_profile_id"] = prof.ID
+		}
+		if prof.PolicyReference != "" {
+			payload["policy_reference"] = prof.PolicyReference
+		}
+	}
+	if agentID != "" {
+		payload["agent_id"] = agentID
+	}
+	return acc.recordObservation(env.RequestSource(), env.RequestID(),
+		audit.AuditEventFailModePolicyEnforced, payload)
+}
+
 // ---------------------------------------------------------------------------
 // Resolution helpers
 // ---------------------------------------------------------------------------
@@ -1732,13 +2316,24 @@ func (o *Orchestrator) resolveAuthorityChain(
 	return nil, nil, eval.OutcomeReject, eval.ReasonProfileNotFound, nil
 }
 
+// evaluatePolicy runs the configured policy evaluator and returns the
+// outcome / reason that the orchestrator should apply.
+//
+// The fourth return value, evaluatorErrored, distinguishes the
+// fail-open-after-error branch (returns empty outcome to let evaluation
+// continue) from the genuine evaluator-allowed branch (also returns
+// empty outcome). Callers may use the bool to emit
+// FAIL_MODE_POLICY_TRIGGER_FIRED evidence (D29c-2) without changing
+// the outcome path. The third return value remains reserved for
+// internal orchestrator errors — the evaluator's own error is consumed
+// here and converted into an outcome plus the evaluatorErrored flag.
 func (o *Orchestrator) evaluatePolicy(
 	ctx context.Context,
 	req eval.DecisionRequest,
 	p *authority.AuthorityProfile,
-) (eval.Outcome, eval.ReasonCode, error) {
+) (eval.Outcome, eval.ReasonCode, bool, error) {
 	if p.PolicyReference == "" {
-		return "", "", nil
+		return "", "", false, nil
 	}
 	startedAt := o.clock()
 	result, err := o.policies.Evaluate(ctx, policy.PolicyInput{
@@ -1762,16 +2357,16 @@ func (o *Orchestrator) evaluatePolicy(
 		)
 		if p.FailMode == authority.FailModeOpen {
 			slog.Warn("policy_fail_open_applied", "request_id", req.RequestID, "policy_reference", p.PolicyReference)
-			return "", "", nil
+			return "", "", true, nil
 		}
-		return eval.OutcomeEscalate, eval.ReasonPolicyError, nil
+		return eval.OutcomeEscalate, eval.ReasonPolicyError, true, nil
 	}
 	if !result.Allowed {
 		slog.Info("policy_denied", "request_id", req.RequestID, "policy_reference", p.PolicyReference,
 			"duration_ms", duration.Milliseconds())
-		return eval.OutcomeEscalate, eval.ReasonPolicyDeny, nil
+		return eval.OutcomeEscalate, eval.ReasonPolicyDeny, false, nil
 	}
-	return "", "", nil
+	return "", "", false, nil
 }
 
 // ---------------------------------------------------------------------------

@@ -79,11 +79,21 @@ func mapFailModePolicyDocumentToDomain(
 		managed = *doc.Spec.Managed
 	}
 
+	// Copy document rules verbatim into domain rules. The mapper preserves
+	// operator-supplied empty values so failmode.ApplyRuleAxisDefaults can
+	// fill in the effective EnforcementState / Outcome consistently when
+	// the policy is validated, persisted, and later read back. The
+	// defensive failmode.Validate call below operates on a defaulted copy
+	// internally; the persisted Rules slice carries whatever the operator
+	// supplied (post-trim) so a future tranche can distinguish "default"
+	// from "explicit" if needed.
 	rules := make([]failmode.FailModePolicyRule, 0, len(doc.Spec.Rules))
 	for _, r := range doc.Spec.Rules {
 		rules = append(rules, failmode.FailModePolicyRule{
 			CorrectnessClass: failmode.CorrectnessClass(strings.TrimSpace(r.CorrectnessClass)),
 			PermittedMode:    failmode.PermittedMode(strings.TrimSpace(r.PermittedMode)),
+			EnforcementState: failmode.EnforcementState(strings.TrimSpace(r.EnforcementState)),
+			Outcome:          failmode.Outcome(strings.TrimSpace(r.Outcome)),
 			Reason:           strings.TrimSpace(r.Reason),
 		})
 	}

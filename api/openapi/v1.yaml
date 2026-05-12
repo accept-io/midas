@@ -284,6 +284,249 @@ components:
           type: string
           format: date-time
 
+    RuntimeAuditEvent:
+      type: object
+      description: >
+        One audit event in the runtime evidence chain for a governance
+        envelope. Returned by GET /v1/evidence/envelopes/{id}/audit-events
+        (D30b). The shape mirrors the workbench Explorer audit-event
+        response so SIEM and integration consumers can target either
+        route with no transform. Payload is returned as recorded; no
+        redaction is applied at this endpoint.
+      required:
+        - id
+        - envelope_id
+        - request_source
+        - request_id
+        - sequence_no
+        - event_type
+        - performer_type
+        - performer_id
+        - payload
+        - occurred_at
+        - hash
+      properties:
+        id:
+          type: string
+          description: Stable audit-event identifier.
+        envelope_id:
+          type: string
+          description: Envelope this event belongs to.
+        request_source:
+          type: string
+          description: Source system identifier from the originating evaluation.
+        request_id:
+          type: string
+          description: Request identifier from the originating evaluation.
+        sequence_no:
+          type: integer
+          description: 1-based per-envelope sequence number; monotonic in append order.
+        event_type:
+          type: string
+          description: >
+            Event-type identifier from the runtime audit chain. The
+            set of event types is runtime-internal and intentionally
+            not enumerated in this spec; values cover envelope
+            lifecycle, evaluation-step, and governance evidence
+            events.
+        performer_type:
+          type: string
+          description: Performer category (e.g. system, user, service).
+        performer_id:
+          type: string
+          description: Identifier of the performer that produced the event.
+        payload:
+          type: object
+          description: >
+            Event-specific payload as recorded by the runtime. Field
+            shape varies per event_type; consumers should treat the
+            object as free-form JSON and key off event_type when
+            extracting specific fields.
+          additionalProperties: true
+        occurred_at:
+          type: string
+          format: date-time
+          description: When the runtime recorded the event.
+        hash:
+          type: string
+          description: SHA-256 hash of this event in the per-envelope audit chain.
+        prev_hash:
+          type: string
+          description: >
+            SHA-256 hash of the previous event in the chain. Omitted
+            on the first event of an envelope's chain (sequence_no=1).
+
+    RuntimeAuditEventListResponse:
+      type: object
+      description: >
+        Response wrapper for GET /v1/evidence/envelopes/{id}/audit-events.
+        items is always present (empty list for envelopes with no
+        events recorded — an operationally-impossible state in
+        practice, since every persisted envelope has at least lifecycle
+        events). count equals len(items). The endpoint does not
+        paginate; audit chains are bounded by evaluation step count.
+      required:
+        - envelope_id
+        - items
+        - count
+      properties:
+        envelope_id:
+          type: string
+          description: Envelope the chain was retrieved for.
+        items:
+          type: array
+          description: Ordered audit events (SequenceNo ascending).
+          items:
+            $ref: "#/components/schemas/RuntimeAuditEvent"
+        count:
+          type: integer
+          description: Number of events returned. Equals len(items).
+
+    RuntimeAuditEventSearchResponse:
+      type: object
+      description: >
+        Response wrapper for GET /v1/evidence/audit-events (D30c).
+        Cross-envelope search results: items may span multiple
+        envelopes, so the wrapper deliberately omits the envelope_id
+        field that the per-envelope chain response carries. items is
+        always present (empty list is an empty array). count equals
+        len(items). The endpoint applies the audit-list default page
+        size (100) when limit is unset, capped at the maximum (500).
+
+
+        D30j adds next_cursor: an opaque pagination token clients
+        pass back verbatim as the cursor query parameter to retrieve
+        the next page under the same query. The field is absent
+        when no further pages exist; clients use field presence as
+        the stop signal rather than comparing counts.
+      required:
+        - items
+        - count
+      properties:
+        items:
+          type: array
+          description: Audit events matching the filter, ordered by occurred_at per the order query parameter.
+          items:
+            $ref: "#/components/schemas/RuntimeAuditEvent"
+        count:
+          type: integer
+          description: Number of events returned. Equals len(items).
+        next_cursor:
+          type: string
+          description: >
+            Opaque pagination token (D30j). Pass verbatim as the
+            cursor query parameter to retrieve the next page under
+            the same query. Absent when no further pages exist.
+            Bound to the order direction of the originating request:
+            replaying a desc-bound cursor against an asc query is
+            rejected with 400.
+
+    RuntimeEvidenceIntegrityResponse:
+      type: object
+      description: >
+        Response wrapper for GET /v1/evidence/envelopes/{id}/integrity
+        (D30d). Reports the integrity status of the audit-event chain
+        for one envelope. `valid` is true only when every check
+        passes. On `valid: false`, `error_kind` and `error_message`
+        describe the finding; on `valid: true` those fields are
+        omitted.
+
+
+        `first_event_hash` and `final_event_hash` come from the
+        observed audit chain (the first and last event's stored
+        hashes), not from the envelope's recorded integrity anchors;
+        cross-checking those anchors is out of scope for this
+        tranche.
+
+
+        `checked_at` is the timestamp at which the verifier ran. The
+        verifier is stateless and can be re-run idempotently.
+      required:
+        - envelope_id
+        - valid
+        - chain_length
+        - first_event_hash
+        - final_event_hash
+        - checked_at
+      properties:
+        envelope_id:
+          type: string
+          description: Envelope the integrity check was performed on.
+        valid:
+          type: boolean
+          description: True when every chain-integrity check passed; false when an integrity finding is reported.
+        chain_length:
+          type: integer
+          description: Number of audit events observed in the chain. Zero when error_kind is "missing_events".
+        first_event_hash:
+          type: string
+          description: Stored hash of the first audit event in the observed chain. Empty string when the chain is empty.
+        final_event_hash:
+          type: string
+          description: Stored hash of the last audit event in the observed chain. Empty string when the chain is empty.
+        checked_at:
+          type: string
+          format: date-time
+          description: UTC timestamp at which the verifier ran.
+        error_kind:
+          type: string
+          description: >
+            Stable taxonomy of the integrity finding when `valid` is
+            false. One of:
+            "missing_events", "sequence_gap", "prev_hash_mismatch",
+            "event_hash_mismatch", "terminal_state_mismatch", or
+            "unknown" (defensive fallback). Omitted when `valid` is true.
+        error_message:
+          type: string
+          description: Human-readable diagnostic for the integrity finding. Omitted when `valid` is true.
+
+    RuntimeEvidencePacket:
+      type: object
+      description: >
+        Response wrapper for GET /v1/evidence/envelopes/{id}/packet
+        (D30e). Composes three existing runtime evidence reads —
+        envelope detail, the ordered audit-event chain, and the
+        per-envelope integrity verification result — into one
+        export-friendly object. Adds no new shapes: each composed
+        section uses the same schema as its standalone endpoint.
+
+
+        Integrity findings are reported in-band via the embedded
+        `integrity.valid` field. A `valid: false` result indicates a
+        broken audit chain; the packet itself still completed
+        successfully and returns HTTP 200. Repository or verification
+        read failures produce HTTP 500 — the packet is never returned
+        partially.
+
+
+        `submitted.raw` appears only inside the embedded envelope
+        object, preserving the GET /v1/envelopes/{id} contract. The
+        wrapper has no top-level submitted / raw / submitted_hash
+        field. D30e adds no redaction mode.
+      required:
+        - envelope_id
+        - generated_at
+        - envelope
+        - audit_events
+        - integrity
+      properties:
+        envelope_id:
+          type: string
+          description: Envelope the packet was composed for. Matches Envelope.identity.id.
+        generated_at:
+          type: string
+          format: date-time
+          description: UTC timestamp at which the handler composed the packet.
+        envelope:
+          $ref: "#/components/schemas/Envelope"
+        audit_events:
+          type: array
+          description: Ordered audit-event chain for the envelope (SequenceNo ascending). Same item shape as GET /v1/evidence/envelopes/{id}/audit-events.
+          items:
+            $ref: "#/components/schemas/RuntimeAuditEvent"
+        integrity:
+          $ref: "#/components/schemas/RuntimeEvidenceIntegrityResponse"
+
     Surface:
       type: object
       properties:
@@ -481,12 +724,13 @@ components:
     FailModePolicyRule:
       type: object
       description: >
-        A single rule binding a correctness class to its permitted
-        runtime degradation mode (D27j-impl-1c). The closed-only invariant
-        constrains permitted_mode to "closed" for all classes other than
-        "input", which carries "not_applicable". "soft" and "open" are
-        deliberately excluded from this enum until a future tranche
-        admits them subject to durable secondary audit prerequisites.
+        A single rule binding a correctness class to a three-axis
+        runtime-degradation posture (D29b): permitted_mode (Axis A),
+        enforcement_state (Axis B), and outcome (Axis C). Validation
+        enforces a per-posture matrix of permitted (enforcement_state,
+        outcome) combinations; the runtime continues to record the
+        resolved policy as evidence only and does not enforce rule
+        contents in this tranche.
       required: [correctness_class, permitted_mode]
       properties:
         correctness_class:
@@ -494,7 +738,22 @@ components:
           enum: [governance_integrity, persistence, input, resource, consistency]
         permitted_mode:
           type: string
-          enum: [closed, not_applicable]
+          enum: [closed, soft, open, not_applicable]
+        enforcement_state:
+          type: string
+          enum: [evidence_only, dry_run, enforced]
+          default: evidence_only
+          description: >
+            D29b declares the policy posture and intended enforcement
+            state. The runtime currently records this declaration as
+            evidence only and does not enforce it.
+        outcome:
+          type: string
+          enum: [deny, escalate, permit_with_evidence, manual_review]
+          description: >
+            Intended outcome for future dry-run or enforced modes. D29b
+            stores and validates this declaration only; runtime
+            enforcement is not enabled by this schema change.
         reason:
           type: string
           description: Optional free-form note explaining the rule.
@@ -601,6 +860,99 @@ components:
           type: integer
           minimum: 1
         deprecated_by:
+          type: string
+        reason:
+          type: string
+
+    # ---------------------------------------------------------------
+    # FailModePolicy read API (D29d)
+    # ---------------------------------------------------------------
+    FailModePolicyListResponse:
+      type: object
+      description: >
+        Versions list wrapper for FailModePolicy GET endpoints. The
+        array always serialises non-null (empty list when the resource
+        is unknown is mapped to 404 by the handler).
+      required: [fail_mode_policies]
+      properties:
+        fail_mode_policies:
+          type: array
+          items:
+            $ref: "#/components/schemas/FailModePolicy"
+
+    # ---------------------------------------------------------------
+    # DriftDefinition lifecycle (Drift-1e)
+    # ---------------------------------------------------------------
+    SubmitDriftDefinitionRequest:
+      type: object
+      required: [version]
+      properties:
+        version:
+          type: integer
+          minimum: 1
+        submitted_by:
+          type: string
+          description: Optional body fallback when the authenticated principal is not present.
+        reason:
+          type: string
+
+    ApproveDriftDefinitionRequest:
+      type: object
+      required: [version]
+      properties:
+        version:
+          type: integer
+          minimum: 1
+        approved_by:
+          type: string
+          description: Optional body fallback when the authenticated principal is not present.
+
+    RejectDriftDefinitionRequest:
+      type: object
+      required: [version]
+      properties:
+        version:
+          type: integer
+          minimum: 1
+        rejected_by:
+          type: string
+        reason:
+          type: string
+
+    DeprecateDriftDefinitionRequest:
+      type: object
+      description: >
+        DriftDefinition deprecation request. Successor information is
+        optional; when supplied it is persisted on the row's
+        successor_definition_id and successor_version fields. The
+        operator-supplied reason is captured in the control-audit
+        record only.
+      required: [version]
+      properties:
+        version:
+          type: integer
+          minimum: 1
+        deprecated_by:
+          type: string
+        reason:
+          type: string
+        successor_definition_id:
+          type: string
+        successor_version:
+          type: integer
+          minimum: 0
+
+    RetireDriftDefinitionRequest:
+      type: object
+      description: >
+        DriftDefinition retirement request. Allowed source states:
+        draft, review, active, deprecated. Retired is terminal.
+      required: [version]
+      properties:
+        version:
+          type: integer
+          minimum: 1
+        retired_by:
           type: string
         reason:
           type: string
@@ -1537,6 +1889,17 @@ components:
           description: >
             Free-form regulatory-scope label. Mirrors the
             governance-map business_service.regulatory_scope field.
+        fail_mode_policy_id:
+          type: string
+          description: >
+            Optional logical reference to a closed-only FailModePolicy
+            that supplies the default fail-mode posture for surfaces
+            under this service when those surfaces have no explicit
+            override. Empty / omitted when unset. Apply-time validation
+            rejects references to missing, review, deprecated, or
+            retired policies. The projection carries the reference
+            verbatim — no policy lookup or rule inspection is performed
+            on the read path.
         external_ref:
           $ref: "#/components/schemas/AuthorityGraphExternalRefData"
 
@@ -1664,6 +2027,16 @@ components:
           type: string
         process_id:
           type: string
+        fail_mode_policy_id:
+          type: string
+          description: >
+            Optional surface-level FailModePolicy override. Empty /
+            omitted when unset; runtime resolution then falls back to
+            the parent BusinessService's `fail_mode_policy_id`.
+            Apply-time validation rejects references to missing,
+            review, deprecated, or retired policies. The projection
+            carries the reference verbatim — no policy lookup or rule
+            inspection is performed on the read path.
         ai_binding_ids:
           type: array
           items:
@@ -2354,6 +2727,560 @@ components:
           items:
             type: string
 
+    # ---------------------------------------------------------------
+    # Drift (Drift-1d read APIs)
+    # ---------------------------------------------------------------
+    DriftType:
+      type: string
+      description: >
+        V1 drift taxonomy. Population, data, prediction, performance,
+        and concept drift are deferred to V2 and MUST NOT appear here.
+      enum:
+        - invocation
+        - outcome
+        - confidence
+        - latency
+        - evidence
+        - authority
+        - policy
+        - coverage
+        - process_path
+
+    DriftDefinitionStatus:
+      type: string
+      enum:
+        - draft
+        - review
+        - active
+        - deprecated
+        - retired
+
+    DriftStatusBand:
+      type: string
+      description: >
+        Five-band status used by DriftSeries, DriftSeriesPoint, and
+        DriftObservation.detector_status. The split into
+        unknown_insufficient_data and unknown_detector_error is
+        deliberate; there is no single 'unknown' value.
+      enum:
+        - healthy
+        - warning
+        - breached
+        - unknown_insufficient_data
+        - unknown_detector_error
+
+    DriftPointComputationMode:
+      type: string
+      description: >
+        Computation provenance for a series point. Backfill state lives
+        on this enum; it is not encoded on detector_status.
+      enum:
+        - realtime
+        - backfilled
+        - corrected
+        - imported
+
+    DriftObservationOperatorStatus:
+      type: string
+      enum:
+        - open
+        - triaged
+        - resolved
+        - accepted
+        - superseded
+
+    DriftAnnotationStatus:
+      type: string
+      enum:
+        - active
+        - superseded
+
+    DriftAnnotationTargetKind:
+      type: string
+      enum:
+        - series
+        - observation
+
+    DriftAnnotationType:
+      type: string
+      enum:
+        - known_business_change
+        - suppression
+        - remediation_note
+        - acknowledgement
+
+    DriftBaselineStrategy:
+      type: string
+      description: >
+        V1 baseline strategies. champion_challenger and
+        seasonality_aware are deferred to V2 and MUST NOT appear here.
+      enum:
+        - rolling
+        - fixed_governed
+        - previous_equivalent
+        - since_last_governed_change
+        - manually_pinned
+
+    DriftCadence:
+      type: string
+      enum:
+        - minute
+        - hour
+        - day
+        - week
+
+    DriftOrigin:
+      type: string
+      enum:
+        - manual
+        - inferred
+        - auto_instrumented
+
+    DriftTargetEntityKind:
+      type: string
+      description: >
+        The nine governed entity kinds a DriftDefinition may target.
+      enum:
+        - business_service
+        - capability
+        - process
+        - decision_surface
+        - ai_system
+        - ai_system_binding
+        - agent
+        - authority_profile
+        - authority_grant
+
+    DriftThresholdDirection:
+      type: string
+      enum:
+        - ascending
+        - descending
+
+    DriftTargetRef:
+      type: object
+      description: Discriminated reference to a governed entity.
+      required: [kind, id]
+      properties:
+        kind:
+          $ref: "#/components/schemas/DriftTargetEntityKind"
+        id:
+          type: string
+
+    DriftMetricDefinition:
+      type: object
+      description: Embedded metric inside a DriftDefinition revision.
+      required:
+        - metric_id
+        - drift_type
+        - baseline_strategy
+        - window_seconds
+        - cadence
+        - threshold_direction
+        - warning_threshold
+        - breached_threshold
+      properties:
+        metric_id:
+          type: string
+        drift_type:
+          $ref: "#/components/schemas/DriftType"
+        baseline_strategy:
+          $ref: "#/components/schemas/DriftBaselineStrategy"
+        baseline_window_seconds:
+          type: integer
+          minimum: 0
+        window_seconds:
+          type: integer
+          minimum: 1
+        cadence:
+          $ref: "#/components/schemas/DriftCadence"
+        warning_threshold:
+          type: number
+        breached_threshold:
+          type: number
+        threshold_direction:
+          $ref: "#/components/schemas/DriftThresholdDirection"
+        governance_expectation_ref:
+          type: string
+        governance_expectation_ver:
+          type: integer
+          minimum: 0
+        description:
+          type: string
+
+    DriftDefinition:
+      type: object
+      description: >
+        Governed, versioned drift specification. Composite (id, version)
+        identity. Apply persists Status='review'; activation lives in a
+        future approval-endpoint tranche.
+      required:
+        - id
+        - version
+        - name
+        - status
+        - effective_date
+        - business_owner
+        - technical_owner
+        - target
+        - metrics
+        - origin
+        - managed
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        version:
+          type: integer
+          minimum: 1
+        name:
+          type: string
+        description:
+          type: string
+        status:
+          $ref: "#/components/schemas/DriftDefinitionStatus"
+        effective_date:
+          type: string
+          format: date-time
+        effective_until:
+          type: string
+          format: date-time
+          nullable: true
+        retired_at:
+          type: string
+          format: date-time
+          nullable: true
+        business_owner:
+          type: string
+        technical_owner:
+          type: string
+        target:
+          $ref: "#/components/schemas/DriftTargetRef"
+        metrics:
+          type: array
+          items:
+            $ref: "#/components/schemas/DriftMetricDefinition"
+        origin:
+          $ref: "#/components/schemas/DriftOrigin"
+        managed:
+          type: boolean
+        replaces:
+          type: string
+        successor_definition_id:
+          type: string
+        successor_version:
+          type: integer
+          minimum: 0
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        created_by:
+          type: string
+        approved_by:
+          type: string
+        approved_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    DriftDefinitionListResponse:
+      type: object
+      required: [drift_definitions]
+      properties:
+        drift_definitions:
+          type: array
+          items:
+            $ref: "#/components/schemas/DriftDefinition"
+
+    DriftSeries:
+      type: object
+      description: One time-ordered stream for a (definition revision, metric, cadence) tuple.
+      required:
+        - id
+        - definition_id
+        - definition_version
+        - metric_id
+        - cadence
+        - status
+        - continuity_group_id
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        definition_id:
+          type: string
+        definition_version:
+          type: integer
+          minimum: 1
+        metric_id:
+          type: string
+        cadence:
+          $ref: "#/components/schemas/DriftCadence"
+        status:
+          $ref: "#/components/schemas/DriftStatusBand"
+        continuity_group_id:
+          type: string
+        previous_series_id:
+          type: string
+        superseded_by_series_id:
+          type: string
+        cutover_at:
+          type: string
+          format: date-time
+          nullable: true
+        sealed_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    DriftSeriesListResponse:
+      type: object
+      required: [drift_series]
+      properties:
+        drift_series:
+          type: array
+          items:
+            $ref: "#/components/schemas/DriftSeries"
+
+    DriftSeriesPoint:
+      type: object
+      description: >
+        Append-only window summary. summary_stats and baseline_stats
+        are opaque JSON objects whose internal shape is detector-
+        specific. Backfill state is encoded on computation_mode +
+        backfill_run_id, NOT on status.
+      required:
+        - id
+        - series_id
+        - window_start
+        - window_end
+        - sample_count
+        - summary_stats
+        - baseline_stats
+        - magnitude
+        - status
+        - computation_mode
+        - computed_at
+        - source_window_complete
+        - provenance_envelope_ids
+        - created_at
+      properties:
+        id:
+          type: string
+        series_id:
+          type: string
+        window_start:
+          type: string
+          format: date-time
+        window_end:
+          type: string
+          format: date-time
+        sample_count:
+          type: integer
+          minimum: 0
+        summary_stats:
+          type: object
+          description: Detector-specific summary stats; opaque object whose internal shape is detector-specific.
+          additionalProperties: true
+        baseline_stats:
+          type: object
+          description: Detector-specific baseline stats; opaque object whose internal shape is detector-specific.
+          additionalProperties: true
+        baseline_window_id:
+          type: string
+        magnitude:
+          type: number
+        status:
+          $ref: "#/components/schemas/DriftStatusBand"
+        computation_mode:
+          $ref: "#/components/schemas/DriftPointComputationMode"
+        computed_at:
+          type: string
+          format: date-time
+        backfill_run_id:
+          type: string
+        source_window_complete:
+          type: boolean
+        provenance_envelope_ids:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+
+    DriftSeriesPointListResponse:
+      type: object
+      required: [drift_series_points]
+      properties:
+        drift_series_points:
+          type: array
+          items:
+            $ref: "#/components/schemas/DriftSeriesPoint"
+
+    DriftObservation:
+      type: object
+      description: >
+        Audit-chain-bearing detector result. The observation itself
+        does not mutate runtime state; future FailModePolicy resolvers
+        may consume it as evidence input.
+      required:
+        - id
+        - definition_id
+        - definition_version
+        - series_id
+        - point_id
+        - target
+        - drift_type
+        - magnitude
+        - detector_status
+        - operator_status
+        - observed_window_start
+        - observed_window_end
+        - detected_at
+        - emitted_at
+        - backfilled
+        - evidence_envelope_ids
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        definition_id:
+          type: string
+        definition_version:
+          type: integer
+          minimum: 1
+        series_id:
+          type: string
+        point_id:
+          type: string
+        target:
+          $ref: "#/components/schemas/DriftTargetRef"
+        drift_type:
+          $ref: "#/components/schemas/DriftType"
+        magnitude:
+          type: number
+        detector_status:
+          $ref: "#/components/schemas/DriftStatusBand"
+        operator_status:
+          $ref: "#/components/schemas/DriftObservationOperatorStatus"
+        baseline_window_id:
+          type: string
+        observed_window_start:
+          type: string
+          format: date-time
+        observed_window_end:
+          type: string
+          format: date-time
+        detected_at:
+          type: string
+          format: date-time
+        emitted_at:
+          type: string
+          format: date-time
+        backfilled:
+          type: boolean
+        backfill_run_id:
+          type: string
+        evidence_envelope_ids:
+          type: array
+          items:
+            type: string
+        related_fail_mode_policy_id:
+          type: string
+        related_governance_exp_ref:
+          type: string
+        correction_of:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    DriftObservationListResponse:
+      type: object
+      required: [drift_observations]
+      properties:
+        drift_observations:
+          type: array
+          items:
+            $ref: "#/components/schemas/DriftObservation"
+
+    DriftAnnotationTargetRef:
+      type: object
+      required: [kind, id]
+      properties:
+        kind:
+          $ref: "#/components/schemas/DriftAnnotationTargetKind"
+        id:
+          type: string
+
+    DriftAnnotation:
+      type: object
+      description: Operator commentary against a series or observation.
+      required:
+        - id
+        - target
+        - annotation_type
+        - body
+        - reference_envelope_ids
+        - status
+        - author_id
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        target:
+          $ref: "#/components/schemas/DriftAnnotationTargetRef"
+        annotation_type:
+          $ref: "#/components/schemas/DriftAnnotationType"
+        body:
+          type: string
+        suppression_until:
+          type: string
+          format: date-time
+          nullable: true
+        reference_envelope_ids:
+          type: array
+          items:
+            type: string
+        status:
+          $ref: "#/components/schemas/DriftAnnotationStatus"
+        superseded_by_id:
+          type: string
+        author_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    DriftAnnotationListResponse:
+      type: object
+      required: [drift_annotations]
+      properties:
+        drift_annotations:
+          type: array
+          items:
+            $ref: "#/components/schemas/DriftAnnotation"
+
 paths:
   /healthz:
     get:
@@ -2654,6 +3581,367 @@ paths:
                 $ref: "#/components/schemas/Error"
         "404":
           description: Decision not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/evidence/envelopes/{id}/audit-events:
+    get:
+      operationId: getEvidenceEnvelopeAuditEvents
+      summary: Get the runtime audit-event chain for one envelope
+      description: >
+        Returns the ordered runtime audit-event chain for one evaluation
+        envelope. Events are returned newest-last in SequenceNo
+        ascending order — the same order the runtime appended them.
+        Payloads are returned as recorded; no redaction is applied.
+
+
+        This endpoint does NOT return the submitted request payload; use
+        GET /v1/envelopes/{id} for envelope details (which includes the
+        verbatim submitted JSON under the `submitted.raw` field).
+
+
+        Read-only. Backed by the production envelope and audit
+        repositories. Disjoint from the Explorer audit-events route
+        (GET /explorer/envelopes/{id}/audit-events), which uses the
+        Explorer-isolated in-memory store and is workbench-only.
+
+
+        Requires platform.viewer, platform.operator, or platform.admin.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Envelope ID.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Ordered audit-event chain for the envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuntimeAuditEventListResponse"
+        "400":
+          description: Missing or invalid envelope ID.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Envelope not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Repository error while reading the audit chain.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: Evidence read service is not configured on this deployment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/evidence/envelopes/{id}/integrity:
+    get:
+      operationId: getEvidenceEnvelopeIntegrity
+      summary: Verify the audit-event chain integrity for one envelope
+      description: >
+        Runs the per-envelope integrity verifier against the
+        production audit chain for the specified envelope and returns
+        a structured status report. Integrity findings (a broken
+        chain) are reported with HTTP 200 and `valid: false` — a
+        broken chain is the result being reported, not a transport
+        failure. HTTP 500 is reserved for repository / hash-compute
+        errors that prevent verification from completing.
+
+
+        The response does NOT include audit-event payloads, audit-event
+        IDs, the envelope's submitted request payload, or the
+        envelope's submitted hash. Callers that need that detail use
+        GET /v1/evidence/envelopes/{id}/audit-events for the chain or
+        GET /v1/envelopes/{id} for envelope detail.
+
+
+        Requires platform.viewer, platform.operator, or platform.admin.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Envelope ID.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: >
+            Integrity verification ran to completion. `valid` reports
+            the result: true when every check passed; false when an
+            integrity finding was reported. On `valid: false`,
+            `error_kind` and `error_message` describe the finding.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuntimeEvidenceIntegrityResponse"
+        "400":
+          description: Missing or invalid envelope ID.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Envelope not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Repository or hash-compute error prevented verification from completing.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: Evidence read service is not configured on this deployment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/evidence/envelopes/{id}/packet:
+    get:
+      operationId: getEvidenceEnvelopePacket
+      summary: Export a decision evidence packet for one envelope
+      description: >
+        Returns a single decision evidence packet composing the
+        existing production reads for one evaluation envelope: the
+        envelope object (same shape as GET /v1/envelopes/{id}), the
+        ordered audit-event chain (same items as
+        GET /v1/evidence/envelopes/{id}/audit-events), and the
+        per-envelope integrity verification result (same shape as
+        GET /v1/evidence/envelopes/{id}/integrity).
+
+
+        Integrity findings are reported in-band: a broken audit chain
+        produces HTTP 200 with `integrity.valid: false`. Repository or
+        verification read failures produce HTTP 500 — the packet is
+        never returned partially.
+
+
+        The envelope sub-object preserves the existing
+        /v1/envelopes/{id} contract, including its `submitted.raw`
+        field. The packet wrapper itself has no top-level submitted /
+        raw / submitted_hash field; D30e adds no redaction mode and
+        no query flag toggles that placement.
+
+
+        Requires platform.viewer, platform.operator, or platform.admin.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Envelope ID.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Packet composed successfully. `integrity.valid` reports the chain status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuntimeEvidencePacket"
+        "400":
+          description: Missing or invalid envelope ID.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Envelope not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Repository or verification read failure prevented packet composition.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: Evidence read service is not configured on this deployment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/evidence/audit-events:
+    get:
+      operationId: searchEvidenceAuditEvents
+      summary: Search runtime audit events across envelopes
+      description: >
+        Returns runtime audit events matching the supplied filter,
+        newest-first by default. Backed by the same audit list
+        primitive that powers /v1/coverage and applies the same hard
+        upper bound (default page size 100, maximum 500). Cross-envelope
+        search complements GET /v1/evidence/envelopes/{id}/audit-events
+        (envelope-scoped chain).
+
+
+        Payloads are returned as recorded; no redaction. This endpoint
+        does NOT expose the submitted request payload — use
+        GET /v1/envelopes/{id} for envelope details. payload_contains
+        and offset / page-number pagination are intentionally not
+        exposed; the D30j cursor parameter is the only supported
+        pagination mechanism.
+
+
+        Pagination model (D30j): the response carries an optional
+        next_cursor opaque token; clients pass it back verbatim as
+        the cursor query parameter to fetch the next page. The
+        cursor is bound to the order direction of the originating
+        request — replaying a desc cursor against an asc query is
+        rejected with 400. Pagination stops when next_cursor is
+        absent from the response.
+
+
+        Requires platform.viewer, platform.operator, or platform.admin.
+      parameters:
+        - name: event_type
+          in: query
+          required: false
+          description: Single audit event type. event_types wins when both are supplied.
+          schema: { type: string }
+        - name: event_types
+          in: query
+          required: false
+          description: >
+            Comma-separated list of audit event types. Empty tokens
+            are rejected with 400. Whitespace around each token is
+            trimmed. When non-empty, takes precedence over event_type.
+          schema: { type: string }
+        - name: envelope_id
+          in: query
+          required: false
+          description: Exact-match filter on envelope_id.
+          schema: { type: string }
+        - name: request_source
+          in: query
+          required: false
+          description: Exact-match filter on request_source.
+          schema: { type: string }
+        - name: request_id
+          in: query
+          required: false
+          description: Exact-match filter on request_id.
+          schema: { type: string }
+        - name: since
+          in: query
+          required: false
+          description: RFC3339 timestamp; inclusive lower bound on event occurred_at.
+          schema: { type: string, format: date-time }
+        - name: until
+          in: query
+          required: false
+          description: RFC3339 timestamp; exclusive upper bound on event occurred_at. Must not be earlier than since.
+          schema: { type: string, format: date-time }
+        - name: limit
+          in: query
+          required: false
+          description: Positive integer in 1..500. Empty applies the audit-list default page size (100). Oversize values are rejected with 400.
+          schema: { type: integer, minimum: 1, maximum: 500 }
+        - name: order
+          in: query
+          required: false
+          description: Result ordering by occurred_at. Defaults to desc (newest first).
+          schema:
+            type: string
+            enum: [asc, desc]
+        - name: cursor
+          in: query
+          required: false
+          description: >
+            Opaque pagination token from a prior response's
+            next_cursor (D30j). Pass verbatim — clients must not
+            decode or modify the token. The cursor is bound to the
+            order direction of the originating request; replaying a
+            desc cursor against an asc query is rejected with 400.
+            A malformed token is rejected with 400.
+          schema: { type: string }
+      responses:
+        "200":
+          description: Audit events matching the filter.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuntimeAuditEventSearchResponse"
+        "400":
+          description: Malformed query parameter (e.g. non-numeric limit, oversize limit, unparseable since/until, until earlier than since, empty event_types token, unknown order value, malformed or order-mismatched cursor).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Repository error while reading audit events.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: Evidence read service is not configured on this deployment.
           content:
             application/json:
               schema:
@@ -3391,6 +4679,343 @@ paths:
                 $ref: "#/components/schemas/Error"
         "409":
           description: FailModePolicy is not in active state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # -----------------------------------------------------------------
+  # DriftDefinition lifecycle (Drift-1e)
+  # -----------------------------------------------------------------
+
+  /v1/controlplane/drift_definitions/{id}/submit:
+    post:
+      operationId: submitDriftDefinition
+      summary: Submit a DriftDefinition revision for review
+      description: >
+        Transitions a specific DriftDefinition revision from draft to
+        review. Requires platform.operator or platform.admin role
+        (permission `drift_definition:submit`).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubmitDriftDefinitionRequest"
+      responses:
+        "200":
+          description: DriftDefinition transitioned to review
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DriftDefinition"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission (requires drift_definition:submit)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: DriftDefinition not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: DriftDefinition is not in draft state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: Approval service not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/controlplane/drift_definitions/{id}/approve:
+    post:
+      operationId: approveDriftDefinition
+      summary: Approve a DriftDefinition revision in review state
+      description: >
+        Transitions a specific DriftDefinition revision from review to
+        active. Maker-checker is enforced at the service layer: the
+        approver must not equal the revision's `created_by` field
+        (case-insensitive trim). Requires governance.approver or
+        platform.admin role (permission `drift_definition:approve`).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApproveDriftDefinitionRequest"
+      responses:
+        "200":
+          description: DriftDefinition approved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DriftDefinition"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission or maker-checker violation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: DriftDefinition not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: DriftDefinition is not in review state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: Approval service not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/controlplane/drift_definitions/{id}/reject:
+    post:
+      operationId: rejectDriftDefinition
+      summary: Reject a DriftDefinition revision back to draft
+      description: >
+        Transitions a specific DriftDefinition revision from review back
+        to draft. Approved_by and approved_at are not modified
+        (review-state revisions have neither set). The operator-supplied
+        reason is captured in the control-audit record only. Requires
+        governance.approver or platform.admin role (permission
+        `drift_definition:reject`).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RejectDriftDefinitionRequest"
+      responses:
+        "200":
+          description: DriftDefinition transitioned to draft
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DriftDefinition"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission (requires drift_definition:reject)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: DriftDefinition not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: DriftDefinition is not in review state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: Approval service not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/controlplane/drift_definitions/{id}/deprecate:
+    post:
+      operationId: deprecateDriftDefinition
+      summary: Deprecate an active DriftDefinition revision
+      description: >
+        Transitions a specific DriftDefinition revision from active to
+        deprecated. Successor information is optional; when supplied
+        it is persisted on the row's `successor_definition_id` and
+        `successor_version` fields. The operator-supplied reason is
+        captured in the control-audit record only. Requires
+        platform.admin role (permission `drift_definition:deprecate`).
+        Cross-version atomic deprecation (auto-deprecate prior active
+        when activating a new revision) is intentionally NOT performed
+        — operators must call this endpoint explicitly.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeprecateDriftDefinitionRequest"
+      responses:
+        "200":
+          description: DriftDefinition deprecated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DriftDefinition"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission (requires drift_definition:deprecate)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: DriftDefinition not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: DriftDefinition is not in active state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: Approval service not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/controlplane/drift_definitions/{id}/retire:
+    post:
+      operationId: retireDriftDefinition
+      summary: Retire a DriftDefinition revision
+      description: >
+        Transitions a DriftDefinition revision to retired. Allowed
+        source states: draft, review, active, deprecated. Retired is
+        terminal — already-retired revisions are rejected with 409.
+        Requires platform.admin role (permission
+        `drift_definition:retire`).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RetireDriftDefinitionRequest"
+      responses:
+        "200":
+          description: DriftDefinition retired
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DriftDefinition"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission (requires drift_definition:retire)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: DriftDefinition not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: DriftDefinition is already retired (terminal)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: Approval service not configured
           content:
             application/json:
               schema:
@@ -5011,3 +6636,852 @@ paths:
                 $ref: "#/components/schemas/Error"
               example:
                 error: admin-audit not configured
+
+  # -----------------------------------------------------------------
+  # Drift (Drift-1d read APIs)
+  # -----------------------------------------------------------------
+
+  /v1/drift/definitions/{id}:
+    get:
+      operationId: getDriftDefinition
+      summary: Get the latest version of a DriftDefinition by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Drift definition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DriftDefinition"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Drift definition not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Repository error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: Drift definition reader not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/drift/definitions/{id}/versions:
+    get:
+      operationId: listDriftDefinitionVersions
+      summary: List all versions of a DriftDefinition
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Versions list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DriftDefinitionListResponse"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Drift definition not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Repository error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: Drift definition reader not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/drift/definitions/{id}/versions/{version}:
+    get:
+      operationId: getDriftDefinitionVersion
+      summary: Get a specific DriftDefinition revision
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: version
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: Drift definition version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DriftDefinition"
+        "400":
+          description: Version path segment is not a positive integer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Drift definition or version not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Repository error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: Drift definition reader not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/drift/definitions/{id}/series:
+    get:
+      operationId: listDriftSeriesByDefinition
+      summary: List DriftSeries for a DriftDefinition
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Series list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DriftSeriesListResponse"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Repository error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: Drift series reader not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/drift/definitions/{id}/observations:
+    get:
+      operationId: listDriftObservationsByDefinition
+      summary: List DriftObservations for a DriftDefinition
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Observations list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DriftObservationListResponse"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Repository error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: Drift observation reader not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/drift/series/{id}:
+    get:
+      operationId: getDriftSeries
+      summary: Get a DriftSeries by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Drift series
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DriftSeries"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Drift series not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Repository error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: Drift series reader not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/drift/series/{id}/points:
+    get:
+      operationId: listDriftSeriesPoints
+      summary: List DriftSeriesPoints for a series
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: from_window
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: Inclusive lower bound on window_start; RFC3339.
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+      responses:
+        "200":
+          description: Points list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DriftSeriesPointListResponse"
+        "400":
+          description: Invalid query parameter (limit out of range or from_window not RFC3339)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Repository error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: Drift series point reader not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/drift/series/{id}/observations:
+    get:
+      operationId: listDriftObservationsBySeries
+      summary: List DriftObservations for a series
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Observations list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DriftObservationListResponse"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Repository error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: Drift observation reader not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/drift/series/{id}/annotations:
+    get:
+      operationId: listDriftAnnotationsBySeries
+      summary: List DriftAnnotations attached to a series
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Annotations list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DriftAnnotationListResponse"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Repository error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: Drift annotation reader not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/drift/series-points/{id}:
+    get:
+      operationId: getDriftSeriesPoint
+      summary: Get a DriftSeriesPoint by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Drift series point
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DriftSeriesPoint"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Drift series point not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Repository error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: Drift series point reader not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/drift/observations/{id}:
+    get:
+      operationId: getDriftObservation
+      summary: Get a DriftObservation by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Drift observation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DriftObservation"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Drift observation not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Repository error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: Drift observation reader not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/drift/observations/{id}/annotations:
+    get:
+      operationId: listDriftAnnotationsByObservation
+      summary: List DriftAnnotations attached to an observation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Annotations list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DriftAnnotationListResponse"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Repository error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: Drift annotation reader not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/drift/annotations/{id}:
+    get:
+      operationId: getDriftAnnotation
+      summary: Get a DriftAnnotation by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Drift annotation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DriftAnnotation"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Drift annotation not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Repository error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: Drift annotation reader not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/drift/entities/{kind}/{entity_id}/observations:
+    get:
+      operationId: listDriftObservationsByEntity
+      summary: List DriftObservations for a governed entity target
+      parameters:
+        - name: kind
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/DriftTargetEntityKind"
+        - name: entity_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Observations list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DriftObservationListResponse"
+        "400":
+          description: Invalid target entity kind
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Repository error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: Drift observation reader not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # -----------------------------------------------------------------
+  # FailModePolicy read API (D29d)
+  # -----------------------------------------------------------------
+
+  /v1/fail_mode_policies/{id}:
+    get:
+      operationId: getFailModePolicy
+      summary: Get the latest version of a FailModePolicy by ID
+      description: >
+        Returns the highest-numbered FailModePolicy version for the
+        given id regardless of lifecycle status. Read-only; the
+        runtime resolver remains evidence-only and rule contents do
+        not influence outcome computation.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: FailModePolicy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FailModePolicy"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: FailModePolicy not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Repository error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: FailModePolicy reader not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/fail_mode_policies/{id}/versions:
+    get:
+      operationId: listFailModePolicyVersions
+      summary: List all versions of a FailModePolicy
+      description: >
+        Returns every persisted revision of the FailModePolicy id in
+        descending version order. 404 when the id is unknown.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Versions list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FailModePolicyListResponse"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: FailModePolicy not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Repository error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: FailModePolicy reader not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/fail_mode_policies/{id}/versions/{version}:
+    get:
+      operationId: getFailModePolicyVersion
+      summary: Get a specific FailModePolicy revision
+      description: >
+        Returns the exact (id, version) revision. 404 when the pair
+        does not exist. The runtime resolver remains evidence-only.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: version
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: FailModePolicy version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FailModePolicy"
+        "400":
+          description: Version path segment is not a positive integer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: FailModePolicy or version not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Repository error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: FailModePolicy reader not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"

@@ -29,12 +29,15 @@ const (
 )
 
 // FailMode controls the narrow runtime behaviour when the policy evaluator
-// returns an error for this authority profile. It is the only currently
-// runtime-effective fail-mode field in MIDAS (the sibling surface.FailureMode
-// is persisted but runtime-dead — see internal/surface for that field's
-// status). Scope is precisely the policy-evaluator-error sub-case in
-// internal/decision/orchestrator.go (evaluatePolicy); no other failure path
-// consults this value.
+// returns an error for this authority profile. It is the profile-scoped
+// runtime fallback for policy-evaluator errors; FailModePolicy is the
+// governed, hierarchical mechanism for fail-mode policy resolution and
+// enforcement. When an enforced FailModePolicy applies for the
+// policy_evaluator_error trigger (per D29f), the FailModePolicy outcome
+// overrides this fallback; otherwise authority.FailMode's behaviour is
+// applied exactly. Scope is precisely the policy-evaluator-error sub-case
+// in internal/decision/orchestrator.go (evaluatePolicy); no other failure
+// path consults this value.
 //
 //   - FailModeOpen:   on policy-evaluator error, the policy step is skipped
 //                     and evaluation continues. The path is canonically
@@ -42,14 +45,10 @@ const (
 //                     policy_evaluated audit-event payload currently records
 //                     allowed:true rather than an explicit degraded marker.
 //                     This audit-payload encoding is a known legacy
-//                     limitation, scheduled for migration when FailModePolicy
-//                     lands (D27j).
+//                     limitation; FailModePolicy enforcement (D29f) provides
+//                     the explicit-degradation alternative when configured.
 //   - FailModeClosed: on policy-evaluator error, the decision escalates with
 //                     ReasonPolicyError. Conventional default.
-//
-// Broader fail-mode posture across correctness classes will be governed by
-// the future FailModePolicy entity. See docs/operations/runtime-readiness.md
-// §11 for the operator-facing summary.
 type FailMode string
 
 const (

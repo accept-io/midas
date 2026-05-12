@@ -362,6 +362,8 @@ Use any standard Postgres backup mechanism (logical via `pg_dump` for small depl
 
 After a restore, operators should plan to verify the chain. **Note**: a verification primitive exists in code (the hash function plus the integrity helpers in [internal/audit/integrity.go](../../internal/audit/integrity.go)), but a packaged operator-facing CLI for "verify all chains in this database" is not yet shipped. Verification is currently exercised through tests and through bespoke operator queries. Building a first-class `midas verify-audit` command is a known gap.
 
+**Per-envelope verification is exposed as an HTTP endpoint** through the runtime evidence API: `GET /v1/evidence/envelopes/{id}/integrity` runs the same chain verifier and returns a structured status report. The endpoint reports integrity findings *in-band* (HTTP 200 with `valid: false` plus an `error_kind` taxonomy); HTTP 500 is reserved for repository / hash-compute failures that prevent verification from completing. The same family also exposes the audit-event chain (`/v1/evidence/envelopes/{id}/audit-events`), cross-envelope search (`/v1/evidence/audit-events`), and a composed evidence packet (`/v1/evidence/envelopes/{id}/packet`). See [`docs/operations/runtime-evidence-api.md`](runtime-evidence-api.md) for the operator guide.
+
 **Do not claim** RPO < 1 minute or RTO < 2 hours from MIDAS alone — those are properties of your Postgres deployment.
 
 ---
@@ -377,7 +379,7 @@ This section answers a single question: **for a service of a given tier, can MID
 | **Tier 4** (low criticality / non-core) | ✅ Supported | F1's explicit fail-closed semantics are sufficient. Brief inability to make a governed decision is recoverable; ungoverned decisions are not desired. |
 | **Tier 3** (important but recoverable) | ✅ Supported | F1's class-aware status mapping plus the `audit_status` marker plus the chunk-1 audit trail give an operator the signals they need to triage and recover. The narrow fail-open exception (below) is documented and bounded. |
 | **Tier 2** (material service impact, strong recovery expected) | ⚠️ Conditional | Supported where the business process tolerates *brief* fail-closed behaviour during dependency outages. Run a controlled pilot first; characterise recovery time empirically against your Postgres topology before promoting. |
-| **Tier 1** (highest criticality; breaks intolerable) | ❌ Not yet | Inline use requires configurable per-surface FailModePolicy plus audit-chain encoding of degraded outcomes. Both are next-tranche work (see §15). Today, run MIDAS in **advisory** mode for Tier 1 flows: the caller logs the request, calls MIDAS asynchronously, and reconciles outcomes out of band. |
+| **Tier 1** (highest criticality; breaks intolerable) | ❌ Not yet | Per-surface FailModePolicy and explicit audit-chain encoding of governed degraded outcomes are shipped (see §11.5), but Tier 1 inline use also requires active-active / multi-region resilience, RPO < 1 minute / RTO < 2 hours, and failover-performance evidence — none of which MIDAS provides today. Run MIDAS in **advisory** mode for Tier 1 flows: the caller logs the request, calls MIDAS asynchronously, and reconciles outcomes out of band. |
 
 **F1 makes Tier 3 inline genuinely supported.** The previous "wait for the fail-mode design tranche" framing is no longer accurate — F1 *is* the fail-mode design tranche, and it ships. Tier 1 still requires further work; Tier 2 is a tier where pilot evidence (not policy gaps) is the gating constraint.
 
@@ -407,20 +409,11 @@ Failure responses on any path do not carry `audit_status`. The marker is for gov
 
 The marker is mandatory in the OpenAPI sense (`required` on `EvaluateResponse`); strict-schema clients break without coordination. F1 takes the clean-break stance — there is no compatibility shim and no opt-in flag. Operators promoting past F1 must update their `/v1/evaluate` consumers.
 
-**Current narrow fail-mode fields.** Two narrow fail-mode fields exist in the model today. Their runtime status is asymmetric — operators applying surfaces and profiles must understand which one actually changes behaviour.
+**Fail-mode governance.** FailModePolicy is the supported fail-mode governance mechanism in MIDAS. It is a governed, versioned resource resolved through the hierarchy DecisionSurface override → BusinessService default → deployment default, and it records resolution, trigger, dry-run, and (where configured) enforcement evidence in the audit chain.
 
-| Field (Go / column) | Persisted? | Runtime-effective today? | Scope | Future direction |
-|---|---|---|---|---|
-| `surface.FailureMode` / `decision_surfaces.failure_mode` | Yes | **No** | Legacy surface-level field. Accepted by control-plane apply and stored, but not consulted by the inline runtime evaluator. | Expected to be replaced by FailModePolicy. May be retired once surfaces have migrated to a FailModePolicy reference. |
-| `authority.FailMode` / `authority_profiles.fail_mode` | Yes | **Yes** | Policy-evaluator-error handling only. `open` skips the policy step on evaluator error (canonically audited; see caveat below); `closed` escalates with `ReasonPolicyError`. No other failure path consults this field. | Expected to migrate into FailModePolicy. The narrow `open` path's audit-payload encoding is fixed at the same time. |
+`authority.FailMode` on the resolved authority profile remains a scoped fallback for the policy-evaluator-error sub-case. It applies when no enforced FailModePolicy rule covers the evaluation: `open` skips the policy step and continues evaluation; `closed` escalates with `ReasonPolicyError`. When an enforced FailModePolicy rule applies, the FailModePolicy outcome wins and `authority.FailMode` is not consulted.
 
-Operators applying a Surface with `failure_mode: closed` or `failure_mode: open` should know the value is round-tripped through the control plane but has no behavioural effect at evaluation time today. The runtime fail-closed posture for surfaces is a property of MIDAS's F1 baseline (see "what F1 ships" above), not of the surface field.
-
-**Named exception — the narrow fail-open path.** When a profile sets `authority.FailMode = open`, a policy-evaluator error during evaluation does *not* surface as a class-aware 503. Instead, the orchestrator returns `OutcomeAccept`, writes a canonical audit envelope, and the inline path returns its normal 200 response. The path is canonically audited (it produces an envelope and an audit event), but the audit-event payload encodes the fail-open decision as `allowed:true` rather than as an explicit degradation marker. **This is a known limitation.** Explicit `degraded:true` / `class:resource` audit-event payload encoding is FailModePolicy work (§15), deliberately deferred from F1.
-
-Operationally: for surfaces that opt into fail-open via `authority.FailMode = open`, briefly degraded outcomes are recorded but are not distinguishable in the audit chain from normal accepts without inspecting upstream context. Operators relying on the audit chain to discriminate degraded from normal accepts on these surfaces should not promote them past Tier 3 until FailModePolicy ships.
-
-**Dead-field finding — `surface.FailureMode`.** The `failure_mode` field on `decision_surface` is set and persisted by the control plane but is never consulted at evaluation time today. Only `authority.FailMode` (on the resolved profile) influences runtime behaviour, and only via the narrow fail-open path described above. Operators applying surfaces with explicit `failure_mode` settings should know the field has no behavioural effect today; the chunk-1 inspection captured this finding and FailModePolicy is the natural place to either retire or rewire the field.
+**Named exception — the narrow fail-open path on `authority.FailMode`.** When a profile sets `authority.FailMode = open` and no enforced FailModePolicy rule applies, a policy-evaluator error returns `OutcomeAccept` and writes a canonical audit envelope. The audit-event payload encodes the fail-open decision as `allowed:true` rather than an explicit degradation marker. Operators that need the explicit-degradation audit shape should configure a FailModePolicy with `enforcement_state=enforced` on the relevant correctness class.
 
 **Three independent surfaces, currently sharing a value.** F1 introduces `correctness_class` on three independent observability surfaces:
 
@@ -434,14 +427,165 @@ The three surfaces are deliberately independent — each is owned by its tranche
 
 For each surface MIDAS evaluates, decide explicitly:
 
-1. **Does the calling process tolerate brief fail-closed behaviour during dependency outages?** If yes, inline is appropriate up to Tier 3 today. If no, do not place MIDAS inline; run advisory until a future tranche provides the surface-specific FailModePolicy you need.
-2. **Does the surface need fail-open semantics?** If yes, set `authority.FailMode = open` on its profile, with eyes open about the audit-encoding caveat above. The narrow fail-open path is canonically audited but the `allowed:true` encoding limits audit-chain discriminability of degraded vs normal accepts. Plan to migrate these surfaces to an explicit FailModePolicy when one ships.
+1. **Does the calling process tolerate brief fail-closed behaviour during dependency outages?** If yes, inline is appropriate up to Tier 3 today. If no, configure an enforced FailModePolicy rule on the relevant correctness class so the runtime applies an explicit governed degradation rather than escalating — see §11.5. If your tolerance constraints cannot be expressed even through enforced FailModePolicy posture, fall back to advisory mode for that flow.
+2. **Does the surface need fail-open semantics?** If yes, either set `authority.FailMode = open` on its profile (the simple fallback, with the `allowed:true` audit-encoding caveat above) or attach a FailModePolicy and set the `resource` correctness class to `enforcement_state=enforced` with `permit_with_evidence` — the latter records the explicit governed-degradation shape on the audit chain as `FAIL_MODE_POLICY_ENFORCED`. See §11.5 for the configuration model and §11.5.6 for the interaction between the two mechanisms.
 3. **Wire `audit_status` into your downstream consumers.** Strict-schema clients must update before promoting past F1. Loose-schema clients (those that ignore unknown fields) are unaffected by the marker addition but should still validate that the field is `recorded` or `explorer_recorded` as documented before treating a response as authoritative.
 4. **Group dashboards on `correctness_class`** for tier-aware system health. `governance_integrity` rates above zero are always a paging concern; `resource` rates indicate degradation-eligible dependency outages; `input` rates indicate client-side defects. See §6 for the metric details.
 
 ### Footnote — Explorer paths and OpenAPI
 
 Explorer paths (`/explorer`, `/explorer/simulate`, `/explorer/envelopes`, etc.) are deliberately out of the v1 public OpenAPI contract today; their `audit_status` semantics are pinned by tests in `internal/httpapi/evaluate_test.go` rather than by spec. Bringing Explorer paths into OpenAPI is a separate governance decision tracked as a future tranche.
+
+---
+
+## 11.5 FailModePolicy runtime operations
+
+> Where §11 framed fail-mode posture in the abstract, this section documents the FailModePolicy mechanism as it actually runs today. It covers the resolution hierarchy, supported triggers, enforcement states, outcome mapping, audit-chain evidence, Records-view inspection, plan-time advisory warnings, and the deployment default config.
+
+### 11.5.1 Core model
+
+**FailModePolicy** is the supported runtime fail-mode mechanism in MIDAS. It is governed (maker-checker), versioned, and resolved through the hierarchy DecisionSurface override → BusinessService default → deployment default. A resolved policy declares, per correctness class, a posture (`permitted_mode`), an enforcement state (`evidence_only` / `dry_run` / `enforced`), and a configured outcome (`deny` / `escalate` / `permit_with_evidence` / `manual_review`).
+
+**`authority.FailMode`** on the resolved authority profile is the profile-scoped fallback for the policy-evaluator-error sub-case. It applies only when no enforced FailModePolicy rule covers the evaluation: `open` continues evaluation; `closed` escalates with `POLICY_ERROR`. When an enforced FailModePolicy rule applies, the FailModePolicy outcome wins and `authority.FailMode` is not consulted.
+
+**`surface.FailureMode`** has been removed. Do not configure a `failure_mode:` field on a DecisionSurface manifest — the strict YAML parser rejects unknown fields. To express fail-mode posture for a surface, use `fail_mode_policy_id` on a DecisionSurface or BusinessService, or configure a deployment default FailModePolicy (§11.5.10).
+
+### 11.5.2 Resolution hierarchy
+
+When MIDAS evaluates a request it walks the FailModePolicy hierarchy in order and stops at the first level that names a policy:
+
+1. **DecisionSurface override** — `Surface.fail_mode_policy_id`.
+2. **BusinessService default** — `BusinessService.fail_mode_policy_id`.
+3. **Deployment default** — `fail_mode.deployment_default_policy_id` from MIDAS config.
+
+Semantics:
+
+- An **empty** reference at a level falls through to the next level.
+- A **non-empty reference that cannot be resolved** as an active policy does **not** silently fall through. The resolver records the failed reference, the orchestrator logs a warning, and the evaluation continues *without* a resolved FailModePolicy. The apply-time validator is the authoritative gate preventing this state from reaching the runtime under normal approved configuration.
+- The resolved policy identity (id, version, source level) is recorded in the audit chain as a `FAIL_MODE_POLICY_RESOLVED` event before agent / authority resolution.
+- The deployment default is empty by default. See §11.5.10.
+
+### 11.5.3 Supported triggers
+
+A trigger is the runtime condition that fires FailModePolicy evidence emission. The supported set today:
+
+| Trigger | Correctness class | When it fires |
+|---|---|---|
+| `policy_evaluator_error` | `resource` | The configured policy evaluator returned a non-nil error after authority resolved. |
+| `authority_resolution_failure` | `resource` | Authority resolution failed before the evaluator step was reached. In-scope causes: no active grant, no active authority profile, authority profile / surface mismatch. |
+
+**Explicitly out of scope** of the FailModePolicy trigger surface today:
+
+- Repository / system errors.
+- Audit / envelope persistence failures.
+- Request validation failures.
+- DriftObservation.
+- Coverage / stale-evidence signals.
+
+These failures use the existing class-aware HTTP error mapping (§11) and the `correctness_class` axis on `evaluation_failed` / `midas_evaluation_failures_total`. They do not invoke the FailModePolicy trigger machinery.
+
+### 11.5.4 Enforcement states
+
+Each FailModePolicy rule carries one of three `enforcement_state` values. The runtime effect:
+
+| State | Effect on runtime outcome | Audit evidence emitted |
+|---|---|---|
+| `evidence_only` | Records that a rule applied; **outcome unchanged**. | `FAIL_MODE_POLICY_RESOLVED` + `FAIL_MODE_POLICY_TRIGGER_FIRED` |
+| `dry_run` | Computes the *would-be* outcome and records it alongside the actual outcome; **outcome unchanged**. | the above + `FAIL_MODE_POLICY_DRY_RUN_DECISION` |
+| `enforced` | Applies the configured outcome; **outcome may change**. Only enforced rules override `authority.FailMode` and authority-chain reject outcomes. | the above + `FAIL_MODE_POLICY_ENFORCED` |
+
+`dry_run` and `enforced` are mutually exclusive per evaluation: a single rule cannot be both, and the orchestrator never emits both follow-up events in the same evaluation. `enforced` applies only when explicitly configured on the rule selected for the trigger's correctness class.
+
+### 11.5.5 Outcome mapping
+
+When `enforcement_state = enforced` (or when a `dry_run` rule computes its would-be result), the rule's configured outcome maps to a runtime outcome and reason code as follows:
+
+| Configured outcome | Runtime outcome | Reason code |
+|---|---|---|
+| `deny` | `reject` | `FAIL_MODE_POLICY_DENIED` |
+| `escalate` | `escalate` | `FAIL_MODE_POLICY_ESCALATED` |
+| `permit_with_evidence` | `accept` | `FAIL_MODE_POLICY_PERMIT_WITH_EVIDENCE` |
+| `manual_review` | `escalate` | `FAIL_MODE_POLICY_MANUAL_REVIEW` |
+
+> MIDAS does not currently have a separate `manual_review` runtime outcome. `manual_review` maps to `escalate` and records `FAIL_MODE_POLICY_MANUAL_REVIEW` so the configured operator intent remains visible on the audit chain.
+
+### 11.5.6 `authority.FailMode` fallback
+
+`authority.FailMode` on the resolved authority profile is the **profile-scoped fallback for the policy-evaluator-error sub-case**. It applies when the gate for FailModePolicy enforcement is not met. The gate fails (and the fallback applies) when any of:
+
+- no FailModePolicy resolved for this evaluation,
+- the resolver could not load the referenced policy,
+- the resolved policy has no matching rule for the trigger's correctness class,
+- the matching rule's `enforcement_state` is `evidence_only` or `dry_run`.
+
+FailModePolicy enforcement **wins** — overriding the authority fallback — only when **all** of these hold:
+
+- a FailModePolicy resolved,
+- a supported trigger fired,
+- the matching rule for the trigger's correctness class exists,
+- `enforcement_state == enforced`.
+
+On the `authority_resolution_failure` path `authority.FailMode` is not consulted at all — no profile is in hand on that path.
+
+**Operator-surprise cases.** Enforced FailModePolicy rules can intentionally override the fallback in either direction. Two examples to be aware of when reviewing policy:
+
+- `authority.FailMode = closed` + enforced `permit_with_evidence` → the decision can proceed (Accept / `FAIL_MODE_POLICY_PERMIT_WITH_EVIDENCE`) where the fallback path would have escalated with `POLICY_ERROR`.
+- `authority.FailMode = open` + enforced `deny` (or `escalate` / `manual_review`) → the decision can be rejected (Reject / `FAIL_MODE_POLICY_DENIED`) where the fallback path would have proceeded.
+
+Both are intentional consequences of explicit FailModePolicy configuration, not bugs. The audit chain records both the enforced outcome and the counterfactual `previous_outcome` / `previous_reason_code` so a reviewer can see what the fallback path would have produced.
+
+### 11.5.7 Audit events
+
+FailModePolicy evidence is recorded in the standard tamper-evident audit chain on the evaluation envelope. Four event kinds, emitted in this order when applicable:
+
+| Event | Purpose |
+|---|---|
+| `FAIL_MODE_POLICY_RESOLVED` | Records which policy resolved and from which hierarchy source (Surface override / BusinessService default / deployment default). Emitted before `AGENT_RESOLVED`. |
+| `FAIL_MODE_POLICY_TRIGGER_FIRED` | Records which supported trigger fired, which correctness class applied, and the matched rule's posture / enforcement state / outcome. Evidence-only — does not branch the runtime outcome. |
+| `FAIL_MODE_POLICY_DRY_RUN_DECISION` | Records the would-be outcome computed from a `dry_run` rule alongside the actual outcome the runtime applied, plus a `divergent` flag. Does not change the outcome. |
+| `FAIL_MODE_POLICY_ENFORCED` | Records that an `enforced` rule applied its configured outcome to the runtime decision. Carries `enforced_outcome` / `enforced_reason_code` and the counterfactual `previous_outcome` / `previous_reason_code`. The only FailModePolicy event that corresponds to a real outcome change. |
+
+The chain ordering on a triggered evaluation is `RESOLVED → TRIGGER_FIRED → (DRY_RUN_DECISION | ENFORCED) → OUTCOME_RECORDED`. `dry_run` and `enforced` are mutually exclusive per evaluation.
+
+### 11.5.8 Records view inspection
+
+To inspect FailModePolicy enforcement evidence for a specific evaluation in the Explorer:
+
+1. Open **Records**.
+2. Select the evaluation envelope to inspect.
+3. Open the audit events panel in the Records detail rail (the **View audit events** action).
+4. Look for `FAIL_MODE_POLICY_*` events on the chain. Each renders as a rich card with policy identity, trigger condition, correctness class, rule posture, and timestamps.
+5. For `FAIL_MODE_POLICY_ENFORCED`, compare `previous_outcome` / `previous_reason_code` (what the fallback path would have produced) with `enforced_outcome` / `enforced_reason_code` (what was actually applied).
+
+On the `authority_resolution_failure` path the detail rail shows an authority-resolution cause line — one of `No active authority grant was available.`, `No active authority profile could be resolved.`, or `The resolved authority profile did not match the decision surface.` — so the operator can identify the specific authority cause without re-running the evaluation.
+
+The Records view is read-only. There are no approve / suppress / override actions on FailModePolicy enforcement events from this surface; FailModePolicy lifecycle is managed through the maker-checker control-plane flow.
+
+### 11.5.9 Plan-time authority / FailModePolicy warnings
+
+When `POST /v1/controlplane/plan` evaluates a control-plane bundle, MIDAS emits a non-blocking advisory warning if an enforced FailModePolicy rule on an affected scope would override the authority profile's fallback posture. Example shapes:
+
+- A profile with `authority.FailMode = closed` covered by an enforced `permit_with_evidence` rule.
+- A profile with `authority.FailMode = open` covered by an enforced `deny`, `escalate`, or `manual_review` rule.
+
+These warnings are advisory: they highlight intentional operator-surprise configurations so the reviewer can confirm the override is deliberate. The plan is **not** rejected on the basis of tension warnings alone; an operator may proceed if the override is the desired behaviour.
+
+### 11.5.10 Deployment default config
+
+A cluster-wide default FailModePolicy can be configured so every evaluation has a baseline policy even when no Surface or BusinessService names one:
+
+```yaml
+fail_mode:
+  deployment_default_policy_id: fmp-default-closed
+```
+
+Equivalent environment override:
+
+```text
+MIDAS_FAIL_MODE_DEPLOYMENT_DEFAULT_POLICY_ID=fmp-default-closed
+```
+
+Default: **empty**. With an empty deployment default, evaluations where no Surface or BusinessService names a policy proceed without any FailModePolicy evidence; the `authority.FailMode` fallback applies as documented in §11.5.6. Setting a deployment default does not affect Surfaces or BusinessServices that already declare `fail_mode_policy_id` — the higher levels in the hierarchy take precedence (§11.5.2).
 
 ---
 
@@ -493,6 +637,7 @@ A practical pre-promotion checklist for a controlled pilot:
 - Tamper-evident audit substrate: SHA-256 hash chain over decision events plus SHA-256 hash of the raw submitted payload per envelope.
 - Idempotency controls: `(request_source, request_id)` uniqueness enforced at the schema and orchestrator level, with deterministic 409 on hash mismatch.
 - Explicit, structurally-marked fail-closed semantics on the inline `/v1/evaluate` path: class-aware HTTP status mapping (`governance_integrity` / `consistency` / `persistence` → 500; `resource` → 503; `input` → existing 4xx), a mandatory `audit_status` marker on governed success responses (`recorded` on `/v1/evaluate`, `explorer_recorded` on `/explorer`), and a `correctness_class` axis on the slog `evaluation_failed` event and on `midas_evaluation_failures_total`. F1 makes Tier 3 inline use genuinely supported.
+- Governed FailModePolicy runtime: three-axis policy declaration, hierarchical resolution (Surface override → BusinessService default → deployment default), two supported triggers (`policy_evaluator_error`, `authority_resolution_failure`) mapped to the `resource` correctness class, three enforcement states (`evidence_only` / `dry_run` / `enforced`) with mutually-exclusive evidence emission, explicit audit-chain encoding for resolution / trigger / dry-run / enforced events, plan-time advisory tension warnings, and Records-view rich rendering of the FailModePolicy evidence cards. See §11.5 for the operator model.
 
 **Cannot claim yet**:
 
@@ -502,8 +647,6 @@ A practical pre-promotion checklist for a controlled pilot:
 - 99.95% availability under measurement.
 - Failover-performance evidence.
 - Multi-replica scaling ceiling (formula exists; not empirically validated).
-- Configurable per-surface FailModePolicy (deferred — F1 ships the foundation; per-surface policy is a future tranche gated on Option B prerequisites).
-- Audit-chain encoding of degraded outcomes (the existing narrow fail-open path encodes `allowed:true`; explicit `degraded:true` / `class:resource` audit-event payload is future FailModePolicy work).
 - Drift analytics in production.
 - Context-freshness instrumentation.
 
@@ -522,15 +665,15 @@ Roadmap guidance, not commitments.
 | **D27i-a-rev1 — Fail-mode governance ADR** | ✅ Shipped. Binding governance ADR for explicit fail-mode semantics. |
 | **D27i-b-rev1 — F1 MVP scoping and chunk decomposition** | ✅ Shipped. Selected MVP F1 and decomposed it into four implementation chunks. |
 | **D27i-c F1 chunks 1–4 — Implementation** | ✅ Shipped. `FailureClass` enum + mapping (chunk 1), class-aware HTTP error mapping (chunk 2), `audit_status` success marker (chunk 3), `correctness_class` Prometheus label and operator-doc refresh (chunk 4). |
+| **D29 series — FailModePolicy as a first-class structural entity** | ✅ Shipped. Three-axis FailModePolicy declaration (permitted mode / enforcement state / outcome), hierarchical resolution (Surface override → BusinessService default → deployment default), two runtime triggers mapped to the `resource` correctness class, bounded enforcement, audit-chain encoding via `FAIL_MODE_POLICY_RESOLVED` / `_TRIGGER_FIRED` / `_DRY_RUN_DECISION` / `_ENFORCED`, plan-time advisory tension warnings, removal of legacy `surface.FailureMode`, central trigger taxonomy, and Records-view rich rendering. See §11.5 for the operator model. |
 
 **Next-tranche work, in rough priority order:**
 
 | Tranche | Purpose |
 |---|---|
-| **FailModePolicy as a first-class structural entity** | Per-surface configurable degraded modes: explicit `degraded:true` audit-event encoding, retirement of the `allowed:true` fail-open caveat, surface-level FailModePolicy gating on profile resolution. Gated on Option B prerequisites becoming tractable. The natural successor to F1; required before Tier 1 inline use. |
 | **D27j — Multi-replica Benchmark Against Shared Postgres** | Empirically validate the connection-pool capacity rule; produce real horizontal-scaling numbers. |
 | **D27k — Outbox and Audit Operational Observability** | Add Prometheus metrics for outbox backlog depth and oldest-unpublished-age; ship a `verify-audit` operator command. |
 | **D28 — Runtime Signal / Drift Architecture Implementation** | Drift analytics as an asynchronous consumer of envelope / audit / outbox streams. Must remain off the inline path. |
-| **D29 — Production HA / Tier-2/Tier-1 Architecture Assessment** | Active-active design, RPO/RTO testing methodology, schema-migration discipline, distributed tracing if required. |
+| **D29-HA — Production HA / Tier-2/Tier-1 Architecture Assessment** | Active-active design, RPO/RTO testing methodology, schema-migration discipline, distributed tracing if required. |
 
-Order: F1 ships the fail-mode foundation; the natural successor is per-surface FailModePolicy, gated on Option B becoming tractable. Multi-replica evidence and observability gap-fills sit alongside that work; drift implementation is only sensible after the operational foundation is stable. See [D27g report](../../) — the runtime-readiness interpretation — for the rationale.
+Order: F1 shipped the class-aware foundation; the D29 series shipped the FailModePolicy runtime that depends on it. The remaining priorities are multi-replica empirical evidence (D27j), outbox / audit operational observability (D27k), drift analytics off the inline path (D28), and the HA / Tier-2/Tier-1 architecture assessment that gates higher-tier inline claims. Drift implementation is only sensible after the operational foundation is stable. See [D27g report](../../) — the runtime-readiness interpretation — for the rationale.

@@ -294,9 +294,19 @@ func (r *FailModePolicyRepo) Update(ctx context.Context, p *failmode.FailModePol
 // failModeRuleRow is the JSONB wire shape for a single rule. The keys are
 // snake_case to match the typical apply-document convention; the inner-
 // structure validation lives in internal/failmode.
+//
+// D29b added enforcement_state and outcome to support the three-axis
+// rule model. Both fields are written with omitempty: a rule whose
+// EnforcementState is "evidence_only" still has a non-empty Go value,
+// so the keys are always present in newly-serialised rows. Legacy
+// JSONB rows written before D29b have neither key; the deserialiser
+// applies axis-aware defaults on read so existing data continues to
+// load with effective values.
 type failModeRuleRow struct {
 	CorrectnessClass string `json:"correctness_class"`
 	PermittedMode    string `json:"permitted_mode"`
+	EnforcementState string `json:"enforcement_state,omitempty"`
+	Outcome          string `json:"outcome,omitempty"`
 	Reason           string `json:"reason,omitempty"`
 }
 
@@ -306,12 +316,20 @@ func serialiseRules(rs []failmode.FailModePolicyRule) []failModeRuleRow {
 		out[i] = failModeRuleRow{
 			CorrectnessClass: string(r.CorrectnessClass),
 			PermittedMode:    string(r.PermittedMode),
+			EnforcementState: string(r.EnforcementState),
+			Outcome:          string(r.Outcome),
 			Reason:           r.Reason,
 		}
 	}
 	return out
 }
 
+// deserialiseRules unmarshals the JSONB array and applies axis-aware
+// defaults to any rule whose EnforcementState or Outcome is missing
+// (D29b backward compatibility). This guarantees that pre-D29b rows,
+// which never carried enforcement_state or outcome, load with the
+// effective values (evidence_only + posture-implied outcome) that the
+// Go validator expects.
 func deserialiseRules(b []byte) ([]failmode.FailModePolicyRule, error) {
 	if len(b) == 0 {
 		return []failmode.FailModePolicyRule{}, nil
@@ -322,11 +340,19 @@ func deserialiseRules(b []byte) ([]failmode.FailModePolicyRule, error) {
 	}
 	out := make([]failmode.FailModePolicyRule, len(rows))
 	for i, r := range rows {
-		out[i] = failmode.FailModePolicyRule{
+		rule := failmode.FailModePolicyRule{
 			CorrectnessClass: failmode.CorrectnessClass(r.CorrectnessClass),
 			PermittedMode:    failmode.PermittedMode(r.PermittedMode),
+			EnforcementState: failmode.EnforcementState(r.EnforcementState),
+			Outcome:          failmode.Outcome(r.Outcome),
 			Reason:           r.Reason,
 		}
+		// Apply D29b axis-aware defaults so legacy rows (no
+		// enforcement_state / outcome keys) load with effective values.
+		// ApplyRuleAxisDefaults is non-mutating and idempotent — newly
+		// serialised rows carry the explicit values and are returned
+		// unchanged.
+		out[i] = failmode.ApplyRuleAxisDefaults(rule)
 	}
 	return out, nil
 }

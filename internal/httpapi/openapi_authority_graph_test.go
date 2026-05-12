@@ -489,3 +489,89 @@ func checkArrayItemsRef(t *testing.T, props map[string]any, name, wantRef string
 		t.Errorf("AuthorityGraphProjection.%s.items.$ref: want %s, got %v", name, wantRef, got)
 	}
 }
+
+// TestOpenAPIContract_AuthorityGraphBusinessServiceData_HasFailModePolicyID
+// pins D27j-ui-2a's additive change to the BS typed-data schema:
+// fail_mode_policy_id is documented as an optional string and is NOT
+// elevated to `required`.
+func TestOpenAPIContract_AuthorityGraphBusinessServiceData_HasFailModePolicyID(t *testing.T) {
+	schemas := loadSpecComponentSchemas(t)
+	bs, ok := schemas["AuthorityGraphBusinessServiceData"].(map[string]any)
+	if !ok {
+		t.Fatal("AuthorityGraphBusinessServiceData schema not a map")
+	}
+	props, ok := bs["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("AuthorityGraphBusinessServiceData has no properties map")
+	}
+	prop, ok := props["fail_mode_policy_id"].(map[string]any)
+	if !ok {
+		t.Fatal("AuthorityGraphBusinessServiceData.properties.fail_mode_policy_id missing")
+	}
+	if got := prop["type"]; got != "string" {
+		t.Errorf("AuthorityGraphBusinessServiceData.fail_mode_policy_id.type: want string, got %v", got)
+	}
+	if req, ok := bs["required"].([]any); ok {
+		for _, r := range req {
+			if r == "fail_mode_policy_id" {
+				t.Error("AuthorityGraphBusinessServiceData.required must NOT include fail_mode_policy_id (optional)")
+			}
+		}
+	}
+}
+
+// TestOpenAPIContract_AuthorityGraphDecisionSurfaceData_HasFailModePolicyID
+// mirrors the BusinessService test for the surface schema.
+func TestOpenAPIContract_AuthorityGraphDecisionSurfaceData_HasFailModePolicyID(t *testing.T) {
+	schemas := loadSpecComponentSchemas(t)
+	ds, ok := schemas["AuthorityGraphDecisionSurfaceData"].(map[string]any)
+	if !ok {
+		t.Fatal("AuthorityGraphDecisionSurfaceData schema not a map")
+	}
+	props, ok := ds["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("AuthorityGraphDecisionSurfaceData has no properties map")
+	}
+	prop, ok := props["fail_mode_policy_id"].(map[string]any)
+	if !ok {
+		t.Fatal("AuthorityGraphDecisionSurfaceData.properties.fail_mode_policy_id missing")
+	}
+	if got := prop["type"]; got != "string" {
+		t.Errorf("AuthorityGraphDecisionSurfaceData.fail_mode_policy_id.type: want string, got %v", got)
+	}
+	if req, ok := ds["required"].([]any); ok {
+		for _, r := range req {
+			if r == "fail_mode_policy_id" {
+				t.Error("AuthorityGraphDecisionSurfaceData.required must NOT include fail_mode_policy_id (optional)")
+			}
+		}
+	}
+}
+
+// TestOpenAPIContract_NoFailModePolicyAuthorityGraphAdditions guards
+// against scope creep in this tranche: D27j-ui-2a is data-plumbing
+// only, so no FailModePolicy node-data schemas, edge schemas, or new
+// authority-graph paths may appear.
+func TestOpenAPIContract_NoFailModePolicyAuthorityGraphAdditions(t *testing.T) {
+	schemas := loadSpecComponentSchemas(t)
+	for _, forbidden := range []string{
+		"AuthorityGraphFailModePolicyData",
+		"AuthorityGraphFailModePolicyNodeData",
+		"AuthorityGraphFailModePolicyEdgeData",
+		"AuthorityGraphEffectiveFailModePolicy",
+	} {
+		if _, ok := schemas[forbidden]; ok {
+			t.Errorf("D27j-ui-2a: forbidden schema %q must not exist (deferred to later tranches)", forbidden)
+		}
+	}
+	specPaths := loadSpecPaths(t)
+	for _, p := range specPaths {
+		// The existing /v1/failmodepolicies* paths from D27j-impl-1c are
+		// fine; what we forbid is anything routing under the authority
+		// graph itself.
+		if p == "/v1/authority-graph/fail-mode-policies" ||
+			p == "/v1/authority-graph/fail_mode_policies" {
+			t.Errorf("D27j-ui-2a: forbidden path %q must not exist", p)
+		}
+	}
+}

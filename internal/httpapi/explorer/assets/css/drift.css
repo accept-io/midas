@@ -1,0 +1,998 @@
+  /* ──────────────────────────────────────────────────────────────────────
+     Drift-2b — Level 1 Drift Overview heatmap
+     Fourth peer sub-view inside #view-services (sibling of
+     #services-catalogue-view, #services-record-view, #services-map-view).
+     Renders a matrix of governed entities (rows) × V1 drift types
+     (columns) showing the latest rolled-up detector status.
+
+     Status colour usage is token-based so the dark and light themes
+     stay legible without redeclaring hexes. The single token reuse
+     called out below is technical debt; introduce a dedicated
+     --warning token in a later tranche and replace the
+     --gmap-type-coverage reference in .drift-status-warning.
+     ────────────────────────────────────────────────────────────── */
+
+  .drift-overview {
+    padding: 0;
+  }
+
+  /* ── Catalogue header — Drift entry-point button row ─────────────── */
+  /* The catalogue header previously held only the title + subtitle +
+     search input stacked vertically. Drift-2b adds a single
+     right-aligned action button ("Drift Overview"); the new
+     header-row wrapper aligns title block and action block on a
+     single horizontal line. Defined here (not in services.css)
+     because the wrapper classes were introduced by Drift-2b. */
+  .services-catalogue-header-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 12px;
+  }
+  .services-catalogue-header-titles {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+  .services-catalogue-header-actions {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* ── Header ──────────────────────────────────────────────────────── */
+
+  .drift-overview-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+  .drift-overview-header-titles {
+    min-width: 0;
+  }
+  .drift-overview-title {
+    font-size: 22px;
+    font-weight: 700;
+    font-family: var(--font-display);
+    color: var(--on-surface);
+    letter-spacing: -0.01em;
+    margin-bottom: 4px;
+  }
+  .drift-overview-subtitle {
+    font-size: 12px;
+    color: var(--slate-500);
+  }
+  .drift-overview-back {
+    background: transparent;
+    border: 0;
+    color: var(--on-surface-variant);
+    font-size: 12px;
+    font-family: inherit;
+    padding: 6px 0;
+    cursor: pointer;
+    margin-bottom: 8px;
+  }
+  .drift-overview-back:hover { color: var(--on-surface); }
+
+  /* ── Summary chips ──────────────────────────────────────────────── */
+
+  .drift-overview-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 10px;
+    margin-bottom: 14px;
+  }
+  .drift-overview-summary-chip {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    padding: 3px 8px;
+    border-radius: var(--radius-tight);
+    border: var(--border-hairline);
+    background: var(--surface-container);
+    color: var(--on-surface-variant);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .drift-overview-summary-chip-count {
+    font-weight: 700;
+    color: var(--on-surface);
+  }
+  .drift-overview-summary-chip[data-status="healthy"]                   { border-color: var(--secondary); }
+  .drift-overview-summary-chip[data-status="warning"]                   { border-color: var(--gmap-type-coverage); }
+  .drift-overview-summary-chip[data-status="breached"]                  { border-color: var(--error); }
+  .drift-overview-summary-chip[data-status="unknown_insufficient_data"] { border-color: var(--outline); border-style: dashed; }
+  .drift-overview-summary-chip[data-status="unknown_detector_error"]    { border-color: var(--error); border-style: dashed; }
+
+  /* ── Synthetic-data badge ───────────────────────────────────────── */
+
+  .drift-synthetic-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    padding: 4px 10px;
+    border-radius: var(--radius-tight);
+    background: var(--surface-container-high);
+    color: var(--on-surface-variant);
+    border: 1px dashed var(--outline-variant);
+    margin-bottom: 12px;
+  }
+  .drift-synthetic-badge-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: var(--radius-pip);
+    background: var(--gmap-type-coverage);
+    display: inline-block;
+  }
+
+  /* ── Toolbar / filters ──────────────────────────────────────────── */
+
+  .drift-overview-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    margin-bottom: 12px;
+  }
+  .drift-overview-search {
+    flex: 1 1 220px;
+    min-width: 180px;
+    padding: 7px 10px;
+    background: var(--surface-container-lowest);
+    border: 0;
+    border-bottom: 2px solid var(--outline-variant);
+    color: var(--on-surface);
+    font-size: 12px;
+    font-family: inherit;
+  }
+  .drift-overview-search:focus {
+    outline: none;
+    border-bottom-color: var(--primary);
+  }
+
+  /* ── Heatmap matrix ─────────────────────────────────────────────── */
+
+  .drift-heatmap {
+    display: grid;
+    grid-template-columns: minmax(260px, 1.4fr) repeat(9, minmax(56px, 1fr));
+    gap: 1px;
+    background: var(--outline-variant);
+    border: var(--border-hairline);
+    border-radius: var(--radius-panel);
+    overflow: hidden;
+  }
+  .drift-heatmap-cell-header,
+  .drift-heatmap-entity,
+  .drift-heatmap-cell {
+    background: var(--surface-container-low);
+    padding: 8px 10px;
+    font-size: 11px;
+    line-height: 1.35;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+  }
+  .drift-heatmap-cell-header {
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 10px;
+    color: var(--slate-400);
+    background: var(--surface-container);
+    justify-content: center;
+    text-align: center;
+  }
+  .drift-heatmap-row {
+    display: contents;
+  }
+  .drift-heatmap-entity {
+    position: sticky;
+    left: 0;
+    background: var(--surface-container);
+    border-right: 1px solid var(--outline-variant);
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+  .drift-heatmap-entity-name {
+    font-family: var(--font-display);
+    font-size: 12px;
+    color: var(--on-surface);
+    font-weight: 600;
+    word-break: break-word;
+  }
+  .drift-heatmap-entity-meta {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--slate-500);
+  }
+  .drift-heatmap-cell {
+    justify-content: center;
+    cursor: pointer;
+    transition: filter 0.12s;
+  }
+  .drift-heatmap-cell:hover,
+  .drift-heatmap-cell:focus {
+    outline: 2px solid var(--primary);
+    outline-offset: -2px;
+    filter: brightness(1.05);
+  }
+  .drift-heatmap-cell-glyph {
+    width: 14px;
+    height: 14px;
+    border-radius: var(--radius-tight);
+    display: inline-block;
+  }
+
+  /* ── Status cell states ─────────────────────────────────────────── */
+
+  /* Five-band detector status plus the empty-cell state. The two
+     unknown variants are deliberately distinct: insufficient_data is
+     a wait / cold-start signal; detector_error is a diagnostic
+     failure. Operators triage them differently — there is no single
+     unknown status. */
+
+  .drift-status-healthy {
+    background: var(--secondary-container);
+    color: var(--on-secondary);
+  }
+  .drift-status-healthy .drift-heatmap-cell-glyph {
+    background: var(--secondary);
+  }
+
+  /* Reuses --gmap-type-coverage; introduce a dedicated --warning token
+     in a future tranche. */
+  .drift-status-warning {
+    background: color-mix(in srgb, var(--gmap-type-coverage) 18%, var(--surface-container-low));
+    color: var(--on-surface);
+  }
+  .drift-status-warning .drift-heatmap-cell-glyph {
+    background: var(--gmap-type-coverage);
+  }
+
+  .drift-status-breached {
+    background: var(--error-container);
+    color: var(--on-surface);
+  }
+  .drift-status-breached .drift-heatmap-cell-glyph {
+    background: var(--error);
+  }
+
+  .drift-status-unknown-insufficient-data {
+    background: var(--surface-container-low);
+    color: var(--on-surface-variant);
+    box-shadow: inset 0 0 0 1px var(--outline-variant);
+  }
+  .drift-status-unknown-insufficient-data .drift-heatmap-cell-glyph {
+    background: transparent;
+    border: 1px dashed var(--outline);
+  }
+
+  .drift-status-unknown-detector-error {
+    background: color-mix(in srgb, var(--error) 10%, var(--surface-container-low));
+    color: var(--on-surface);
+    box-shadow: inset 0 0 0 1px var(--error);
+  }
+  .drift-status-unknown-detector-error .drift-heatmap-cell-glyph {
+    background: transparent;
+    border: 1px dashed var(--error);
+  }
+
+  .drift-status-empty {
+    background: var(--surface-container-lowest);
+    color: var(--slate-500);
+    cursor: default;
+  }
+  .drift-status-empty .drift-heatmap-cell-glyph {
+    display: none;
+  }
+  .drift-status-empty:hover,
+  .drift-status-empty:focus {
+    outline: none;
+    filter: none;
+  }
+
+  /* ── Cell detail / tooltip ──────────────────────────────────────── */
+
+  .drift-heatmap-detail {
+    margin-top: 12px;
+    padding: 12px 14px;
+    background: var(--surface-container);
+    border: var(--border-hairline);
+    border-radius: var(--radius-panel);
+    font-size: 12px;
+    color: var(--on-surface);
+    min-height: 48px;
+  }
+  .drift-heatmap-detail[hidden] { display: none; }
+  .drift-heatmap-detail-header {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    align-items: baseline;
+    margin-bottom: 8px;
+  }
+  .drift-heatmap-detail-title {
+    font-weight: 700;
+    color: var(--on-surface);
+  }
+  .drift-heatmap-detail-meta {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--slate-500);
+  }
+  .drift-heatmap-detail-fields {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 4px 12px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--on-surface-variant);
+  }
+  .drift-heatmap-detail-fields .key {
+    color: var(--slate-500);
+    margin-right: 6px;
+  }
+
+  /* ── Status / empty / error strips ──────────────────────────────── */
+
+  .drift-overview-state {
+    background: var(--surface-container);
+    border: var(--border-hairline);
+    border-radius: var(--radius-panel);
+    padding: 18px 20px;
+    font-size: 12px;
+    color: var(--on-surface-variant);
+    line-height: 1.5;
+    margin-bottom: 12px;
+  }
+  .drift-overview-state strong {
+    color: var(--on-surface);
+    display: block;
+    margin-bottom: 4px;
+    font-weight: 600;
+  }
+  .drift-overview-state.is-error {
+    border-left: 4px solid var(--error);
+  }
+  .drift-overview-state.is-empty {
+    border-left: 4px solid var(--outline);
+  }
+  .drift-overview-state.is-partial {
+    border-left: 4px solid var(--gmap-type-coverage);
+  }
+  .drift-overview-state.is-allhealthy {
+    border-left: 4px solid var(--secondary);
+  }
+  .drift-overview-state.is-allempty {
+    border-left: 4px solid var(--outline-variant);
+    text-align: center;
+  }
+
+  /* ── Light-mode overrides ───────────────────────────────────────── */
+
+  :root[data-theme="light"] .drift-heatmap-cell-header {
+    color: var(--on-surface-variant);
+    background: var(--surface-container);
+  }
+  :root[data-theme="light"] .drift-heatmap-entity {
+    background: var(--surface-container);
+  }
+  :root[data-theme="light"] .drift-status-healthy {
+    background: var(--secondary-container);
+    color: var(--on-surface);
+  }
+  :root[data-theme="light"] .drift-status-warning {
+    background: color-mix(in srgb, var(--gmap-type-coverage) 22%, var(--surface-container-lowest));
+    color: var(--on-surface);
+  }
+  :root[data-theme="light"] .drift-status-breached {
+    background: var(--error-container);
+    color: var(--on-surface);
+  }
+  :root[data-theme="light"] .drift-status-unknown-detector-error {
+    background: color-mix(in srgb, var(--error) 14%, var(--surface-container-lowest));
+  }
+  :root[data-theme="light"] .drift-synthetic-badge {
+    background: var(--surface-container);
+    color: var(--on-surface-variant);
+  }
+
+  /* ──────────────────────────────────────────────────────────────────
+     Drift-2c — Level 2 Drift Workbench
+     Inline below the heatmap. Hidden until a heatmap cell is
+     activated. Header, series rail, magnitude chart, and detail /
+     observations / annotations stack.
+     The chart deliberately renders magnitude only (no thresholds),
+     so the y-axis label reads "Magnitude" verbatim. Backfill is a
+     separate visual cue (.is-backfilled modifier + dashed outer
+     ring) — never folded into a status colour.
+     ─────────────────────────────────────────────────────────────── */
+
+  /* Selected heatmap cell (persistent, distinct from hover/focus) */
+  .drift-heatmap-cell.is-selected {
+    outline: 2px solid var(--primary);
+    outline-offset: -2px;
+    box-shadow: inset 4px 0 0 0 var(--primary);
+  }
+
+  .drift-workbench {
+    margin-top: 16px;
+    padding: 16px;
+    background: var(--surface-container);
+    border: var(--border-hairline);
+    border-radius: var(--radius-panel);
+  }
+  .drift-workbench[hidden] { display: none; }
+
+  .drift-workbench-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px 16px;
+    margin-bottom: 12px;
+  }
+  .drift-workbench-header-titles { min-width: 0; flex: 1 1 320px; }
+  .drift-workbench-close-btn {
+    background: transparent;
+    border: 0;
+    color: var(--on-surface-variant);
+    font-size: 12px;
+    font-family: inherit;
+    padding: 4px 0;
+    cursor: pointer;
+    margin-bottom: 4px;
+  }
+  .drift-workbench-close-btn:hover { color: var(--on-surface); }
+  .drift-workbench-title {
+    font-family: var(--font-display);
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--on-surface);
+    letter-spacing: -0.01em;
+  }
+  .drift-workbench-subtitle {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--slate-500);
+    margin-top: 2px;
+  }
+  .drift-workbench-header-status {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: var(--radius-tight);
+    border: var(--border-hairline);
+    align-self: center;
+  }
+
+  .drift-workbench-state {
+    margin-bottom: 12px;
+    padding: 12px 14px;
+    background: var(--surface-container-low);
+    border: var(--border-hairline);
+    border-radius: var(--radius-panel);
+    font-size: 12px;
+    color: var(--on-surface-variant);
+  }
+  .drift-workbench-state[hidden] { display: none; }
+  .drift-workbench-state strong {
+    color: var(--on-surface);
+    display: block;
+    margin-bottom: 4px;
+    font-weight: 600;
+  }
+
+  .drift-workbench-layout {
+    display: grid;
+    grid-template-columns: minmax(220px, 260px) minmax(0, 1fr) minmax(240px, 320px);
+    gap: 12px;
+    align-items: start;
+  }
+  @media (max-width: 1100px) {
+    .drift-workbench-layout {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  /* ── Series rail ────────────────────────────────────────────────── */
+  .drift-workbench-series-rail {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    background: var(--surface-container-low);
+    border: var(--border-hairline);
+    border-radius: var(--radius-panel);
+    padding: 8px;
+  }
+  .drift-workbench-series-rail-title {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--slate-400);
+    padding: 4px 6px;
+  }
+  .drift-workbench-series-row {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    align-items: flex-start;
+    padding: 8px 10px;
+    background: var(--surface-container);
+    border: var(--border-hairline);
+    border-radius: var(--radius-tight);
+    color: var(--on-surface);
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.12s, border-color 0.12s;
+  }
+  .drift-workbench-series-row:hover { background: var(--surface-container-high); }
+  .drift-workbench-series-row.is-active {
+    border-color: var(--primary);
+    box-shadow: inset 4px 0 0 0 var(--primary);
+  }
+  .drift-workbench-series-row-metric {
+    font-family: var(--font-display);
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .drift-workbench-series-row-meta {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--slate-400);
+  }
+
+  /* ── Chart panel ────────────────────────────────────────────────── */
+  .drift-workbench-chart-panel {
+    background: var(--surface-container-low);
+    border: var(--border-hairline);
+    border-radius: var(--radius-panel);
+    padding: 12px;
+    min-height: 240px;
+  }
+  .drift-workbench-chart {
+    width: 100%;
+    height: 220px;
+    display: block;
+  }
+  .drift-workbench-axis {
+    stroke: var(--outline-variant);
+    stroke-width: 1;
+    fill: none;
+  }
+  .drift-workbench-axis-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    fill: var(--slate-400);
+  }
+  .drift-workbench-axis-title {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    fill: var(--on-surface-variant);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .drift-workbench-line {
+    stroke: var(--on-surface-variant);
+    stroke-width: 1.5;
+    fill: none;
+  }
+  .drift-workbench-baseline {
+    stroke: var(--outline);
+    stroke-width: 1;
+    stroke-dasharray: 2 3;
+    fill: none;
+  }
+  .drift-workbench-point {
+    stroke: var(--surface-container-low);
+    stroke-width: 1;
+  }
+  .drift-workbench-point.status-healthy                   { fill: var(--secondary); }
+  .drift-workbench-point.status-warning                   { fill: var(--gmap-type-coverage); }
+  .drift-workbench-point.status-breached                  { fill: var(--error); }
+  .drift-workbench-point.status-unknown-insufficient-data { fill: transparent; stroke: var(--outline); stroke-dasharray: 2 2; }
+  .drift-workbench-point.status-unknown-detector-error    { fill: transparent; stroke: var(--error); stroke-dasharray: 2 2; }
+  .drift-workbench-point.is-latest                        { stroke: var(--primary); stroke-width: 2; }
+  /* Backfill is rendered as a separate, dashed outer ring — orthogonal
+     to status. Forbidden combined classes such as
+     status-warning-backfilled or drift-status-backfilled are not
+     introduced (pinned by tests). */
+  .drift-workbench-backfill-marker {
+    fill: none;
+    stroke: var(--gmap-type-coverage);
+    stroke-width: 1.5;
+    stroke-dasharray: 3 3;
+  }
+
+  .drift-workbench-chart-legend {
+    margin-top: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 12px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--slate-400);
+  }
+  .drift-workbench-chart-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .drift-workbench-legend-swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: var(--radius-pip);
+    background: var(--outline-variant);
+    display: inline-block;
+  }
+  .drift-workbench-legend-swatch.status-healthy                   { background: var(--secondary); }
+  .drift-workbench-legend-swatch.status-warning                   { background: var(--gmap-type-coverage); }
+  .drift-workbench-legend-swatch.status-breached                  { background: var(--error); }
+  .drift-workbench-legend-swatch.status-unknown-insufficient-data { background: transparent; border: 1px dashed var(--outline); }
+  .drift-workbench-legend-swatch.status-unknown-detector-error    { background: transparent; border: 1px dashed var(--error); }
+  .drift-workbench-legend-swatch.is-backfilled                    { background: transparent; border: 1px dashed var(--gmap-type-coverage); }
+
+  /* ── Side: detail / observations / annotations stack ────────────── */
+  .drift-workbench-side {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .drift-workbench-detail,
+  .drift-workbench-observations,
+  .drift-workbench-annotations {
+    background: var(--surface-container-low);
+    border: var(--border-hairline);
+    border-radius: var(--radius-panel);
+    padding: 12px;
+  }
+  .drift-workbench-detail-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .drift-workbench-detail-title {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--slate-400);
+    flex: 1 1 auto;
+  }
+  .drift-workbench-detail-status {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: var(--radius-tight);
+  }
+  .drift-workbench-detail-fields {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 4px 12px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--on-surface-variant);
+  }
+  .drift-workbench-detail-fields .key {
+    color: var(--slate-500);
+    margin-right: 6px;
+  }
+
+  .drift-workbench-section-title {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--slate-400);
+    margin-bottom: 6px;
+  }
+  .drift-workbench-observation-list,
+  .drift-workbench-annotation-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .drift-workbench-observation-item,
+  .drift-workbench-annotation-item {
+    padding: 6px 8px;
+    background: var(--surface-container);
+    border: var(--border-hairline);
+    border-radius: var(--radius-tight);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--on-surface-variant);
+  }
+  .drift-workbench-observation-meta,
+  .drift-workbench-annotation-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    margin-bottom: 2px;
+  }
+  .drift-workbench-observation-id { color: var(--on-surface); font-weight: 600; }
+  .drift-workbench-annotation-type { color: var(--on-surface); font-weight: 600; }
+  .drift-workbench-observation-time,
+  .drift-workbench-annotation-time { color: var(--slate-500); }
+  .drift-workbench-annotation-body {
+    color: var(--on-surface);
+    white-space: pre-wrap;
+    margin-top: 2px;
+  }
+
+  .drift-workbench-empty {
+    font-size: 11px;
+    color: var(--slate-500);
+    padding: 8px 4px;
+    text-align: center;
+  }
+
+  /* In-line backfill marker used inside list rows / detail headers
+     where an SVG ring would not apply. Kept distinct from any status
+     class so backfill stays orthogonal. */
+  .drift-workbench-backfill-marker:not(circle) {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 2px 6px;
+    border-radius: var(--radius-pip);
+    border: 1px dashed var(--gmap-type-coverage);
+    color: var(--gmap-type-coverage);
+  }
+
+  /* ── Light-mode overrides ───────────────────────────────────────── */
+  :root[data-theme="light"] .drift-workbench {
+    background: var(--surface-container-lowest);
+  }
+  :root[data-theme="light"] .drift-workbench-chart-panel,
+  :root[data-theme="light"] .drift-workbench-detail,
+  :root[data-theme="light"] .drift-workbench-observations,
+  :root[data-theme="light"] .drift-workbench-annotations,
+  :root[data-theme="light"] .drift-workbench-series-rail {
+    background: var(--surface-container);
+  }
+  :root[data-theme="light"] .drift-workbench-line {
+    stroke: var(--on-surface);
+  }
+  :root[data-theme="light"] .drift-workbench-point.status-healthy   { fill: var(--secondary); }
+  :root[data-theme="light"] .drift-workbench-point.status-warning   { fill: var(--gmap-type-coverage); }
+  :root[data-theme="light"] .drift-workbench-point.status-breached  { fill: var(--error); }
+
+  /* ──────────────────────────────────────────────────────────────────
+     Drift-2d — Level 3 Observation Inspector
+     Pre-rendered hidden section that lives inside
+     [data-drift-workbench-observations], beneath the observation list.
+     The inspector is strictly read-only: the only control is a Close
+     button (no triage, no annotation creation/editing). Backfilled is
+     a separate badge element with its own class — never folded into a
+     status modifier.
+     ─────────────────────────────────────────────────────────────── */
+
+  /* Observation row — selected state. Drift-2c rendered observation
+     items as <li>; Drift-2d converts them to <button> rows so they are
+     clickable and keyboard-activatable. The .is-selected modifier is
+     persistent (survives hover/focus changes). */
+  .drift-workbench-observation-row {
+    display: block;
+    width: 100%;
+    background: transparent;
+    border: var(--border-hairline);
+    border-radius: var(--radius-tight);
+    padding: 6px 8px;
+    color: inherit;
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.12s, border-color 0.12s;
+  }
+  .drift-workbench-observation-row:hover,
+  .drift-workbench-observation-row:focus {
+    background: var(--surface-container-high);
+    outline: none;
+    border-color: var(--outline);
+  }
+  .drift-workbench-observation-row.is-selected {
+    border-color: var(--primary);
+    box-shadow: inset 4px 0 0 0 var(--primary);
+  }
+
+  .drift-observation-inspector {
+    margin-top: 8px;
+    padding: 12px;
+    background: var(--surface-container);
+    border: var(--border-hairline);
+    border-radius: var(--radius-panel);
+  }
+  .drift-observation-inspector[hidden] { display: none; }
+
+  .drift-observation-inspector-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px 12px;
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--outline-variant);
+  }
+  .drift-observation-inspector-titles { min-width: 0; flex: 1 1 auto; }
+  .drift-observation-inspector-title {
+    font-family: var(--font-display);
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--on-surface);
+  }
+  .drift-observation-inspector-subtitle {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--slate-500);
+    margin-top: 2px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    align-items: center;
+  }
+  .drift-observation-inspector-status-row {
+    margin-top: 4px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+  }
+  .drift-observation-detector-status,
+  .drift-observation-operator-status {
+    padding: 2px 6px;
+    border-radius: var(--radius-tight);
+    border: var(--border-hairline);
+  }
+  .drift-observation-inspector-close {
+    background: transparent;
+    border: var(--border-hairline);
+    color: var(--on-surface-variant);
+    font-family: inherit;
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: var(--radius-tight);
+    cursor: pointer;
+    align-self: flex-start;
+  }
+  .drift-observation-inspector-close:hover {
+    color: var(--on-surface);
+    background: var(--surface-container-high);
+  }
+
+  .drift-observation-inspector-body {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .drift-observation-section {
+    background: var(--surface-container-low);
+    border: var(--border-hairline);
+    border-radius: var(--radius-tight);
+    padding: 8px 10px;
+  }
+  .drift-observation-section-title {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--slate-400);
+    margin-bottom: 6px;
+    font-weight: 700;
+  }
+
+  .drift-observation-kv {
+    display: grid;
+    grid-template-columns: 180px 1fr;
+    gap: 4px 12px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--on-surface-variant);
+    padding: 2px 0;
+  }
+  .drift-observation-kv-key { color: var(--slate-500); }
+  .drift-observation-kv-value {
+    color: var(--on-surface);
+    word-break: break-all;
+  }
+
+  .drift-observation-code-chip {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    background: var(--surface-container-high);
+    color: var(--on-surface);
+    border: 1px solid var(--outline-variant);
+    border-radius: var(--radius-tight);
+    padding: 1px 6px;
+    user-select: text;
+    word-break: break-all;
+  }
+
+  .drift-observation-evidence-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .drift-observation-governance-refs .drift-observation-kv {
+    grid-template-columns: 220px 1fr;
+  }
+
+  .drift-observation-annotation-card {
+    background: var(--surface-container);
+    border: var(--border-hairline);
+    border-radius: var(--radius-tight);
+    padding: 8px 10px;
+    margin-top: 6px;
+  }
+  .drift-observation-annotation-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--slate-500);
+    margin-bottom: 4px;
+  }
+  .drift-observation-annotation-type { color: var(--on-surface); font-weight: 600; }
+  .drift-observation-annotation-status,
+  .drift-observation-annotation-author { color: var(--on-surface-variant); }
+  .drift-observation-annotation-body {
+    font-size: 12px;
+    color: var(--on-surface);
+    white-space: pre-wrap;
+  }
+
+  /* Backfill badge — separate DOM element with its own class. Never
+     a modifier on a status element; combined classes such as
+     status-warning-backfilled are forbidden (pinned by tests). */
+  .drift-observation-backfill-badge {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 2px 8px;
+    border-radius: var(--radius-pip);
+    border: 1px dashed var(--gmap-type-coverage);
+    color: var(--gmap-type-coverage);
+    margin-bottom: 6px;
+  }
+
+  .drift-observation-empty {
+    font-size: 11px;
+    color: var(--slate-500);
+    padding: 4px 0;
+  }
+
+  /* ── Light-mode overrides ───────────────────────────────────────── */
+  :root[data-theme="light"] .drift-observation-inspector {
+    background: var(--surface-container-lowest);
+  }
+  :root[data-theme="light"] .drift-observation-section {
+    background: var(--surface-container);
+  }
+  :root[data-theme="light"] .drift-observation-annotation-card {
+    background: var(--surface-container-low);
+  }
+  :root[data-theme="light"] .drift-observation-code-chip {
+    background: var(--surface-container);
+  }

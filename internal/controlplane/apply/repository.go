@@ -11,6 +11,7 @@ import (
 	"github.com/accept-io/midas/internal/businessservicecapability"
 	"github.com/accept-io/midas/internal/capability"
 	"github.com/accept-io/midas/internal/controlaudit"
+	"github.com/accept-io/midas/internal/drift"
 	"github.com/accept-io/midas/internal/failmode"
 	"github.com/accept-io/midas/internal/governanceexpectation"
 	"github.com/accept-io/midas/internal/process"
@@ -30,6 +31,14 @@ type AgentRepository interface {
 type ProfileRepository interface {
 	FindByID(ctx context.Context, id string) (*authority.AuthorityProfile, error)
 	Create(ctx context.Context, p *authority.AuthorityProfile) error
+	// ListBySurface returns the profiles governing the given surface
+	// (D29h). Used by the apply-time FailModePolicy/authority tension
+	// analyzer to walk from a surface that references an enforced
+	// FailModePolicy to the authority profiles whose FailMode value
+	// would be overridden at runtime. Returns an empty slice when no
+	// profiles are associated; never returns nil for the slice on a
+	// successful lookup.
+	ListBySurface(ctx context.Context, surfaceID string) ([]*authority.AuthorityProfile, error)
 }
 
 type GrantRepository interface {
@@ -141,6 +150,21 @@ type FailModePolicyRepository interface {
 	Create(ctx context.Context, p *failmode.FailModePolicy) error
 }
 
+// DriftDefinitionRepository is the apply-side persistence interface for
+// the DriftDefinition entity (Drift-1c). Mirrors the
+// FailModePolicyRepository / GovernanceExpectationRepository posture for
+// review-forced versioned Kinds. The planner uses FindByID (latest
+// version) to decide first-create vs new-version; FindByIDAndVersion is
+// used to detect metric-mutation attempts on an existing (id, version)
+// tuple; Create persists a new revision. Update is reserved for later
+// approval-endpoint tranches (Drift-1e) and is intentionally absent
+// from this narrower interface.
+type DriftDefinitionRepository interface {
+	FindByID(ctx context.Context, id string) (*drift.DriftDefinition, error)
+	FindByIDAndVersion(ctx context.Context, id string, version int) (*drift.DriftDefinition, error)
+	Create(ctx context.Context, d *drift.DriftDefinition) error
+}
+
 type RepositorySet struct {
 	Surfaces                     SurfaceRepository
 	Agents                       AgentRepository
@@ -156,6 +180,7 @@ type RepositorySet struct {
 	AISystemVersions             AISystemVersionRepository
 	AISystemBindings             AISystemBindingRepository
 	FailModePolicies             FailModePolicyRepository
+	DriftDefinitions             DriftDefinitionRepository
 	ControlAudit                 controlaudit.Repository
 	// Tx, when non-nil, wraps the executor's mutation loop in an
 	// atomic transaction. The callback receives a scoped *RepositorySet

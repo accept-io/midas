@@ -410,6 +410,294 @@ func TestPostgresRepository_List_OrderDesc_NewestFirst(t *testing.T) {
 	}
 }
 
+// ===========================================================================
+// D30j — cursor pagination (Postgres backend).
+//
+// Each test exercises the cursor predicate against the live
+// audit_events table. The cursor SQL fragment is a 3-key
+// (occurred_at, sequence_no, id) tuple comparison; these tests pin
+// that it actually restricts the scan correctly across pages, with
+// ties, and alongside other filters.
+// ===========================================================================
+
+// updateEventID overwrites the persisted audit_events.id and the
+// in-memory pointer so id-based tie-breaker assertions can use a
+// known lexical order. Audit IDs are not FK-referenced from other
+// tables (only audit_events.envelope_id has an FK), so this is safe
+// within the test transaction scope.
+func updateEventID(t *testing.T, db *sql.DB, ev *AuditEvent, newID string) {
+	t.Helper()
+	if _, err := db.Exec(
+		`UPDATE audit_events SET id = $1 WHERE id = $2`,
+		newID, ev.ID,
+	); err != nil {
+		t.Fatalf("UPDATE audit_events.id: %v", err)
+	}
+	ev.ID = newID
+}
+
+func TestPostgresRepository_List_Cursor_Desc_PaginatesAcrossPages(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+	resetAuditEventsTable(t, db)
+	repo := NewPostgresRepository(db)
+
+	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	const src = "src-cursor-desc"
+	for i := 0; i < 5; i++ {
+		seedListEvent(t, db, repo, AuditEventGovernanceConditionDetected,
+			"env-cursor-desc-1", src, "req-1",
+			t0.Add(time.Duration(i)*time.Second), nil)
+	}
+
+	p1, err := repo.List(context.Background(), ListFilter{
+		RequestSource: src, OrderDesc: true, Limit: 2,
+	})
+	if err != nil {
+		t.Fatalf("List page 1: %v", err)
+	}
+	if len(p1) != 2 {
+		t.Fatalf("page 1: want 2, got %d", len(p1))
+	}
+	if !p1[0].OccurredAt.Equal(t0.Add(4*time.Second)) ||
+		!p1[1].OccurredAt.Equal(t0.Add(3*time.Second)) {
+		t.Errorf("page 1: want [t0+4s, t0+3s], got [%s, %s]",
+			p1[0].OccurredAt, p1[1].OccurredAt)
+	}
+
+	cur := &ListCursor{
+		OccurredAt: p1[1].OccurredAt,
+		SequenceNo: p1[1].SequenceNo,
+		ID:         p1[1].ID,
+	}
+	p2, err := repo.List(context.Background(), ListFilter{
+		RequestSource: src, OrderDesc: true, Limit: 2, Cursor: cur,
+	})
+	if err != nil {
+		t.Fatalf("List page 2: %v", err)
+	}
+	if len(p2) != 2 {
+		t.Fatalf("page 2: want 2, got %d", len(p2))
+	}
+	if !p2[0].OccurredAt.Equal(t0.Add(2*time.Second)) ||
+		!p2[1].OccurredAt.Equal(t0.Add(time.Second)) {
+		t.Errorf("page 2: want [t0+2s, t0+1s], got [%s, %s]",
+			p2[0].OccurredAt, p2[1].OccurredAt)
+	}
+
+	cur = &ListCursor{
+		OccurredAt: p2[1].OccurredAt,
+		SequenceNo: p2[1].SequenceNo,
+		ID:         p2[1].ID,
+	}
+	p3, err := repo.List(context.Background(), ListFilter{
+		RequestSource: src, OrderDesc: true, Limit: 2, Cursor: cur,
+	})
+	if err != nil {
+		t.Fatalf("List page 3: %v", err)
+	}
+	if len(p3) != 1 || !p3[0].OccurredAt.Equal(t0) {
+		t.Errorf("page 3: want [t0], got %+v", p3)
+	}
+
+	cur = &ListCursor{
+		OccurredAt: p3[0].OccurredAt,
+		SequenceNo: p3[0].SequenceNo,
+		ID:         p3[0].ID,
+	}
+	p4, err := repo.List(context.Background(), ListFilter{
+		RequestSource: src, OrderDesc: true, Limit: 2, Cursor: cur,
+	})
+	if err != nil {
+		t.Fatalf("List page 4: %v", err)
+	}
+	if len(p4) != 0 {
+		t.Errorf("page 4: want 0, got %d", len(p4))
+	}
+}
+
+func TestPostgresRepository_List_Cursor_Asc_PaginatesAcrossPages(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+	resetAuditEventsTable(t, db)
+	repo := NewPostgresRepository(db)
+
+	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	const src = "src-cursor-asc"
+	for i := 0; i < 5; i++ {
+		seedListEvent(t, db, repo, AuditEventGovernanceConditionDetected,
+			"env-cursor-asc-1", src, "req-1",
+			t0.Add(time.Duration(i)*time.Second), nil)
+	}
+
+	p1, err := repo.List(context.Background(), ListFilter{
+		RequestSource: src, OrderDesc: false, Limit: 2,
+	})
+	if err != nil {
+		t.Fatalf("List page 1: %v", err)
+	}
+	if len(p1) != 2 ||
+		!p1[0].OccurredAt.Equal(t0) ||
+		!p1[1].OccurredAt.Equal(t0.Add(time.Second)) {
+		t.Fatalf("page 1: want [t0, t0+1s], got %+v", p1)
+	}
+
+	cur := &ListCursor{
+		OccurredAt: p1[1].OccurredAt,
+		SequenceNo: p1[1].SequenceNo,
+		ID:         p1[1].ID,
+	}
+	p2, err := repo.List(context.Background(), ListFilter{
+		RequestSource: src, OrderDesc: false, Limit: 2, Cursor: cur,
+	})
+	if err != nil {
+		t.Fatalf("List page 2: %v", err)
+	}
+	if len(p2) != 2 ||
+		!p2[0].OccurredAt.Equal(t0.Add(2*time.Second)) ||
+		!p2[1].OccurredAt.Equal(t0.Add(3*time.Second)) {
+		t.Errorf("page 2: want [t0+2s, t0+3s], got %+v", p2)
+	}
+}
+
+func TestPostgresRepository_List_Cursor_TieBreaker_SameOccurredAtSameSequenceNo(t *testing.T) {
+	// Three events across distinct envelopes, identical occurred_at,
+	// each with sequence_no=1 in its envelope. The id tertiary
+	// tie-breaker must produce a globally deterministic order.
+	db := openTestDB(t)
+	defer db.Close()
+	resetAuditEventsTable(t, db)
+	repo := NewPostgresRepository(db)
+
+	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	const src = "src-cursor-tie"
+	// Distinct request_ids across the three envelopes — the
+	// (request_source, request_id) tuple is unique in
+	// operational_envelopes.
+	a := seedListEvent(t, db, repo, AuditEventGovernanceConditionDetected,
+		"env-tie-a", src, "req-tie-a", t0, nil)
+	b := seedListEvent(t, db, repo, AuditEventGovernanceConditionDetected,
+		"env-tie-b", src, "req-tie-b", t0, nil)
+	c := seedListEvent(t, db, repo, AuditEventGovernanceConditionDetected,
+		"env-tie-c", src, "req-tie-c", t0, nil)
+	updateEventID(t, db, a, "11111111-1111-1111-1111-111111111111")
+	updateEventID(t, db, b, "22222222-2222-2222-2222-222222222222")
+	updateEventID(t, db, c, "33333333-3333-3333-3333-333333333333")
+
+	all, err := repo.List(context.Background(), ListFilter{
+		RequestSource: src, OrderDesc: false, Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("List all: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("want 3 events, got %d", len(all))
+	}
+	if all[0].ID != a.ID || all[1].ID != b.ID || all[2].ID != c.ID {
+		t.Fatalf("tertiary tie-breaker order: want [a, b, c], got [%s, %s, %s]",
+			all[0].ID, all[1].ID, all[2].ID)
+	}
+
+	cur := &ListCursor{
+		OccurredAt: all[0].OccurredAt,
+		SequenceNo: all[0].SequenceNo,
+		ID:         all[0].ID,
+	}
+	rest, err := repo.List(context.Background(), ListFilter{
+		RequestSource: src, OrderDesc: false, Limit: 10, Cursor: cur,
+	})
+	if err != nil {
+		t.Fatalf("List after cursor: %v", err)
+	}
+	if len(rest) != 2 || rest[0].ID != b.ID || rest[1].ID != c.ID {
+		t.Errorf("cursor past id a: want [b, c], got %+v", rest)
+	}
+}
+
+func TestPostgresRepository_List_Cursor_AppliesAlongsideEventTypeFilter(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+	resetAuditEventsTable(t, db)
+	repo := NewPostgresRepository(db)
+
+	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	const src = "src-cursor-evt"
+	seedListEvent(t, db, repo, AuditEventGovernanceConditionDetected,
+		"env-evt-1", src, "req-1", t0, nil)
+	seedListEvent(t, db, repo, AuditEventEvaluationStarted,
+		"env-evt-1", src, "req-1", t0.Add(time.Second), nil)
+	seedListEvent(t, db, repo, AuditEventGovernanceConditionDetected,
+		"env-evt-1", src, "req-1", t0.Add(2*time.Second), nil)
+	seedListEvent(t, db, repo, AuditEventEvaluationStarted,
+		"env-evt-1", src, "req-1", t0.Add(3*time.Second), nil)
+	seedListEvent(t, db, repo, AuditEventGovernanceConditionDetected,
+		"env-evt-1", src, "req-1", t0.Add(4*time.Second), nil)
+
+	p1, err := repo.List(context.Background(), ListFilter{
+		RequestSource: src,
+		EventType:     AuditEventGovernanceConditionDetected,
+		OrderDesc:     false, Limit: 2,
+	})
+	if err != nil {
+		t.Fatalf("List page 1: %v", err)
+	}
+	if len(p1) != 2 {
+		t.Fatalf("page 1: want 2, got %d", len(p1))
+	}
+	for _, ev := range p1 {
+		if ev.EventType != AuditEventGovernanceConditionDetected {
+			t.Errorf("page 1 leaked %s", ev.EventType)
+		}
+	}
+
+	cur := &ListCursor{
+		OccurredAt: p1[1].OccurredAt,
+		SequenceNo: p1[1].SequenceNo,
+		ID:         p1[1].ID,
+	}
+	p2, err := repo.List(context.Background(), ListFilter{
+		RequestSource: src,
+		EventType:     AuditEventGovernanceConditionDetected,
+		OrderDesc:     false, Limit: 2, Cursor: cur,
+	})
+	if err != nil {
+		t.Fatalf("List page 2: %v", err)
+	}
+	if len(p2) != 1 || !p2[0].OccurredAt.Equal(t0.Add(4*time.Second)) {
+		t.Errorf("page 2: want [t0+4s], got %+v", p2)
+	}
+	if p2[0].EventType != AuditEventGovernanceConditionDetected {
+		t.Errorf("page 2 leaked %s", p2[0].EventType)
+	}
+}
+
+func TestPostgresRepository_List_Cursor_PastEnd_ReturnsEmpty(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+	resetAuditEventsTable(t, db)
+	repo := NewPostgresRepository(db)
+
+	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	ev := seedListEvent(t, db, repo, AuditEventGovernanceConditionDetected,
+		"env-end-1", "src-cursor-end", "req-1", t0, nil)
+
+	cur := &ListCursor{
+		OccurredAt: ev.OccurredAt,
+		SequenceNo: ev.SequenceNo,
+		ID:         ev.ID,
+	}
+	got, err := repo.List(context.Background(), ListFilter{
+		RequestSource: "src-cursor-end",
+		OrderDesc:     true, Limit: 10, Cursor: cur,
+	})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("cursor at last row: want 0, got %d", len(got))
+	}
+}
+
 func TestPostgresRepository_List_LimitCapped(t *testing.T) {
 	db := openTestDB(t)
 	defer db.Close()

@@ -58,6 +58,12 @@ func DefaultConfig() Config {
 		Dev: DevConfig{
 			SeedDemoData: true,
 			SeedDemoUser: true,
+			// SeedSyntheticDrift is intentionally left nil so the
+			// effective behaviour (resolved by
+			// DevConfig.EffectiveSeedSyntheticDrift) inherits from
+			// SeedDemoData. An explicit env / YAML value of true or
+			// false overrides the inheritance.
+			SeedSyntheticDrift: nil,
 		},
 		Dispatcher: DispatcherConfig{
 			Enabled:      false,
@@ -72,6 +78,9 @@ func DefaultConfig() Config {
 		},
 		Structural: StructuralConfig{
 			Mode: StructuralModePermissive,
+		},
+		FailMode: FailModeConfig{
+			DeploymentDefaultPolicyID: "",
 		},
 	}
 }

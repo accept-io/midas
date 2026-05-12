@@ -161,7 +161,6 @@ func NewLendingSecuredOrigination() *surface.DecisionSurface {
 		// Policy Integration
 		PolicyPackage: "lending.secured.origination",
 		PolicyVersion: "v1.2.0",
-		FailureMode:   surface.FailureModeClosed, // Fail-safe: escalate on policy errors
 
 		// Observability & Compliance
 		AuditRetentionHours:  87600, // 10 years (regulatory requirement)
@@ -317,7 +316,6 @@ func NewPaymentsInstantExecution() *surface.DecisionSurface {
 		// Policy Integration
 		PolicyPackage: "payments.fraud.detection",
 		PolicyVersion: "v2.1.0",
-		FailureMode:   surface.FailureModeClosed, // Fail-safe on policy errors
 
 		// Observability & Compliance
 		AuditRetentionHours:  43800, // 5 years (payments regulation)
@@ -458,7 +456,6 @@ func NewFraudAccountSuspension() *surface.DecisionSurface {
 		// Policy Integration
 		PolicyPackage: "fraud.suspension.rules",
 		PolicyVersion: "v1.0.0",
-		FailureMode:   surface.FailureModeOpen, // Fail-open: manual review if policy fails
 
 		// Observability & Compliance
 		AuditRetentionHours:  26280, // 3 years

@@ -57,6 +57,7 @@ type Service struct {
 	aiVersionRepo                 AISystemVersionRepository
 	aiBindingRepo                 AISystemBindingRepository
 	failModePolicyRepo            FailModePolicyRepository
+	driftDefinitionRepo           DriftDefinitionRepository
 	controlAuditRepo              controlaudit.Repository
 	tx                            TxRunner
 }
@@ -96,6 +97,7 @@ func NewServiceWithRepos(repos RepositorySet) *Service {
 		aiVersionRepo:                 repos.AISystemVersions,
 		aiBindingRepo:                 repos.AISystemBindings,
 		failModePolicyRepo:            repos.FailModePolicies,
+		driftDefinitionRepo:           repos.DriftDefinitions,
 		controlAuditRepo:              repos.ControlAudit,
 		tx:                            repos.Tx,
 	}
@@ -535,6 +537,14 @@ func (s *Service) buildApplyPlan(ctx context.Context, docs []parser.ParsedDocume
 					entry.DecisionSource = DecisionSourceValidation
 					entry.CreateKind = CreateKindNew
 				}
+			case types.KindDriftDefinition:
+				if s.driftDefinitionRepo != nil {
+					s.planDriftDefinitionEntry(ctx, doc, &entry)
+				} else {
+					entry.Action = ApplyActionCreate
+					entry.DecisionSource = DecisionSourceValidation
+					entry.CreateKind = CreateKindNew
+				}
 			default:
 				entry.Action = ApplyActionCreate
 				entry.DecisionSource = DecisionSourceValidation
@@ -836,6 +846,11 @@ func (s *Service) planSurfaceEntry(ctx context.Context, doc parser.ParsedDocumen
 		if !s.checkFailModePolicyReference(ctx, doc, surfaceDoc.Spec.FailModePolicyID, surfaceEffectiveAt(surfaceDoc), "spec.fail_mode_policy_id", entry) {
 			return
 		}
+		// D29h: advisory FailModePolicy/authority tension analysis.
+		// Read-only; never blocks apply. Skipped silently when no
+		// FailModePolicy is referenced or when the policy has no
+		// enforced resource rule.
+		s.analyzeSurfaceFailModePolicyTension(ctx, entry, surfaceDoc.Metadata.ID, surfaceDoc.Spec.FailModePolicyID, surfaceEffectiveAt(surfaceDoc))
 		entry.Action = ApplyActionCreate
 		entry.DecisionSource = DecisionSourcePersistedState
 		entry.CreateKind = CreateKindNew
@@ -864,6 +879,9 @@ func (s *Service) planSurfaceEntry(ctx context.Context, doc parser.ParsedDocumen
 	if !s.checkFailModePolicyReference(ctx, doc, surfaceDoc.Spec.FailModePolicyID, surfaceEffectiveAt(surfaceDoc), "spec.fail_mode_policy_id", entry) {
 		return
 	}
+	// D29h: advisory FailModePolicy/authority tension analysis.
+	// Read-only; never blocks apply. See analyzeSurfaceFailModePolicyTension.
+	s.analyzeSurfaceFailModePolicyTension(ctx, entry, surfaceDoc.Metadata.ID, surfaceDoc.Spec.FailModePolicyID, surfaceEffectiveAt(surfaceDoc))
 	entry.Action = ApplyActionCreate
 	entry.DecisionSource = DecisionSourcePersistedState
 	entry.CreateKind = CreateKindNewVersion
@@ -1026,6 +1044,15 @@ func (s *Service) planBusinessServiceEntry(ctx context.Context, doc parser.Parse
 	if !s.checkFailModePolicyReference(ctx, doc, bsDoc.Spec.FailModePolicyID, time.Time{}, "spec.fail_mode_policy_id", entry) {
 		return
 	}
+
+	// D29h: advisory generic-tension warning for BusinessService.
+	// The apply-side interface has no list-surfaces-by-business-service
+	// method today, so the analyzer cannot enumerate affected
+	// authority profiles. Instead it emits a single potential-tension
+	// warning that names the BS + policy + rule shape. Operators are
+	// referred to per-surface analysis (already covered by the
+	// Surface plan path) for the precise profile-level deltas.
+	s.analyzeBusinessServiceFailModePolicyTension(ctx, entry, bsDoc.Metadata.ID, bsDoc.Spec.FailModePolicyID)
 
 	entry.Action = ApplyActionCreate
 	entry.DecisionSource = DecisionSourcePersistedState
@@ -2240,6 +2267,12 @@ func (s *Service) applyCreateEntry(
 			return nil
 		}
 		return s.applyFailModePolicy(ctx, repos, entry.Doc, now, actor, entry.NewVersion, result)
+	case types.KindDriftDefinition:
+		if repos.DriftDefinitions == nil {
+			result.AddCreated(entry.Kind, entry.ID)
+			return nil
+		}
+		return s.applyDriftDefinition(ctx, repos, entry.Doc, now, actor, entry.NewVersion, result)
 	default:
 		result.AddCreated(entry.Kind, entry.ID)
 		return nil
@@ -2266,6 +2299,7 @@ func (s *Service) ownRepositorySet() *RepositorySet {
 		AISystemVersions:             s.aiVersionRepo,
 		AISystemBindings:             s.aiBindingRepo,
 		FailModePolicies:             s.failModePolicyRepo,
+		DriftDefinitions:             s.driftDefinitionRepo,
 	}
 }
 

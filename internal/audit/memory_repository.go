@@ -127,6 +127,11 @@ func (r *MemoryRepository) List(ctx context.Context, filter ListFilter) ([]*Audi
 		if !payloadContainsAll(ev.Payload, filter.PayloadContains) {
 			continue
 		}
+		// D30j cursor predicate — skip rows up to and including the
+		// cursor tuple under the requested order direction.
+		if filter.Cursor != nil && !cursorRetainsRow(ev, filter.Cursor, filter.OrderDesc) {
+			continue
+		}
 		matched = append(matched, ev)
 	}
 
@@ -135,7 +140,20 @@ func (r *MemoryRepository) List(ctx context.Context, filter ListFilter) ([]*Audi
 			// Tie-break by sequence number within the envelope so
 			// detected/gap pairs from the same evaluation always
 			// surface in the chain order the accumulator wrote them.
-			return matched[i].SequenceNo < matched[j].SequenceNo
+			if matched[i].SequenceNo != matched[j].SequenceNo {
+				return matched[i].SequenceNo < matched[j].SequenceNo
+			}
+			// D30j — id ASC as the deterministic tertiary tie-breaker.
+			// Only fires when two events share both occurred_at and
+			// sequence_no, which is rare-to-impossible in production
+			// (events in the same envelope have distinct sequence
+			// numbers, and across envelopes the occurred_at
+			// collision is itself rare). Adding it here is purely
+			// additive for existing tests — none construct chains
+			// with that collision — but load-bearing for cursor
+			// determinism: the (occurred_at, sequence_no, id) tuple
+			// must be globally unique for cursors to work.
+			return matched[i].ID < matched[j].ID
 		}
 		if filter.OrderDesc {
 			return matched[i].OccurredAt.After(matched[j].OccurredAt)
