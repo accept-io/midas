@@ -107,8 +107,18 @@
   // into still-inline orchestration (hover tooltip cleanup, drag
   // handler attachment, multi-select / inspector / fit-mode wiring).
   // Each hook is optional; renderer code branches on typeof === 'function'.
-  var _hooks = window.MIDASExplorerGraph._rendererHooks =
-               window.MIDASExplorerGraph._rendererHooks || {};
+  //
+  // D32b-debug-3 — resolved LAZILY on every call. The inline IIFE in
+  // index.html reassigns window.MIDASExplorerGraph._rendererHooks to a
+  // fresh object literal AFTER this module has loaded; an eager-captured
+  // reference would freeze on the empty pre-IIFE object and every hook
+  // call would silently no-op (typeof undefined !== 'function'). That
+  // was the operator-observed Context Graph reframe regression: clicks
+  // fired but _hooks.selectNode was undefined, the inspector was never
+  // told about the click, root remained .selected, reframe never shown.
+  function _hooks() {
+    return (window.MIDASExplorerGraph && window.MIDASExplorerGraph._rendererHooks) || {};
+  }
 
   // ────────────────────────────────────────────────────────────────────
   // Lens dispatch (D32a-impl-1, retained).
@@ -182,8 +192,9 @@
   // survive across renders); removes child node cards + empty/error
   // overlays. Resets the position/connector/drag-override state.
   function clearCanvas() {
-    if (typeof _hooks.hideConnectorTooltip === 'function') {
-      try { _hooks.hideConnectorTooltip(); } catch (_) { /* swallow */ }
+    var h = _hooks();
+    if (typeof h.hideConnectorTooltip === 'function') {
+      try { h.hideConnectorTooltip(); } catch (_) { /* swallow */ }
     }
     var canvas = document.getElementById('gmap-canvas');
     var scene  = document.getElementById('gmap-scene');
@@ -265,10 +276,11 @@
     pathEl.setAttribute('data-source-node-id', srcId);
     pathEl.setAttribute('data-target-node-id', dstId);
     pathEl.setAttribute('role', 'img');
-    var srcLabel = (typeof _hooks.connectorEndpointLabel === 'function')
-                     ? _hooks.connectorEndpointLabel(srcId) : srcId;
-    var dstLabel = (typeof _hooks.connectorEndpointLabel === 'function')
-                     ? _hooks.connectorEndpointLabel(dstId) : dstId;
+    var hConn = _hooks();
+    var srcLabel = (typeof hConn.connectorEndpointLabel === 'function')
+                     ? hConn.connectorEndpointLabel(srcId) : srcId;
+    var dstLabel = (typeof hConn.connectorEndpointLabel === 'function')
+                     ? hConn.connectorEndpointLabel(dstId) : dstId;
     pathEl.setAttribute(
       'aria-label',
       kindInfo.label + ' from ' + srcLabel + ' to ' + dstLabel
@@ -325,28 +337,31 @@
     // multi-select membership through the inline hook to keep the
     // existing applyGmapMultiSelection orchestration in one place.
     node.addEventListener('click', function (e) {
+      var h = _hooks();
       if (e && (e.ctrlKey || e.metaKey)) {
         if (_state.selectedNodeIds.has(spec.id)) {
           _state.selectedNodeIds.delete(spec.id);
         } else {
           _state.selectedNodeIds.add(spec.id);
         }
-        if (typeof _hooks.applyMultiSelection === 'function') _hooks.applyMultiSelection();
+        if (typeof h.applyMultiSelection === 'function') h.applyMultiSelection();
         return;
       }
       _state.selectedNodeIds.clear();
       _state.selectedNodeIds.add(spec.id);
-      if (typeof _hooks.applyMultiSelection === 'function') _hooks.applyMultiSelection();
-      if (typeof _hooks.selectNode === 'function') _hooks.selectNode(spec.id);
+      if (typeof h.applyMultiSelection === 'function') h.applyMultiSelection();
+      if (typeof h.selectNode === 'function') h.selectNode(spec.id);
     });
     node.addEventListener('keydown', function (e) {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
-        if (typeof _hooks.selectNode === 'function') _hooks.selectNode(spec.id);
+        var h = _hooks();
+        if (typeof h.selectNode === 'function') h.selectNode(spec.id);
       }
     });
-    if (typeof _hooks.attachDragHandlers === 'function') {
-      _hooks.attachDragHandlers(node, spec.id);
+    var hAttach = _hooks();
+    if (typeof hAttach.attachDragHandlers === 'function') {
+      hAttach.attachDragHandlers(node, spec.id);
     }
     scene.appendChild(node);
   }
@@ -401,14 +416,15 @@
       }
       c.pathEl.classList.toggle('gmap-connector-hidden', hide);
     }
-    var selectedId = (typeof _hooks.getSelectedId === 'function') ? _hooks.getSelectedId() : _state.selectedId;
+    var hVis = _hooks();
+    var selectedId = (typeof hVis.getSelectedId === 'function') ? hVis.getSelectedId() : _state.selectedId;
     if (selectedId && hiddenIds.has(selectedId)) {
       nodes.forEach(function (n) {
         if (n.dataset.nodeId === selectedId) n.classList.remove('selected');
       });
-      if (typeof _hooks.clearSelection === 'function') _hooks.clearSelection();
+      if (typeof hVis.clearSelection === 'function') hVis.clearSelection();
       else _state.selectedId = null;
-      if (typeof _hooks.clearInspector === 'function') _hooks.clearInspector();
+      if (typeof hVis.clearInspector === 'function') hVis.clearInspector();
     }
   }
 

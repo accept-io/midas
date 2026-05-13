@@ -1183,8 +1183,11 @@ func TestExplorer_D32aImpl3_BehaviouralCoverage_VisibilityFilters(t *testing.T) 
 		"connector-ai-binding",
 		// Connector hidden class toggling.
 		"gmap-connector-hidden",
-		// Selection clear hook.
-		"_hooks.clearSelection",
+		// Selection clear hook. D32b-debug-3: hook bundle is resolved
+		// lazily via _hooks() and bound to a local `hVis` inside
+		// applyVisibilityFilters so the clear-selection call sees the
+		// post-IIFE hook object, not a stale cached reference.
+		"hVis.clearSelection",
 	} {
 		if !strings.Contains(rendererJS, want) {
 			t.Errorf("graph-renderer.js applyVisibilityFilters behavioural pin missing: %q", want)
