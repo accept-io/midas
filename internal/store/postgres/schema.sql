@@ -2595,3 +2595,40 @@ CREATE INDEX IF NOT EXISTS idx_escalation_targets_active
 -- while escalation_target_id describes the destination.
 
 ALTER TABLE authority_profiles ADD COLUMN IF NOT EXISTS escalation_target_id TEXT;
+
+-- =============================================================================
+-- D33a-impl-1: BusinessService + DecisionSurface fail_mode_policy_id failsafe
+-- =============================================================================
+-- D27j-impl-2 added the optional `fail_mode_policy_id TEXT` column to both
+-- `business_services` and `decision_surfaces` inside their respective
+-- `CREATE TABLE IF NOT EXISTS` blocks. That form only creates the table if
+-- it did not previously exist; on long-lived databases (e.g. Azure Postgres
+-- carried across deploys) where these tables had been created by an earlier
+-- MIDAS revision, the `CREATE TABLE IF NOT EXISTS` re-runs are no-ops and
+-- the new column is never added. Repository SELECTs that reference
+-- `fail_mode_policy_id` then fail at startup with:
+--
+--   pq: column "fail_mode_policy_id" does not exist at position 5:19 (42703)
+--
+-- which is exactly what Azure Container Apps revision midas-api--0000034
+-- exited with (ActivationFailed, exit code 1) before listening. The
+-- regression manifested as `bootstrap.ensureBusinessService` performing a
+-- GetByID("bs-consumer-lending") seed-guard read on stale tables.
+--
+-- The fix is the standard additive ALTER-TABLE-ADD-COLUMN-IF-NOT-EXISTS
+-- pattern already used elsewhere in this file (e.g. authority_profiles
+-- .escalation_target_id, authority_grants.capabilities/.constraints, the
+-- ext_* columns for the five PR-3 entities). On fresh databases the CREATE
+-- TABLE block has already added the column and the ALTER is a no-op; on
+-- stale databases the ALTER restores the schema before any repository
+-- read. No data is altered: pre-existing rows get NULL, which the
+-- application repository code COALESCEs to '' on read.
+--
+-- Pinned by:
+--   TestPostgresSchemaBootstrap_AddsBusinessServiceFailModePolicyID
+--   TestPostgresSchemaBootstrap_AddsDecisionSurfaceFailModePolicyID
+--   TestPostgresSchemaBootstrap_PrecedesDemoSeedGuard
+--   TestPostgresSchemaBootstrap_Idempotent
+
+ALTER TABLE business_services  ADD COLUMN IF NOT EXISTS fail_mode_policy_id TEXT;
+ALTER TABLE decision_surfaces  ADD COLUMN IF NOT EXISTS fail_mode_policy_id TEXT;

@@ -650,10 +650,35 @@ func buildRepositories(ctx context.Context, storeCfg config.StoreConfig, txRecor
 			return nil, nil, nil, nil, nil, err
 		}
 
+		// D33a-impl-1 — Postgres schema bootstrap failsafe. EnsureSchema
+		// applies the consolidated idempotent schema.sql. Logging is
+		// structured around the call so an Azure / Cloud Run failure can
+		// be triaged from the postgres_schema_bootstrap_* events without
+		// needing to bisect a later repository read. Schema reconciliation
+		// MUST run before any repository read (including bootstrap demo
+		// seed guards such as ensureBusinessService) so a stale column
+		// like business_services.fail_mode_policy_id is repaired before
+		// startup performs a SELECT that names it.
+		schemaStart := time.Now()
+		slog.Info("postgres_schema_bootstrap_start",
+			"store_backend", storeCfg.Backend,
+			"schema_source", "embedded:internal/store/postgres/schema.sql",
+		)
 		if err := postgres.EnsureSchema(db); err != nil {
+			slog.Error("postgres_schema_bootstrap_failed",
+				"store_backend", storeCfg.Backend,
+				"schema_source", "embedded:internal/store/postgres/schema.sql",
+				"duration_ms", time.Since(schemaStart).Milliseconds(),
+				"error", err.Error(),
+			)
 			_ = db.Close()
-			return nil, nil, nil, nil, nil, err
+			return nil, nil, nil, nil, nil, fmt.Errorf("postgres schema bootstrap failed: %w", err)
 		}
+		slog.Info("postgres_schema_bootstrap_complete",
+			"store_backend", storeCfg.Backend,
+			"schema_source", "embedded:internal/store/postgres/schema.sql",
+			"duration_ms", time.Since(schemaStart).Milliseconds(),
+		)
 
 		pgStore, err := postgres.NewStore(db, txRecorder)
 		if err != nil {
@@ -681,6 +706,13 @@ func buildRepositories(ctx context.Context, storeCfg config.StoreConfig, txRecor
 		return repos, pgStore, repos.Outbox, cleanup, readyFn, nil
 
 	case "memory":
+		// D33a-impl-1 — memory store carries no schema; surface the skip
+		// in startup logs so the postgres_schema_bootstrap_* event chain
+		// is unambiguous (absence-by-design vs absence-by-bug).
+		slog.Info("postgres_schema_bootstrap_skipped",
+			"store_backend", storeCfg.Backend,
+			"reason", "memory_store_has_no_schema",
+		)
 		memStore := memory.NewStore()
 		repos, err := memStore.Repositories()
 		if err != nil {
