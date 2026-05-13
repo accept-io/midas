@@ -2458,16 +2458,22 @@ func TestExplorer_D32aImpl9_InspectorHookDispatchesToModule(t *testing.T) {
 //     panels overlay markup. The drawer LOGIC itself lives in a
 //     separate module (graph-drawer.js) — only the registrations
 //     are inline.
+//   • D32b-debug-1 — lens-race fix added ~14 lines of doc comments
+//     plus the lens guard at the top of refreshGovernanceMap and the
+//     pre-seed of selectedGraphLens in setWorkbenchMode('authority')
+//     (~7,514). The fix prevents Context and Authority modes from
+//     rendering the same canvas — see the operator-reported bug pinned
+//     by TestExplorer_D32bDebug1_*.
 // The 8,000-line ceiling from the D32a tranche prompt is enforced
-// here as a 7,500 ceiling so a future inline regression is loud
+// here as a 7,550 ceiling so a future inline regression is loud
 // rather than silent.
 func TestExplorer_D32aImpl9_IndexHtmlReducedBelowImpl8(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
 	body := performRequest(t, srv, http.MethodGet, "/explorer", nil).Body.String()
 	lines := strings.Count(body, "\n") + 1
-	if lines > 7500 {
-		t.Errorf("D32a-impl-9 / D32b-impl-3: index.html line count %d exceeds 7500 — extraction discipline should hold", lines)
+	if lines > 7550 {
+		t.Errorf("D32a-impl-9 / D32b-debug-1: index.html line count %d exceeds 7550 — extraction discipline should hold", lines)
 	}
 }
 
@@ -5220,6 +5226,211 @@ func TestExplorer_D32bImpl4_KnowledgePlaceholderNoBackendRoute(t *testing.T) {
 	} {
 		if strings.Contains(js, banned) {
 			t.Errorf("D32b-impl-4: no JS module may reference Knowledge Graph endpoints (%q)", banned)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// D32b-debug-1 — Context Graph and Authority Graph rendering same view.
+//
+// Operator-reported regression on Azure revision midas-api--0000036:
+// clicking Authority Graph and Context Graph showed the same view.
+// Root cause is a race in the inline workbench mode dispatcher: the
+// Authority branch of setWorkbenchMode invokes MIDASExplorerServices
+// .showMap(serviceId), which through the _hooks.setGmapMode('map') +
+// _hooks.refreshGovernanceMap chain unconditionally triggers the
+// inline refreshGovernanceMap() — hard-coded to lens:'context' +
+// contextView.renderContextGraph. The Authority view's parallel
+// fetch+render then races for the shared #gmap-canvas; whichever
+// response arrives LAST paints. So the operator sees Context content
+// even when they clicked Authority.
+//
+// The fix has three parts:
+//
+//   1. refreshGovernanceMap reads selectedGraphLens from the store
+//      and early-returns when the active lens is not 'context'.
+//   2. setWorkbenchMode('authority') pre-seeds selectedGraphLens =
+//      'authority' in the store BEFORE calling showMap, so the lens
+//      guard in (1) sees the right lens during showMap-triggered
+//      refreshGovernanceMap.
+//   3. authority-graph-view.js's renderAuthorityGraph applies the
+//      same active-lens guard before painting so a late-arriving
+//      Authority response cannot clobber a Context canvas (reverse
+//      race when the operator switches Authority → Context).
+// ---------------------------------------------------------------------------
+
+// TestExplorer_D32bDebug1_RefreshGovernanceMapHasLensGuard pins
+// the inline Context refresh is gated by the store's
+// selectedGraphLens. Without this, refreshGovernanceMap fires a
+// Context fetch+render anywhere showMap is called, regardless of
+// the operator's mode.
+func TestExplorer_D32bDebug1_RefreshGovernanceMapHasLensGuard(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	body := performRequest(t, srv, http.MethodGet, "/explorer", nil).Body.String()
+	startIdx := strings.Index(body, "function refreshGovernanceMap()")
+	if startIdx < 0 {
+		t.Fatal("D32b-debug-1: refreshGovernanceMap function missing")
+	}
+	endRel := strings.Index(body[startIdx:], "\n  }\n")
+	if endRel <= 0 {
+		t.Fatal("D32b-debug-1: refreshGovernanceMap body has no closing brace")
+	}
+	fnBody := body[startIdx : startIdx+endRel]
+	if !strings.Contains(fnBody, "selectedGraphLens") {
+		t.Error("D32b-debug-1: refreshGovernanceMap must read selectedGraphLens (Context-only refresh must skip when active lens is not 'context')")
+	}
+	if !strings.Contains(fnBody, "MIDASExplorerStore.getState") {
+		t.Error("D32b-debug-1: refreshGovernanceMap must read MIDASExplorerStore.getState() for the lens-guard check")
+	}
+	if !strings.Contains(fnBody, "activeLens !== 'context'") {
+		t.Error("D32b-debug-1: refreshGovernanceMap must early-return when activeLens !== 'context'")
+	}
+}
+
+// TestExplorer_D32bDebug1_SetWorkbenchModeAuthorityPreSeedsLens pins
+// the second half of the fix: setWorkbenchMode('authority') writes
+// selectedGraphLens='authority' to the store BEFORE showMap.
+func TestExplorer_D32bDebug1_SetWorkbenchModeAuthorityPreSeedsLens(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	body := performRequest(t, srv, http.MethodGet, "/explorer", nil).Body.String()
+	branchIdx := strings.Index(body, "if (mode === 'authority') {")
+	if branchIdx < 0 {
+		t.Fatal("D32b-debug-1: Authority branch of setWorkbenchMode missing")
+	}
+	endRel := strings.Index(body[branchIdx:], "\n    }\n")
+	if endRel <= 0 {
+		t.Fatal("D32b-debug-1: Authority branch body has no closing brace")
+	}
+	branchBody := body[branchIdx : branchIdx+endRel]
+	seedIdx := strings.Index(branchBody, "MIDASExplorerStore.setState({ selectedGraphLens: 'authority' })")
+	showMapIdx := strings.Index(branchBody, "MIDASExplorerServices.showMap(serviceId)")
+	if seedIdx < 0 {
+		t.Error("D32b-debug-1: Authority branch must pre-seed MIDASExplorerStore.setState({ selectedGraphLens: 'authority' })")
+	}
+	if showMapIdx < 0 {
+		t.Fatal("D32b-debug-1: Authority branch must continue to call MIDASExplorerServices.showMap(serviceId)")
+	}
+	if !(seedIdx < showMapIdx) {
+		t.Errorf("D32b-debug-1: store pre-seed (offset %d) must precede showMap (offset %d) in setWorkbenchMode('authority') — otherwise refreshGovernanceMap's lens guard reads a stale 'context' lens and the Context fetch fires anyway",
+			seedIdx, showMapIdx)
+	}
+}
+
+// TestExplorer_D32bDebug1_AuthorityRenderHasLensGuard pins the
+// reverse-race guard: a late-arriving Authority fetch must not
+// clobber a freshly-rendered Context canvas.
+func TestExplorer_D32bDebug1_AuthorityRenderHasLensGuard(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	js := getExplorerAsset(t, srv, "/explorer/assets/js/graph/authority/authority-graph-view.js")
+	startIdx := strings.Index(js, "function renderAuthorityGraph(payload, ctx) {")
+	if startIdx < 0 {
+		t.Fatal("D32b-debug-1: renderAuthorityGraph function missing")
+	}
+	// Restrict the slice to the first ~1.5 KB so the guard is pinned
+	// at the TOP of the function, not buried below an early return
+	// path that would miss a fast-path render.
+	end := len(js)
+	if startIdx+1500 < end {
+		end = startIdx + 1500
+	}
+	fnBody := js[startIdx:end]
+	if !strings.Contains(fnBody, "selectedGraphLens") {
+		t.Error("D32b-debug-1: renderAuthorityGraph must read selectedGraphLens (active-lens guard against reverse-direction race)")
+	}
+	if !strings.Contains(fnBody, "MIDASExplorerStore") {
+		t.Error("D32b-debug-1: renderAuthorityGraph must consult MIDASExplorerStore for the active lens")
+	}
+	if !strings.Contains(fnBody, "activeLens !== 'authority'") {
+		t.Error("D32b-debug-1: renderAuthorityGraph must early-return when activeLens !== 'authority'")
+	}
+}
+
+// TestExplorer_D32bDebug1_LensDispatchEndpointsRemainDistinct
+// pins the canonical pre-condition: API client paths must remain
+// distinct (regression guard against a future copy-paste collapse).
+func TestExplorer_D32bDebug1_LensDispatchEndpointsRemainDistinct(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	js := getExplorerAsset(t, srv, "/explorer/assets/js/core/api-client.js")
+	if !strings.Contains(js, "request('/v1/graphs/context' + q)") {
+		t.Error("D32b-debug-1: ExplorerAPI.graphs.context must call /v1/graphs/context")
+	}
+	if !strings.Contains(js, "request('/v1/graphs/authority' + q)") {
+		t.Error("D32b-debug-1: ExplorerAPI.graphs.authority must call /v1/graphs/authority")
+	}
+	contextFnIdx := strings.Index(js, "context: function (params)")
+	authorityFnIdx := strings.Index(js, "authority: function (params)")
+	if contextFnIdx < 0 || authorityFnIdx < 0 {
+		t.Fatal("D32b-debug-1: ExplorerAPI.graphs.{context,authority} declarations missing")
+	}
+	contextBody := js[contextFnIdx:]
+	if ctxEnd := strings.Index(contextBody, "},"); ctxEnd > 0 {
+		contextBody = contextBody[:ctxEnd]
+	}
+	if strings.Contains(contextBody, "/v1/graphs/authority") {
+		t.Error("D32b-debug-1: graphs.context must NOT reference /v1/graphs/authority")
+	}
+	authorityBody := js[authorityFnIdx:]
+	if authEnd := strings.Index(authorityBody, "},"); authEnd > 0 {
+		authorityBody = authorityBody[:authEnd]
+	}
+	if strings.Contains(authorityBody, "/v1/graphs/context") {
+		t.Error("D32b-debug-1: graphs.authority must NOT reference /v1/graphs/context")
+	}
+}
+
+// TestExplorer_D32bDebug1_AuthorityViewDoesNotCallContextRenderer
+// pins that the Authority view paints via its own renderer. A
+// regression that pointed Authority at the Context renderer would
+// surface the same "same view" symptom even after the race fix.
+func TestExplorer_D32bDebug1_AuthorityViewDoesNotCallContextRenderer(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	js := getExplorerAsset(t, srv, "/explorer/assets/js/graph/authority/authority-graph-view.js")
+	for _, banned := range []string{
+		"contextView.renderContextGraph",
+		"contextAdapter.mapToCardLayout",
+		"contextAdapter.fetch",
+		"ExplorerAPI.graphs.context(",
+	} {
+		if strings.Contains(js, banned) {
+			t.Errorf("D32b-debug-1: authority-graph-view.js must NOT call %q (would reduce Authority to Context content)", banned)
+		}
+	}
+}
+
+// TestExplorer_D32bDebug1_ContextRefreshIsContextOnly pins the
+// complementary guarantee: the inline Context refresh dispatches to
+// the Context lens only. A regression that pointed it at lens:
+// 'authority' would surface the same operator-reported bug from the
+// opposite direction.
+func TestExplorer_D32bDebug1_ContextRefreshIsContextOnly(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	body := performRequest(t, srv, http.MethodGet, "/explorer", nil).Body.String()
+	startIdx := strings.Index(body, "function refreshGovernanceMap()")
+	if startIdx < 0 {
+		t.Fatal("D32b-debug-1: refreshGovernanceMap missing")
+	}
+	endRel := strings.Index(body[startIdx:], "\n  }\n")
+	fnBody := body[startIdx : startIdx+endRel]
+	if !strings.Contains(fnBody, "ExplorerGraph.shell.refresh({ lens: 'context'") {
+		t.Error("D32b-debug-1: refreshGovernanceMap must dispatch lens:'context' on shell.refresh")
+	}
+	if !strings.Contains(fnBody, "ExplorerGraph.contextView.renderContextGraph") {
+		t.Error("D32b-debug-1: refreshGovernanceMap must render via ExplorerGraph.contextView.renderContextGraph")
+	}
+	for _, banned := range []string{
+		"ExplorerGraph.authorityView.renderAuthorityGraph",
+		"authorityAdapter.fetch",
+		"ExplorerAPI.graphs.authority(",
+		"lens: 'authority'",
+	} {
+		if strings.Contains(fnBody, banned) {
+			t.Errorf("D32b-debug-1: refreshGovernanceMap must NOT reference %q (Context-only refresh)", banned)
 		}
 	}
 }

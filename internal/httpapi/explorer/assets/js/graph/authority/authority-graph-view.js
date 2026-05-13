@@ -175,6 +175,20 @@
   // escalation_target) live in a right-hand column.
   function renderAuthorityGraph(payload, ctx) {
     ctx = ctx || {};
+    // D32b-debug-1 — Authority-lens guard. Skip the Authority paint
+    // when the operator has already switched the active lens to
+    // something else (typical race: Authority fetch was in flight, the
+    // user clicked Context Graph, Context render landed; Authority's
+    // response now arrives and would clobber the Context canvas).
+    // The guard reads the store's selectedGraphLens rather than
+    // graph-shell's private _activeLens because the store is the
+    // operator-facing source of truth (mode toolbar + drawer + router
+    // all converge on store.selectedGraphLens). A null / unset lens
+    // proceeds (test isolation, very early boot).
+    if (window.MIDASExplorerStore && typeof window.MIDASExplorerStore.getState === 'function') {
+      var activeLens = window.MIDASExplorerStore.getState().selectedGraphLens;
+      if (activeLens && activeLens !== 'authority') return;
+    }
     var renderer = _renderer();
     var adapter  = _adapter();
     if (!renderer || !adapter) {

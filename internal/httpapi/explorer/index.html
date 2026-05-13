@@ -3132,6 +3132,17 @@
     if (mode === 'authority') {
       _showAuthorityPanels(true);
       _setWorkbenchModeActiveButton('authority');
+      // D32b-debug-1 — Pre-seed selectedGraphLens BEFORE showMap so the
+      // refreshGovernanceMap hook (triggered downstream by showMap →
+      // setGmapMode → hooks.refreshGovernanceMap) sees the active lens
+      // and skips its Context fetch. Without this seed, refreshGovernance
+      // Map fired a Context fetch in parallel with the Authority fetch
+      // below, and whichever response arrived last painted the shared
+      // canvas — manifesting as "Context and Authority show the same
+      // graph" depending on response order.
+      if (window.MIDASExplorerStore && typeof MIDASExplorerStore.setState === 'function') {
+        MIDASExplorerStore.setState({ selectedGraphLens: 'authority' });
+      }
       if (window.MIDASExplorerServices && typeof MIDASExplorerServices.showMap === 'function') {
         MIDASExplorerServices.showMap(serviceId);
       }
@@ -4086,6 +4097,18 @@
   // lines 5274–5285). All call-sites are unchanged.
   function refreshGovernanceMap() {
     if (gmapMode !== 'map') return; // only fetch when the pane is visible
+    // D32b-debug-1 — Context-lens guard. refreshGovernanceMap is the
+    // Context Graph fetch+render path (hard-coded to lens:'context' and
+    // contextView.renderContextGraph). When the active lens is NOT
+    // 'context' (operator clicked Authority Graph in the mode toolbar),
+    // this function must be a no-op — otherwise the Context fetch races
+    // the Authority fetch for the shared #gmap-canvas and whichever
+    // response arrives LAST paints. That race manifests as Context and
+    // Authority modes showing the same view (operator-reported bug).
+    if (window.MIDASExplorerStore && typeof window.MIDASExplorerStore.getState === 'function') {
+      const activeLens = window.MIDASExplorerStore.getState().selectedGraphLens;
+      if (activeLens && activeLens !== 'context') return;
+    }
     const rootId = currentGraphRootId;
     if (!rootId || rootId === gmapLastBSId) return;
     gmapLastBSId = rootId;
