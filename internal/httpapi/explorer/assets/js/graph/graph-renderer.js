@@ -161,16 +161,35 @@
   // ────────────────────────────────────────────────────────────────────
   // Lens-agnostic SVG path math (D32a-impl-2, retained).
   // ────────────────────────────────────────────────────────────────────
+  // lensAgnosticConnectorPath — fallback Bézier path when
+  // window.MIDASGovernanceMap.curvePath is unavailable (test isolation,
+  // partial asset load). D32g-fix-3 mirrors the direction-aware fix in
+  // layout.js so the fallback produces the same geometry as the
+  // primary helper.
   function lensAgnosticConnectorPath(srcAnchor, dstAnchor) {
     if (!srcAnchor || !dstAnchor) return '';
     var x1 = +srcAnchor.x || 0;
     var y1 = +srcAnchor.y || 0;
     var x2 = +dstAnchor.x || 0;
     var y2 = +dstAnchor.y || 0;
+    var dx = x2 - x1;
     var dy = y2 - y1;
-    var ctrl = Math.max(40, Math.abs(dy) / 2);
-    var c1x = x1, c1y = y1 + Math.sign(dy || 1) * ctrl;
-    var c2x = x2, c2y = y2 - Math.sign(dy || 1) * ctrl;
+    var adx = Math.abs(dx);
+    var ady = Math.abs(dy);
+    if (adx > ady) {
+      // Horizontal-dominant — offset control points along X.
+      var hctrl = Math.max(40, adx * 0.45);
+      var hsgn  = (dx === 0) ? 1 : (dx > 0 ? 1 : -1);
+      return 'M ' + x1 + ' ' + y1 +
+             ' C ' + (x1 + hsgn * hctrl) + ' ' + y1 + ', ' +
+                    (x2 - hsgn * hctrl) + ' ' + y2 + ', ' +
+                    x2 + ' ' + y2;
+    }
+    // Vertical-dominant — offset along Y.
+    var vctrl = Math.max(40, ady * 0.45);
+    var vsgn  = (dy === 0) ? 1 : (dy > 0 ? 1 : -1);
+    var c1x = x1, c1y = y1 + vsgn * vctrl;
+    var c2x = x2, c2y = y2 - vsgn * vctrl;
     return 'M ' + x1 + ' ' + y1 + ' C ' + c1x + ' ' + c1y + ', ' + c2x + ' ' + c2y + ', ' + x2 + ' ' + y2;
   }
   function lensAgnosticNodePosition(node, layoutResult) {

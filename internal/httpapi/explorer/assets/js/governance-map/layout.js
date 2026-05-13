@@ -58,13 +58,86 @@
     right:  rightAnchor,
   };
 
+  // curvePath — direction-aware cubic Bézier between two anchor points.
+  //
+  // D32g-fix-3: the pre-fix formula assumed a top-to-bottom flow
+  // (control points always offset along Y). Context Graph edges are
+  // always vertical so this worked, but Authority Graph's governance
+  // edges (surface_has_fail_mode_policy / business_service_has_fail_
+  // mode_policy / profile_escalates_to) run horizontally from the
+  // spine to the right-hand governance column. With the pre-fix
+  // formula the curve dipped DOWN from the source's right anchor and
+  // looped UP to the target's left anchor — producing the operator-
+  // reported "connector stops short" / "routed toward the wrong part"
+  // visual defect. (The defect was previously masked by the SVG
+  // default fill: black painting the bezier interior as a black
+  // shape; D32g-fix-1's fill: none correction made the underlying
+  // bad path visible.)
+  //
+  // The fix picks the dominant axis from |Δx| vs |Δy| and places
+  // control points along that axis. Endpoints (M and the final point)
+  // remain EXACTLY the supplied (x1, y1) and (x2, y2) — control-point
+  // calculation never alters where the path starts or terminates.
+  //
+  // Signed offsets (Math.sign) keep the curve bowing outward correctly
+  // for both forward and reverse directions; an identical sign-aware
+  // formula already lived in lensAgnosticConnectorPath (graph-
+  // renderer.js) for vertical flow. Both helpers now share the same
+  // direction-aware logic.
   function curvePath(x1, y1, x2, y2) {
-    const dy = Math.abs(y2 - y1);
-    const ctrl = Math.max(40, dy * 0.45);
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const adx = Math.abs(dx);
+    const ady = Math.abs(dy);
+    if (adx > ady) {
+      // Horizontal-dominant: offset control points along X so the
+      // curve sweeps horizontally between the two anchor sides.
+      const ctrl = Math.max(40, adx * 0.45);
+      const sgn = Math.sign(dx) || 1;
+      return 'M ' + x1 + ' ' + y1 +
+             ' C ' + (x1 + sgn * ctrl) + ' ' + y1 + ', ' +
+                    (x2 - sgn * ctrl) + ' ' + y2 + ', ' +
+                    x2 + ' ' + y2;
+    }
+    // Vertical-dominant (Context Graph default): offset along Y. The
+    // sgn(dy) factor preserves behaviour for downward flow (sgn=+1,
+    // identical to the pre-fix output) and corrects reverse-direction
+    // edges (sgn=-1) which previously drew a loop.
+    const ctrl = Math.max(40, ady * 0.45);
+    const sgn = Math.sign(dy) || 1;
     return 'M ' + x1 + ' ' + y1 +
-           ' C ' + x1 + ' ' + (y1 + ctrl) + ', ' +
-                  x2 + ' ' + (y2 - ctrl) + ', ' +
+           ' C ' + x1 + ' ' + (y1 + sgn * ctrl) + ', ' +
+                  x2 + ' ' + (y2 - sgn * ctrl) + ', ' +
                   x2 + ' ' + y2;
+  }
+
+  // pickAnchorSides — choose source/target anchor sides based on the
+  // relative positions of two nodes. Returns a [srcSide, dstSide] pair
+  // where each side is one of 'top' / 'bottom' / 'left' / 'right',
+  // matching the GMAP_ANCHORS lookup table.
+  //
+  // The heuristic: the dominant axis (|Δx| vs |Δy| between node
+  // centres) chooses left/right vs top/bottom; the sign chooses which
+  // of the two opposing sides to use. The result faces each node's
+  // anchor toward the other node, producing edges that meet card
+  // boundaries cleanly even when the source is to the right of or
+  // above the target.
+  //
+  // Used by lenses with mixed-direction edges (Authority Graph's
+  // governance crossings). The Context Graph's strict top-down flow
+  // does not need this — it can keep its fixed ['bottom', 'top'] pair.
+  function pickAnchorSides(srcPos, dstPos) {
+    if (!srcPos || !dstPos) return ['bottom', 'top'];
+    const sCx = (srcPos.x || 0) + GMAP.NODE_W / 2;
+    const sCy = (srcPos.y || 0) + GMAP.NODE_H / 2;
+    const dCx = (dstPos.x || 0) + GMAP.NODE_W / 2;
+    const dCy = (dstPos.y || 0) + GMAP.NODE_H / 2;
+    const dx = dCx - sCx;
+    const dy = dCy - sCy;
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      return dx >= 0 ? ['right', 'left'] : ['left', 'right'];
+    }
+    return dy >= 0 ? ['bottom', 'top'] : ['top', 'bottom'];
   }
 
   function gmapSafeArea(scrollEl) {
@@ -92,4 +165,5 @@
   window.MIDASGovernanceMap.GMAP_ANCHORS  = GMAP_ANCHORS;
   window.MIDASGovernanceMap.curvePath     = curvePath;
   window.MIDASGovernanceMap.gmapSafeArea  = gmapSafeArea;
+  window.MIDASGovernanceMap.pickAnchorSides = pickAnchorSides;
 })();

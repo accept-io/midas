@@ -254,6 +254,19 @@
     );
     canvas.style.minWidth = canvasW + 'px';
 
+    // D32g-fix-6 — Align the SVG connector layer's viewBox with the
+    // dynamically-computed canvas width (mirrors Context Graph's
+    // context-graph-view.js:196). Without this, the SVG retains the
+    // static viewBox="0 0 1180 720" from index.html and paths drawn
+    // at canvas-local pixel coords > 1180 get stretched proportionally
+    // to fit the wider container — so connector endpoints drift away
+    // from the HTML node cards (which use absolute pixel positioning).
+    // D32g-analysis-2 Hypothesis 1.
+    var svg = document.getElementById('gmap-svg');
+    if (svg) {
+      svg.setAttribute('viewBox', '0 0 ' + canvasW + ' ' + GMAP.CANVAS_H);
+    }
+
     var positions = {};
 
     // Place each kind row.
@@ -289,15 +302,25 @@
     }
 
     // Paint edges. The lens-agnostic addLiveConnector takes anchor
-    // names from GMAP_ANCHORS; we pick {bottom → top} for column rows
-    // and {right → left} for governance crossings.
+    // names from GMAP_ANCHORS. D32g-fix-3: anchor-side selection now
+    // routes through _anchorsForEdge which uses the actual relative
+    // positions of source + target nodes (via
+    // MIDASGovernanceMap.pickAnchorSides) for governance crossings
+    // so the source anchor faces the target wherever the target
+    // happens to sit on the canvas. Spine edges keep their fixed
+    // top-down ['bottom', 'top'] pair.
     for (var ei = 0; ei < projection.edges.length; ei++) {
       var edge = projection.edges[ei];
       if (!edge || !edge.src || !edge.dst) continue;
       var srcKey = _refKey(edge.src);
       var dstKey = _refKey(edge.dst);
+      // D32g-fix-3 — Structural-edge guardrail: drop edges whose
+      // endpoints are missing from the position map (a node was
+      // filtered out, lens-switch race, etc.). Without this the
+      // connector pipeline can paint a path with one valid end and
+      // one undefined end, producing a connector that "stops short".
       if (!positions[srcKey] || !positions[dstKey]) continue;
-      var anchors = _anchorsForEdge(edge);
+      var anchors = _anchorsForEdge(edge, positions[srcKey], positions[dstKey]);
       _state().positions[srcKey] = positions[srcKey];
       _state().positions[dstKey] = positions[dstKey];
       var cls = 'authority-connector ' + adapter.connectorClassForEdge(edge);
@@ -537,17 +560,34 @@
     }
   }
 
-  // _anchorsForEdge — anchor-pair lookup. Subject column edges flow
-  // top→bottom (parent at smaller y). Governance crossings flow
-  // right→left from subject column to governance column.
-  function _anchorsForEdge(edge) {
+  // _anchorsForEdge — anchor-pair selection. D32g-fix-3:
+  //   • Subject-column spine edges (BS → Surface → Profile → Grant
+  //     → Agent) always flow top-to-bottom; keep the fixed
+  //     ['bottom', 'top'] pair.
+  //   • Governance crossings (fail-mode-policy + escalation edges)
+  //     may run in either direction depending on the relative
+  //     positions of the spine column and the right governance
+  //     column. Delegate to pickAnchorSides so the source anchor
+  //     always faces the target's actual position. This corrects
+  //     the operator-observed "connector approaches but does not
+  //     terminate at the node boundary" symptom that surfaced when
+  //     D32g-fix-1 removed the black fill that had been masking
+  //     the misaligned curve.
+  function _anchorsForEdge(edge, srcPos, dstPos) {
     var govEdges = {
       surface_has_fail_mode_policy:          true,
       business_service_has_fail_mode_policy: true,
       profile_escalates_to:                  true,
     };
-    if (govEdges[edge.kind]) return ['right', 'left'];
-    return ['bottom', 'top'];
+    if (!govEdges[edge.kind]) return ['bottom', 'top'];
+    var pick = _gmap().pickAnchorSides;
+    if (typeof pick === 'function' && srcPos && dstPos) {
+      return pick(srcPos, dstPos);
+    }
+    // Defensive fallback for partial asset loads / test isolation:
+    // governance column is on the right by construction, so the
+    // default 'right' → 'left' pair is correct in the common case.
+    return ['right', 'left'];
   }
 
   function _refKey(ref) {

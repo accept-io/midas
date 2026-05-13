@@ -262,7 +262,9 @@
       "PowerShell(docker run --rm -v \"${PWD}:/app\" -w /app golang:1.26-alpine sh -c \"go test -count=1 -timeout 120s -run 'D32f|D32g|TestExplorer_HTML_LayersControl' -v ./internal/httpapi/\" 2>&1 | Select-String -Pattern \"FAIL:|FAIL\\\\s\" | Select-Object -First 30)",
       "PowerShell(docker run --rm -v \"${PWD}:/app\" -w /app golang:1.26-alpine sh -c \"go test -count=1 -timeout 120s -run 'Authority|Explorer|D32|D32f|D32g' ./internal/httpapi/\" 2>&1 | Select-Object -Last 5)",
       "PowerShell(docker run --rm -v \"${PWD}:/app\" -w /app golang:1.26-alpine sh -c \"go test -count=1 -timeout 120s -run 'D32gFix2|D32gFix1|D32f' ./internal/httpapi/\" 2>&1 | Select-Object -Last 5)",
-      "PowerShell(docker run --rm -v \"${PWD}:/app\" -w /app golang:1.26-alpine sh -c \"go test -count=1 -timeout 120s ./internal/httpapi/... && go test -count=1 -timeout 60s ./internal/graph/authority/\" 2>&1 | Select-Object -Last 5)"
+      "PowerShell(docker run --rm -v \"${PWD}:/app\" -w /app golang:1.26-alpine sh -c \"go test -count=1 -timeout 120s ./internal/httpapi/... && go test -count=1 -timeout 60s ./internal/graph/authority/\" 2>&1 | Select-Object -Last 5)",
+      "PowerShell(docker run --rm -v \"${PWD}:/app\" -w /app golang:1.26-alpine sh -c \"go test -count=1 -timeout 120s -run 'D32gFix3|D32gFix2|D32gFix1|D32f' ./internal/httpapi/\" 2>&1 | Select-Object -Last 5)",
+      "PowerShell(docker run --rm -v \"${PWD}:/app\" -w /app golang:1.26-alpine sh -c \"go test -count=1 -timeout 120s -run 'Authority|Explorer|D32|D32f|D32g' ./internal/httpapi/ && go test -count=1 -timeout 60s ./internal/graph/authority/\" 2>&1 | Select-Object -Last 5)"
     ],
     "additionalDirectories": [
       "\\tmp"
