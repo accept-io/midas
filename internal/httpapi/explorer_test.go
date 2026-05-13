@@ -106,6 +106,7 @@ var explorerGraphJSFiles = []string{
 	"graph/authority/authority-graph-inspector",
 	"graph/authority/authority-diagnostics-panel",
 	"graph/authority/authority-surface-posture-panel",
+	"graph/authority/authority-graph-overlays",
 	"drift/drift-chart-formatters",
 	"drift/drift-chart-demo-adapter",
 	"drift/drift-series-chart",
@@ -7424,25 +7425,36 @@ func TestExplorer_HTML_LayersControl_NoFailModePolicy(t *testing.T) {
 	}
 	body := getExplorerAllJS(t, srv)
 
-	// The D27j-ui-1 Layers control did not introduce any FailModePolicy
-	// chip or surface. D27j-ui-2b later landed compact FMP badges on
-	// node cards, but the Layers control itself still has no
-	// fail-mode-policy chip — that toggle remains deferred to a future
-	// tranche. The forbidden list therefore tracks Layers / chip
-	// affordances and any user-visible "Fail-mode policy" / "Fail mode
-	// policy" copy. The bare PascalCase token "FailModePolicy" is no
-	// longer forbidden body-wide because comments in the badge code
-	// path now reference it for context.
+	// D27j-ui-1 deferred a fail-mode-policy chip in the Context Graph's
+	// Layers control. D32f-impl-1 lands a fail-mode-policy chip on the
+	// Authority Graph's overlays toolbar (a separate DOM construct
+	// scoped to the Authority lens), so the user-visible "Fail-mode
+	// policy" copy now legitimately appears in the Authority overlays
+	// module. The forbidden list narrows to Context-Graph-Layers-Control
+	// specific structural tokens: `data-kind="..."` attributes are the
+	// Context Graph's chip discriminator, and those must NOT carry a
+	// failmode variant. The "Fail mode policy" (with space, no hyphen)
+	// copy is also still forbidden — neither D27j-ui-1 nor D32f-impl-1
+	// uses that wording.
 	for _, forbidden := range []string{
 		`data-kind="failmode"`,
 		`data-kind="fail_mode_policy"`,
 		`data-kind="fail-mode-policy"`,
-		`Fail-mode policy`,
 		`Fail mode policy`,
 	} {
 		if strings.Contains(body, forbidden) {
-			t.Errorf("D27j-ui-1: Layers control must not introduce chip/copy %q (still deferred)", forbidden)
+			t.Errorf("D27j-ui-1: Layers control must not introduce chip/copy %q (Context Graph layers control still defers fail-mode-policy)", forbidden)
 		}
+	}
+
+	// The Authority Graph overlays module IS allowed to surface the
+	// hyphenated "Fail-mode policy" copy as one of its layer chips
+	// (D32f-impl-1 Part B). Pin that the copy lives only in the
+	// Authority overlays module so a future regression that puts it
+	// into the Context Graph's Layers control surfaces here.
+	overlaysJS := getExplorerAsset(t, srv, "/explorer/assets/js/graph/authority/authority-graph-overlays.js")
+	if !strings.Contains(overlaysJS, "Fail-mode policy") {
+		t.Error("D32f-impl-1: authority-graph-overlays.js must declare the 'Fail-mode policy' layer chip label")
 	}
 }
 

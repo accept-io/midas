@@ -214,8 +214,11 @@
     if (typeof insp.setSummary === 'function') {
       insp.setSummary([['Kind', kindLabel]]);
     }
+    // D32f-impl-1 — Compose the Governance section from per-selection
+    // overlays: diagnostics that name this node, plus surface-posture
+    // when the selection is a decision_surface.
     if (typeof insp.setGovernance === 'function') {
-      insp.setGovernance('');
+      insp.setGovernance(_buildOverlayHTML(projKind, projId));
     }
     if (typeof insp.setActions === 'function') {
       insp.setActions([]);
@@ -223,6 +226,112 @@
     if (typeof insp.setInlineActions === 'function') {
       insp.setInlineActions(selectedNode, []);
     }
+  }
+
+  // _buildOverlayHTML returns an HTML fragment with two optional
+  // subsections — Diagnostics + Posture — driven by the cached
+  // projection. Returns an empty string when neither subsection has
+  // content; the inspector frame's setGovernance call then leaves the
+  // governance container empty.
+  function _buildOverlayHTML(projKind, projId) {
+    var projection = window.MIDASExplorerGraph && window.MIDASExplorerGraph._lastAuthorityProjection;
+    if (!projection) return '';
+
+    var html = '';
+
+    // ── Diagnostics for the selected node ───────────────────────────────
+    var diagnostics = _diagnosticsForNode(projection, projKind, projId);
+    if (diagnostics.length > 0) {
+      var rows = '';
+      for (var i = 0; i < diagnostics.length; i++) {
+        var d = diagnostics[i];
+        rows += (
+          '<li class="authority-inspector-diagnostic authority-inspector-diagnostic-' + _escHtml(d.severity || '') + '">' +
+            '<span class="authority-inspector-diagnostic-severity" data-diagnostic-severity="' + _escHtml(d.severity || '') + '">' + _escHtml(d.severity || '') + '</span>' +
+            '<span class="authority-inspector-diagnostic-kind">' + _escHtml(d.kind || '') + '</span>' +
+            (d.message ? '<span class="authority-inspector-diagnostic-message">' + _escHtml(d.message) + '</span>' : '') +
+          '</li>'
+        );
+      }
+      html += (
+        '<section class="authority-inspector-section authority-inspector-section-diagnostics" aria-label="Diagnostics">' +
+          '<h4 class="authority-inspector-section-title">Diagnostics</h4>' +
+          '<ul class="authority-inspector-diagnostics-list">' + rows + '</ul>' +
+        '</section>'
+      );
+    }
+
+    // ── Posture (surface only) ─────────────────────────────────────────
+    if (projKind === 'decision_surface') {
+      var posture = _postureForSurface(projection, projId);
+      if (posture) {
+        var pairs = [
+          ['Authority status',   posture.authority_status],
+          ['Profile status',     posture.profile_status],
+          ['Grant status',       posture.grant_status],
+          ['Agent status',       posture.agent_status],
+          ['Fail-mode policy',   posture.fail_mode_policy_status],
+          ['Escalation',         posture.escalation_status],
+          ['Highest severity',   posture.highest_severity],
+        ];
+        var pHTML = '';
+        for (var p = 0; p < pairs.length; p++) {
+          if (!pairs[p][1]) continue;
+          pHTML += (
+            '<div class="authority-inspector-posture-row">' +
+              '<span class="authority-inspector-posture-key">' + _escHtml(pairs[p][0]) + '</span>' +
+              '<span class="authority-inspector-posture-val" data-posture-axis="' + _escHtml(_axisAttr(pairs[p][0])) + '" data-posture-value="' + _escHtml(pairs[p][1]) + '">' + _escHtml(pairs[p][1]) + '</span>' +
+            '</div>'
+          );
+        }
+        if (pHTML) {
+          html += (
+            '<section class="authority-inspector-section authority-inspector-section-posture" aria-label="Surface posture">' +
+              '<h4 class="authority-inspector-section-title">Surface posture</h4>' +
+              '<div class="authority-inspector-posture">' + pHTML + '</div>' +
+            '</section>'
+          );
+        }
+      }
+    }
+
+    return html;
+  }
+
+  function _axisAttr(label) {
+    return String(label || '').toLowerCase().replace(/\s+/g, '-');
+  }
+
+  // _diagnosticsForNode returns the deterministic list of Diagnostic
+  // records whose NodeRefs include (projKind, projId).
+  function _diagnosticsForNode(projection, projKind, projId) {
+    var out = [];
+    var diags = (projection && projection.diagnostics) || [];
+    for (var i = 0; i < diags.length; i++) {
+      var d = diags[i];
+      if (!d || !Array.isArray(d.node_refs)) continue;
+      for (var j = 0; j < d.node_refs.length; j++) {
+        var ref = d.node_refs[j];
+        if (ref && ref.kind === projKind && ref.id === projId) {
+          out.push(d);
+          break;
+        }
+      }
+    }
+    return out;
+  }
+
+  // _postureForSurface returns the surface_posture entry for the
+  // selected surface, or null when none exists.
+  function _postureForSurface(projection, surfaceID) {
+    var postures = (projection && projection.surface_posture) || [];
+    for (var i = 0; i < postures.length; i++) {
+      var p = postures[i];
+      if (p && p.surface && p.surface.id === surfaceID) {
+        return p;
+      }
+    }
+    return null;
   }
 
   // renderNode — lens dispatch entry point. graph-inspector.render

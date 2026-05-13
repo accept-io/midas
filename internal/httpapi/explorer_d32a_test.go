@@ -3289,10 +3289,16 @@ func TestExplorer_D32bImpl2_AuthorityPanelContainer(t *testing.T) {
 		`data-authority-diagnostics`,
 		`data-authority-surface-posture`,
 		`_authorityRenderDiagnosticsIntoDrawer`,
-		`_authorityRenderPostureIntoDrawer`,
+		// D32g-fix-1 renamed `_authorityRenderPostureIntoDrawer` to
+		// `_authorityRenderPostureAndHelpIntoDrawer` when the Posture
+		// tab grew to consolidate posture + summary + layer chips +
+		// legend into the shared drawer. The injection contract is
+		// preserved; only the function name reflects the broader
+		// content the tab now hosts.
+		`_authorityRenderPostureAndHelpIntoDrawer`,
 	} {
 		if !strings.Contains(viewJS, want) {
-			t.Errorf("D32b-impl-3: authority-graph-view.js must inject %q into the drawer panel mount", want)
+			t.Errorf("D32b-impl-3 (post-D32g): authority-graph-view.js must inject %q into the drawer panel mount", want)
 		}
 	}
 }
@@ -3945,15 +3951,18 @@ func TestExplorer_D32bImpl3_LensProvidersRegistered(t *testing.T) {
 		t.Error("D32b-impl-3: authority-graph-view.js must register the Authority lens drawer provider")
 	}
 	// Authority labels per the D32b-impl-3 design (Inspector |
-	// Diagnostics | Posture) — pin the labels appear in the
-	// Authority registration.
+	// Diagnostics | Posture). D32g-fix-1 relabelled the third tab to
+	// "Posture & Help" when it grew to host the consolidated posture
+	// list + full summary counts + layer toggle chips + the legend
+	// that previously lived above the canvas. Inspector + Diagnostics
+	// labels are unchanged.
 	for _, want := range []string{
 		"label: 'Inspector'",
 		"label: 'Diagnostics'",
-		"label: 'Posture'",
+		"label: 'Posture & Help'",
 	} {
 		if !strings.Contains(viewJS, want) {
-			t.Errorf("D32b-impl-3: Authority drawer registration must declare %q", want)
+			t.Errorf("D32b-impl-3 (post-D32g): Authority drawer registration must declare %q", want)
 		}
 	}
 	// Authority Inspector tab renderer is a no-op (the existing
@@ -3965,12 +3974,12 @@ func TestExplorer_D32bImpl3_LensProvidersRegistered(t *testing.T) {
 	// Diagnostics + Posture renderers dispatch to the panel modules.
 	for _, want := range []string{
 		"_authorityRenderDiagnosticsIntoDrawer",
-		"_authorityRenderPostureIntoDrawer",
+		"_authorityRenderPostureAndHelpIntoDrawer",
 		"window.MIDASExplorerGraph.authorityDiagnosticsPanel",
 		"window.MIDASExplorerGraph.authoritySurfacePosturePanel",
 	} {
 		if !strings.Contains(viewJS, want) {
-			t.Errorf("D32b-impl-3: Authority drawer must dispatch to %q", want)
+			t.Errorf("D32b-impl-3 (post-D32g): Authority drawer must dispatch to %q", want)
 		}
 	}
 }

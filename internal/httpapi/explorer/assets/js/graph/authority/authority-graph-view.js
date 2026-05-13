@@ -210,6 +210,19 @@
       return;
     }
 
+    // D32f-impl-1 — Cache the latest projection on the namespace so the
+    // inspector + overlays module can read diagnostics / posture for the
+    // selected node WITHOUT re-fetching. Stored as a frozen snapshot;
+    // the next refresh overwrites it.
+    window.MIDASExplorerGraph._lastAuthorityProjection = payload || null;
+
+    // D32f-impl-1 — Pre-compute the per-node overlay indexes ONCE per
+    // render. Each map is keyed by "<kind>:<id>".
+    //   _diagnosticsByNode    → { "decision_surface:surf-…": "critical"|"warning"|"info" }
+    //   _postureBySurface     → { "surf-…": { fmp_status, agent_status, profile_status, … } }
+    //   _diagnosticDetails    → { "decision_surface:surf-…": [Diagnostic, …] }
+    var overlays = _computeNodeOverlays(projection);
+
     // Group nodes by kind row (subject/authority/agent layout) and by
     // governance column (fail_mode_policy / escalation_target).
     var ROWS = ['business_service', 'decision_surface', 'authority_profile', 'authority_grant', 'agent'];
@@ -255,7 +268,7 @@
         var node = list[ni];
         var pos = { x: xs[ni], y: rowY[kind] };
         positions[_refKey({ kind: node.kind, id: node.id })] = pos;
-        _paintNode(node, pos, renderer, adapter);
+        _paintNode(node, pos, renderer, adapter, overlays);
       }
     }
 
@@ -272,7 +285,7 @@
       var gNode = govList[gp];
       var gPos = { x: govX, y: 24 + gp * (GMAP.NODE_H + 32) };
       positions[_refKey({ kind: gNode.kind, id: gNode.id })] = gPos;
-      _paintNode(gNode, gPos, renderer, adapter);
+      _paintNode(gNode, gPos, renderer, adapter, overlays);
     }
 
     // Paint edges. The lens-agnostic addLiveConnector takes anchor
@@ -297,6 +310,17 @@
     // and paints into its own data-* container. Panels are no-ops
     // when their modules / containers are absent.
     _renderAuthorityPanels(payload);
+
+    // D32f-impl-1 — Render the toolbar overlays (legend + layer chips
+    // + summary pills) after a successful graph paint. The overlays
+    // module is stateless: it reads from
+    // window.MIDASExplorerGraph._lastAuthorityProjection (set above)
+    // and from the adapter for label tables. No-op when the module
+    // is absent.
+    var overlaysModule = window.MIDASExplorerGraph && window.MIDASExplorerGraph.authorityOverlays;
+    if (overlaysModule && typeof overlaysModule.render === 'function') {
+      try { overlaysModule.render(payload); } catch (_) { /* swallow */ }
+    }
 
     // D32b-impl-2a — Schedule a fit-to-view after the Authority Graph
     // first paints so the operator opens to a centred / framed graph
@@ -340,12 +364,39 @@
     }
   }
 
-  function _paintNode(node, pos, renderer, adapter) {
+  function _paintNode(node, pos, renderer, adapter, overlays) {
     var details = _detailsFor(node, adapter);
     var nodeId  = _refKey({ kind: node.kind, id: node.id });
     // Mirror the node position into shared renderer state so
     // addLiveConnector's effectiveGmapPosition lookup resolves.
     _state().positions[nodeId] = pos;
+
+    // D32g-fix-1 — Posture badges. Short labels (No FMP / Dangling /
+    // Blocked / No profile / No grant) replace the louder pre-fix
+    // strings ("FMP dangling" / "agent blocked" / etc.). Badge styling
+    // is muted via authority-graph.css so the badges don't compete
+    // with the selected-node ring.
+    var badges = (adapter.nodeBadges(node) || []).slice();
+    if (overlays && node.kind === 'decision_surface') {
+      var posture = overlays.postureBySurface[node.id];
+      if (posture) {
+        if (posture.fail_mode_policy_status === 'dangling') {
+          badges.push({ cls: 'authority-badge-posture-dangling', text: 'Dangling' });
+        } else if (posture.fail_mode_policy_status === 'missing') {
+          badges.push({ cls: 'authority-badge-posture-missing', text: 'No FMP' });
+        }
+        if (posture.agent_status === 'blocked') {
+          badges.push({ cls: 'authority-badge-posture-blocked', text: 'Blocked' });
+        }
+        if (posture.profile_status === 'missing') {
+          badges.push({ cls: 'authority-badge-posture-no-profile', text: 'No profile' });
+        }
+        if (posture.grant_status === 'missing') {
+          badges.push({ cls: 'authority-badge-posture-no-grant', text: 'No grant' });
+        }
+      }
+    }
+
     renderer.addNode({
       id:      nodeId,
       kind:    'authority-' + node.kind,
@@ -353,10 +404,88 @@
       label:   adapter.nodeKindLabel(node.kind),
       name:    node.label || node.id,
       meta:    _metaFor(node, adapter),
-      badges:  adapter.nodeBadges(node),
+      badges:  badges,
       details: details,
       actions: [],
     }, pos);
+
+    // D32f-impl-1 — Annotate the freshly-painted node with
+    // diagnostic + posture data-attributes. The renderer's addNode
+    // appends synchronously, so the node is queryable here.
+    if (overlays) {
+      var nodeEl = document.querySelector(
+        '.gmap-node[data-node-id="' + (window.CSS && CSS.escape ? CSS.escape(nodeId) : nodeId) + '"]'
+      );
+      if (nodeEl) {
+        // Mirror the projection kind without the "authority-" prefix so
+        // CSS selectors stay readable and contract tests can pin them.
+        nodeEl.setAttribute('data-projection-kind', node.kind);
+        var sev = overlays.diagnosticsByNode[nodeId];
+        if (sev) {
+          nodeEl.setAttribute('data-diagnostic-severity', sev);
+        }
+        if (node.kind === 'decision_surface') {
+          var p = overlays.postureBySurface[node.id];
+          if (p) {
+            if (p.fail_mode_policy_status) nodeEl.setAttribute('data-fmp-status', p.fail_mode_policy_status);
+            if (p.agent_status)            nodeEl.setAttribute('data-agent-status', p.agent_status);
+            if (p.profile_status)          nodeEl.setAttribute('data-profile-status', p.profile_status);
+            if (p.grant_status)            nodeEl.setAttribute('data-grant-status', p.grant_status);
+            if (p.authority_status)        nodeEl.setAttribute('data-authority-status', p.authority_status);
+            if (p.escalation_status)       nodeEl.setAttribute('data-escalation-status', p.escalation_status);
+          }
+        }
+      }
+    }
+  }
+
+  // _computeNodeOverlays — collapse projection.diagnostics[] into a
+  // per-node highest-severity map, and index surface_posture[] by
+  // surface id. Severity precedence: critical > warning > info.
+  //
+  // The diagnostics map key is "<kind>:<id>" matching _refKey so the
+  // paint loop can look up by the same key the renderer uses for
+  // data-node-id.
+  function _computeNodeOverlays(projection) {
+    var diagBy = {};
+    var detailsBy = {};
+    var postureBy = {};
+    var diags = (projection && projection.diagnostics) || [];
+    for (var i = 0; i < diags.length; i++) {
+      var d = diags[i];
+      if (!d || !Array.isArray(d.node_refs)) continue;
+      for (var j = 0; j < d.node_refs.length; j++) {
+        var ref = d.node_refs[j];
+        if (!ref || !ref.kind || !ref.id) continue;
+        var key = ref.kind + ':' + ref.id;
+        if (!detailsBy[key]) detailsBy[key] = [];
+        detailsBy[key].push(d);
+        if (_severityWins(d.severity, diagBy[key])) {
+          diagBy[key] = d.severity;
+        }
+      }
+    }
+    var postures = (projection && projection.surface_posture) || [];
+    for (var pi = 0; pi < postures.length; pi++) {
+      var p = postures[pi];
+      if (p && p.surface && p.surface.id) {
+        postureBy[p.surface.id] = p;
+      }
+    }
+    return {
+      diagnosticsByNode: diagBy,
+      diagnosticDetails: detailsBy,
+      postureBySurface:  postureBy,
+    };
+  }
+
+  // _severityWins reports whether `candidate` outranks `current`.
+  // Precedence: critical > warning > info > (none).
+  function _severityWins(candidate, current) {
+    if (!candidate) return false;
+    if (!current) return true;
+    var rank = { critical: 3, warning: 2, info: 1 };
+    return (rank[candidate] || 0) > (rank[current] || 0);
   }
 
   // _detailsFor — JSON-serialisable typed-data block. The inspector
@@ -508,14 +637,47 @@
     }
   }
 
-  function _authorityRenderPostureIntoDrawer(ctx, mount) {
+  // D32g-fix-1 — The Posture & Help tab consolidates four reference-
+  // grade sections that previously occupied the canvas overlay:
+  //   • Surface posture list (existing posture panel)
+  //   • Full summary counts (moved from above-canvas pills)
+  //   • Layer toggles (moved from above-canvas chip row)
+  //   • Full legend (moved from above-canvas <details> block)
+  //
+  // Each section delegates its content to the existing module that
+  // owns it (authoritySurfacePosturePanel + authorityOverlays). The
+  // drawer module owns tab activation / focus / panel scroll; this
+  // function only stamps mount points.
+  function _authorityRenderPostureAndHelpIntoDrawer(ctx, mount) {
     if (!mount) return;
     mount.innerHTML =
-      '<div class="authority-drawer-section authority-surface-posture"' +
-        ' data-authority-surface-posture aria-label="Surface posture"></div>';
-    var panel = window.MIDASExplorerGraph && window.MIDASExplorerGraph.authoritySurfacePosturePanel;
-    if (panel && typeof panel.render === 'function') {
-      try { panel.render(ctx && ctx.projection); } catch (_) { /* swallow */ }
+      '<section class="authority-drawer-section authority-drawer-section-posture"' +
+        ' aria-label="Surface posture">' +
+        '<h4 class="authority-drawer-section-title">Surface posture</h4>' +
+        '<div class="authority-surface-posture" data-authority-surface-posture></div>' +
+      '</section>' +
+      '<section class="authority-drawer-section authority-drawer-section-summary"' +
+        ' data-authority-summary-mount aria-label="Authority summary"></section>' +
+      '<section class="authority-drawer-section authority-drawer-section-layers"' +
+        ' data-authority-layer-chips aria-label="Authority Graph layers"></section>' +
+      '<section class="authority-drawer-section authority-drawer-section-legend"' +
+        ' data-authority-legend aria-label="Authority Graph legend"></section>';
+
+    var posturePanel = window.MIDASExplorerGraph && window.MIDASExplorerGraph.authoritySurfacePosturePanel;
+    if (posturePanel && typeof posturePanel.render === 'function') {
+      try { posturePanel.render(ctx && ctx.projection); } catch (_) { /* swallow */ }
+    }
+    var overlays = window.MIDASExplorerGraph && window.MIDASExplorerGraph.authorityOverlays;
+    if (overlays) {
+      if (typeof overlays.renderSummaryInto === 'function') {
+        try { overlays.renderSummaryInto(mount.querySelector('[data-authority-summary-mount]'), ctx && ctx.projection); } catch (_) { /* swallow */ }
+      }
+      if (typeof overlays.renderLayerChipsInto === 'function') {
+        try { overlays.renderLayerChipsInto(mount.querySelector('[data-authority-layer-chips]')); } catch (_) { /* swallow */ }
+      }
+      if (typeof overlays.renderLegendInto === 'function') {
+        try { overlays.renderLegendInto(mount.querySelector('[data-authority-legend]')); } catch (_) { /* swallow */ }
+      }
     }
   }
 
@@ -531,8 +693,8 @@
             void ctx; void mount;
           },
         },
-        { id: 'evidence', label: 'Diagnostics', render: _authorityRenderDiagnosticsIntoDrawer },
-        { id: 'config',   label: 'Posture',     render: _authorityRenderPostureIntoDrawer  },
+        { id: 'evidence', label: 'Diagnostics',     render: _authorityRenderDiagnosticsIntoDrawer       },
+        { id: 'config',   label: 'Posture & Help',  render: _authorityRenderPostureAndHelpIntoDrawer    },
       ],
     });
   }
@@ -543,6 +705,10 @@
     renderAuthorityGraphEmpty:   renderAuthorityGraphEmpty,
     renderAuthorityGraphError:   renderAuthorityGraphError,
     setAuthorityGraphStatus:     setAuthorityGraphStatus,
+    // D32f-impl-1 — pure helper exposed for the overlays module
+    // and the inspector. Computes per-node diagnostic + posture
+    // overlay indexes from a projection envelope.
+    computeNodeOverlays:         _computeNodeOverlays,
     // Exposed for tests; not part of the documented surface.
     _lensImpl:                   lensImpl,
   };

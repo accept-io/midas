@@ -57,14 +57,20 @@ func cleanupSeedDemoRows(t *testing.T, db *sql.DB) {
 			'aisys-fraud-detection','aisys-card-dispute-triage',
 			'aisys-collections-priority','aisys-vulnerability-detection'
 		)`,
-		// Authority grants reference profiles + agents.
+		// Authority grants reference profiles + agents. D32f-impl-1 adds
+		// three showcase grants (grant-demo-stop / grant-demo-dangling /
+		// grant-demo-blocked-agent); listed alongside the originals so a
+		// FK violation on the subsequent agents DELETE cannot surface.
 		`DELETE FROM authority_grants WHERE id IN (
 			'grant-v2-standard','grant-v2-onboarding',
-			'grant-v2-credit-assess','grant-v2-fraud-detection'
+			'grant-v2-credit-assess','grant-v2-fraud-detection',
+			'grant-demo-stop','grant-demo-dangling','grant-demo-blocked-agent'
 		)`,
 		`DELETE FROM authority_profiles WHERE id IN (
 			'profile-v2-standard','profile-v2-onboarding',
-			'profile-v2-credit-assess','profile-v2-fraud-detection'
+			'profile-v2-credit-assess','profile-v2-fraud-detection',
+			'profile-demo-override','profile-demo-dangling',
+			'profile-demo-no-grant','profile-demo-blocked-agent'
 		)`,
 		// Business service relationships reference business services.
 		`DELETE FROM business_service_relationships WHERE id IN (
@@ -73,7 +79,10 @@ func cleanupSeedDemoRows(t *testing.T, db *sql.DB) {
 			'rel-merchant-services-deps-fraud','rel-payments-supports-cards',
 			'rel-retail-banking-part-of-onboarding','rel-customer-onboarding-deps-fraud'
 		)`,
-		`DELETE FROM agents WHERE id IN ('agent-v2-evaluator','agent-v2-fraud-bot')`,
+		`DELETE FROM agents WHERE id IN (
+			'agent-v2-evaluator','agent-v2-fraud-bot',
+			'agent-v2-suspended-demo'
+		)`,
 		`DELETE FROM decision_surfaces WHERE id IN (
 			'surf-v2-id-verify','surf-v2-consumer-fraud','surf-v2-credit-assess',
 			'surf-v2-merchant-risk','surf-v2-merchant-payment','surf-v2-merchant-hv-pay',
@@ -81,8 +90,15 @@ func cleanupSeedDemoRows(t *testing.T, db *sql.DB) {
 			'surf-v2-statement-suppression','surf-v2-payment-initiation-check',
 			'surf-v2-sanctions-screen','surf-v2-card-issuance-decision',
 			'surf-v2-dispute-triage','surf-v2-kyc-evaluation','surf-v2-vulnerability-flag',
-			'surf-v2-tx-anomaly','surf-v2-tx-velocity','surf-v2-aml-alert-triage'
+			'surf-v2-tx-anomaly','surf-v2-tx-velocity','surf-v2-aml-alert-triage',
+			'surf-demo-override','surf-demo-dangling','surf-demo-no-profile',
+			'surf-demo-no-grant','surf-demo-blocked-agent'
 		)`,
+		// D32f-impl-1: showcase fail-mode policy must be removed before
+		// the table is reused. fmp-demo-default is also a SeedDemo
+		// fixture (D29d) but predates this cleanup harness; both are
+		// covered by id-keyed DELETE so existing tests are unaffected.
+		`DELETE FROM fail_mode_policies WHERE id IN ('fmp-demo-default','fmp-demo-strict')`,
 		`DELETE FROM business_service_capabilities WHERE business_service_id IN (
 			'bs-consumer-lending','bs-merchant-services',
 			'bs-retail-banking','bs-payments','bs-cards',
@@ -95,7 +111,8 @@ func cleanupSeedDemoRows(t *testing.T, db *sql.DB) {
 			'proc-payment-initiation','proc-payment-clearing','proc-cross-border-transfer',
 			'proc-card-issuance-flow','proc-card-dispute',
 			'proc-kyc-collection','proc-vulnerability-screen',
-			'proc-transaction-monitoring','proc-aml-investigation','proc-financial-crime-case'
+			'proc-transaction-monitoring','proc-aml-investigation','proc-financial-crime-case',
+			'proc-demo-authority-showcase'
 		)`,
 		// Child capabilities first (FK to parent capability id).
 		`DELETE FROM capabilities WHERE capability_id IN (
@@ -115,7 +132,8 @@ func cleanupSeedDemoRows(t *testing.T, db *sql.DB) {
 		`DELETE FROM business_services WHERE business_service_id IN (
 			'bs-consumer-lending','bs-merchant-services',
 			'bs-retail-banking','bs-payments','bs-cards',
-			'bs-customer-onboarding','bs-fraud-financial-crime'
+			'bs-customer-onboarding','bs-fraud-financial-crime',
+			'bs-demo-authority-showcase'
 		)`,
 	}
 	for _, s := range stmts {

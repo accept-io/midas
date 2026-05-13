@@ -254,10 +254,31 @@
         }
         break;
       case 'decision_surface':
+        // D32f-impl-1: fail-mode posture badge per surface.
+        // The projection emits EffectivePolicySource as one of the
+        // canonical EffectivePolicySource* constants — "override",
+        // "business_service_default", or "none". Earlier code matched
+        // 'business_service' and silently never matched the
+        // inherited case; this branch lists every value emitted by
+        // the backend ([projection.go:EffectivePolicySource*]).
+        //
+        // "Dangling" posture (a non-empty FailModePolicyID that
+        // doesn't resolve to an active version) is the surface_posture
+        // axis the backend emits separately; the surface node here
+        // shows the resolved source. The posture badge for dangling
+        // is applied via the posture overlay (D32f-impl-1) which
+        // reads projection.surface_posture[].fail_mode_policy_status.
+        // D32g-fix-1 — Short labels ("Override" / "Inherited" /
+        // "No FMP") to keep the surface card compact. The previous
+        // "FMP override" / "FMP inherited" wording repeated "FMP"
+        // everywhere; the legend in the shared drawer keeps the
+        // disambiguating "Fail-mode posture" header.
         if (d.effective_policy_source === 'override') {
-          badges.push({ cls: 'authority-badge-fmp-override', text: 'FMP override' });
-        } else if (d.effective_policy_source === 'business_service') {
-          badges.push({ cls: 'authority-badge-fmp-inherited', text: 'FMP inherited' });
+          badges.push({ cls: 'authority-badge-fmp-override', text: 'Override' });
+        } else if (d.effective_policy_source === 'business_service_default') {
+          badges.push({ cls: 'authority-badge-fmp-inherited', text: 'Inherited' });
+        } else if (d.effective_policy_source === 'none') {
+          badges.push({ cls: 'authority-badge-fmp-missing', text: 'No FMP' });
         }
         break;
       case 'fail_mode_policy':

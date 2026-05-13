@@ -479,3 +479,329 @@ func TestAuthorityGraph_SeededDemo_NoMalformedPostureRecords(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// D32f-impl-1 — Showcase BS (bs-demo-authority-showcase) seeded scenarios
+// ---------------------------------------------------------------------------
+//
+// The showcase BS is a dedicated demo subtree that exercises the
+// non-happy-path Authority Graph affordances (missing profile,
+// missing grant, dangling fail-mode reference, blocked agent, stop
+// capability, surface override, inherited policy). The asserts below
+// prove that these scenarios flow through the SAME projection
+// pipeline that powers /v1/graphs/authority — no UI-side mock
+// derivation, no shortcut.
+
+// TestAuthorityGraph_SeededDemo_Showcase_SurfacesPresent confirms
+// every showcase surface emits a graph node when projecting
+// bs-demo-authority-showcase.
+func TestAuthorityGraph_SeededDemo_Showcase_SurfacesPresent(t *testing.T) {
+	svc := newSeededService(t)
+	got, err := svc.Project(context.Background(), ViewService, "bs-demo-authority-showcase", DefaultDepth)
+	if err != nil {
+		t.Fatalf("Project(bs-demo-authority-showcase): %v", err)
+	}
+	want := map[string]bool{
+		"surf-demo-override":      false,
+		"surf-demo-dangling":      false,
+		"surf-demo-no-profile":    false,
+		"surf-demo-no-grant":      false,
+		"surf-demo-blocked-agent": false,
+	}
+	for _, n := range got.Nodes {
+		if n.Kind != NodeKindDecisionSurface {
+			continue
+		}
+		if _, ok := want[n.ID]; ok {
+			want[n.ID] = true
+		}
+	}
+	for id, present := range want {
+		if !present {
+			t.Errorf("D32f-impl-1: showcase surface %q missing from projection", id)
+		}
+	}
+}
+
+// TestAuthorityGraph_SeededDemo_Showcase_SurfaceOverridePosture pins
+// Scenario 5: surf-demo-override carries a surface-level FailModePolicyID
+// (fmp-demo-strict) so its posture reports fail_mode_policy_status =
+// "override".
+func TestAuthorityGraph_SeededDemo_Showcase_SurfaceOverridePosture(t *testing.T) {
+	svc := newSeededService(t)
+	got, err := svc.Project(context.Background(), ViewService, "bs-demo-authority-showcase", DefaultDepth)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	posture := findPosture(got.SurfacePosture, "surf-demo-override")
+	if posture == nil {
+		t.Fatalf("D32f-impl-1 Scenario 5: missing posture for surf-demo-override")
+	}
+	if posture.FailModePolicyStatus != FailModePolicyStatusOverride {
+		t.Errorf("D32f-impl-1 Scenario 5: surf-demo-override fail_mode_policy_status: want %q, got %q",
+			FailModePolicyStatusOverride, posture.FailModePolicyStatus)
+	}
+}
+
+// TestAuthorityGraph_SeededDemo_Showcase_SurfaceDanglingPosture pins
+// Scenario 6: surf-demo-dangling references fmp-demo-missing-version
+// which does not resolve; posture reports fail_mode_policy_status =
+// "dangling" and the projection emits fail_mode_policy_reference_dangling.
+func TestAuthorityGraph_SeededDemo_Showcase_SurfaceDanglingPosture(t *testing.T) {
+	svc := newSeededService(t)
+	got, err := svc.Project(context.Background(), ViewService, "bs-demo-authority-showcase", DefaultDepth)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	posture := findPosture(got.SurfacePosture, "surf-demo-dangling")
+	if posture == nil {
+		t.Fatalf("D32f-impl-1 Scenario 6: missing posture for surf-demo-dangling")
+	}
+	if posture.FailModePolicyStatus != FailModePolicyStatusDangling {
+		t.Errorf("D32f-impl-1 Scenario 6: surf-demo-dangling fail_mode_policy_status: want %q, got %q",
+			FailModePolicyStatusDangling, posture.FailModePolicyStatus)
+	}
+	if !hasDiagnosticForSurface(got.Diagnostics, DiagnosticKindFailModePolicyReferenceDangling, "surf-demo-dangling") {
+		t.Errorf("D32f-impl-1 Scenario 6: expected %s diagnostic referencing surf-demo-dangling; got %+v",
+			DiagnosticKindFailModePolicyReferenceDangling, got.Diagnostics)
+	}
+}
+
+// TestAuthorityGraph_SeededDemo_Showcase_SurfaceMissingProfileDiagnostic
+// pins Scenario 2: surf-demo-no-profile has no AuthorityProfile attached,
+// the projection emits surface_has_no_active_profile, and posture reports
+// profile_status = "missing".
+func TestAuthorityGraph_SeededDemo_Showcase_SurfaceMissingProfileDiagnostic(t *testing.T) {
+	svc := newSeededService(t)
+	got, err := svc.Project(context.Background(), ViewService, "bs-demo-authority-showcase", DefaultDepth)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	posture := findPosture(got.SurfacePosture, "surf-demo-no-profile")
+	if posture == nil {
+		t.Fatalf("D32f-impl-1 Scenario 2: missing posture for surf-demo-no-profile")
+	}
+	if posture.ProfileStatus != ProfileStatusMissing {
+		t.Errorf("D32f-impl-1 Scenario 2: surf-demo-no-profile profile_status: want %q, got %q",
+			ProfileStatusMissing, posture.ProfileStatus)
+	}
+	if !hasDiagnosticForSurface(got.Diagnostics, DiagnosticKindSurfaceHasNoActiveProfile, "surf-demo-no-profile") {
+		t.Errorf("D32f-impl-1 Scenario 2: expected %s diagnostic referencing surf-demo-no-profile; got %+v",
+			DiagnosticKindSurfaceHasNoActiveProfile, got.Diagnostics)
+	}
+}
+
+// TestAuthorityGraph_SeededDemo_Showcase_ProfileMissingGrantDiagnostic
+// pins Scenario 3: profile-demo-no-grant exists, is attached to
+// surf-demo-no-grant, but has zero grants. Expected: surface posture
+// reports grant_status = "missing", and the projection emits
+// profile_has_no_active_grant for that profile.
+func TestAuthorityGraph_SeededDemo_Showcase_ProfileMissingGrantDiagnostic(t *testing.T) {
+	svc := newSeededService(t)
+	got, err := svc.Project(context.Background(), ViewService, "bs-demo-authority-showcase", DefaultDepth)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	posture := findPosture(got.SurfacePosture, "surf-demo-no-grant")
+	if posture == nil {
+		t.Fatalf("D32f-impl-1 Scenario 3: missing posture for surf-demo-no-grant")
+	}
+	if posture.GrantStatus != GrantStatusMissing {
+		t.Errorf("D32f-impl-1 Scenario 3: surf-demo-no-grant grant_status: want %q, got %q",
+			GrantStatusMissing, posture.GrantStatus)
+	}
+	if !hasDiagnosticForRef(got.Diagnostics, DiagnosticKindProfileHasNoActiveGrant,
+		NodeKindAuthorityProfile, "profile-demo-no-grant") {
+		t.Errorf("D32f-impl-1 Scenario 3: expected %s diagnostic referencing profile-demo-no-grant; got %+v",
+			DiagnosticKindProfileHasNoActiveGrant, got.Diagnostics)
+	}
+}
+
+// TestAuthorityGraph_SeededDemo_Showcase_BlockedAgentPosture pins
+// Scenario 7: grant-demo-blocked-agent points at agent-v2-suspended-demo
+// (OperationalStateSuspended). Expected: posture reports agent_status =
+// "blocked" and the projection emits grant_references_inactive_agent.
+func TestAuthorityGraph_SeededDemo_Showcase_BlockedAgentPosture(t *testing.T) {
+	svc := newSeededService(t)
+	got, err := svc.Project(context.Background(), ViewService, "bs-demo-authority-showcase", DefaultDepth)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	posture := findPosture(got.SurfacePosture, "surf-demo-blocked-agent")
+	if posture == nil {
+		t.Fatalf("D32f-impl-1 Scenario 7: missing posture for surf-demo-blocked-agent")
+	}
+	if posture.AgentStatus != AgentStatusBlocked {
+		t.Errorf("D32f-impl-1 Scenario 7: surf-demo-blocked-agent agent_status: want %q, got %q",
+			AgentStatusBlocked, posture.AgentStatus)
+	}
+	if !hasDiagnosticForRef(got.Diagnostics, DiagnosticKindGrantReferencesInactiveAgent,
+		NodeKindAuthorityGrant, "grant-demo-blocked-agent") {
+		t.Errorf("D32f-impl-1 Scenario 7: expected %s diagnostic referencing grant-demo-blocked-agent; got %+v",
+			DiagnosticKindGrantReferencesInactiveAgent, got.Diagnostics)
+	}
+}
+
+// TestAuthorityGraph_SeededDemo_Showcase_StopCapabilityGrants pins
+// Scenario 8: at least two showcase grants carry the "stop" capability.
+// One is grant-demo-stop (on the override surface), one is
+// grant-demo-blocked-agent (which combines stop with blocked posture).
+// The Summary.GrantsWithStopCapability counter must increment.
+func TestAuthorityGraph_SeededDemo_Showcase_StopCapabilityGrants(t *testing.T) {
+	svc := newSeededService(t)
+	got, err := svc.Project(context.Background(), ViewService, "bs-demo-authority-showcase", DefaultDepth)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	if got.Summary == nil {
+		t.Fatal("D32f-impl-1 Scenario 8: Summary must be populated")
+	}
+	if got.Summary.GrantsWithStopCapability < 2 {
+		t.Errorf("D32f-impl-1 Scenario 8: GrantsWithStopCapability: want >= 2 (grant-demo-stop + grant-demo-blocked-agent), got %d",
+			got.Summary.GrantsWithStopCapability)
+	}
+	// Both grant nodes must carry the stop capability in their typed data.
+	wantStop := map[string]bool{"grant-demo-stop": false, "grant-demo-blocked-agent": false}
+	for _, n := range got.Nodes {
+		if n.Kind != NodeKindAuthorityGrant {
+			continue
+		}
+		if _, ok := wantStop[n.ID]; !ok {
+			continue
+		}
+		if n.AuthorityGrant == nil {
+			t.Errorf("D32f-impl-1 Scenario 8: %q grant missing typed data", n.ID)
+			continue
+		}
+		var hasStop bool
+		for _, c := range n.AuthorityGrant.Capabilities {
+			if c == "stop" {
+				hasStop = true
+				break
+			}
+		}
+		wantStop[n.ID] = hasStop
+	}
+	for id, hasStop := range wantStop {
+		if !hasStop {
+			t.Errorf("D32f-impl-1 Scenario 8: grant %q must carry stop capability", id)
+		}
+	}
+}
+
+// TestAuthorityGraph_SeededDemo_Showcase_InheritedPolicyPosture pins
+// Scenario 4: surfaces that have no override AND no dangling reference
+// inherit bs-demo-authority-showcase's BS-level default fmp-demo-default
+// → fail_mode_policy_status = "inherited".
+//
+// surf-demo-no-profile, surf-demo-no-grant, and surf-demo-blocked-agent
+// all match this — they carry no FailModePolicyID of their own.
+func TestAuthorityGraph_SeededDemo_Showcase_InheritedPolicyPosture(t *testing.T) {
+	svc := newSeededService(t)
+	got, err := svc.Project(context.Background(), ViewService, "bs-demo-authority-showcase", DefaultDepth)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	inheritedSurfaces := []string{"surf-demo-no-profile", "surf-demo-no-grant", "surf-demo-blocked-agent"}
+	for _, id := range inheritedSurfaces {
+		posture := findPosture(got.SurfacePosture, id)
+		if posture == nil {
+			t.Errorf("D32f-impl-1 Scenario 4: missing posture for %q", id)
+			continue
+		}
+		if posture.FailModePolicyStatus != FailModePolicyStatusInherited {
+			t.Errorf("D32f-impl-1 Scenario 4: %s fail_mode_policy_status: want %q, got %q",
+				id, FailModePolicyStatusInherited, posture.FailModePolicyStatus)
+		}
+	}
+}
+
+// TestAuthorityGraph_SeededDemo_Showcase_FailModePolicyNodesEmitted
+// confirms both fail-mode-policy nodes (fmp-demo-default for BS default,
+// fmp-demo-strict for the override) are emitted under bs-demo-authority-showcase.
+func TestAuthorityGraph_SeededDemo_Showcase_FailModePolicyNodesEmitted(t *testing.T) {
+	svc := newSeededService(t)
+	got, err := svc.Project(context.Background(), ViewService, "bs-demo-authority-showcase", DefaultDepth)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	want := map[string]bool{
+		"fmp-demo-default": false,
+		"fmp-demo-strict":  false,
+	}
+	for _, n := range got.Nodes {
+		if n.Kind != NodeKindFailModePolicy {
+			continue
+		}
+		if _, ok := want[n.ID]; ok {
+			want[n.ID] = true
+		}
+	}
+	for id, present := range want {
+		if !present {
+			t.Errorf("D32f-impl-1: showcase must emit fail_mode_policy %q (override + BS-default coexist on the showcase)", id)
+		}
+	}
+}
+
+// TestAuthorityGraph_SeededDemo_ExistingProjections_Unchanged is a
+// guard test: enriching the demo with bs-demo-authority-showcase
+// must NOT break the bs-consumer-lending or bs-merchant-services
+// projections. Existing tests in this file pin the healthy state of
+// those BSs; this test re-asserts the headline invariants (non-empty
+// projection, no critical diagnostics) so a regression in the
+// showcase wiring surfaces here before each individual existing test.
+func TestAuthorityGraph_SeededDemo_ExistingProjections_Unchanged(t *testing.T) {
+	svc := newSeededService(t)
+	for _, bsID := range []string{"bs-consumer-lending", "bs-merchant-services"} {
+		got, err := svc.Project(context.Background(), ViewService, bsID, DefaultDepth)
+		if err != nil {
+			t.Fatalf("Project(%q): %v", bsID, err)
+		}
+		if len(got.Nodes) == 0 {
+			t.Errorf("D32f-impl-1: %q projection unexpectedly empty after showcase enrichment", bsID)
+		}
+		for _, d := range got.Diagnostics {
+			if d.Severity == DiagnosticSeverityCritical {
+				t.Errorf("D32f-impl-1: %q must remain free of critical diagnostics; got %+v", bsID, d)
+			}
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test helpers for D32f-impl-1
+// ---------------------------------------------------------------------------
+
+// findPosture returns the SurfaceAuthorityPosture for the named surface,
+// or nil if no posture record exists.
+func findPosture(postures []SurfaceAuthorityPosture, surfaceID string) *SurfaceAuthorityPosture {
+	for i := range postures {
+		if postures[i].Surface.ID == surfaceID {
+			return &postures[i]
+		}
+	}
+	return nil
+}
+
+// hasDiagnosticForSurface reports whether a diagnostic of the given
+// kind names the surface in its NodeRefs.
+func hasDiagnosticForSurface(diags []Diagnostic, kind, surfaceID string) bool {
+	return hasDiagnosticForRef(diags, kind, NodeKindDecisionSurface, surfaceID)
+}
+
+// hasDiagnosticForRef reports whether any diagnostic of the given kind
+// has a NodeRef matching the supplied (kind, id) pair.
+func hasDiagnosticForRef(diags []Diagnostic, diagKind, nodeKind, nodeID string) bool {
+	for _, d := range diags {
+		if d.Kind != diagKind {
+			continue
+		}
+		for _, ref := range d.NodeRefs {
+			if ref.Kind == nodeKind && ref.ID == nodeID {
+				return true
+			}
+		}
+	}
+	return false
+}

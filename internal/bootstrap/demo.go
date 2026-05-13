@@ -1432,6 +1432,435 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 		}
 	}
 
+	// ---------------------------------------------------------------------
+	// D32f-impl-1 — Authority Graph showcase scenarios
+	// ---------------------------------------------------------------------
+	//
+	// One purpose-built BusinessService (bs-demo-authority-showcase) that
+	// exercises every visible Authority Graph affordance through the
+	// normal product path (repository → /v1/graphs/authority → adapter →
+	// renderer). The seed entities are stable demo IDs; per-entity
+	// idempotency is preserved by the existing ensure* helpers.
+	//
+	// Scenarios (numbered to match D32f-impl-1 prompt Part A):
+	//
+	//   1. Fully governed chain (existing — bs-consumer-lending and
+	//      bs-merchant-services already provide this).
+	//   2. Missing active profile      → surf-demo-no-profile (no profile attached).
+	//   3. Missing active grant        → surf-demo-no-grant has profile-demo-no-grant
+	//                                    but zero grants.
+	//   4. Inherited fail-mode policy  → bs-demo-authority-showcase has the BS
+	//                                    default fmp-demo-default; surfaces without
+	//                                    their own override inherit it.
+	//   5. Surface override            → surf-demo-override uses fmp-demo-strict.
+	//   6. Dangling fail-mode-policy   → surf-demo-dangling references
+	//                                    fmp-demo-missing-version which resolves
+	//                                    to no active version.
+	//   7. Blocked / inactive agent    → surf-demo-blocked-agent grants link to
+	//                                    agent-v2-suspended-demo (OperationalState
+	//                                    = suspended).
+	//   8. Stop-capability grant       → grant-demo-stop carries CapabilityStop.
+	//
+	// These scenarios add visible variety to the Authority Graph WITHOUT
+	// invalidating existing seeded projection tests against
+	// bs-consumer-lending or bs-merchant-services — the showcase is a
+	// separate BS subtree.
+
+	// --- D32f-impl-1: Showcase BusinessService ---
+	if err := ensureBusinessService(ctx, repos.BusinessServices, &businessservice.BusinessService{
+		ID:          "bs-demo-authority-showcase",
+		Name:        "Authority Graph Showcase",
+		Description: "Demonstration service that exercises every Authority Graph affordance (override, inherited, missing, dangling, blocked agent, stop capability) through the real product path.",
+		ServiceType: businessservice.ServiceTypeInternal,
+		OwnerID:     "platform-team",
+		Status:      "active",
+		Origin:      "manual",
+		Managed:     true,
+		// BS-level default — surfaces without their own policy id
+		// inherit this and surface SurfacePosture.fail_mode_policy_status
+		// = "inherited".
+		FailModePolicyID: "fmp-demo-default",
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}); err != nil {
+		return err
+	}
+
+	// --- D32f-impl-1: Showcase Process ---
+	if err := ensureProcess(ctx, repos.Processes, &process.Process{
+		ID:                "proc-demo-authority-showcase",
+		Name:              "Authority Showcase Process",
+		Description:       "Container for the Authority Graph showcase surfaces.",
+		BusinessServiceID: "bs-demo-authority-showcase",
+		Status:            "active",
+		Origin:            "manual",
+		Managed:           true,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}); err != nil {
+		return err
+	}
+
+	// --- D32f-impl-1: Strict FailModePolicy (override target) ---
+	// Active policy with closed-only enforcement across every class.
+	// Used as the surface override on surf-demo-override.
+	if repos.FailModePolicies != nil {
+		if err := ensureFailModePolicy(ctx, repos.FailModePolicies, &failmode.FailModePolicy{
+			ID:             "fmp-demo-strict",
+			Version:        1,
+			Name:           "Demo Strict FailModePolicy",
+			Description:    "Showcase fail-mode policy used as a surface-level override (D32f-impl-1).",
+			Status:         failmode.FailModePolicyStatusActive,
+			EffectiveDate:  effective,
+			BusinessOwner:  "platform-team",
+			TechnicalOwner: "platform-runtime-team",
+			Rules: []failmode.FailModePolicyRule{
+				{
+					CorrectnessClass: failmode.CorrectnessClassGovernanceIntegrity,
+					PermittedMode:    failmode.PermittedModeClosed,
+					EnforcementState: failmode.EnforcementStateEvidenceOnly,
+					Outcome:          failmode.OutcomeEscalate,
+				},
+				{
+					CorrectnessClass: failmode.CorrectnessClassPersistence,
+					PermittedMode:    failmode.PermittedModeClosed,
+					EnforcementState: failmode.EnforcementStateEvidenceOnly,
+					Outcome:          failmode.OutcomeEscalate,
+				},
+				{
+					CorrectnessClass: failmode.CorrectnessClassInput,
+					PermittedMode:    failmode.PermittedModeNotApplicable,
+					EnforcementState: failmode.EnforcementStateEvidenceOnly,
+					Outcome:          failmode.OutcomeEscalate,
+				},
+				{
+					CorrectnessClass: failmode.CorrectnessClassResource,
+					PermittedMode:    failmode.PermittedModeClosed,
+					EnforcementState: failmode.EnforcementStateEvidenceOnly,
+					Outcome:          failmode.OutcomeEscalate,
+				},
+				{
+					CorrectnessClass: failmode.CorrectnessClassConsistency,
+					PermittedMode:    failmode.PermittedModeClosed,
+					EnforcementState: failmode.EnforcementStateEvidenceOnly,
+					Outcome:          failmode.OutcomeEscalate,
+				},
+			},
+			Origin:    "manual",
+			Managed:   true,
+			CreatedAt: now,
+			UpdatedAt: now,
+			CreatedBy: "system",
+		}); err != nil {
+			return err
+		}
+	}
+
+	// --- D32f-impl-1: Suspended demo agent (for blocked-agent scenario) ---
+	if err := ensureAgent(ctx, repos.Agents, &agent.Agent{
+		ID:               "agent-v2-suspended-demo",
+		Name:             "Suspended Demo Agent",
+		Type:             agent.AgentTypeAI,
+		Owner:            "platform-team",
+		ModelVersion:     "v1",
+		Endpoint:         "local",
+		OperationalState: agent.OperationalStateSuspended,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}); err != nil {
+		return err
+	}
+
+	// --- D32f-impl-1: Showcase surfaces ---
+	showcaseSurfaces := []*surface.DecisionSurface{
+		{
+			// Scenario 5: surface-level override. The surface declares its
+			// own FailModePolicyID resolving to the active fmp-demo-strict.
+			ID:                 "surf-demo-override",
+			Version:            1,
+			Name:               "Showcase: Fail-mode override",
+			Description:        "Surface with its own fail-mode policy override (D32f-impl-1 Scenario 5).",
+			Domain:             "showcase",
+			ProcessID:          "proc-demo-authority-showcase",
+			DecisionType:       surface.DecisionTypeTactical,
+			ReversibilityClass: surface.ReversibilityConditionallyReversible,
+			RequiredContext:    surface.ContextSchema{Fields: []surface.ContextField{}},
+			ConsequenceTypes:   []surface.ConsequenceType{},
+			Status:             surface.SurfaceStatusActive,
+			EffectiveFrom:      effective,
+			BusinessOwner:      "platform-team",
+			TechnicalOwner:     "midas",
+			FailModePolicyID:   "fmp-demo-strict",
+			CreatedAt:          now,
+			UpdatedAt:          now,
+		},
+		{
+			// Scenario 6: dangling fail-mode-policy reference. The surface
+			// names a policy id that does NOT resolve to any active version,
+			// so SurfacePosture.fail_mode_policy_status = "dangling" and the
+			// fail_mode_policy_reference_dangling warning diagnostic fires.
+			ID:                 "surf-demo-dangling",
+			Version:            1,
+			Name:               "Showcase: Dangling fail-mode reference",
+			Description:        "Surface whose fail-mode policy id resolves to nothing (D32f-impl-1 Scenario 6).",
+			Domain:             "showcase",
+			ProcessID:          "proc-demo-authority-showcase",
+			DecisionType:       surface.DecisionTypeTactical,
+			ReversibilityClass: surface.ReversibilityConditionallyReversible,
+			RequiredContext:    surface.ContextSchema{Fields: []surface.ContextField{}},
+			ConsequenceTypes:   []surface.ConsequenceType{},
+			Status:             surface.SurfaceStatusActive,
+			EffectiveFrom:      effective,
+			BusinessOwner:      "platform-team",
+			TechnicalOwner:     "midas",
+			FailModePolicyID:   "fmp-demo-missing-version",
+			CreatedAt:          now,
+			UpdatedAt:          now,
+		},
+		{
+			// Scenario 2: missing active profile. Surface exists, no profile
+			// is attached → surface_has_no_active_profile diagnostic.
+			ID:                 "surf-demo-no-profile",
+			Version:            1,
+			Name:               "Showcase: Missing active profile",
+			Description:        "Active surface with no authority profile attached (D32f-impl-1 Scenario 2).",
+			Domain:             "showcase",
+			ProcessID:          "proc-demo-authority-showcase",
+			DecisionType:       surface.DecisionTypeTactical,
+			ReversibilityClass: surface.ReversibilityConditionallyReversible,
+			RequiredContext:    surface.ContextSchema{Fields: []surface.ContextField{}},
+			ConsequenceTypes:   []surface.ConsequenceType{},
+			Status:             surface.SurfaceStatusActive,
+			EffectiveFrom:      effective,
+			BusinessOwner:      "platform-team",
+			TechnicalOwner:     "midas",
+			CreatedAt:          now,
+			UpdatedAt:          now,
+		},
+		{
+			// Scenario 3: missing active grant. Surface has a profile,
+			// profile has no grant → profile_has_no_active_grant diagnostic.
+			ID:                 "surf-demo-no-grant",
+			Version:            1,
+			Name:               "Showcase: Profile without grant",
+			Description:        "Surface whose profile has no authority grants (D32f-impl-1 Scenario 3).",
+			Domain:             "showcase",
+			ProcessID:          "proc-demo-authority-showcase",
+			DecisionType:       surface.DecisionTypeTactical,
+			ReversibilityClass: surface.ReversibilityConditionallyReversible,
+			RequiredContext:    surface.ContextSchema{Fields: []surface.ContextField{}},
+			ConsequenceTypes:   []surface.ConsequenceType{},
+			Status:             surface.SurfaceStatusActive,
+			EffectiveFrom:      effective,
+			BusinessOwner:      "platform-team",
+			TechnicalOwner:     "midas",
+			CreatedAt:          now,
+			UpdatedAt:          now,
+		},
+		{
+			// Scenario 7 + 8: blocked agent AND stop capability. The grant
+			// for this surface points at agent-v2-suspended-demo (blocked
+			// posture via grant_references_inactive_agent diagnostic) and
+			// carries the stop capability. One surface exercising two
+			// independent showcase axes is intentional — operators see
+			// stop-capability grant + blocked agent at the same node.
+			ID:                 "surf-demo-blocked-agent",
+			Version:            1,
+			Name:               "Showcase: Blocked agent + stop capability",
+			Description:        "Surface governed by a grant that links to a suspended agent and carries the stop capability (D32f-impl-1 Scenarios 7 + 8).",
+			Domain:             "showcase",
+			ProcessID:          "proc-demo-authority-showcase",
+			DecisionType:       surface.DecisionTypeStrategic,
+			ReversibilityClass: surface.ReversibilityReversible,
+			RequiredContext:    surface.ContextSchema{Fields: []surface.ContextField{}},
+			ConsequenceTypes:   []surface.ConsequenceType{},
+			Status:             surface.SurfaceStatusActive,
+			EffectiveFrom:      effective,
+			BusinessOwner:      "platform-team",
+			TechnicalOwner:     "midas",
+			CreatedAt:          now,
+			UpdatedAt:          now,
+		},
+	}
+	for _, s := range showcaseSurfaces {
+		if err := ensureSurface(ctx, repos.Surfaces, s); err != nil {
+			return err
+		}
+	}
+
+	// --- D32f-impl-1: Showcase profiles ---
+	//
+	// One profile per showcase surface that needs one. Profiles attached
+	// to surf-demo-no-profile are intentionally absent (Scenario 2).
+	showcaseProfiles := []*authority.AuthorityProfile{
+		{
+			ID:          "profile-demo-override",
+			Version:     1,
+			SurfaceID:   "surf-demo-override",
+			Name:        "Showcase Override Profile",
+			Description: "Authority profile attached to the override-policy showcase surface.",
+
+			Status:        authority.ProfileStatusActive,
+			EffectiveDate: effective,
+
+			ConfidenceThreshold: 0.85,
+			ConsequenceThreshold: authority.Consequence{
+				Type:       value.ConsequenceTypeRiskRating,
+				RiskRating: value.RiskRatingMedium,
+			},
+
+			EscalationMode:      authority.EscalationModeAuto,
+			EscalationTargetID:  "et-governance-approver",
+			FailMode:            authority.FailModeClosed,
+			RequiredContextKeys: []string{},
+
+			CreatedAt: now,
+			UpdatedAt: now,
+		},
+		{
+			ID:          "profile-demo-dangling",
+			Version:     1,
+			SurfaceID:   "surf-demo-dangling",
+			Name:        "Showcase Dangling-Policy Profile",
+			Description: "Authority profile under a surface whose fail-mode reference doesn't resolve.",
+
+			Status:        authority.ProfileStatusActive,
+			EffectiveDate: effective,
+
+			ConfidenceThreshold: 0.75,
+			ConsequenceThreshold: authority.Consequence{
+				Type:       value.ConsequenceTypeRiskRating,
+				RiskRating: value.RiskRatingLow,
+			},
+
+			EscalationMode:      authority.EscalationModeAuto,
+			FailMode:            authority.FailModeClosed,
+			RequiredContextKeys: []string{},
+
+			CreatedAt: now,
+			UpdatedAt: now,
+		},
+		{
+			// Scenario 3: this profile is intentionally NOT granted to any
+			// agent. The projection emits profile_has_no_active_grant.
+			ID:          "profile-demo-no-grant",
+			Version:     1,
+			SurfaceID:   "surf-demo-no-grant",
+			Name:        "Showcase Profile Without Grant",
+			Description: "Active authority profile with no grants (showcase Scenario 3).",
+
+			Status:        authority.ProfileStatusActive,
+			EffectiveDate: effective,
+
+			ConfidenceThreshold: 0.70,
+			ConsequenceThreshold: authority.Consequence{
+				Type:       value.ConsequenceTypeRiskRating,
+				RiskRating: value.RiskRatingLow,
+			},
+
+			EscalationMode:      authority.EscalationModeManual,
+			FailMode:            authority.FailModeClosed,
+			RequiredContextKeys: []string{},
+
+			CreatedAt: now,
+			UpdatedAt: now,
+		},
+		{
+			ID:          "profile-demo-blocked-agent",
+			Version:     1,
+			SurfaceID:   "surf-demo-blocked-agent",
+			Name:        "Showcase Blocked-Agent Profile",
+			Description: "Authority profile linked to a suspended agent (Scenario 7) carrying stop authority (Scenario 8).",
+
+			Status:        authority.ProfileStatusActive,
+			EffectiveDate: effective,
+
+			ConfidenceThreshold: 0.90,
+			ConsequenceThreshold: authority.Consequence{
+				Type:       value.ConsequenceTypeRiskRating,
+				RiskRating: value.RiskRatingHigh,
+			},
+
+			EscalationMode:      authority.EscalationModeAuto,
+			EscalationTargetID:  "et-governance-approver",
+			FailMode:            authority.FailModeClosed,
+			RequiredContextKeys: []string{},
+
+			CreatedAt: now,
+			UpdatedAt: now,
+		},
+	}
+	for _, p := range showcaseProfiles {
+		if err := ensureProfile(ctx, repos.Profiles, p); err != nil {
+			return err
+		}
+	}
+
+	// --- D32f-impl-1: Showcase grants ---
+	//
+	// One grant for the override profile (carries the stop capability
+	// AND constraints, to exercise grant inspector richly).
+	// One grant for the dangling profile (healthy chain — only the
+	// fail-mode reference is broken, not the authority spine).
+	// One grant for the blocked-agent profile pointing at the suspended
+	// agent. NO grant for profile-demo-no-grant (Scenario 3).
+	if err := ensureGrant(ctx, repos.Grants, &authority.AuthorityGrant{
+		ID:            "grant-demo-stop",
+		AgentID:       "agent-v2-evaluator",
+		ProfileID:     "profile-demo-override",
+		GrantedBy:     "system",
+		EffectiveDate: effective,
+		Status:        authority.GrantStatusActive,
+		CreatedAt:     now, UpdatedAt: now,
+		// Scenario 8: stop authority. The grant authorises a kill-switch
+		// alongside the recommend/approve baseline. The Authority Graph
+		// surfaces this via grant.capabilities and the
+		// Summary.GrantsWithStopCapability counter.
+		Capabilities: []authority.Capability{
+			authority.CapabilityRecommend,
+			authority.CapabilityApprove,
+			authority.CapabilityEscalate,
+			authority.CapabilityStop,
+		},
+	}); err != nil {
+		return err
+	}
+
+	if err := ensureGrant(ctx, repos.Grants, &authority.AuthorityGrant{
+		ID:            "grant-demo-dangling",
+		AgentID:       "agent-v2-evaluator",
+		ProfileID:     "profile-demo-dangling",
+		GrantedBy:     "system",
+		EffectiveDate: effective,
+		Status:        authority.GrantStatusActive,
+		CreatedAt:     now, UpdatedAt: now,
+		Capabilities: []authority.Capability{
+			authority.CapabilityRecommend,
+			authority.CapabilityApprove,
+		},
+	}); err != nil {
+		return err
+	}
+
+	if err := ensureGrant(ctx, repos.Grants, &authority.AuthorityGrant{
+		// Scenario 7: grant points at a suspended agent.
+		// projection emits grant_references_inactive_agent (critical) and
+		// the surface posture reports agent_status = "blocked".
+		ID:            "grant-demo-blocked-agent",
+		AgentID:       "agent-v2-suspended-demo",
+		ProfileID:     "profile-demo-blocked-agent",
+		GrantedBy:     "system",
+		EffectiveDate: effective,
+		Status:        authority.GrantStatusActive,
+		CreatedAt:     now, UpdatedAt: now,
+		Capabilities: []authority.Capability{
+			authority.CapabilityRecommend,
+			authority.CapabilityStop,
+		},
+	}); err != nil {
+		return err
+	}
+
 	return nil
 }
 

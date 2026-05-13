@@ -873,3 +873,239 @@ func TestSeedDemo_EscalationTargetIdempotent(t *testing.T) {
 		t.Errorf("EscalationTarget versions: want 1+1, got %d+%d", len(before), len(after))
 	}
 }
+
+// ---------------------------------------------------------------------------
+// D32f-impl-1 — Authority Graph showcase scenarios
+// ---------------------------------------------------------------------------
+//
+// The seed adds bs-demo-authority-showcase with five showcase surfaces,
+// one new FailModePolicy, one suspended agent, four authority profiles,
+// and three grants. These pins assert presence + idempotency. The
+// projection-level invariants (diagnostics fire, surface posture statuses
+// resolve correctly) live in internal/graph/authority/service_seeded_test.go.
+
+// TestSeedDemo_D32fImpl1_ShowcaseEntitiesCreated confirms every D32f
+// showcase entity is created by SeedDemo on a fresh store.
+func TestSeedDemo_D32fImpl1_ShowcaseEntitiesCreated(t *testing.T) {
+	ctx := context.Background()
+	repos := freshRepos(t)
+	if err := SeedDemo(ctx, repos); err != nil {
+		t.Fatalf("SeedDemo: %v", err)
+	}
+
+	// BusinessService.
+	bs, _ := repos.BusinessServices.GetByID(ctx, "bs-demo-authority-showcase")
+	if bs == nil {
+		t.Fatal("D32f-impl-1: bs-demo-authority-showcase must be created")
+	}
+	if bs.FailModePolicyID != "fmp-demo-default" {
+		t.Errorf("D32f-impl-1: bs-demo-authority-showcase.FailModePolicyID: want fmp-demo-default, got %q",
+			bs.FailModePolicyID)
+	}
+
+	// Process.
+	procs, _ := repos.Processes.ListByBusinessService(ctx, "bs-demo-authority-showcase")
+	var foundProc bool
+	for _, p := range procs {
+		if p.ID == "proc-demo-authority-showcase" {
+			foundProc = true
+		}
+	}
+	if !foundProc {
+		t.Error("D32f-impl-1: proc-demo-authority-showcase must be created")
+	}
+
+	// All five showcase surfaces.
+	wantSurfaces := []string{
+		"surf-demo-override",
+		"surf-demo-dangling",
+		"surf-demo-no-profile",
+		"surf-demo-no-grant",
+		"surf-demo-blocked-agent",
+	}
+	for _, id := range wantSurfaces {
+		s, _ := repos.Surfaces.FindLatestByID(ctx, id)
+		if s == nil {
+			t.Errorf("D32f-impl-1: surface %q must be created", id)
+		}
+	}
+
+	// Strict fail-mode policy (override target).
+	if pol, _ := repos.FailModePolicies.FindActiveAt(ctx, "fmp-demo-strict", time.Now()); pol == nil {
+		t.Error("D32f-impl-1: fmp-demo-strict must be created and active")
+	}
+
+	// Suspended agent.
+	ag, _ := repos.Agents.GetByID(ctx, "agent-v2-suspended-demo")
+	if ag == nil {
+		t.Fatal("D32f-impl-1: agent-v2-suspended-demo must be created")
+	}
+	if ag.OperationalState != agent.OperationalStateSuspended {
+		t.Errorf("D32f-impl-1: agent-v2-suspended-demo OperationalState: want %q, got %q",
+			agent.OperationalStateSuspended, ag.OperationalState)
+	}
+
+	// All four showcase profiles.
+	wantProfiles := []string{
+		"profile-demo-override",
+		"profile-demo-dangling",
+		"profile-demo-no-grant",
+		"profile-demo-blocked-agent",
+	}
+	for _, id := range wantProfiles {
+		p, _ := repos.Profiles.FindActiveAt(ctx, id, time.Now())
+		if p == nil {
+			t.Errorf("D32f-impl-1: profile %q must be created and active", id)
+		}
+	}
+
+	// Three showcase grants (no grant for profile-demo-no-grant by design).
+	wantGrants := []string{
+		"grant-demo-stop",
+		"grant-demo-dangling",
+		"grant-demo-blocked-agent",
+	}
+	for _, id := range wantGrants {
+		g, _ := repos.Grants.FindByID(ctx,id)
+		if g == nil {
+			t.Errorf("D32f-impl-1: grant %q must be created", id)
+		}
+	}
+}
+
+// TestSeedDemo_D32fImpl1_NoGrantForOrphanProfile pins Scenario 3:
+// profile-demo-no-grant must NOT have any grant created for it.
+func TestSeedDemo_D32fImpl1_NoGrantForOrphanProfile(t *testing.T) {
+	ctx := context.Background()
+	repos := freshRepos(t)
+	if err := SeedDemo(ctx, repos); err != nil {
+		t.Fatalf("SeedDemo: %v", err)
+	}
+	grants, err := repos.Grants.ListByProfile(ctx, "profile-demo-no-grant")
+	if err != nil {
+		t.Fatalf("ListByProfile: %v", err)
+	}
+	if len(grants) != 0 {
+		t.Errorf("D32f-impl-1 Scenario 3: profile-demo-no-grant must have zero grants; got %d", len(grants))
+	}
+}
+
+// TestSeedDemo_D32fImpl1_GrantDemoStopCarriesStopCapability pins
+// Scenario 8 at the seed level.
+func TestSeedDemo_D32fImpl1_GrantDemoStopCarriesStopCapability(t *testing.T) {
+	ctx := context.Background()
+	repos := freshRepos(t)
+	if err := SeedDemo(ctx, repos); err != nil {
+		t.Fatalf("SeedDemo: %v", err)
+	}
+	g, err := repos.Grants.FindByID(ctx,"grant-demo-stop")
+	if err != nil {
+		t.Fatalf("GetByID(grant-demo-stop): %v", err)
+	}
+	if g == nil {
+		t.Fatal("D32f-impl-1: grant-demo-stop must exist")
+	}
+	var hasStop bool
+	for _, c := range g.Capabilities {
+		if c == authority.CapabilityStop {
+			hasStop = true
+		}
+	}
+	if !hasStop {
+		t.Errorf("D32f-impl-1 Scenario 8: grant-demo-stop must carry CapabilityStop; got %+v", g.Capabilities)
+	}
+}
+
+// TestSeedDemo_D32fImpl1_Idempotent pins that the new showcase
+// entities are NOT duplicated on a second SeedDemo call.
+func TestSeedDemo_D32fImpl1_Idempotent(t *testing.T) {
+	ctx := context.Background()
+	repos := freshRepos(t)
+	if err := SeedDemo(ctx, repos); err != nil {
+		t.Fatalf("SeedDemo (first): %v", err)
+	}
+
+	// Snapshot a few entity counts after first seed.
+	bs1, _ := repos.BusinessServices.GetByID(ctx, "bs-demo-authority-showcase")
+	ag1, _ := repos.Agents.GetByID(ctx, "agent-v2-suspended-demo")
+	g1, _ := repos.Grants.FindByID(ctx,"grant-demo-stop")
+	pol1, _ := repos.FailModePolicies.FindActiveAt(ctx, "fmp-demo-strict", time.Now())
+
+	if err := SeedDemo(ctx, repos); err != nil {
+		t.Fatalf("SeedDemo (second): %v", err)
+	}
+
+	bs2, _ := repos.BusinessServices.GetByID(ctx, "bs-demo-authority-showcase")
+	ag2, _ := repos.Agents.GetByID(ctx, "agent-v2-suspended-demo")
+	g2, _ := repos.Grants.FindByID(ctx,"grant-demo-stop")
+	pol2, _ := repos.FailModePolicies.FindActiveAt(ctx, "fmp-demo-strict", time.Now())
+
+	// Entities exist before and after; the seed is per-entity self-healing
+	// and does not delete or recreate rows.
+	if bs1 == nil || bs2 == nil {
+		t.Errorf("D32f-impl-1: bs-demo-authority-showcase missing after seed (before=%v after=%v)", bs1 != nil, bs2 != nil)
+	}
+	if ag1 == nil || ag2 == nil {
+		t.Errorf("D32f-impl-1: agent-v2-suspended-demo missing after seed")
+	}
+	if g1 == nil || g2 == nil {
+		t.Errorf("D32f-impl-1: grant-demo-stop missing after seed")
+	}
+	if pol1 == nil || pol2 == nil {
+		t.Errorf("D32f-impl-1: fmp-demo-strict missing after seed")
+	}
+
+	// FailModePolicy must still have exactly one version (idempotent).
+	versions, _ := repos.FailModePolicies.ListVersions(ctx, "fmp-demo-strict")
+	if len(versions) != 1 {
+		t.Errorf("D32f-impl-1: fmp-demo-strict must have exactly 1 version; got %d", len(versions))
+	}
+
+	// Profile versions: each showcase profile must have exactly 1 version.
+	for _, profileID := range []string{
+		"profile-demo-override",
+		"profile-demo-dangling",
+		"profile-demo-no-grant",
+		"profile-demo-blocked-agent",
+	} {
+		pversions, _ := repos.Profiles.ListVersions(ctx, profileID)
+		if len(pversions) != 1 {
+			t.Errorf("D32f-impl-1: profile %q must have exactly 1 version; got %d", profileID, len(pversions))
+		}
+	}
+}
+
+// TestSeedDemo_D32fImpl1_UserEditsSurvive pins the user-edit protection
+// contract for showcase entities: a manually-edited demo entity must
+// NOT be overwritten by a subsequent SeedDemo call.
+func TestSeedDemo_D32fImpl1_UserEditsSurvive(t *testing.T) {
+	ctx := context.Background()
+	repos := freshRepos(t)
+	if err := SeedDemo(ctx, repos); err != nil {
+		t.Fatalf("SeedDemo (first): %v", err)
+	}
+
+	// Mutate the seeded BS description simulating an operator edit.
+	bs, _ := repos.BusinessServices.GetByID(ctx, "bs-demo-authority-showcase")
+	if bs == nil {
+		t.Fatal("D32f-impl-1: showcase BS missing after first seed")
+	}
+	edited := *bs
+	edited.Description = "edited by operator"
+	if err := repos.BusinessServices.Update(ctx, &edited); err != nil {
+		t.Fatalf("Update bs: %v", err)
+	}
+
+	// Re-run seed. The ensure helpers must NOT overwrite the description.
+	if err := SeedDemo(ctx, repos); err != nil {
+		t.Fatalf("SeedDemo (second): %v", err)
+	}
+	after, _ := repos.BusinessServices.GetByID(ctx, "bs-demo-authority-showcase")
+	if after == nil {
+		t.Fatal("D32f-impl-1: showcase BS missing after second seed")
+	}
+	if after.Description != "edited by operator" {
+		t.Errorf("D32f-impl-1: SeedDemo overwrote user edit on bs-demo-authority-showcase: want %q, got %q",
+			"edited by operator", after.Description)
+	}
+}

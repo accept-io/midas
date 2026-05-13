@@ -48,27 +48,59 @@
  * One class per edge kind. The visible <path> and the hit-target
  * <path> share the class; the renderer assigns the .gmap-connector
  * geometry class so default stroke widths still apply.
+ *
+ * D32g-fix-1 — Every authority connector explicitly sets fill: none.
+ * Without it, the SVG default (fill: black) paints the curved area
+ * the C-bezier `d` attribute encloses as a solid black band — the
+ * "large black artefact" symptom that masked node cards. The
+ * stroke-width + opacity match the Context Graph connector classes
+ * (1.6–1.8, opacity 0.85–0.95) so visual weight stays consistent
+ * across both lenses.
  */
+.authority-connector,
+[class*="authority-connector-"] {
+  fill: none;
+  stroke-width: 1.6;
+  opacity: 0.85;
+}
 .authority-connector-business_service_has_surface {
+  fill: none;
   stroke: var(--authority-conn-surface, #6da3ff);
+  stroke-width: 1.6;
+  opacity: 0.85;
 }
 .authority-connector-surface_uses_profile {
+  fill: none;
   stroke: var(--authority-conn-profile, #8b7fff);
+  stroke-width: 1.6;
+  opacity: 0.85;
 }
 .authority-connector-profile_has_grant {
+  fill: none;
   stroke: var(--authority-conn-grant, #ac9bff);
+  stroke-width: 1.6;
+  opacity: 0.85;
 }
 .authority-connector-grant_authorises_agent {
+  fill: none;
   stroke: var(--authority-conn-agent, #c79bff);
+  stroke-width: 1.6;
+  opacity: 0.85;
 }
 .authority-connector-surface_has_fail_mode_policy,
 .authority-connector-business_service_has_fail_mode_policy {
+  fill: none;
   stroke: var(--authority-conn-fmp, #ffb86b);
+  stroke-width: 1.6;
   stroke-dasharray: 4 4;
+  opacity: 0.85;
 }
 .authority-connector-profile_escalates_to {
+  fill: none;
   stroke: var(--authority-conn-escalation, #ff7e9b);
+  stroke-width: 1.6;
   stroke-dasharray: 6 3;
+  opacity: 0.85;
 }
 
 /* Badges --------------------------------------------------------------- */
@@ -338,4 +370,401 @@
   background: var(--surface-3, rgba(255, 255, 255, 0.06));
   font-size: 11px;
   color: var(--text-2, #c4ccd6);
+}
+
+/* ============================================================================
+ * D32f-impl-1 + D32g-fix-1 + D32g-fix-2 — Authority Graph overlays.
+ *
+ * D32g-fix-2 corrective pass:
+ *   • The full-width Authority canvas toolbar introduced by D32g-fix-1
+ *     is REMOVED. Authority lens reuses the existing graph shell chrome
+ *     (graph header + #gmap-layers-button + right-side drawer) — no
+ *     mode-specific second menu bar.
+ *   • Layers control is the EXISTING #gmap-layers-button. The overlays
+ *     module installs a capture-phase click interceptor so the click
+ *     opens the shared drawer's Posture & Help tab in Authority mode
+ *     instead of the Context-only .gmap-layers-panel.
+ *   • All risk / gap counts live inside the shared drawer's Diagnostics
+ *     + Posture & Help tabs. No canvas-overlay pill row.
+ *   • Diagnostic markers, posture badges, connector fill-fix, and
+ *     layer-hide CSS rules are unchanged from D32g-fix-1.
+ *
+ * Visual contract preserved:
+ *   - Diagnostic severity (critical > warning > info) still readable.
+ *   - Surface posture badges still indicate gaps.
+ *   - Layer-hide CSS rules unchanged so contract tests pin them.
+ * ============================================================================
+ */
+
+/* Hide the legacy Context-Graph bottom-centre connector legend when
+   the operator is in Authority lens. Authority has its own legend in
+   the shared drawer's Posture & Help tab. */
+body[data-graph-lens="authority"] .gmap-legend-overlay {
+  display: none;
+}
+
+/* ── Summary pills ─────────────────────────────────────────────────────
+ * Shared between the compact toolbar (high-priority only) and the
+ * drawer's Summary section (full set).
+ */
+.authority-summary-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  font-size: 10px;
+  font-weight: 500;
+  border-radius: 10px;
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--surface-3, rgba(255, 255, 255, 0.08));
+  color: var(--text-1, #e6ebf2);
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.authority-summary-pill-label {
+  color: var(--text-2, #c4ccd6);
+}
+.authority-summary-pill-count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--text-1, #e6ebf2);
+}
+.authority-summary-pill-gap {
+  border-color: rgba(232, 87, 87, 0.5);
+  background: rgba(232, 87, 87, 0.08);
+}
+.authority-summary-pill-gap .authority-summary-pill-count { color: #ffb3b3; }
+.authority-summary-pill-emphasis {
+  border-color: rgba(245, 200, 90, 0.45);
+  background: rgba(245, 200, 90, 0.08);
+}
+.authority-summary-pill-critical {
+  border-color: rgba(232, 87, 87, 0.6);
+  background: rgba(232, 87, 87, 0.10);
+}
+.authority-summary-pill-critical .authority-summary-pill-count { color: #ffb3b3; }
+.authority-summary-pill-warning {
+  border-color: rgba(245, 200, 90, 0.55);
+  background: rgba(245, 200, 90, 0.10);
+}
+.authority-summary-pill-warning .authority-summary-pill-count { color: #ffdb88; }
+.authority-summary-pill-info {
+  border-color: rgba(110, 180, 255, 0.4);
+  background: rgba(110, 180, 255, 0.08);
+}
+
+/* ── Layer chips (drawer-only) ─────────────────────────────────────────── */
+.authority-graph-layer-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  font-size: 11px;
+  border-radius: 4px;
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--surface-3, rgba(255, 255, 255, 0.08));
+  cursor: pointer;
+  user-select: none;
+}
+.authority-graph-layer-chip input[disabled] {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+.authority-graph-layer-chip-input { margin: 0; }
+.authority-graph-layer-chip-label { color: var(--text-1, #e6ebf2); }
+
+/* ── Drawer-only sections (Posture & Help tab) ─────────────────────────── */
+.authority-drawer-section {
+  margin: 0 0 12px 0;
+  padding: 0;
+}
+.authority-drawer-section + .authority-drawer-section {
+  border-top: 1px solid var(--surface-3, rgba(255, 255, 255, 0.06));
+  padding-top: 10px;
+}
+.authority-drawer-section-title {
+  margin: 0 0 6px 0;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-2, #c4ccd6);
+  font-weight: 600;
+}
+.authority-drawer-summary-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.authority-drawer-layer-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.authority-drawer-help-intro {
+  font-size: 11px;
+  color: var(--text-2, #c4ccd6);
+  margin-bottom: 8px;
+  line-height: 1.45;
+}
+.authority-drawer-legend-columns {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.authority-drawer-legend-column h4 {
+  margin: 0 0 4px 0;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-2, #c4ccd6);
+  font-weight: 600;
+}
+.authority-drawer-empty {
+  font-size: 11px;
+  color: var(--text-2, #c4ccd6);
+  font-style: italic;
+}
+
+/* ── Legend list (used inside drawer) ──────────────────────────────────── */
+.authority-legend-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.authority-legend-entry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+.authority-legend-swatch {
+  width: 14px;
+  height: 8px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.authority-legend-swatch-node {
+  background: var(--surface-3, rgba(255, 255, 255, 0.06));
+  border: 1px solid var(--text-2, rgba(196, 204, 214, 0.4));
+}
+.authority-legend-swatch-edge {
+  background: var(--text-2, rgba(196, 204, 214, 0.45));
+  height: 2px;
+  border-radius: 1px;
+}
+.authority-legend-swatch-severity[data-diagnostic-severity="critical"] { background: #e85757; }
+.authority-legend-swatch-severity[data-diagnostic-severity="warning"]  { background: #f5c85a; }
+.authority-legend-swatch-severity[data-diagnostic-severity="info"]     { background: #6eb4ff; }
+.authority-legend-swatch-posture[data-fmp-status="override"]  { background: #a574e8; }
+.authority-legend-swatch-posture[data-fmp-status="inherited"] { background: var(--text-2, #c4ccd6); }
+.authority-legend-swatch-posture[data-fmp-status="missing"]   { background: #e85757; }
+.authority-legend-swatch-posture[data-fmp-status="dangling"]  { background: transparent; border: 1px solid #e85757; }
+
+/* ── Diagnostic severity marker on node cards ──────────────────────────
+ *
+ * D32g-fix-1 — Subtler treatment. The pre-fix box-shadow ring of
+ * 0 0 0 2px <colour> + 0 0 12px <halo> made warning nodes look
+ * selected. Replace with a left-edge accent stripe + small corner
+ * dot. Critical gets a thicker accent; warning gets a thinner one;
+ * info uses only the corner dot. The selected-node treatment
+ * (separate styling on .gmap-node.selected) keeps its own ring so
+ * the operator can always tell which node is selected.
+ */
+.gmap-node[data-diagnostic-severity] {
+  position: relative;
+}
+.gmap-node[data-diagnostic-severity]::before {
+  content: '';
+  position: absolute;
+  left: -1px;
+  top: 4px;
+  bottom: 4px;
+  width: 3px;
+  border-radius: 2px;
+  pointer-events: none;
+}
+.gmap-node[data-diagnostic-severity="critical"]::before {
+  background: #e85757;
+  box-shadow: 0 0 4px rgba(232, 87, 87, 0.4);
+}
+.gmap-node[data-diagnostic-severity="warning"]::before {
+  background: #f5c85a;
+}
+.gmap-node[data-diagnostic-severity="info"]::before {
+  background: rgba(110, 180, 255, 0.65);
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+}
+/* Tiny corner dot for critical only — operator-eye attractor at the
+   top-right of the card. Warning + info rely on the left accent. */
+.gmap-node[data-diagnostic-severity="critical"]::after {
+  content: '';
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #e85757;
+  pointer-events: none;
+}
+
+/* ── Posture badges on node cards (rendered via spec.badges in addNode) ──
+ *
+ * D32g-fix-1 — Shorter labels + subtler colours. The pre-fix
+ * "FMP MISSING" / "agent blocked" / "no profile" badges were bright
+ * red filled rectangles that repeated loudly on the canvas. The
+ * shortened labels are emitted in JS; the styles here pair muted
+ * fills with coloured outlines so the badges read as compact tags
+ * rather than alarms.
+ */
+.gmap-badge.authority-badge-posture-dangling {
+  background: rgba(232, 87, 87, 0.08);
+  color: #ffb3b3;
+  border: 1px solid rgba(232, 87, 87, 0.6);
+}
+.gmap-badge.authority-badge-posture-missing {
+  background: rgba(232, 87, 87, 0.10);
+  color: #ffc8c8;
+  border: 1px solid rgba(232, 87, 87, 0.5);
+}
+.gmap-badge.authority-badge-posture-blocked {
+  background: rgba(232, 87, 87, 0.12);
+  color: #ffcaca;
+  border: 1px solid rgba(232, 87, 87, 0.55);
+  font-weight: 500;
+}
+.gmap-badge.authority-badge-posture-no-profile,
+.gmap-badge.authority-badge-posture-no-grant {
+  background: rgba(245, 200, 90, 0.08);
+  color: #ffdb88;
+  border: 1px solid rgba(245, 200, 90, 0.45);
+}
+.gmap-badge.authority-badge-fmp-override {
+  background: rgba(165, 116, 232, 0.10);
+  color: #d4baff;
+  border: 1px solid rgba(165, 116, 232, 0.4);
+}
+.gmap-badge.authority-badge-fmp-inherited {
+  background: rgba(196, 204, 214, 0.08);
+  color: var(--text-2, #c4ccd6);
+  border: 1px solid rgba(196, 204, 214, 0.25);
+}
+.gmap-badge.authority-badge-fmp-missing {
+  background: rgba(232, 87, 87, 0.08);
+  color: #ffb3b3;
+  border: 1px solid rgba(232, 87, 87, 0.5);
+}
+
+/* ── Inspector subsections (Diagnostics + Posture) ──────────────────────── */
+.authority-inspector-section {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--surface-3, rgba(255, 255, 255, 0.06));
+}
+.authority-inspector-section-title {
+  margin: 0 0 4px 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-2, #c4ccd6);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.authority-inspector-diagnostics-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.authority-inspector-diagnostic {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+  border-left: 3px solid var(--text-2, #c4ccd6);
+}
+.authority-inspector-diagnostic-critical { border-left-color: #e85757; }
+.authority-inspector-diagnostic-warning  { border-left-color: #f5c85a; }
+.authority-inspector-diagnostic-info     { border-left-color: #6eb4ff; }
+.authority-inspector-diagnostic-severity {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.authority-inspector-diagnostic-severity[data-diagnostic-severity="critical"] { color: #e85757; }
+.authority-inspector-diagnostic-severity[data-diagnostic-severity="warning"]  { color: #f5c85a; }
+.authority-inspector-diagnostic-severity[data-diagnostic-severity="info"]     { color: #6eb4ff; }
+.authority-inspector-diagnostic-kind {
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  color: var(--text-2, #c4ccd6);
+}
+.authority-inspector-diagnostic-message {
+  margin-top: 2px;
+  color: var(--text-1, #e6ebf2);
+  font-size: 11px;
+}
+
+.authority-inspector-posture {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.authority-inspector-posture-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+}
+.authority-inspector-posture-key {
+  color: var(--text-2, #c4ccd6);
+}
+.authority-inspector-posture-val {
+  color: var(--text-1, #e6ebf2);
+  font-weight: 500;
+}
+.authority-inspector-posture-val[data-posture-axis="fail-mode-policy"][data-posture-value="dangling"],
+.authority-inspector-posture-val[data-posture-axis="fail-mode-policy"][data-posture-value="missing"],
+.authority-inspector-posture-val[data-posture-axis="agent-status"][data-posture-value="blocked"],
+.authority-inspector-posture-val[data-posture-axis="profile-status"][data-posture-value="missing"],
+.authority-inspector-posture-val[data-posture-axis="grant-status"][data-posture-value="missing"] {
+  color: #ffb3b3;
+  font-weight: 600;
+}
+
+/* ── Layer-hide rules ───────────────────────────────────────────────────
+ * Each chip's "off" state adds the corresponding class to the toolbar's
+ * parent (the .governance-map-body wrapper or whatever holds gmap-canvas).
+ * The class names are pinned by the overlays module's _layerClassFor
+ * helper and by the D32f Explorer contract tests. */
+.authority-layer-diagnostics-off .gmap-node[data-diagnostic-severity] {
+  box-shadow: none;
+}
+.authority-layer-surface-posture-off .gmap-node[data-projection-kind="decision_surface"] .gmap-badge.authority-badge-posture-dangling,
+.authority-layer-surface-posture-off .gmap-node[data-projection-kind="decision_surface"] .gmap-badge.authority-badge-posture-missing,
+.authority-layer-surface-posture-off .gmap-node[data-projection-kind="decision_surface"] .gmap-badge.authority-badge-posture-blocked,
+.authority-layer-surface-posture-off .gmap-node[data-projection-kind="decision_surface"] .gmap-badge.authority-badge-posture-no-profile,
+.authority-layer-surface-posture-off .gmap-node[data-projection-kind="decision_surface"] .gmap-badge.authority-badge-posture-no-grant,
+.authority-layer-surface-posture-off .gmap-node[data-projection-kind="decision_surface"] .gmap-badge.authority-badge-fmp-override,
+.authority-layer-surface-posture-off .gmap-node[data-projection-kind="decision_surface"] .gmap-badge.authority-badge-fmp-inherited,
+.authority-layer-surface-posture-off .gmap-node[data-projection-kind="decision_surface"] .gmap-badge.authority-badge-fmp-missing {
+  display: none;
+}
+.authority-layer-escalation-off .gmap-node[data-projection-kind="escalation_target"],
+.authority-layer-escalation-off .authority-connector-profile_escalates_to {
+  display: none;
+}
+.authority-layer-fail-mode-off .gmap-node[data-projection-kind="fail_mode_policy"],
+.authority-layer-fail-mode-off .authority-connector-surface_has_fail_mode_policy,
+.authority-layer-fail-mode-off .authority-connector-business_service_has_fail_mode_policy {
+  display: none;
 }

@@ -1570,6 +1570,11 @@
      resolves the adapter, inspector, and panel namespaces at register
      time. -->
 <script src="/explorer/assets/js/graph/authority/authority-graph-view.js"></script>
+<!-- D32f-impl-1 — Authority overlays toolbar (legend + layer chips +
+     summary pills). Loaded after the view because the view's
+     renderAuthorityGraph dispatches into authorityOverlays.render
+     after a successful paint. -->
+<script src="/explorer/assets/js/graph/authority/authority-graph-overlays.js"></script>
 <!-- D32a-impl-5 — Explorer Services + Capabilities view modules.
      Each owns the production view orchestration formerly inline in
      index.html. Loaded after the graph modules so the services view's
@@ -3185,6 +3190,11 @@
           typeof window.MIDASExplorerGraph.drawer.setActiveLens === 'function') {
         window.MIDASExplorerGraph.drawer.setActiveLens(state.selectedGraphLens);
       }
+      // D32g-fix-1 — Mirror selectedGraphLens onto body[data-graph-lens]
+      // so lens-aware CSS rules can hide the legacy Context-Graph
+      // connector legend (.gmap-legend-overlay) while keeping
+      // Authority's compact toolbar visible.
+      try { document.body.setAttribute('data-graph-lens', state.selectedGraphLens); } catch (_) { /* swallow */ }
     });
   }
 
