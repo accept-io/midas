@@ -1,0 +1,341 @@
+/* /explorer/assets/css/authority-graph.css — D32b-impl-1
+ *
+ * Authority Graph lens-specific styling. Namespaced under
+ * .authority-graph-* / .authority-connector-* / .authority-badge-*
+ * so existing Context Graph classes are not affected.
+ *
+ * Intentionally minimal — the Authority lens reuses the same
+ * .gmap-node card visual treatment as the Context lens; only
+ * connector colours and a small set of authority-specific badges
+ * are introduced.
+ *
+ * Diagnostics + surface_posture panel styling is deferred to
+ * D32b-impl-2.
+ */
+
+/* Loading / empty / error overlay --------------------------------------
+ * Mirrors the Context lens overlay shape (full-canvas, centred copy)
+ * so users see consistent treatment across lenses.
+ */
+.authority-graph-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 5;
+}
+.authority-graph-overlay-inner {
+  max-width: 480px;
+  padding: 16px 20px;
+  border-radius: 8px;
+  background: var(--surface-2, rgba(20, 24, 32, 0.92));
+  color: var(--text-1, #e8ecf2);
+  font-size: 14px;
+  line-height: 1.45;
+  text-align: center;
+  pointer-events: auto;
+}
+.authority-graph-overlay-error .authority-graph-overlay-inner {
+  border-left: 4px solid var(--danger, #e35a5a);
+}
+.authority-graph-overlay-empty .authority-graph-overlay-inner {
+  border-left: 4px solid var(--muted, #6b7383);
+}
+
+/* Connectors -----------------------------------------------------------
+ * One class per edge kind. The visible <path> and the hit-target
+ * <path> share the class; the renderer assigns the .gmap-connector
+ * geometry class so default stroke widths still apply.
+ */
+.authority-connector-business_service_has_surface {
+  stroke: var(--authority-conn-surface, #6da3ff);
+}
+.authority-connector-surface_uses_profile {
+  stroke: var(--authority-conn-profile, #8b7fff);
+}
+.authority-connector-profile_has_grant {
+  stroke: var(--authority-conn-grant, #ac9bff);
+}
+.authority-connector-grant_authorises_agent {
+  stroke: var(--authority-conn-agent, #c79bff);
+}
+.authority-connector-surface_has_fail_mode_policy,
+.authority-connector-business_service_has_fail_mode_policy {
+  stroke: var(--authority-conn-fmp, #ffb86b);
+  stroke-dasharray: 4 4;
+}
+.authority-connector-profile_escalates_to {
+  stroke: var(--authority-conn-escalation, #ff7e9b);
+  stroke-dasharray: 6 3;
+}
+
+/* Badges --------------------------------------------------------------- */
+.authority-badge-validity-valid    { background: var(--badge-good, #1d6b3f); color: #fff; }
+.authority-badge-validity-invalid  { background: var(--badge-bad,  #8a1f1f); color: #fff; }
+.authority-badge-validity-pending  { background: var(--badge-warn, #8a601f); color: #fff; }
+.authority-badge-opstate-active        { background: var(--badge-good, #1d6b3f); color: #fff; }
+.authority-badge-opstate-deprecated    { background: var(--badge-warn, #8a601f); color: #fff; }
+.authority-badge-opstate-retired       { background: var(--badge-muted, #495163); color: #fff; }
+.authority-badge-fmp-override          { background: var(--badge-info, #1c5278); color: #fff; }
+.authority-badge-fmp-inherited         { background: var(--badge-muted, #495163); color: #fff; }
+.authority-badge-fmp-origin-imported   { background: var(--badge-info, #1c5278); color: #fff; }
+.authority-badge-fmp-origin-defined    { background: var(--badge-muted, #495163); color: #fff; }
+
+/* D32b-impl-2 — Service Workbench mode toolbar -------------------------
+ * The three-button toolbar (Form View | Context Graph | Authority Graph)
+ * lives in .services-map-view-header. It piggy-backs the existing
+ * .graph-lens-switcher / .graph-lens-button styling so the visual
+ * treatment lands automatically; the .service-workbench-mode class is
+ * a namespacing hook for tests and any D32b-impl-3 customisation.
+ */
+.service-workbench-modes {
+  display: inline-flex;
+  gap: 4px;
+}
+.service-workbench-mode {
+  /* Inherit default button visuals from .graph-lens-button when both
+   * classes are present; .service-workbench-mode alone (Form View)
+   * uses neutral defaults consistent with the segmented control. */
+}
+
+/* D32b-impl-3 — Icon-only Service Workbench mode toolbar.
+ * The icon variant of the mode buttons takes its visual treatment
+ * from the bottom-right canvas controls (.gmap-mode-rail /
+ * .gmap-camera-cluster buttons): fixed compact bounding box, centred
+ * inline SVG icon, currentColor stroke so :hover / .is-active recolours
+ * the glyph. Accessible name lives on aria-label + title.
+ */
+.service-workbench-icon-modes {
+  align-items: center;
+  margin: 0 4px;
+}
+.service-workbench-icon-mode {
+  width: 28px;
+  height: 24px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-2, #c4ccd6);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background-color 100ms ease, color 100ms ease, border-color 100ms ease;
+}
+.service-workbench-icon-mode:hover,
+.service-workbench-icon-mode:focus-visible {
+  background: var(--surface-3, rgba(255, 255, 255, 0.06));
+  color: var(--text-1, #e8ecf2);
+  outline: none;
+}
+.service-workbench-icon-mode:focus-visible {
+  border-color: var(--focus, #6da3ff);
+}
+.service-workbench-icon-mode.is-active {
+  background: var(--surface-3, rgba(255, 255, 255, 0.08));
+  color: var(--text-1, #e8ecf2);
+  border-color: var(--border-muted, rgba(255, 255, 255, 0.16));
+}
+
+/* D32b-impl-3 — Authority drawer sections.
+ * The diagnostics + posture panel modules render into data-*
+ * containers injected by the Authority drawer provider into the
+ * existing drawer panel mounts. The .authority-drawer-section class
+ * provides matching spacing to the .gmap-details-section convention
+ * used by the Context inspector so both lenses look uniform inside
+ * the right rail.
+ */
+.authority-drawer-section {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-muted, rgba(255, 255, 255, 0.08));
+}
+.authority-drawer-section:last-child {
+  border-bottom: none;
+}
+
+/* D32b-impl-2 / D32b-impl-3 — Authority Graph panels.
+ * The previous floating overlay (.authority-graph-panels) was removed
+ * in D32b-impl-3. Authority diagnostics + surface posture now render
+ * inside the unified right-side graph drawer (#gmap-details). The
+ * panel chrome inherits .gmap-right-rail styling; per-section
+ * dividers come from .authority-drawer-section (declared above).
+ */
+
+/* Diagnostic summary panel */
+.authority-diagnostics-summary-title,
+.authority-diagnostics-list-title,
+.authority-posture-title {
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+  color: var(--text-2, #c4ccd6);
+}
+.authority-diagnostics-summary-rows {
+  display: grid;
+  grid-template-columns: auto auto;
+  column-gap: 12px;
+  row-gap: 4px;
+}
+.authority-diagnostics-summary-row {
+  display: contents;
+}
+.authority-diagnostics-summary-key {
+  color: var(--text-2, #c4ccd6);
+}
+.authority-diagnostics-summary-val {
+  font-weight: 600;
+}
+.authority-diagnostics-summary-empty,
+.authority-diagnostics-list-empty,
+.authority-posture-empty {
+  color: var(--text-3, #93a0b0);
+  font-style: italic;
+}
+.authority-diagnostics-summary-bykind {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-muted, rgba(255, 255, 255, 0.08));
+}
+.authority-diagnostics-summary-bykind-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+  color: var(--text-2, #c4ccd6);
+}
+.authority-diagnostics-summary-bykind-row {
+  display: flex;
+  justify-content: space-between;
+}
+
+/* Severity colour tokens */
+.authority-diagnostics-severity-none     { color: var(--text-3, #93a0b0); }
+.authority-diagnostics-severity-info     { color: var(--badge-info, #6da3ff); }
+.authority-diagnostics-severity-warning  { color: var(--badge-warn, #ffb86b); }
+.authority-diagnostics-severity-critical { color: var(--badge-bad,  #ff7e9b); }
+
+/* Diagnostics list */
+.authority-diagnostics-list-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.authority-diagnostics-row {
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--surface-2, rgba(20, 24, 32, 0.7));
+}
+.authority-diagnostics-row-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.authority-diagnostics-row-severity {
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  font-weight: 700;
+}
+.authority-diagnostics-row-kind {
+  font-size: 11px;
+  color: var(--text-2, #c4ccd6);
+}
+.authority-diagnostics-row-msg {
+  margin-top: 4px;
+  color: var(--text-1, #e8ecf2);
+}
+.authority-diagnostics-row-refs {
+  margin-top: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.authority-diagnostics-row-ref {
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--surface-3, rgba(255, 255, 255, 0.06));
+  font-size: 11px;
+}
+
+/* Surface posture panel */
+.authority-posture-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.authority-posture-row {
+  text-align: left;
+  width: 100%;
+  appearance: none;
+  border: 1px solid var(--border-muted, rgba(255, 255, 255, 0.08));
+  background: var(--surface-2, rgba(20, 24, 32, 0.7));
+  color: inherit;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+}
+.authority-posture-row:hover,
+.authority-posture-row:focus-visible {
+  background: var(--surface-3, rgba(255, 255, 255, 0.06));
+  outline: 2px solid var(--focus, #6da3ff);
+  outline-offset: 1px;
+}
+.authority-posture-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.authority-posture-row-surface {
+  font-weight: 600;
+  word-break: break-all;
+}
+.authority-posture-row-severity {
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  font-weight: 700;
+}
+.authority-posture-row-axes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+.authority-posture-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 10px;
+  background: var(--surface-3, rgba(255, 255, 255, 0.06));
+  font-size: 11px;
+}
+.authority-posture-chip-key {
+  font-weight: 600;
+  color: var(--text-2, #c4ccd6);
+}
+.authority-posture-row-paths {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-2, #c4ccd6);
+}
+.authority-posture-row-diagkinds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.authority-posture-row-diagkind {
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--surface-3, rgba(255, 255, 255, 0.06));
+  font-size: 11px;
+  color: var(--text-2, #c4ccd6);
+}

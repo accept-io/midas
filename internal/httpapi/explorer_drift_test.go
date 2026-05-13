@@ -562,10 +562,12 @@ func TestExplorer_HTML_SetServicesSubView_AcceptsDrift(t *testing.T) {
 	if !strings.Contains(allJS, "MIDASExplorerDrift.loadDriftHeatmap") {
 		t.Error("services-view.js showDriftOverview must call MIDASExplorerDrift.loadDriftHeatmap()")
 	}
-	// The inline IIFE retains a thin shim for showServicesDriftOverview;
-	// pin its delegation through MIDASExplorerServices.
-	if !strings.Contains(allJS, "MIDASExplorerServices.showDriftOverview") {
-		t.Error("inline shim or wiring must dispatch through MIDASExplorerServices.showDriftOverview")
+	// D32a-impl-7 — inline showServicesDriftOverview shim removed.
+	// Services-view.js owns the function and binds it directly to
+	// the open-drift button click inside MIDASExplorerServices.init().
+	// Pin the module-level export + the button-click wiring.
+	if !strings.Contains(allJS, "showDriftOverview:        showDriftOverview") {
+		t.Error("services-view.js must export showDriftOverview on the MIDASExplorerServices namespace")
 	}
 }
 

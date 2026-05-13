@@ -1,0 +1,60 @@
+/* /explorer/assets/css/graph-view-menu.css — D32d-impl-4
+ *
+ * Graph View menu — first-class header control surface that exposes
+ * the four workbench views (Form / Records, Context Graph, Authority
+ * Graph, Knowledge Graph placeholder).
+ *
+ * The menu mounts inside .shell-header-right next to the IAM pill +
+ * runtime badge. The icon buttons reuse the .service-workbench-icon-
+ * mode visual language declared in authority-graph.css so the active
+ * / hover / focus treatment is identical across surfaces.
+ *
+ * .graph-view-menu wraps the four buttons in a compact pill container
+ * so the group reads as one control cluster against the dark header.
+ */
+
+.graph-view-menu {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 8px;
+  background: var(--surface-2, rgba(20, 24, 32, 0.55));
+  border: 1px solid var(--border-muted, rgba(255, 255, 255, 0.06));
+  margin-right: 8px;
+}
+
+/* The .service-workbench-icon-mode rules in authority-graph.css
+ * already provide compact icon sizing + hover / focus / .is-active
+ * states. The .graph-view-menu-button class is a namespace hook so
+ * future header-specific overrides land cleanly without touching the
+ * in-toolbar variant. */
+.graph-view-menu-button {
+  width: 28px;
+  height: 22px;
+}
+
+/* Knowledge Graph placeholder — visible but disabled. Aria-disabled +
+ * native `disabled` early-return the setWorkbenchMode dispatcher; the
+ * dimmed visual treatment signals "coming soon". */
+.graph-view-menu-button.is-placeholder,
+.graph-view-menu-button[disabled],
+.graph-view-menu-button[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.graph-view-menu-button.is-placeholder:hover,
+.graph-view-menu-button[disabled]:hover,
+.graph-view-menu-button[aria-disabled="true"]:hover {
+  background: transparent;
+  color: var(--text-2, #c4ccd6);
+}
+
+/* Light theme — mirror the dark-theme tokens without overriding the
+ * surface-2 / border-muted vars (those already cascade). The pill
+ * background gets a brighter neutral so the icons stay readable on
+ * the light header. */
+[data-theme="light"] .graph-view-menu {
+  background: var(--surface-2, rgba(0, 0, 0, 0.04));
+  border-color: var(--border-muted, rgba(0, 0, 0, 0.08));
+}

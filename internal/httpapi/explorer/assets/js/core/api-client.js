@@ -237,6 +237,14 @@
     points:       function (id, opts)   { return request('/v1/drift/definitions/' + encodeURIComponent(id) + '/points' + _query(opts || {})); },
     observations: function (id)         { return request('/v1/drift/definitions/' + encodeURIComponent(id) + '/observations'); },
     annotations:  function (id)         { return request('/v1/drift/definitions/' + encodeURIComponent(id) + '/annotations'); },
+    // D32e-impl-1 — per-series typed accessors. Existing drift-
+    // workbench / drift-heatmap modules call /v1/drift/series/{id}/*
+    // via their own driftFetchJSON helper. The Drift Analytics panel
+    // routes through the canonical API client surface instead so all
+    // /v1/drift fetches converge on one auth + base-URL configuration.
+    seriesPointsByID:  function (id, opts) { return request('/v1/drift/series/' + encodeURIComponent(id) + '/points' + _query(opts || {})); },
+    seriesObservations: function (id) { return request('/v1/drift/series/' + encodeURIComponent(id) + '/observations'); },
+    seriesAnnotations:  function (id) { return request('/v1/drift/series/' + encodeURIComponent(id) + '/annotations'); },
   };
 
   var evidence = {

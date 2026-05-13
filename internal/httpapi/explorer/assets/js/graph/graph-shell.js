@@ -23,19 +23,14 @@
 //      onto the store so the new code path observes the same
 //      values.
 //
-//   3. The renderer implementation registered via renderer.register
-//      forwards through window.MIDASExplorerGovernanceMapBridge to
-//      the inline rendering primitives (renderGovernanceMap, …).
-//      The bridge is the documented compatibility seam: the inline
-//      IIFE registers its primitives on the bridge at boot; the
-//      Context view module (graph/context/context-graph-view.js)
-//      forwards through the bridge in render(). The end-state goal
-//      is to migrate the rendering primitives themselves into
-//      graph-renderer.js, but that requires updating ~50 explorer_test.go
-//      pins that assert inline location of those function
-//      declarations AND inline body content (focusGmapOnRoot
-//      ordering, applyGmapMultiSelection presence, etc.) — that is
-//      a separate tranche.
+//   3. The shell delegates rendering to the lens dispatch table
+//      (ExplorerGraph.renderer.register / .render). The Context view
+//      module (graph/context/context-graph-view.js) registers the
+//      Context lens implementation; it owns the production renderer
+//      directly (D32a-impl-3..7 extractions). The legacy
+//      MIDASExplorerGovernanceMapBridge compatibility alias was
+//      removed in D32a-impl-7 — no module reaches into it; inline
+//      renderer functions are reachable by name without an alias.
 //
 // API:
 //
@@ -48,15 +43,12 @@
 //     ignored while disabled.
 //
 //   refresh({view, id, depth})
-//     Production graph refresh. Fetches via the Context adapter,
-//     dispatches the response through the bridge to the inline
-//     renderer. Returns a Promise that resolves to the adapter-
-//     shaped payload (or rejects on adapter failure). Updates the
-//     store (loadingByKey, errorByKey, graphDataByLens.context,
-//     graphDepth). The two existing inline graph-fetch call-sites
-//     (loadBusinessServiceRecord, refreshGovernanceMap) may opt-in
-//     to this method incrementally; D32a-impl-2 wires
-//     refreshGovernanceMap through it.
+//     Production graph refresh. Fetches via the Context adapter and
+//     resolves to the mapped layout (or a __status sentinel). Updates
+//     the store (loadingByKey, errorByKey, graphDataByLens.context,
+//     graphDepth). Active inline call-sites (loadBusinessServiceRecord
+//     in services-view.js, refreshGovernanceMap in index.html) dispatch
+//     through this method.
 
 (function () {
   'use strict';
@@ -64,18 +56,28 @@
   window.MIDASExplorerGraph = window.MIDASExplorerGraph || {};
 
   var _activeLens = 'context';
-  var _disabledLenses = { authority: true };
+
+  // D32b-impl-1 — Authority lens enabled. Both Context and Authority
+  // lenses now register adapters under their canonical namespace key
+  // (contextAdapter / authorityAdapter). _disabledLenses is retained
+  // as a hook for future feature-gating; today it is empty.
+  var _disabledLenses = {};
 
   function _store() {
     return window.MIDASExplorerStore || null;
   }
-  function _bridge() {
-    return window.MIDASExplorerGovernanceMapBridge || null;
-  }
-  function _adapter() {
-    return (window.MIDASExplorerGraph && window.MIDASExplorerGraph.contextAdapter)
-      ? window.MIDASExplorerGraph.contextAdapter
-      : null;
+
+  // _adapter(lens) — lens-aware adapter lookup. Returns the registered
+  // adapter for the named lens, or the current active lens when no
+  // argument is supplied. Adapter contract per lens:
+  //   .fetch({view, id, depth})       — required; returns Promise<payload | sentinel>
+  //   .mapToCardLayout(payload, view) — optional; Context-only today.
+  //                                     When absent, the raw payload is
+  //                                     handed to the lens renderer
+  //                                     (Authority follows this path).
+  function _adapter(lens) {
+    var key = (lens || _activeLens) + 'Adapter';
+    return (window.MIDASExplorerGraph && window.MIDASExplorerGraph[key]) || null;
   }
 
   function _onSwitcherClick(ev) {
@@ -103,9 +105,9 @@
       if (_disabledLenses[lens]) {
         btn.setAttribute('aria-disabled', 'true');
         btn.classList.add('is-disabled');
-        if (!btn.getAttribute('title')) {
-          btn.setAttribute('title', 'Authority lens — coming next');
-        }
+      } else {
+        btn.removeAttribute('aria-disabled');
+        btn.classList.remove('is-disabled');
       }
     }
   }
@@ -165,16 +167,16 @@
   function refresh(opts) {
     opts = opts || {};
     var lens = opts.lens || _activeLens || 'context';
-    if (lens === 'authority' || _disabledLenses[lens]) {
+    if (_disabledLenses[lens]) {
       return Promise.resolve({ __status: 0, __disabled: true });
     }
     var view  = opts.view;
     var id    = opts.id;
     var depth = (typeof opts.depth === 'number' && opts.depth > 0) ? opts.depth : 5;
 
-    var adapter = _adapter();
+    var adapter = _adapter(lens);
     if (!adapter || typeof adapter.fetch !== 'function') {
-      return Promise.reject(new Error('Context Graph adapter not available'));
+      return Promise.reject(new Error(lens + ' graph adapter not available'));
     }
 
     var key = 'graph:' + lens;
@@ -191,7 +193,16 @@
 
     return adapter.fetch({ view: view, id: id, depth: depth }).then(function (payload) {
       var sentinel = (payload && payload.__status) ? payload : null;
-      var layout   = sentinel ? null : adapter.mapToCardLayout(payload, view);
+      // mapToCardLayout is Context-only; Authority renderer consumes
+      // the raw projection envelope and computes its own layout.
+      var layout;
+      if (sentinel) {
+        layout = null;
+      } else if (typeof adapter.mapToCardLayout === 'function') {
+        layout = adapter.mapToCardLayout(payload, view);
+      } else {
+        layout = payload;
+      }
       if (store && typeof store.setState === 'function') {
         store.setState(function (prev) {
           var loading = Object.assign({}, prev.loadingByKey || {});
@@ -219,35 +230,19 @@
     });
   }
 
-  // render — dispatches a Context layout payload to the production
-  // renderer through the bridge. Kept thin so the inline IIFE's
-  // call-sites continue to drive rendering through the bridge; the
-  // shell is the formal entry point but does not re-implement the
-  // rendering primitives. Future tranche: replace bridge forwarding
-  // with direct DOM rendering once the inline body-pin tests are
-  // refactored.
-  function render(payload, mount) {
-    var b = _bridge();
-    if (b && typeof b.renderGovernanceMap === 'function') {
-      try { b.renderGovernanceMap(payload, mount); } catch (e) {
-        if (window.console && window.console.error) {
-          window.console.error('graph shell render error', e);
-        }
-      }
-      return;
-    }
-    // Fallback path: dispatch through the lens-registered renderer.
-    if (window.MIDASExplorerGraph.renderer &&
-        typeof window.MIDASExplorerGraph.renderer.render === 'function') {
-      window.MIDASExplorerGraph.renderer.render(_activeLens, payload, mount);
-    }
-  }
+  // D32a-impl-7 — `shell.render` removed. The method dispatched
+  // through window.MIDASExplorerGovernanceMapBridge (also removed
+  // in D32a-impl-7); it had zero call-sites in the codebase. The
+  // canonical lens-dispatched render path is
+  // ExplorerGraph.renderer.render('context', payload, mount) which
+  // the Context view module (context-graph-view.js) registers for
+  // the Context lens. Future Authority lens UI work registers its
+  // own renderer through the same renderer.register surface.
 
   window.MIDASExplorerGraph.shell = {
     init:           init,
     setActiveLens:  setActiveLens,
     getActiveLens:  getActiveLens,
     refresh:        refresh,
-    render:         render,
   };
 })();

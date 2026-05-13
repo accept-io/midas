@@ -14,10 +14,13 @@
 <meta name="midas-api-base" content="">
 <meta name="midas-auth-mode" content="cookie">
 <title>MIDAS Explorer</title>
-<!-- MIDAS favicon — inline SVG data URI mirrors the sidebar `.midas-logo-mark`:
-     four equal vertical white bars on a black background, with bars 2 and 3
-     translated down ~2px. No external assets are loaded. -->
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20fill='%23000'/%3E%3Crect%20x='5'%20y='6'%20width='4'%20height='20'%20fill='%23fff'/%3E%3Crect%20x='12'%20y='8'%20width='4'%20height='20'%20fill='%23fff'/%3E%3Crect%20x='19'%20y='8'%20width='4'%20height='20'%20fill='%23fff'/%3E%3Crect%20x='26'%20y='6'%20width='4'%20height='20'%20fill='%23fff'/%3E%3C/svg%3E">
+<!-- D32b-impl-4 — MIDAS favicon now sources the canonical SVG from
+     /explorer/assets/img/midas-logo.svg so the favicon, the sidebar
+     brand mark, and any future logo lockup share the SAME geometry
+     (4 white bars, bars 2 & 3 down-shifted by 2 px, rounded 32×32
+     tile on #05070D). The asset is served from the embedded
+     Explorer FS — no external network fetch. -->
+<link rel="icon" type="image/svg+xml" href="/explorer/assets/img/midas-logo.svg">
 <!-- D27j-ui-theme-6 — pre-paint theme application. Reads the operator's
      stored Explorer-theme preference and, if it is the literal string
      light, sets the matching attribute on the document root before the
@@ -45,7 +48,10 @@
 <link rel="stylesheet" href="/explorer/assets/css/services.css">
 <link rel="stylesheet" href="/explorer/assets/css/capabilities.css">
 <link rel="stylesheet" href="/explorer/assets/css/governance-map.css">
+<link rel="stylesheet" href="/explorer/assets/css/authority-graph.css">
 <link rel="stylesheet" href="/explorer/assets/css/drift.css">
+<link rel="stylesheet" href="/explorer/assets/css/drift-analytics.css">
+<link rel="stylesheet" href="/explorer/assets/css/graph-view-menu.css">
 </head>
 <body>
 
@@ -112,9 +118,15 @@
 <aside class="shell-sidebar" aria-label="Primary navigation">
   <div class="shell-brand">
     <div class="shell-brand-row">
-      <div class="midas-logo-mark" aria-hidden="true">
-        <span></span><span></span><span></span><span></span>
-      </div>
+      <!-- D32b-impl-4 — Canonical MIDAS logo. <img> sources the
+           single SVG asset used by the favicon, so the sidebar mark
+           and the browser-tab icon are byte-identical geometry. The
+           SVG bakes its own dark rounded-tile background (#05070D)
+           so the mark renders correctly on any shell-brand surface,
+           including the collapsed sidebar state. aria-hidden because
+           the sibling `.shell-brand-title` already provides the
+           accessible name for the brand row. -->
+      <img class="midas-logo-mark" src="/explorer/assets/img/midas-logo.svg" alt="" aria-hidden="true">
       <span class="shell-brand-title">MIDAS Explorer</span>
     </div>
     <p class="shell-subtitle">Decision Authority Workbench</p>
@@ -181,6 +193,15 @@
     </div>
   </div>
   <div class="shell-header-right">
+    <!-- D32b-impl-4 — Graph View menu was relocated from
+         .shell-header-right back into the workbench toolbar's right
+         zone (.governance-map-toolbar-right). The shell header is
+         collapsed by `body.gmap-focus-mode .shell-header { display:
+         none; }` whenever focus mode is active (the default on graph
+         entry), so a menu hosted here was effectively invisible to
+         operators in the active workbench. The new location is
+         pinned by TestExplorer_D32bImpl2a_ToolbarNotHiddenInFocusMode
+         as focus-mode-resilient. -->
     <div id="iam-user-pill">
       <span id="iam-username-display"></span>
       <button id="iam-logout-btn" type="button">Sign out</button>
@@ -244,7 +265,7 @@
           <span class="services-record-status" id="services-record-status"></span>
         </div>
         <div class="services-record-actions">
-          <button type="button" id="services-record-open-map-btn" class="btn btn-primary" aria-label="Open Context Graph for this service">Open Context Graph</button>
+          <button type="button" id="services-record-open-map-btn" class="btn btn-primary" aria-label="Open Service Workbench for this service">Open Workbench</button>
         </div>
       </header>
       <div id="services-record-body" class="services-record-body"></div>
@@ -256,26 +277,20 @@
          are preserved verbatim because the renderer references them by id.
          Only the outer container changes: a back-to-record header replaces
          the previous Overview/Map mode toggle. -->
-    <div id="services-map-view" class="services-subview" role="region" aria-label="Context Graph">
+    <div id="services-map-view" class="services-subview" role="region" aria-label="Service Workbench">
       <header class="services-map-view-header">
         <button type="button" id="services-map-back-btn" class="services-record-back" aria-label="Back to Business Service record">← <span id="services-map-back-label">Record</span></button>
-        <!-- D32a-impl-1 — Graph lens switcher. Two-button segmented
-             control selecting which lens renders into the workbench
-             below. Context (the existing /v1/graphs/context-backed
-             Governance Map) is enabled today; Authority is visible
-             but disabled with an aria-disabled + "coming next"
-             title until the Authority Graph UI tranche lands. The
-             buttons carry data-lens so window.MIDASExplorerGraph.shell
-             can wire click handlers without re-querying ids. -->
-        <div class="graph-lens-switcher" role="group" aria-label="Graph lens">
-          <button type="button" class="graph-lens-button is-active" data-lens="context"
-                  aria-pressed="true" aria-label="Context lens" title="Context lens">Context</button>
-          <button type="button" class="graph-lens-button is-disabled" data-lens="authority"
-                  aria-pressed="false" aria-disabled="true"
-                  aria-label="Authority lens — coming next"
-                  title="Authority lens — coming next">Authority</button>
-          <span class="graph-lens-coming-next" aria-live="polite">Authority lens — coming next</span>
-        </div>
+        <!-- D32b-impl-2a — The Service Workbench mode toolbar was
+             originally placed here (D32b-impl-2). It is now declared
+             inside .governance-map-toolbar-left below (right after the
+             "Service · <name>" current-root span) so it remains visible
+             in focus mode. The previous CSS rule
+                 body.gmap-focus-mode .services-map-view-header { display: none; }
+             hid the entire header — including the toolbar — when focus
+             mode defaulted ON for graph entry (D32b-impl-2). Moving the
+             toolbar into the always-visible .governance-map-toolbar
+             keeps it reachable without re-architecting focus-mode chrome
+             behaviour. -->
       </header>
       <div class="governance-map-workbench">
         <!-- D26g-impl-1 — Workbench toolbar consolidation. Replaces
@@ -300,6 +315,17 @@
             <button type="button" id="gmap-back-button" disabled
                     aria-label="No previous graph view" title="No previous graph view"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="10 4 6 8 10 12"/></svg></button>
             <span class="gmap-orientation-context gmap-status" id="gmap-current-root" aria-live="polite"></span>
+            <!-- D32d-impl-4 — Service Workbench mode toolbar migrated
+                 to the Explorer header's .graph-view-menu. The
+                 controls (Form / Context Graph / Authority Graph)
+                 are now first-class header chrome alongside the
+                 IAM pill + runtime badge, plus a new Knowledge
+                 Graph placeholder. The dispatcher (setWorkbenchMode)
+                 selects on `.service-workbench-mode[data-workbench-
+                 mode]` so the header buttons drive the same flow the
+                 in-toolbar buttons did. The .governance-map-toolbar-
+                 left now hosts only the back button and the
+                 #gmap-current-root context label. -->
           </div>
           <div class="governance-map-toolbar-centre">
             <input type="text" id="gmap-search-input" class="gmap-search-input"
@@ -354,19 +380,39 @@
             </div>
           </div>
           <div class="governance-map-toolbar-right">
-            <!-- D26g-impl-4 — Form / Graph segmented toggle compacted
-                 to icon-only buttons. Visible text labels were dropped
-                 (the words "Form" and "Graph" repeated unnecessary
-                 noise at the right edge of the toolbar). aria-label +
-                 title preserve meaning for assistive tech and on-hover
-                 discovery. data-view-mode + .is-active class drive the
-                 existing JS handler unchanged. -->
-            <div class="gmap-view-mode-toggle" role="group" aria-label="View mode">
-              <button type="button" class="gmap-view-mode-segment" data-view-mode="form"
-                      aria-pressed="false" aria-label="Form view" title="Form view"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="1"/><line x1="5" y1="6" x2="11" y2="6"/><line x1="5" y1="9" x2="11" y2="9"/><line x1="5" y1="12" x2="9" y2="12"/></svg></button>
-              <button type="button" class="gmap-view-mode-segment is-active" data-view-mode="graph"
-                      aria-pressed="true" aria-label="Graph view" title="Graph view"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="4" cy="4" r="1.6" fill="currentColor"/><circle cx="12" cy="4" r="1.6" fill="currentColor"/><circle cx="8" cy="12" r="1.6" fill="currentColor"/><line x1="4" y1="4" x2="12" y2="4"/><line x1="4" y1="4" x2="8" y2="12"/><line x1="12" y1="4" x2="8" y2="12"/></svg></button>
+            <!-- D32b-impl-4 — Workbench mode menu. Restored into the
+                 workbench toolbar's right group (the focus-mode-
+                 resilient location pinned by
+                 TestExplorer_D32bImpl2a_ToolbarNotHiddenInFocusMode).
+                 D32d-impl-4 had moved this into .shell-header-right,
+                 but `body.gmap-focus-mode .shell-header { display:
+                 none; }` hid the entire shell header whenever focus
+                 mode was on (the default on graph entry), so the
+                 menu was unreachable in the active workbench.
+                 Four icon buttons:
+                   • Form / Records view → MIDASExplorerServices.showRecord
+                   • Context Graph       → Context lens
+                   • Authority Graph     → Authority lens
+                   • Knowledge Graph     → placeholder, disabled
+                 The buttons reuse the .service-workbench-mode +
+                 data-workbench-mode + data-lens attributes the inline
+                 IIFE already binds (click → setWorkbenchMode dispatch).
+                 The .graph-view-menu container groups them in the same
+                 compact pill style used by the canvas controls. -->
+            <div class="graph-view-menu" role="group" aria-label="Graph view">
+              <button type="button" class="service-workbench-mode service-workbench-icon-mode graph-view-menu-button" data-workbench-mode="form"
+                      aria-pressed="false" aria-label="Form / Records view" title="Form / Records view"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="2" width="10" height="12" rx="1"/><line x1="5" y1="5" x2="11" y2="5"/><line x1="5" y1="8" x2="11" y2="8"/><line x1="5" y1="11" x2="9" y2="11"/></svg></button>
+              <button type="button" class="service-workbench-mode service-workbench-icon-mode graph-lens-button graph-view-menu-button is-active" data-workbench-mode="context" data-lens="context"
+                      aria-pressed="true" aria-label="Context Graph" title="Context Graph"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="4" cy="4" r="1.6" fill="currentColor"/><circle cx="12" cy="4" r="1.6" fill="currentColor"/><circle cx="8" cy="12" r="1.6" fill="currentColor"/><line x1="4" y1="4" x2="12" y2="4"/><line x1="4" y1="4" x2="8" y2="12"/><line x1="12" y1="4" x2="8" y2="12"/></svg></button>
+              <button type="button" class="service-workbench-mode service-workbench-icon-mode graph-lens-button graph-view-menu-button" data-workbench-mode="authority" data-lens="authority"
+                      aria-pressed="false" aria-label="Authority Graph" title="Authority Graph"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2 L13 4 V8 C13 11 11 13 8 14 C5 13 3 11 3 8 V4 Z"/></svg></button>
+              <button type="button" class="service-workbench-mode service-workbench-icon-mode graph-view-menu-button is-placeholder" data-workbench-mode="knowledge"
+                      aria-pressed="false" aria-disabled="true" disabled
+                      aria-label="Knowledge Graph (coming soon)" title="Knowledge Graph — coming soon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="1.8" fill="currentColor"/><circle cx="8" cy="8" r="5.5"/><ellipse cx="8" cy="8" rx="5.5" ry="2.4" transform="rotate(60 8 8)"/><ellipse cx="8" cy="8" rx="5.5" ry="2.4" transform="rotate(-60 8 8)"/></svg></button>
             </div>
+            <!-- D32b-impl-2 — polite-live announce span retained for
+                 any future canvas-only affordance that needs a stable
+                 a11y target. -->
             <span class="gmap-view-mode-feedback" aria-live="polite"></span>
           </div>
         </div>
@@ -503,15 +549,25 @@
              range) tuple via buildDemoDriftSeries. Real runtime
              analytics endpoints will replace the synthetic generator
              in a subsequent phase. -->
-        <section id="gmap-evidence-tray" class="gmap-evidence-tray" aria-label="Runtime evidence tray">
+        <!-- D32e-impl-1 — The Runtime Evidence letterbox is upgraded
+             into the Drift Analytics panel. The tray shell (header +
+             collapse toggle + tabs) is preserved so focus-mode +
+             tray-state-persistence behaviour is unchanged; only the
+             Drift tab's body content is now mounted by the analytics
+             panel module (assets/js/drift/drift-analytics-panel.js).
+             The data-drift-analytics-* attributes are the mount
+             points the module addresses; the title / subtitle /
+             severity / demo badges are populated dynamically on
+             render. -->
+        <section id="gmap-evidence-tray" class="gmap-evidence-tray" aria-label="Drift Analytics tray">
           <div class="gmap-evidence-tray-header">
-            <span class="gmap-evidence-tray-title">Runtime Evidence</span>
-            <span class="gmap-evidence-tray-node" id="gmap-evidence-tray-node">Select a graph node to inspect runtime evidence.</span>
-            <span class="gmap-evidence-tray-demo-badge"
-                  title="Synthetic illustrative data. Real runtime analytics will be wired in a subsequent phase.">DEMO DATA</span>
+            <span class="gmap-evidence-tray-title" data-drift-analytics-title>Drift Analytics</span>
+            <span class="gmap-evidence-tray-node" id="gmap-evidence-tray-node" data-drift-analytics-subtitle>Select a graph node to inspect runtime evidence.</span>
+            <span class="gmap-evidence-tray-demo-badge" data-drift-analytics-demo-badge hidden>DEMO DATA</span>
+            <span class="drift-analytics-severity-badge drift-analytics-severity-info" data-drift-analytics-severity-badge>Info</span>
             <button type="button" id="gmap-evidence-tray-toggle" class="gmap-evidence-tray-toggle"
                     aria-expanded="false" aria-controls="gmap-evidence-tray"
-                    aria-label="Expand runtime evidence tray" title="Expand runtime evidence tray"><span aria-hidden="true">&#x25B2;</span></button>
+                    aria-label="Expand Drift Analytics tray" title="Expand Drift Analytics tray"><span aria-hidden="true">&#x25B2;</span></button>
           </div>
           <div class="gmap-evidence-tray-body" id="gmap-evidence-tray-body">
             <div class="gmap-evidence-tray-tabs" role="tablist">
@@ -521,35 +577,37 @@
               <button type="button" class="gmap-evidence-tray-tab" data-tab="activity" role="tab" aria-selected="false">Activity</button>
             </div>
             <div class="gmap-evidence-tray-panel" id="gmap-evidence-tray-panel" role="tabpanel">
-              <!-- Drift tab default content. Other tabs swap this panel
-                   to a placeholder ("Coming soon") for MVP. -->
-              <div class="gmap-evidence-tray-controls">
-                <label class="gmap-evidence-tray-control">
-                  <span>Metric</span>
-                  <select id="gmap-evidence-tray-metric">
-                    <option value="escalation-rate">Escalation rate</option>
-                    <option value="evidence-completeness">Evidence completeness</option>
-                    <option value="decision-volume">Decision volume</option>
-                  </select>
-                </label>
-                <label class="gmap-evidence-tray-control">
-                  <span>Range</span>
-                  <select id="gmap-evidence-tray-range">
-                    <option value="24h">24h</option>
-                    <option value="7d" selected>7d</option>
-                    <option value="30d">30d</option>
-                  </select>
-                </label>
-              </div>
-              <div class="gmap-evidence-tray-tiles" id="gmap-evidence-tray-tiles"></div>
-              <div class="gmap-evidence-tray-chart" id="gmap-evidence-tray-chart">
-                <svg class="gmap-evidence-tray-chart-svg" id="gmap-evidence-tray-chart-svg"
-                     viewBox="0 0 600 100" preserveAspectRatio="none" aria-hidden="true"></svg>
+              <!-- The Drift tab body is owned by drift-analytics-panel
+                   .js. The other tabs (Overview / Evidence / Activity)
+                   are still managed by context-evidence-tray.js, which
+                   overwrites this panel's innerHTML on tab switch and
+                   delegates the Drift tab back to the analytics
+                   module. Static initial markup below is the Drift
+                   tab's first paint; the analytics panel module
+                   re-uses these data-drift-analytics-* mount points
+                   on every render. -->
+              <div class="drift-analytics-panel">
+                <div class="drift-analytics-header">
+                  <!-- Header content (title/subtitle/badges) is
+                       populated in the surrounding tray header; this
+                       inner header strip is kept for future per-
+                       panel context if needed. -->
+                </div>
+                <div class="drift-series-list" data-drift-analytics-series-list role="list" aria-label="Drift series list"></div>
+                <div class="drift-series-chart" data-drift-analytics-chart aria-label="Drift signal time-series"></div>
               </div>
             </div>
           </div>
         </section>
       </div>
+      <!-- D32b-impl-3 — The previous .authority-graph-panels overlay
+           was removed. Authority diagnostics + surface_posture now
+           render INSIDE the unified right-side graph drawer
+           (#gmap-details) under the Authority lens's drawer provider.
+           The panel modules (authority-diagnostics-panel.js +
+           authority-surface-posture-panel.js) are unchanged — their
+           data-* selectors resolve inside the drawer panel mount that
+           the Authority drawer provider populates on tab switch. -->
     </div>
 
     <!-- Sub-view: Drift Overview (Drift-2b).
@@ -1462,11 +1520,13 @@
      register against. context-graph-adapter wraps the API client's
      graphs.context method with the legacy 404/501 sentinel contract.
      context-graph-view registers itself with the renderer + inspector
-     and forwards to the inline IIFE through
-     window.MIDASExplorerGovernanceMapBridge when present (no-op
-     today; subsequent tranches will populate the bridge). Authority
-     Graph UI is intentionally NOT included — the lens switcher's
-     Authority button is disabled with a "coming next" label. -->
+     and owns the production Context rendering directly (D32a-impl-3..7
+     extracted every primitive out of the inline IIFE). The legacy
+     MIDASExplorerGovernanceMapBridge compatibility alias was removed
+     in D32a-impl-7. D32b-impl-1 added the Authority Graph lens (see
+     the authority/* modules loaded below); both lenses are active in
+     the lens switcher. Diagnostics + surface_posture panels are
+     deferred to D32b-impl-2. -->
 <script src="/explorer/assets/js/graph/graph-types.js"></script>
 <script src="/explorer/assets/js/graph/graph-layout.js"></script>
 <script src="/explorer/assets/js/graph/graph-renderer.js"></script>
@@ -1474,10 +1534,42 @@
 <script src="/explorer/assets/js/graph/graph-interactions.js"></script>
 <script src="/explorer/assets/js/graph/graph-selection.js"></script>
 <script src="/explorer/assets/js/graph/graph-inspector.js"></script>
+<!-- D32b-impl-3 — Unified right-side graph drawer module. Owns drawer
+     lifecycle (tab activation, content dispatch, header title sync)
+     plus lens registration so Context and Authority lenses supply
+     their own per-tab labels + renderers without duplicating drawer
+     chrome. Loaded BEFORE graph-shell.js so the shell + lens views
+     can register against the drawer at their own load time. -->
+<script src="/explorer/assets/js/graph/graph-drawer.js"></script>
 <script src="/explorer/assets/js/graph/graph-shell.js"></script>
 <script src="/explorer/assets/js/graph/context/context-graph-adapter.js"></script>
 <script src="/explorer/assets/js/graph/context/context-graph-inspector.js"></script>
 <script src="/explorer/assets/js/graph/context/context-graph-view.js"></script>
+<!-- D32a-impl-9 — Context Graph evidence/drift tray. Module owns the
+     14 tray functions + 6 tray state variables that were previously
+     inline (~990 lines moved out). Loaded after context-graph-view.js
+     so the MIDASExplorerGraph namespace exists for the module to
+     attach to. -->
+<script src="/explorer/assets/js/graph/context/context-evidence-tray.js"></script>
+<!-- D32b-impl-1 — Authority Graph lens modules. Adapter owns lens-
+     specific shape decisions (node-kind labels, edge connector
+     classes, typed-data lookup); view owns fetch+render through the
+     existing shell/renderer; inspector owns per-kind card formatting.
+     Diagnostics + surface_posture panels are deferred to D32b-impl-2;
+     this tranche enables the basic lens. -->
+<script src="/explorer/assets/js/graph/authority/authority-graph-adapter.js"></script>
+<script src="/explorer/assets/js/graph/authority/authority-graph-inspector.js"></script>
+<!-- D32b-impl-2 — Authority panel modules. Each owns one panel and
+     reads its data from the projection envelope passed to render().
+     The panels are stateless renderers — no fetch, no governance
+     recomputation. authority-graph-view.js dispatches a render call
+     after a successful fetch+graph render. -->
+<script src="/explorer/assets/js/graph/authority/authority-diagnostics-panel.js"></script>
+<script src="/explorer/assets/js/graph/authority/authority-surface-posture-panel.js"></script>
+<!-- authority-graph-view.js loads last so the renderer dispatch
+     resolves the adapter, inspector, and panel namespaces at register
+     time. -->
+<script src="/explorer/assets/js/graph/authority/authority-graph-view.js"></script>
 <!-- D32a-impl-5 — Explorer Services + Capabilities view modules.
      Each owns the production view orchestration formerly inline in
      index.html. Loaded after the graph modules so the services view's
@@ -1541,6 +1633,26 @@
      window.MIDASExplorerDriftObservationInspector.openObservationInspector,
      called by the workbench when an observation row is activated. -->
 <script src="/explorer/assets/js/drift-observation-inspector.js"></script>
+<!-- D32e-impl-1 — Drift Analytics panel modules. Replace the inside
+     of the Runtime Evidence letterbox's Drift tab with a richer
+     series-list-plus-chart layout. Each module owns one concern:
+       • drift-chart-formatters    — pure formatters (no DOM, no fetch)
+       • drift-chart-demo-adapter  — clearly-labelled synthetic series
+                                     for use when no real /v1/drift
+                                     series id is resolvable for the
+                                     current selection
+       • drift-series-chart        — SVG renderer (actual + baseline +
+                                     anomaly markers)
+       • drift-series-list         — selectable severity-sorted rows
+       • drift-analytics-panel     — orchestrator; reads selection
+                                     state via init() hooks
+     Loaded in dependency order so each module finds its peers at
+     attach time. -->
+<script src="/explorer/assets/js/drift/drift-chart-formatters.js"></script>
+<script src="/explorer/assets/js/drift/drift-chart-demo-adapter.js"></script>
+<script src="/explorer/assets/js/drift/drift-series-chart.js"></script>
+<script src="/explorer/assets/js/drift/drift-series-list.js"></script>
+<script src="/explorer/assets/js/drift/drift-analytics-panel.js"></script>
 <script>
 (function () {
   'use strict';
@@ -1643,7 +1755,12 @@
   // orchestration so addNode + addLiveConnector keep their existing
   // side effects (drag attach, click → select, tooltip cleanup).
   window.MIDASExplorerGraph._rendererHooks = {
-    attachDragHandlers:      function (node, id) { if (typeof attachGmapDragHandlers === 'function') attachGmapDragHandlers(node, id); },
+    attachDragHandlers:      function (node, id) {
+      if (window.MIDASExplorerGraph && window.MIDASExplorerGraph.interactions &&
+          typeof window.MIDASExplorerGraph.interactions.attachNodeDragHandlers === 'function') {
+        window.MIDASExplorerGraph.interactions.attachNodeDragHandlers(node, id);
+      }
+    },
     selectNode:              function (id)       { if (typeof selectGovernanceMapNode === 'function') selectGovernanceMapNode(id); },
     applyMultiSelection:     function ()         { if (typeof applyGmapMultiSelection === 'function') applyGmapMultiSelection(); },
     connectorEndpointLabel:  function (id)       { return typeof gmapConnectorEndpointLabel === 'function' ? gmapConnectorEndpointLabel(id) : id; },
@@ -1675,8 +1792,9 @@
   // pipeline into this tranche.
   window.MIDASExplorerGraph._inspectorHooks = {
     notifyEvidenceTraySelectionChanged: function () {
-      if (typeof notifyGmapEvidenceTraySelectionChanged === 'function') {
-        notifyGmapEvidenceTraySelectionChanged();
+      if (window.MIDASExplorerGraph && window.MIDASExplorerGraph.contextEvidenceTray &&
+          typeof window.MIDASExplorerGraph.contextEvidenceTray.notifySelectionChanged === 'function') {
+        window.MIDASExplorerGraph.contextEvidenceTray.notifySelectionChanged();
       }
     },
     getGmapData: function () { return (typeof gmapData !== 'undefined') ? gmapData : null; },
@@ -1782,7 +1900,18 @@
   document.querySelectorAll('[data-nav-view]').forEach(item => {
     item.addEventListener('click', e => {
       e.preventDefault();
-      showView(item.dataset.navView);
+      const target = item.dataset.navView;
+      showView(target);
+      // D32b-impl-2 — Clicking Services in the left navigation returns
+      // the operator to the Services catalogue/list regardless of the
+      // current Workbench sub-view (record / map / drift). The
+      // catalogue render preserves selectedBusinessServiceId in the
+      // store; only the visible sub-view changes.
+      if (target === 'services' &&
+          window.MIDASExplorerServices &&
+          typeof MIDASExplorerServices.showCatalogue === 'function') {
+        MIDASExplorerServices.showCatalogue();
+      }
     });
   });
 
@@ -1796,12 +1925,10 @@
   // click handlers on the .graph-lens-switcher buttons, applies the
   // disabled-state styling for Authority, and seeds the store with
   // the active lens. The Context lens adapter is registered via
-  // graph/context/context-graph-view.js and forwards to the inline
-  // renderer once window.MIDASExplorerGovernanceMapBridge is wired
-  // (future tranche). Initialisation is wrapped in a typeof guard so
-  // failures of any shell module to load surface as a no-op rather
-  // than a ReferenceError. The inline IIFE remains the load-bearing
-  // path; the shell is additive.
+  // graph/context/context-graph-view.js and owns the production
+  // Context rendering directly (D32a-impl-3..7). Initialisation is
+  // wrapped in a typeof guard so failures of any shell module to load
+  // surface as a no-op rather than a ReferenceError.
   if (ExplorerGraph && ExplorerGraph.shell && typeof ExplorerGraph.shell.init === 'function') {
     ExplorerGraph.shell.init();
   }
@@ -1812,10 +1939,31 @@
   if (ExplorerRouter && typeof ExplorerRouter.register === 'function') {
     ExplorerRouter.register('graph/context', () => {
       showView('services');
+      if (ExplorerGraph && ExplorerGraph.shell && typeof ExplorerGraph.shell.setActiveLens === 'function') {
+        ExplorerGraph.shell.setActiveLens('context');
+      }
+      // When the user switches back from Authority, the canvas still
+      // holds the Authority lens render. Reset the Context dedup token
+      // and re-trigger refreshGovernanceMap so the Context lens
+      // re-paints. refreshGovernanceMap is a no-op when gmapMode !=
+      // 'map', so this is safe on direct deep-links.
+      try { if (typeof gmapLastBSId !== 'undefined') gmapLastBSId = null; } catch (_) { /* swallow */ }
+      if (typeof refreshGovernanceMap === 'function') refreshGovernanceMap();
     });
+    // D32b-impl-1 — Authority lens deep-link. Switching to the Authority
+    // lens routes through the shell so selectedGraphLens stays in sync;
+    // the authority view's refresh is triggered with the currently-
+    // selected business service (when present), otherwise the view
+    // renders its own empty state.
     ExplorerRouter.register('graph/authority', () => {
-      // Authority lens is disabled today; absorb the hash silently.
       showView('services');
+      if (ExplorerGraph && ExplorerGraph.shell && typeof ExplorerGraph.shell.setActiveLens === 'function') {
+        ExplorerGraph.shell.setActiveLens('authority');
+      }
+      if (ExplorerGraph && ExplorerGraph.authorityView && typeof ExplorerGraph.authorityView.refresh === 'function') {
+        const rootId = (typeof currentGraphRootId !== 'undefined') ? currentGraphRootId : '';
+        ExplorerGraph.authorityView.refresh({ rootId: rootId || '' });
+      }
     });
   }
 
@@ -1947,120 +2095,18 @@
   // No persistence: refresh / new tab starts an empty stack.
   const gmapHistory = [];
 
-  // ── Live Business Service list state ──────────────────────────────────────
-  // The selector that drives currentSelectedService is backed by
-  // GET /v1/businessservices (envelope-shape `{business_services: [...]}`).
-  // On fetch success: liveBSList = array, liveBSError = null.
-  // On fetch failure: liveBSError = {status, message}, liveBSList = null.
-  // While the request is in flight: liveBSLoading = true.
-  //
-  // No fallback to STRUCTURAL_CONTEXT on failure: showing the operator a
-  // visible error is preferable to showing demo data that doesn't reflect
-  // the store. Other Explorer views (Overview, Records, Settings) continue
-  // to read STRUCTURAL_CONTEXT — that is a separate scope.
-  let liveBSList = null;
-  let liveBSError = null;
-  let liveBSLoading = false;
-
-  // D32a-impl-5 — Thin shim. Production loadBusinessServicesList lives in services-view.js / capabilities-view.js.
-  function loadBusinessServicesList() {
-    return MIDASExplorerServices.loadCatalogue();
-  }
-
-  // ── Sub-view state machine ────────────────────────────────────────────────
-  // Module-level state for the Services view. Three sub-views are reachable
-  // (catalogue / detail / map). The state machine is intentionally simple so
-  // that adding hash-route persistence later is a focused change.
-  let servicesSubView = 'catalogue';
-  // Per-record cache keyed by Business Service ID. Stores the most recent
-  // successful governance-map payload so the record page renders instantly
-  // on revisit. The map view does its own fetch via refreshGovernanceMap()
-  // (with its own dedup) so the duplicate first-fetch on record→map is
-  // accepted in exchange for keeping the cache plumbing trivial.
-  // serviceRecordCache is extracted to /explorer/assets/js/state.js
-  // (D27j-ui-foundation-4); the local const at the top of this IIFE
-  // binds to the same object identity so all reads/writes still hit
-  // the same cache.
-  let serviceRecordLoading = false;
-  let serviceRecordError = null;
-
-  // D32a-impl-5 — Thin shim. Production setServicesSubView lives in services-view.js / capabilities-view.js.
-  function setServicesSubView(view) {
-    return MIDASExplorerServices.setSubView(view);
-  }
-
-  // Drift-2b — entry point for the Drift Overview sub-view. Called by
-  // the "Drift Overview" button in the catalogue header. Idempotent
-  // re-entry: each call re-runs the load pipeline so a refresh on
-  // re-entry reflects the current repository state without requiring
-  // the operator to leave and return.
-  // D32a-impl-5 — Thin shim. Production showServicesDriftOverview lives in services-view.js / capabilities-view.js.
-  function showServicesDriftOverview() {
-    return MIDASExplorerServices.showDriftOverview();
-  }
-
-  // D32a-impl-5 — Thin shim. Production showServicesCatalogue lives in services-view.js / capabilities-view.js.
-  function showServicesCatalogue() {
-    return MIDASExplorerServices.showCatalogue();
-  }
-
-  // D32a-impl-5 — Thin shim. Production showBusinessServiceRecord lives in services-view.js / capabilities-view.js.
-  function showBusinessServiceRecord(serviceId) {
-    currentSelectedService = serviceId || null;
-    return MIDASExplorerServices.showRecord(serviceId);
-  }
-
-  // D32a-impl-5 — Thin shim. Production showBusinessServiceMap lives in services-view.js / capabilities-view.js.
-  function showBusinessServiceMap(serviceId) {
-    currentSelectedService = serviceId || null;
-    return MIDASExplorerServices.showMap(serviceId);
-  }
-
-  // renderServicesView re-renders the active sub-view. Used by the live BS
-  // selector loader after the catalogue list comes back.
-  // D32a-impl-5 — Thin shim. Production renderServicesView lives in services-view.js / capabilities-view.js.
-  function renderServicesView() {
-    return MIDASExplorerServices.renderView();
-  }
-
-  // renderServicesCatalogue renders the BS catalogue from the live state
-  // machine. NEVER reads from STRUCTURAL_CONTEXT. The wire shape is
-  // `{business_services: [{id, name, status, service_type, owner_id,
-  // external_ref}]}`, accessed via liveBSList[i].
-  // D32a-impl-5 — Thin shim. Production renderServicesCatalogue lives in services-view.js / capabilities-view.js.
-  function renderServicesCatalogue(filter) {
-    return MIDASExplorerServices.renderCatalogue(filter);
-  }
-
-  // ── Record page ──────────────────────────────────────────────────────────
-  // Defensive renderer: tolerates null payloads, missing arrays, missing
-  // optional fields, empty arrays. Renders empty-state strings instead of
-  // throwing on unexpected payload shapes.
-
-  // D32a-impl-5 — Thin shim. Production loadBusinessServiceRecord lives in services-view.js / capabilities-view.js.
-  function loadBusinessServiceRecord(serviceId) {
-    return MIDASExplorerServices.loadRecord(serviceId);
-  }
-
-  // D32a-impl-5 — Thin shim. Production renderRecordFieldGrid lives in services-view.js / capabilities-view.js.
-  function renderRecordFieldGrid(rows) {
-    return MIDASExplorerServices.renderRecordFieldGrid(rows);
-  }
-
-  // D32a-impl-5 — Thin shim. Production renderRecordSection lives in services-view.js / capabilities-view.js.
-  function renderRecordSection(title, contentHtml) {
-    return MIDASExplorerServices.renderRecordSection(title, contentHtml);
-  }
-
-  // D32a-impl-5 — Thin shim. Production renderRelatedList lives in services-view.js / capabilities-view.js.
-  function renderRelatedList(rows, emptyMessage) {
-    return MIDASExplorerServices.renderRelatedList(rows, emptyMessage);
-  }
-
-  // D32a-impl-5 — Thin shim. Production renderBusinessServiceRecord lives in services-view.js / capabilities-view.js.
-  function renderBusinessServiceRecord(payload) {
-    return MIDASExplorerServices.renderRecord(payload);
-  }
+  // D32a-impl-7 — All 14 Services compatibility shims (loadBusinessServicesList,
+  // setServicesSubView, showServicesDriftOverview, showServicesCatalogue,
+  // showBusinessServiceRecord, showBusinessServiceMap, renderServicesView,
+  // renderServicesCatalogue, loadBusinessServiceRecord, renderRecordFieldGrid,
+  // renderRecordSection, renderRelatedList, renderBusinessServiceRecord,
+  // updateServicesCoverageSummary) were removed. The remaining inline
+  // call-sites (goBackOrToOwningService → showMap, handleGovernanceMapAction
+  // → showRecord, refreshCoverage → updateCoverageSummary, IIFE bootstrap
+  // setTimeouts) now invoke MIDASExplorerServices.* directly. Module-private
+  // liveBSList / liveBSError / liveBSLoading / servicesSubView /
+  // serviceRecordLoading / serviceRecordError state lives in services-view.js
+  // and is no longer mirrored inline.
 
   // ── Wire sub-view transitions + search input ─────────────────────────────
   // D32a-impl-5 — Services view sub-view controls are wired by
@@ -2085,6 +2131,20 @@
         },
         setGmapMode: function (mode) {
           if (typeof gmapMode !== 'undefined') gmapMode = mode;
+          // D32b-impl-2 — Entering the graph workbench (mode === 'map')
+          // defaults Focus Mode to ON for both Context and Authority
+          // lenses. The helper is idempotent and never writes
+          // localStorage, so the operator's explicit toggle remains
+          // authoritative across the rest of the session.
+          if (mode === 'map' && typeof ensureFocusModeEnabledOnGraphEntry === 'function') {
+            ensureFocusModeEnabledOnGraphEntry();
+          }
+          // Authority panels are visible only in Authority lens mode;
+          // hide them on any non-map transition so Form/Catalogue/Drift
+          // sub-views are clean.
+          if (mode !== 'map' && typeof _showAuthorityPanels === 'function') {
+            _showAuthorityPanels(false);
+          }
         },
         refreshGovernanceMap: function () {
           if (typeof refreshGovernanceMap === 'function') refreshGovernanceMap();
@@ -2094,16 +2154,6 @@
         },
       },
     });
-  }
-
-  // updateServicesCoverageSummary is retained so refreshCoverage()'s
-  // hook continues to type-check. The DOM nodes it targeted (the old
-  // right-column cards) have been removed; the function now no-ops via
-  // its existing null-guards. Keeping it avoids a code change to
-  // refreshCoverage in another module of this file.
-  // D32a-impl-5 — Thin shim. Production updateServicesCoverageSummary lives in services-view.js / capabilities-view.js.
-  function updateServicesCoverageSummary(records) {
-    return MIDASExplorerServices.updateCoverageSummary(records);
   }
 
   // The five render functions that powered the previous three-column
@@ -2119,165 +2169,117 @@
   // ──────────────────────────────────────────────────────────────────────
   // Capabilities catalogue + record (live API; no STRUCTURAL_CONTEXT)
   // ──────────────────────────────────────────────────────────────────────
-  // Backed by GET /v1/capabilities (bare-array — kept as bare array
-  // intentionally; envelope migration is a separate scope) and
-  // GET /v1/capabilities/{id}. The state model mirrors the Services
-  // sub-view machinery — catalogue / detail — but the per-capability
-  // map sub-view is intentionally absent. There is no per-capability
-  // governance-map endpoint today; if a record page wants to show map
-  // context it must do so through the BS that consumes the capability,
-  // and that drill-down is scoped to a future PR.
-  //
-  // STRUCTURAL_CONTEXT is NOT consulted from this view — there is no
-  // demo-data fallback. On fetch error the operator sees the explicit
-  // error strip rather than seeded demo capabilities.
+  // Backed by GET /v1/capabilities (bare-array) and GET /v1/capabilities/{id}.
+  // All Capabilities view state (list, sub-view, per-record cache, per-cap
+  // children / business-services / ai-bindings caches) lives in
+  // /explorer/assets/js/capabilities/capabilities-view.js. The inline IIFE
+  // dispatches through MIDASExplorerCapabilities.* directly.
 
-  let capabilitiesSubView = 'catalogue';
-  let currentSelectedCapability = null;
-  let liveCapabilityList = null;
-  let liveCapabilityError = null;
-  let liveCapabilityLoading = false;
-  // capabilityRecordCache is extracted to /explorer/assets/js/state.js
-  // (D27j-ui-foundation-4); the local const at the top of this IIFE
-  // binds to the same object identity.
-  let capabilityRecordLoading = false;
-  let capabilityRecordError = null;
-
-  // Per-capability sub-resource state for the three Phase-3 endpoints
-  // (children / businessservices / ai-bindings). Each map is keyed by
-  // capability id so navigating between records does not blow away
-  // freshly-loaded sub-resources. The three resources are fetched in
-  // parallel after the parent record resolves; each section renders
-  // independently as its loader settles, mirroring the per-section
-  // pattern used by the BS record page (which also fetches sub-data
-  // alongside the BS itself, but in a single envelope call).
-  const capabilityChildrenCache = {};
-  const capabilityChildrenLoading = {};
-  const capabilityChildrenError = {};
-  const capabilityBusinessServicesCache = {};
-  const capabilityBusinessServicesLoading = {};
-  const capabilityBusinessServicesError = {};
-  const capabilityAIBindingsCache = {};
-  const capabilityAIBindingsLoading = {};
-  const capabilityAIBindingsError = {};
-
-  // D32a-impl-5 — Thin shim. Production setCapabilitiesSubView lives in services-view.js / capabilities-view.js.
-  function setCapabilitiesSubView(view) {
-    return MIDASExplorerCapabilities.setSubView(view);
-  }
-
-  // D32a-impl-5 — Thin shim. Production showCapabilitiesCatalogue lives in services-view.js / capabilities-view.js.
-  function showCapabilitiesCatalogue() {
-    return MIDASExplorerCapabilities.showCatalogue();
-  }
-
-  // D32a-impl-5 — Thin shim. Production showCapabilityRecord lives in services-view.js / capabilities-view.js.
-  function showCapabilityRecord(capId) {
-    currentSelectedCapability = capId || null;
-    return MIDASExplorerCapabilities.showRecord(capId);
-  }
-
-  // loadCapabilitiesList fetches GET /v1/capabilities and populates
-  // liveCapabilityList with the bare-array payload. The endpoint is
-  // intentionally consumed as a bare array (Array.isArray check) — the
-  // envelope migration is a separate scope. No fallback to
-  // STRUCTURAL_CONTEXT on error: showing the operator a visible error
-  // is preferable to showing demo data that doesn't reflect the store.
-  // D32a-impl-5 — Thin shim. Production loadCapabilitiesList lives in services-view.js / capabilities-view.js.
-  function loadCapabilitiesList() {
-    return MIDASExplorerCapabilities.loadCatalogue();
-  }
-
-  // D32a-impl-5 — Thin shim. Production renderCapabilitiesCatalogue lives in services-view.js / capabilities-view.js.
-  function renderCapabilitiesCatalogue(filter) {
-    return MIDASExplorerCapabilities.renderCatalogue(filter);
-  }
-
-  // loadCapabilityRecord fetches GET /v1/capabilities/{id} and renders
-  // the record page. Cache hit → render immediately; otherwise show a
-  // loading strip during the fetch. On 404/500 the error strip stays
-  // up; the operator returns to the catalogue via the back button.
-  // After the parent record resolves the three sub-resource loaders
-  // are kicked off in parallel; each settles independently into its
-  // own section.
-  // D32a-impl-5 — Thin shim. Production loadCapabilityRecord lives in services-view.js / capabilities-view.js.
-  function loadCapabilityRecord(capId) {
-    return MIDASExplorerCapabilities.loadRecord(capId);
-  }
-
-  // loadCapabilityChildren fetches GET /v1/capabilities/{id}/children
-  // and stores the envelope's `capabilities` array in
-  // capabilityChildrenCache. The envelope shape is { capability_id,
-  // capabilities[] } per Phase 3A; we read .capabilities (Array.isArray
-  // guard) and ignore the echoed capability_id since the caller already
-  // knows it. On error the section's error strip is rendered without
-  // disturbing the parent record or the other two sub-sections.
-  // D32a-impl-5 — Thin shim. Production loadCapabilityChildren lives in services-view.js / capabilities-view.js.
-  function loadCapabilityChildren(capId) {
-    return MIDASExplorerCapabilities.loadRecord && (typeof MIDASExplorerCapabilities.loadChildren === 'function' ? MIDASExplorerCapabilities.loadChildren(capId) : null);
-  }
-
-  // loadCapabilityBusinessServices fetches GET /v1/capabilities/{id}/businessservices
-  // and stores the envelope's `business_services` array. Mirror of
-  // loadCapabilityChildren.
-  // D32a-impl-5 — Thin shim. Production loadCapabilityBusinessServices lives in services-view.js / capabilities-view.js.
-  function loadCapabilityBusinessServices(capId) {
-    return (typeof MIDASExplorerCapabilities.loadBusinessServices === 'function') ? MIDASExplorerCapabilities.loadBusinessServices(capId) : null;
-  }
-
-  // loadCapabilityAIBindings fetches GET /v1/capabilities/{id}/ai-bindings
-  // and stores the envelope's `bindings` array. The bindings are
-  // direct Capability-scope only (Phase 3C contract); the section is
-  // intentionally non-clickable — there is no per-binding record page
-  // to navigate to today.
-  // D32a-impl-5 — Thin shim. Production loadCapabilityAIBindings lives in services-view.js / capabilities-view.js.
-  function loadCapabilityAIBindings(capId) {
-    return (typeof MIDASExplorerCapabilities.loadAIBindings === 'function') ? MIDASExplorerCapabilities.loadAIBindings(capId) : null;
-  }
-
-  // Defensive renderer: tolerates null payload, missing optional fields,
-  // and renders "—" for empty values. Renders the full Phase-1 wire
-  // shape (id, name, description, status, owner, parent_capability_id,
-  // origin, managed, replaces, created_by, created_at, updated_at,
-  // external_ref) plus three sub-resource sections that are populated
-  // by the Phase-3 endpoints (children / business services / AI
-  // bindings). Sub-section containers are rendered as empty placeholders
-  // here; their contents are filled in by the per-section renderers
-  // when the matching loader settles.
-  // D32a-impl-5 — Thin shim. Production renderCapabilityRecord lives in services-view.js / capabilities-view.js.
-  function renderCapabilityRecord(payload) {
-    return MIDASExplorerCapabilities.renderRecord(payload);
-  }
-
-  // Per-section renderer for the child-capabilities section. Reads the
-  // per-cap state maps and writes loading / error / empty / list to
-  // the section container. Click-through wires showCapabilityRecord on
-  // each row so the operator can drill into a child's own record page.
-  // D32a-impl-5 — Thin shim. Production renderCapabilityChildrenSection lives in services-view.js / capabilities-view.js.
-  function renderCapabilityChildrenSection(capId) {
-    return MIDASExplorerCapabilities.renderChildrenSection(capId);
-  }
-
-  // Per-section renderer for the BS-using-this-Capability section.
-  // Click-through wires showBusinessServiceRecord on each row.
-  // D32a-impl-5 — Thin shim. Production renderCapabilityBusinessServicesSection lives in services-view.js / capabilities-view.js.
-  function renderCapabilityBusinessServicesSection(capId) {
-    return MIDASExplorerCapabilities.renderBusinessServicesSection(capId);
-  }
-
-  // Per-section renderer for the Capability-scoped AI bindings section.
-  // Intentionally NO click-through: there is no per-binding record
-  // page today, so the rows render informationally only. The action
-  // area is absent rather than a disabled button.
-  // D32a-impl-5 — Thin shim. Production renderCapabilityAIBindingsSection lives in services-view.js / capabilities-view.js.
-  function renderCapabilityAIBindingsSection(capId) {
-    return MIDASExplorerCapabilities.renderAIBindingsSection(capId);
-  }
-
-  // D32a-impl-5 — Capabilities view sub-view controls wired by
-  // MIDASExplorerCapabilities.init.
+  // D32a-impl-7 — All 13 Capabilities compatibility shims
+  // (setCapabilitiesSubView, showCapabilitiesCatalogue, showCapabilityRecord,
+  // loadCapabilitiesList, renderCapabilitiesCatalogue, loadCapabilityRecord,
+  // loadCapabilityChildren, loadCapabilityBusinessServices,
+  // loadCapabilityAIBindings, renderCapabilityRecord,
+  // renderCapabilityChildrenSection, renderCapabilityBusinessServicesSection,
+  // renderCapabilityAIBindingsSection) were removed. The remaining inline
+  // call-site (handleGovernanceMapAction → MIDASExplorerCapabilities.showRecord)
+  // invokes the module directly; the IIFE bootstrap setTimeout dispatches
+  // through MIDASExplorerCapabilities.loadCatalogue. Module-private
+  // liveCapabilityList / liveCapabilityError / liveCapabilityLoading /
+  // capabilitiesSubView / capabilityRecordLoading / capabilityRecordError /
+  // per-cap children / business-services / ai-bindings caches all live in
+  // capabilities-view.js and are no longer mirrored inline.
   if (typeof MIDASExplorerCapabilities !== 'undefined' && typeof MIDASExplorerCapabilities.init === 'function') {
     MIDASExplorerCapabilities.init({});
+  }
+
+  // D32a-impl-9 — Context Graph evidence/drift tray init. The tray
+  // module owns its DOM wiring + tray state. The inline IIFE supplies
+  // read-only access to gmapData / currentGraphView / currentGraphRootId
+  // plus camera (focusGmapOnNode) and inspector (selectGovernanceMapNode)
+  // hooks the tray needs to drive search-from-activity flows.
+  if (typeof MIDASExplorerGraph !== 'undefined' &&
+      MIDASExplorerGraph.contextEvidenceTray &&
+      typeof MIDASExplorerGraph.contextEvidenceTray.init === 'function') {
+    MIDASExplorerGraph.contextEvidenceTray.init({
+      hooks: {
+        getGmapData:          function ()   { return (typeof gmapData !== 'undefined') ? gmapData : null; },
+        getCurrentGraphView:  function ()   { return (typeof currentGraphView !== 'undefined') ? currentGraphView : 'service'; },
+        getCurrentGraphRootId: function ()  { return (typeof currentGraphRootId !== 'undefined') ? currentGraphRootId : ''; },
+        focusGmapOnNode:      function (id) { if (typeof focusGmapOnNode === 'function') focusGmapOnNode(id); },
+        selectNode:           function (id) { if (typeof selectGovernanceMapNode === 'function') selectGovernanceMapNode(id); },
+      },
+    });
+  }
+
+  // D32b-impl-3 — Register the Context lens drawer provider with the
+  // unified graph drawer. The three drawer slots map to:
+  //   • inspector — selected-node fields (#gmap-details-{name,fields,
+  //                 actions,summary,governance}) are populated by
+  //                 context-graph-inspector.js on node selection; the
+  //                 tab renderer is a no-op (DOM scaffold is shipped
+  //                 in the panel markup and managed externally).
+  //   • evidence  — placeholder text the operator sees when the
+  //                 Evidence tab is opened without runtime context.
+  //                 The Context Graph evidence/drift tray sits BELOW
+  //                 the canvas (separate from the right drawer) and
+  //                 is unaffected by this registration.
+  //   • config    — placeholder text. Reserved for D32b-impl-3+.
+  if (typeof MIDASExplorerGraph !== 'undefined' &&
+      MIDASExplorerGraph.drawer &&
+      typeof MIDASExplorerGraph.drawer.registerLens === 'function') {
+    MIDASExplorerGraph.drawer.registerLens('context', {
+      tabs: [
+        {
+          id: 'inspector', label: 'Inspector',
+          render: function (ctx, mount) {
+            // Inspector panel scaffold is already in the DOM; no-op.
+            void ctx; void mount;
+          },
+        },
+        {
+          id: 'evidence', label: 'Evidence',
+          render: function (ctx, mount) {
+            if (!mount) return;
+            mount.innerHTML =
+              '<div class="gmap-details-section">' +
+                '<div class="gmap-details-title">Evidence</div>' +
+                '<p class="gmap-right-rail-placeholder">Runtime evidence facts will appear here.</p>' +
+              '</div>';
+            void ctx;
+          },
+        },
+        {
+          id: 'config', label: 'Config',
+          render: function (ctx, mount) {
+            if (!mount) return;
+            mount.innerHTML =
+              '<div class="gmap-details-section">' +
+                '<div class="gmap-details-title">Config</div>' +
+                '<p class="gmap-right-rail-placeholder">Local graph configuration will appear here.</p>' +
+              '</div>';
+            void ctx;
+          },
+        },
+      ],
+    });
+  }
+
+  // D32e-impl-1 — Drift Analytics panel init. Reads the currently-
+  // selected business service / graph-node via hooks so the panel
+  // does not snapshot stale state at boot. Real /v1/drift series
+  // points are not yet wired into the panel (every service needs a
+  // resolvable drift series id first); the panel falls back to the
+  // clearly-labelled MIDASExplorerDriftChartAdapter demo data, which
+  // shows a DEMO badge so operators are not misled.
+  if (typeof MIDASExplorerDriftAnalytics !== 'undefined' &&
+      typeof MIDASExplorerDriftAnalytics.init === 'function') {
+    MIDASExplorerDriftAnalytics.init({
+      hooks: {
+        getServiceId:        function () { return (typeof currentSelectedService === 'string') ? currentSelectedService : ''; },
+        getSelectedNodeId:   function () { return (typeof gmapSelectedId === 'string') ? gmapSelectedId : ''; },
+      },
+    });
   }
 
   // ── Governance Map (Epic 1, PR 5) ──────────────────────────────────────────
@@ -2736,7 +2738,20 @@
   // are now nested inside the Inspector tabpanel — getElementById
   // is document-scoped, so wrapping does not break the lookups.
   // Active tab state is in-memory; no localStorage persistence.
+  // D32b-impl-3 — setGmapRightRailTab is now a thin compatibility
+  // shim. The unified graph-drawer module owns tab activation, panel
+  // visibility, lens-aware label updates, and click-to-open. Callers
+  // that still reference setGmapRightRailTab by name (search input
+  // focus, action dispatchers) route through this shim so behaviour
+  // is preserved.
   function setGmapRightRailTab(tab) {
+    if (window.MIDASExplorerGraph && window.MIDASExplorerGraph.drawer &&
+        typeof window.MIDASExplorerGraph.drawer.setActiveTab === 'function') {
+      window.MIDASExplorerGraph.drawer.setActiveTab(tab);
+      return;
+    }
+    // Fallback for test isolation / partial load: legacy in-place
+    // activation. Behaviour is identical to the pre-D32b-impl-3 path.
     const next = (tab === 'inspector' || tab === 'evidence' || tab === 'config') ? tab : 'inspector';
     document.querySelectorAll('[data-rail-tab]').forEach(btn => {
       const active = btn.dataset.railTab === next;
@@ -2749,10 +2764,6 @@
       if (active) panel.removeAttribute('hidden');
       else        panel.setAttribute('hidden', '');
     });
-    // D27j-ui-3a-refine-5 — write the active label into the
-    // shared rail header title. The title text mirrors the
-    // selected tab name in sentence case. Never a slash-joined
-    // caption.
     const title = document.getElementById('gmap-right-rail-title');
     if (title) {
       const label = next === 'inspector' ? 'Inspector'
@@ -2760,12 +2771,6 @@
                                          : 'Config';
       title.textContent = label;
     }
-    // D27j-ui-3a-refine-4 — click-to-open. Selecting any rail
-    // label while the drawer is collapsed pulls it open at that
-    // section, matching the file-drawer metaphor (one handle, one
-    // drawer, three labelled positions). Reuses the existing
-    // collapse state, storage key, and applier — no new state and
-    // no new storage key.
     if (gmapInspectorCollapsed) {
       gmapInspectorCollapsed = false;
       try {
@@ -2833,14 +2838,45 @@
     });
   })();
 
+  // D32b-impl-3 — Expose collapse-state hooks for graph-drawer.js so
+  // the new module can request open/close without re-implementing
+  // localStorage + applyGmapInspectorCollapsed. The drawer module
+  // owns tab activation and lens dispatch; the inline IIFE retains
+  // the persistent collapse state because it is shared with the
+  // inspector toggle button and focus-mode snapshot/restore logic.
+  if (window.MIDASExplorerGraph) {
+    window.MIDASExplorerGraph._drawerHooks = {
+      requestOpen: function () {
+        if (!gmapInspectorCollapsed) return;
+        gmapInspectorCollapsed = false;
+        try { window.localStorage.setItem(GMAP_INSPECTOR_LS_KEY, '0'); } catch (_) { /* swallow */ }
+        applyGmapInspectorCollapsed();
+      },
+      requestClose: closeGmapRightRail,
+      isOpen: function () { return !gmapInspectorCollapsed; },
+    };
+  }
+
   (function wireGmapRightRailTabs() {
     const tabs = document.querySelectorAll('[data-rail-tab]');
     if (!tabs.length) return;
-    tabs.forEach(btn => {
-      btn.addEventListener('click', () => {
-        setGmapRightRailTab(btn.dataset.railTab);
+    // D32b-impl-3 — Tab activation is now owned by graph-drawer.js;
+    // setGmapRightRailTab remains as a compatibility shim (other
+    // call-sites use it). Tab click handlers route through the
+    // drawer module so the active lens's renderer repaints the
+    // panel on every tab switch, not just on lens change.
+    if (window.MIDASExplorerGraph && window.MIDASExplorerGraph.drawer &&
+        typeof window.MIDASExplorerGraph.drawer.init === 'function') {
+      window.MIDASExplorerGraph.drawer.init({ initialLens: 'context' });
+    } else {
+      // Fallback: drawer module not loaded (test isolation / partial
+      // page); preserve legacy click-to-tab behaviour.
+      tabs.forEach(btn => {
+        btn.addEventListener('click', () => {
+          setGmapRightRailTab(btn.dataset.railTab);
+        });
       });
-    });
+    }
     // Inspector defaults to active. The markup ships with the
     // is-active / aria-selected / hidden attributes already set,
     // but call once for idempotency in case a future tranche flips
@@ -2977,7 +3013,178 @@
     applyGmapFocusMode();
   })();
 
-  // Phase 2B Step 28 (D24d) — Form / Graph view-mode toggle.
+  // D32b-impl-2 — ensureFocusModeEnabledOnGraphEntry()
+  //
+  // Default Focus Mode to enabled when an operator enters the graph
+  // Workbench (Context Graph or Authority Graph) from outside the
+  // Workbench. Switching between Context and Authority lenses while
+  // already inside the Workbench preserves whatever focus mode the
+  // operator has set, so a user who explicitly turns focus off is
+  // not fought every time they switch lenses.
+  //
+  // The implementation reuses the existing gmapFocusMode flag and
+  // applyGmapFocusMode helper — no parallel focus state is introduced.
+  // localStorage persistence remains the user's explicit-toggle path;
+  // this helper does NOT write to localStorage so a future graph entry
+  // re-defaults to ON even if the user previously toggled off and
+  // closed the browser.
+  function ensureFocusModeEnabledOnGraphEntry() {
+    if (typeof gmapFocusMode === 'undefined') return;
+    if (gmapFocusMode) return;
+    gmapFocusMode = true;
+    if (typeof applyGmapFocusMode === 'function') applyGmapFocusMode();
+  }
+
+  // D32b-impl-2 — Service Workbench mode toolbar.
+  //
+  // Replaces the previous canvas-level "Form view coming soon" stub
+  // (Phase 2B Step 28 / D24d) with a real three-mode toolbar that
+  // owns the operator-facing Workbench entry contract:
+  //
+  //   • Form View      — return to the selected business-service
+  //                      record/detail through MIDASExplorerServices
+  //                      .showRecord(...). Hides Authority panels.
+  //   • Context Graph  — switch to the Context lens and refresh the
+  //                      governance map for the selected service.
+  //                      Defaults Focus Mode to ON on first entry.
+  //                      Hides Authority panels.
+  //   • Authority Graph — switch to the Authority lens, fetch +
+  //                       render the Authority Graph for the selected
+  //                       service. Defaults Focus Mode to ON on first
+  //                       entry. Shows Authority panels.
+  //
+  // selectedBusinessServiceId is preserved across all three modes:
+  // showRecord/showMap both pin currentSelectedService and pass it
+  // to the relevant subview; the lens toggle never clears it.
+  //
+  // The handler is idempotent: clicking the active mode is a no-op
+  // (no router redirect, no re-fetch).
+  function _workbenchModeButtons() {
+    return document.querySelectorAll('.service-workbench-mode[data-workbench-mode]');
+  }
+
+  function _setWorkbenchModeActiveButton(mode) {
+    var buttons = _workbenchModeButtons();
+    for (var i = 0; i < buttons.length; i++) {
+      var btn = buttons[i];
+      var active = btn.dataset.workbenchMode === mode;
+      btn.classList.toggle('is-active', active);
+      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    }
+  }
+
+  // D32b-impl-3 — _showAuthorityPanels is preserved as a thin
+  // adapter so the small number of remaining call-sites continue to
+  // work, but the underlying behaviour is now lens-aware drawer
+  // content (no separate overlay). The argument is mapped to a
+  // drawer.setActiveLens() call:
+  //   _showAuthorityPanels(true)  → drawer.setActiveLens('authority')
+  //   _showAuthorityPanels(false) → drawer.setActiveLens('context')
+  function _showAuthorityPanels(show) {
+    if (!(window.MIDASExplorerGraph && window.MIDASExplorerGraph.drawer)) return;
+    var drawer = window.MIDASExplorerGraph.drawer;
+    if (typeof drawer.setActiveLens !== 'function') return;
+    drawer.setActiveLens(show ? 'authority' : 'context');
+  }
+
+  function _activeServiceForWorkbench() {
+    if (typeof currentSelectedService === 'string' && currentSelectedService) return currentSelectedService;
+    if (typeof currentGraphRootId === 'string' && currentGraphRootId) return currentGraphRootId;
+    return null;
+  }
+
+  function setWorkbenchMode(mode) {
+    // D32d-impl-4 — `knowledge` is a Knowledge Graph placeholder. The
+    // header menu surfaces it as a disabled button, but a programmatic
+    // setWorkbenchMode('knowledge') (e.g. from a deep-link) reaches
+    // this dispatcher. Early-return so the placeholder is a guaranteed
+    // no-op regardless of the call-path.
+    if (mode === 'knowledge') return;
+    var serviceId = _activeServiceForWorkbench();
+    // No selected service — bounce to catalogue rather than render an
+    // empty workbench.
+    if (!serviceId && (mode === 'context' || mode === 'authority' || mode === 'form')) {
+      if (window.MIDASExplorerServices && typeof MIDASExplorerServices.showCatalogue === 'function') {
+        MIDASExplorerServices.showCatalogue();
+      }
+      return;
+    }
+    if (mode === 'form') {
+      _showAuthorityPanels(false);
+      _setWorkbenchModeActiveButton('form');
+      if (window.MIDASExplorerServices && typeof MIDASExplorerServices.showRecord === 'function') {
+        MIDASExplorerServices.showRecord(serviceId);
+      }
+      return;
+    }
+    if (mode === 'context') {
+      _showAuthorityPanels(false);
+      _setWorkbenchModeActiveButton('context');
+      if (ExplorerGraph && ExplorerGraph.shell && typeof ExplorerGraph.shell.setActiveLens === 'function') {
+        ExplorerGraph.shell.setActiveLens('context');
+      }
+      if (window.MIDASExplorerServices && typeof MIDASExplorerServices.showMap === 'function') {
+        MIDASExplorerServices.showMap(serviceId);
+      }
+      ensureFocusModeEnabledOnGraphEntry();
+      return;
+    }
+    if (mode === 'authority') {
+      _showAuthorityPanels(true);
+      _setWorkbenchModeActiveButton('authority');
+      if (window.MIDASExplorerServices && typeof MIDASExplorerServices.showMap === 'function') {
+        MIDASExplorerServices.showMap(serviceId);
+      }
+      if (ExplorerGraph && ExplorerGraph.shell && typeof ExplorerGraph.shell.setActiveLens === 'function') {
+        ExplorerGraph.shell.setActiveLens('authority');
+      }
+      if (ExplorerGraph && ExplorerGraph.authorityView && typeof ExplorerGraph.authorityView.refresh === 'function') {
+        ExplorerGraph.authorityView.refresh({ rootId: serviceId });
+      }
+      ensureFocusModeEnabledOnGraphEntry();
+      return;
+    }
+  }
+
+  // Wire the toolbar once at script load. The shell's setActiveLens
+  // (graph-shell.js) also fires on data-lens click via its own
+  // _onSwitcherClick handler; both pathways converge on the lens
+  // switcher state and produce the same result.
+  (function wireServiceWorkbenchModeToolbar() {
+    var buttons = _workbenchModeButtons();
+    for (var i = 0; i < buttons.length; i++) {
+      (function (btn) {
+        btn.addEventListener('click', function () {
+          setWorkbenchMode(btn.dataset.workbenchMode);
+        });
+      })(buttons[i]);
+    }
+  })();
+
+  // D32b-impl-2 / D32b-impl-3 — Drawer follows the active lens.
+  // The previous Authority-overlay show/hide subscription is gone
+  // (overlay removed in D32b-impl-3); the store subscription now
+  // drives drawer.setActiveLens so the right-side drawer's labels
+  // and content track selectedGraphLens through every code path
+  // (router deep-link, shell.setActiveLens, mode toolbar click).
+  if (window.MIDASExplorerStore && typeof MIDASExplorerStore.subscribe === 'function') {
+    MIDASExplorerStore.subscribe(function (state) {
+      if (!state || !state.selectedGraphLens) return;
+      if (window.MIDASExplorerGraph && window.MIDASExplorerGraph.drawer &&
+          typeof window.MIDASExplorerGraph.drawer.setActiveLens === 'function') {
+        window.MIDASExplorerGraph.drawer.setActiveLens(state.selectedGraphLens);
+      }
+    });
+  }
+
+  // Phase 2B Step 28 (D24d) — Form / Graph view-mode toggle (LEGACY).
+  //
+  // The previous canvas-level toggle has been removed in D32b-impl-2
+  // because the Service Workbench mode toolbar above the canvas now
+  // owns the operator-facing mode contract. The IIFE below is kept
+  // only as a no-op guard so any legacy on-load script that still
+  // references .gmap-view-mode-segment continues to evaluate without
+  // ReferenceError, but it has no DOM left to bind to.
   //
   // Two-segment segmented control in the top-right canvas overlay.
   // The Graph segment is always visually active in this phase — the
@@ -3071,10 +3278,6 @@
   // selectedId via the getSelectedId hook and clears it through
   // clearSelection (defined below) so the inspector reset path
   // remains in this IIFE.
-  function applyGmapVisibilityFilters() {
-    return ExplorerGraph.renderer.applyVisibilityFilters();
-  }
-
   // Phase 2B Step 21 — focusGmapOnNode (D18 helper).
   //
   // Centres an arbitrary node card in the visible viewport without
@@ -3520,996 +3723,13 @@
   // backend analytics endpoints will replace the synthetic generator
   // in a subsequent phase.
 
-  let gmapEvidenceTrayExpanded = false;
-  let gmapEvidenceTrayActiveTab = 'drift';
+  // D32a-impl-9 — Evidence/drift tray extracted to
+  // /explorer/assets/js/graph/context/context-evidence-tray.js. The
+  // module owns all 14 tray functions + 6 tray state variables. The
+  // inline IIFE calls into the module through MIDASExplorerGraph.contextEvidenceTray
+  // (via init() at boot and notifySelectionChanged() from the inspector hook).
 
-  // D26c — Activity tab runtime feed state. Holds the raw D26a envelope
-  // summaries (NOT mapped) so the local selection-filter helper can read
-  // surface_id / business_service_id / process_id directly. The render
-  // path maps each item via mapExplorerEnvelopeToRecordRow at display time.
-  let gmapEvidenceActivityItems       = [];
-  let gmapEvidenceActivityLoading     = false;
-  let gmapEvidenceActivityError       = '';
-  let gmapEvidenceActivityLoadedOnce  = false;
-
-  // hashGmapDemoSeed turns an arbitrary string into a non-negative
-  // 32-bit integer. Cheap deterministic hash (djb2 variant) — same
-  // string always produces the same seed, so the synthetic time-
-  // series stays stable across re-renders for a given node + metric.
-  function hashGmapDemoSeed(s) {
-    let h = 5381;
-    const str = String(s || '');
-    for (let i = 0; i < str.length; i++) {
-      h = ((h << 5) + h + str.charCodeAt(i)) | 0;
-    }
-    return Math.abs(h);
-  }
-
-  // buildDemoDriftSeries produces a deterministic synthetic time-
-  // series for the given (nodeId, metric, range) tuple. Returns:
-  //   { points: [{t, v}], min, max, label, unit, n }
-  // where points has length matching the range (24 / 7 / 30).
-  // The base value is metric-appropriate (escalation-rate 5–15%,
-  // decision-volume 100–1000, evidence-completeness 70–95%); each
-  // point varies by ±15% of base via a seeded sine wave with a
-  // secondary harmonic, so the series looks "plausibly real" rather
-  // than flat or pure noise.
-  function buildDemoDriftSeries(nodeId, metric, range) {
-    const seed = hashGmapDemoSeed((nodeId || 'unknown') + '|' + (metric || 'escalation-rate'));
-    let baseLow, baseHigh, label, unit;
-    switch (metric) {
-      case 'decision-volume':
-        baseLow = 100; baseHigh = 1000; label = 'Decision volume'; unit = '';
-        break;
-      case 'evidence-completeness':
-        baseLow = 70; baseHigh = 95; label = 'Evidence completeness'; unit = '%';
-        break;
-      case 'escalation-rate':
-      default:
-        baseLow = 5; baseHigh = 15; label = 'Escalation rate'; unit = '%';
-        break;
-    }
-    let n;
-    switch (range) {
-      case '24h': n = 24; break;
-      case '30d': n = 30; break;
-      case '7d':
-      default: n = 7; break;
-    }
-    const base = baseLow + (seed % 1000) / 1000 * (baseHigh - baseLow);
-    const phase = (seed % 360) * Math.PI / 180;
-    const harmonicAmp = 0.06 + (seed % 100) / 1000;
-    const points = [];
-    let minV = Infinity, maxV = -Infinity;
-    for (let i = 0; i < n; i++) {
-      const t = i / Math.max(1, n - 1);
-      const primary = Math.sin(phase + t * Math.PI * 2) * 0.10;
-      const harmonic = Math.sin(phase * 1.7 + t * Math.PI * 4) * harmonicAmp;
-      const variation = primary + harmonic;
-      const v = Math.max(0, base * (1 + variation));
-      points.push({ t: i, v: v });
-      if (v < minV) minV = v;
-      if (v > maxV) maxV = v;
-    }
-    if (minV === Infinity) { minV = 0; maxV = 1; }
-    if (maxV - minV < 0.5) { maxV = minV + 1; }
-    return { points: points, min: minV, max: maxV, label: label, unit: unit, n: n };
-  }
-
-  // formatGmapDemoValue formats a numeric value with the metric's
-  // unit. Decision volume gets integer rounding; rates get one decimal.
-  // renderGmapEvidenceTrayChart renders the SVG line chart for the
-  // current (selectedNodeId, metric, range) tuple. Empty-state
-  // fallback when no node is selected. The SVG uses a 600x100
-  // viewBox + preserveAspectRatio="none" so it scales to the chart
-  // container's actual width without library help.
-  //
-  // Phase 2B Step 40 (D25e) — chart only renders for runtime-bearing
-  // signal classes (direct_drift, usage_drift). Structural exposure
-  // nodes (BS, Capability, Process, Related Service, Authority
-  // synthetic) do NOT show a metric time-series chart — implying
-  // the structural node directly drifts is semantically wrong.
-  // Those kinds get an explanation panel from the drift-tab content
-  // builder (renderGmapEvidenceTrayDriftPanel) instead. This
-  // function silently returns when called for an exposure kind so
-  // a stale invocation from a re-render doesn't draw an inappropriate
-  // chart.
-  function renderGmapEvidenceTrayChart() {
-    const svg = document.getElementById('gmap-evidence-tray-chart-svg');
-    if (!svg) return;
-    while (svg.firstChild) svg.removeChild(svg.firstChild);
-    const nodeId = gmapSelectedId;
-    if (!nodeId || !gmapPositions[nodeId]) {
-      const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      text.setAttribute('x', '300');
-      text.setAttribute('y', '52');
-      text.setAttribute('class', 'gmap-evidence-tray-chart-empty');
-      text.textContent = 'Select a graph node to view drift signals';
-      svg.appendChild(text);
-      return;
-    }
-    const semantics = getGmapEvidenceSignalSemantics(nodeId);
-    if (semantics.chartMode !== 'metric_timeseries' && semantics.chartMode !== 'usage_timeseries') {
-      // Exposure / preview nodes — no metric chart.
-      return;
-    }
-    const metricEl = document.getElementById('gmap-evidence-tray-metric');
-    const rangeEl  = document.getElementById('gmap-evidence-tray-range');
-    const fallbackMetric = (semantics.metricOptions[0] && semantics.metricOptions[0].value) || 'escalation-rate';
-    const metric = (metricEl && metricEl.value) || fallbackMetric;
-    const range  = (rangeEl  && rangeEl.value)  || '7d';
-    const series = buildDemoDriftSeries(nodeId, metric, range);
-    const W = 600, H = 100, padX = 24, padY = 10;
-    const innerW = W - 2 * padX;
-    const innerH = H - 2 * padY;
-    const span = Math.max(0.0001, series.max - series.min);
-    function xAt(i) { return padX + (i / Math.max(1, series.n - 1)) * innerW; }
-    function yAt(v) { return padY + innerH - ((v - series.min) / span) * innerH; }
-    // Grid: 3 horizontal rules at min / mid / max.
-    [0, 0.5, 1].forEach((frac) => {
-      const y = padY + frac * innerH;
-      const grid = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-      grid.setAttribute('x1', String(padX));
-      grid.setAttribute('x2', String(W - padX));
-      grid.setAttribute('y1', String(y));
-      grid.setAttribute('y2', String(y));
-      grid.setAttribute('class', 'gmap-evidence-tray-chart-grid');
-      svg.appendChild(grid);
-    });
-    // Axis labels — min and max only, top-left.
-    const labelMax = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-    labelMax.setAttribute('x', String(padX - 4));
-    labelMax.setAttribute('y', String(padY + 4));
-    labelMax.setAttribute('text-anchor', 'end');
-    labelMax.setAttribute('class', 'gmap-evidence-tray-chart-axis-label');
-    labelMax.textContent = formatGmapDemoValue(series.max, series.unit);
-    svg.appendChild(labelMax);
-    const labelMin = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-    labelMin.setAttribute('x', String(padX - 4));
-    labelMin.setAttribute('y', String(padY + innerH));
-    labelMin.setAttribute('text-anchor', 'end');
-    labelMin.setAttribute('class', 'gmap-evidence-tray-chart-axis-label');
-    labelMin.textContent = formatGmapDemoValue(series.min, series.unit);
-    svg.appendChild(labelMin);
-    // Filled area beneath the line.
-    let areaD = '';
-    series.points.forEach((p, i) => {
-      const x = xAt(i), y = yAt(p.v);
-      areaD += (i === 0 ? 'M ' : ' L ') + x + ' ' + y;
-    });
-    if (series.points.length > 0) {
-      const baseY = padY + innerH;
-      areaD += ' L ' + xAt(series.n - 1) + ' ' + baseY;
-      areaD += ' L ' + xAt(0) + ' ' + baseY + ' Z';
-      const area = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      area.setAttribute('d', areaD);
-      area.setAttribute('class', 'gmap-evidence-tray-chart-area');
-      svg.appendChild(area);
-    }
-    // Polyline.
-    let pathD = '';
-    series.points.forEach((p, i) => {
-      pathD += (i === 0 ? 'M ' : ' L ') + xAt(i) + ' ' + yAt(p.v);
-    });
-    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    path.setAttribute('d', pathD);
-    path.setAttribute('class', 'gmap-evidence-tray-chart-line');
-    svg.appendChild(path);
-  }
-
-  // renderGmapEvidenceTrayTiles renders the 4 summary tiles for the
-  // currently-selected node, dispatching on the node-kind's signal
-  // class (D25e). Direct drift / usage drift kinds receive
-  // baseline → current numeric tiles; exposure kinds receive roll-up
-  // tiles (affected count, primary contributor, etc.). All tile
-  // values stay deterministic via the synthetic generator wrapper.
-  function renderGmapEvidenceTrayTiles() {
-    // D26f — write into the analytical signal-list container. The
-    // legacy gmap-evidence-tray-tiles container remains supported as a
-    // fallback for any future call site that mounts it; if neither
-    // container is present, the renderer no-ops cleanly.
-    const container = document.getElementById('gmap-evidence-tray-signal-list')
-      || document.getElementById('gmap-evidence-tray-tiles');
-    if (!container) return;
-    container.innerHTML = '';
-    const nodeId = gmapSelectedId;
-    if (!nodeId || !gmapPositions[nodeId]) {
-      return;
-    }
-    const semantics = getGmapEvidenceSignalSemantics(nodeId);
-    const metricEl = document.getElementById('gmap-evidence-tray-metric');
-    const rangeEl  = document.getElementById('gmap-evidence-tray-range');
-    const metric = (metricEl && metricEl.value) || (semantics.metricOptions[0] && semantics.metricOptions[0].value) || '';
-    const range  = (rangeEl  && rangeEl.value)  || '7d';
-    const signal = buildDemoGovernanceSignal(nodeId, semantics, metric, range);
-
-    let tiles = [];
-    if (semantics.signalClass === 'exposure') {
-      // Roll-up: never imply the structural node directly drifts.
-      const affectedFraction = signal.total_count > 0 ? signal.affected_count + ' of ' + signal.total_count : '0 of 0';
-      const childKind = (semantics.kind === 'authority') ? 'profile' :
-                        (semantics.kind === 'proc')      ? 'surface' :
-                        (semantics.kind === 'cap')       ? 'surface' :
-                                                           'surface';
-      tiles = [
-        { label: semantics.summaryTileLabels[0], value: signal.exposure_band, valueClass: bandClassFor(signal.exposure_band) },
-        { label: semantics.summaryTileLabels[1], value: affectedFraction + ' ' + childKind + (signal.affected_count === 1 ? '' : 's') },
-        { label: semantics.summaryTileLabels[2], value: signal.primary_driver },
-        { label: semantics.summaryTileLabels[3], value: signal.primary_contributor },
-      ];
-    } else if (semantics.signalClass === 'direct_drift' || semantics.signalClass === 'usage_drift') {
-      const baselineFmt = formatGmapDemoValue(signal.baseline, signal.unit);
-      const currentFmt  = formatGmapDemoValue(signal.current,  signal.unit);
-      const deltaSign   = signal.delta >= 0 ? '+' : '−';
-      const deltaFmt    = deltaSign + formatGmapDemoValue(Math.abs(signal.delta), signal.unit);
-      // Signal band classification — by relative delta size.
-      const baseAbs = Math.abs(signal.baseline) || 1;
-      const relDelta = Math.abs(signal.delta) / baseAbs;
-      let signalBand;
-      if      (relDelta < 0.10) signalBand = 'Stable';
-      else if (relDelta < 0.30) signalBand = 'Watch';
-      else if (relDelta < 0.60) signalBand = 'Drifting';
-      else                       signalBand = 'Critical';
-      tiles = [
-        { label: semantics.summaryTileLabels[0], value: signalBand, valueClass: bandClassFor(signalBand) },
-        { label: semantics.summaryTileLabels[1], value: signal.driver },
-        { label: semantics.summaryTileLabels[2], value: baselineFmt + ' → ' + currentFmt + ' (' + deltaFmt + ')' },
-        { label: semantics.summaryTileLabels[3], value: signal.window + ' / ' + signal.volume.toLocaleString() + ' decisions' },
-      ];
-    } else {
-      // Preview kind (unknown) — single placeholder item.
-      tiles = [{ label: semantics.summaryTileLabels[0] || 'Status', value: 'Preview' }];
-    }
-    // Pick the item class set based on which container we are filling
-    // — the analytical signal-list uses compact rows, the legacy tile
-    // grid uses the original card classes.
-    const isSignalList = container.id === 'gmap-evidence-tray-signal-list';
-    const itemCls  = isSignalList ? 'gmap-evidence-tray-signal-item'  : 'gmap-evidence-tray-tile';
-    const labelCls = isSignalList ? 'gmap-evidence-tray-signal-label' : 'gmap-evidence-tray-tile-label';
-    const valueCls = isSignalList ? 'gmap-evidence-tray-signal-value' : 'gmap-evidence-tray-tile-value';
-    tiles.forEach(function (tile) {
-      const wrap = document.createElement('div');
-      wrap.className = itemCls;
-      const lbl = document.createElement('div');
-      lbl.className = labelCls;
-      lbl.textContent = tile.label;
-      const val = document.createElement('div');
-      val.className = valueCls + (tile.valueClass ? ' ' + tile.valueClass : '');
-      val.textContent = tile.value;
-      wrap.appendChild(lbl);
-      wrap.appendChild(val);
-      container.appendChild(wrap);
-    });
-  }
-
-  // bandClassFor maps a band string to its colour class. Shared by
-  // exposure and direct-drift tile renderers so the visual treatment
-  // is consistent.
-  // Phase 2B Step 40 (D25e) — node-kind → tray semantics mapping.
-  //
-  // The MIDAS Governance Drift Design Model (D25d) specifies that
-  // only runtime-bearing nodes can directly drift; structural nodes
-  // have drift exposure. The tray must follow the rule by displaying
-  // kind-specific labels, tiles, charts, and copy.
-  //
-  // signalClass values:
-  //   'direct_drift'   — runtime-bearing entity with a measurable
-  //                      time-series metric. Example: Decision Surface,
-  //                      Coverage. Tray shows baseline → current,
-  //                      driver, window, chart.
-  //   'usage_drift'    — AI System usage / outcome drift across
-  //                      bindings. Tray shows usage signal, affected
-  //                      bindings, primary surface, driver.
-  //   'exposure'       — structural entity (BS, Capability, Process,
-  //                      Related Service, Authority synthetic). Tray
-  //                      shows exposure roll-up: affected children,
-  //                      primary contributor, top driver. NO direct
-  //                      metric chart.
-  //   'preview'        — unknown kind. Tray shows a generic preview
-  //                      placeholder.
-  //
-  // The semantics object is consumed by the tile renderer, the chart
-  // renderer (which omits the chart for exposure), the metric selector
-  // (which is hidden for exposure), and the tray title.
-  function getGmapEvidenceSignalSemantics(nodeId) {
-    const pos = nodeId ? gmapPositions[nodeId] : null;
-    const kind = pos && pos.kind ? pos.kind : '';
-    switch (kind) {
-      case 'surface':
-        return {
-          kind: 'surface',
-          signalClass: 'direct_drift',
-          title: 'Decision surface drift',
-          subtitle: 'Direct drift on a runtime-bearing decision surface. Synthetic illustrative signal.',
-          summaryTileLabels: ['Signal', 'Driver', 'Baseline → Current', 'Window / Volume'],
-          chartMode: 'metric_timeseries',
-          metricOptions: [
-            { value: 'escalation-rate',       label: 'Escalation rate' },
-            { value: 'evidence-completeness', label: 'Evidence completeness' },
-            { value: 'decision-volume',       label: 'Decision volume' },
-          ],
-          emptyText: 'No drift signals for this surface in the selected window.',
-          isDirectDrift: true,
-          isExposure: false,
-        };
-      case 'ai':
-        return {
-          kind: 'ai',
-          signalClass: 'usage_drift',
-          title: 'AI usage / outcome drift',
-          subtitle: 'AI usage / outcome drift across bindings. Synthetic illustrative signal.',
-          summaryTileLabels: ['Usage signal', 'Affected bindings', 'Primary surface', 'Driver'],
-          chartMode: 'usage_timeseries',
-          metricOptions: [
-            { value: 'invocation-share',         label: 'Invocation share' },
-            { value: 'binding-outcome-divergence', label: 'Binding outcome divergence' },
-            { value: 'version-mix',              label: 'Version mix' },
-          ],
-          emptyText: 'No usage / outcome drift across bindings in the selected window.',
-          isDirectDrift: true,
-          isExposure: false,
-        };
-      case 'coverage':
-        return {
-          kind: 'coverage',
-          signalClass: 'direct_drift',
-          title: 'Coverage drift',
-          subtitle: 'Coverage-gap event trend. Synthetic illustrative signal.',
-          summaryTileLabels: ['Coverage signal', 'Gap-event rate', 'Affected surfaces', 'Window'],
-          chartMode: 'metric_timeseries',
-          metricOptions: [
-            { value: 'coverage-gap-rate',  label: 'Coverage gap rate' },
-            { value: 'conditions-detected', label: 'Conditions detected' },
-          ],
-          emptyText: 'No coverage signals in the selected window.',
-          isDirectDrift: true,
-          isExposure: false,
-        };
-      case 'authority':
-        return {
-          kind: 'authority',
-          signalClass: 'exposure',
-          title: 'Authority drift exposure',
-          subtitle: 'Authority drift exposure roll-up across associated profiles and grants. Synthetic illustrative signal.',
-          summaryTileLabels: ['Authority exposure', 'Affected profiles', 'Affected grants', 'Primary driver'],
-          chartMode: 'exposure_explanation',
-          metricOptions: [],
-          emptyText: 'No authority drift signals in the selected window.',
-          isDirectDrift: false,
-          isExposure: true,
-        };
-      case 'business':
-        return {
-          kind: 'business',
-          signalClass: 'exposure',
-          title: 'Service drift exposure',
-          subtitle: 'Service drift exposure: synthetic roll-up across associated decision surfaces.',
-          summaryTileLabels: ['Exposure', 'Affected surfaces', 'Primary driver', 'Highest contributor'],
-          chartMode: 'exposure_explanation',
-          metricOptions: [],
-          emptyText: 'No drift signals across this service’s surfaces in the selected window.',
-          isDirectDrift: false,
-          isExposure: true,
-        };
-      case 'related':
-        return {
-          kind: 'related',
-          signalClass: 'exposure',
-          title: 'Related-service drift exposure',
-          subtitle: 'Related-service drift exposure roll-up across associated surfaces.',
-          summaryTileLabels: ['Exposure', 'Affected surfaces', 'Primary driver', 'Highest contributor'],
-          chartMode: 'exposure_explanation',
-          metricOptions: [],
-          emptyText: 'No drift signals across this related service’s surfaces in the selected window.',
-          isDirectDrift: false,
-          isExposure: true,
-        };
-      case 'cap':
-        return {
-          kind: 'cap',
-          signalClass: 'exposure',
-          title: 'Capability drift exposure',
-          subtitle: 'Capability exposure is derived from associated decision surfaces, not from the capability itself.',
-          summaryTileLabels: ['Exposure', 'Affected surfaces', 'Highest child signal', 'Primary contributor'],
-          chartMode: 'exposure_explanation',
-          metricOptions: [],
-          emptyText: 'No drift signals across this capability’s enabling surfaces in the selected window.',
-          isDirectDrift: false,
-          isExposure: true,
-        };
-      case 'proc':
-        return {
-          kind: 'proc',
-          signalClass: 'exposure',
-          title: 'Process drift signals',
-          subtitle: 'Process drift signals derived from decision surfaces under this process.',
-          summaryTileLabels: ['Signals', 'Affected surfaces', 'Top driver', 'Primary surface'],
-          chartMode: 'exposure_explanation',
-          metricOptions: [],
-          emptyText: 'No drift signals on surfaces under this process in the selected window.',
-          isDirectDrift: false,
-          isExposure: true,
-        };
-      default:
-        return {
-          kind: kind || 'unknown',
-          signalClass: 'preview',
-          title: 'Runtime signal preview',
-          subtitle: 'Runtime signal preview. Synthetic illustrative content.',
-          summaryTileLabels: ['Status'],
-          chartMode: 'none',
-          metricOptions: [],
-          emptyText: 'Select a runtime-bearing or structural node to inspect signals.',
-          isDirectDrift: false,
-          isExposure: false,
-        };
-    }
-  }
-
-  // Phase 2B Step 40 (D25e) — semantic synthetic generator wrapper.
-  //
-  // buildDemoGovernanceSignal produces a deterministic synthetic
-  // signal object whose SHAPE depends on the node kind's signal
-  // class. The shape mirrors the design model (D25d §15) so the
-  // future analytics endpoint can swap in real values without the
-  // tray having to change its rendering paths.
-  //
-  // Direct drift / usage drift signals carry: baseline, current,
-  // delta, driver, window, volume.
-  // Exposure signals carry: affected_count, total_count,
-  // primary_driver, primary_contributor, exposure_band.
-  //
-  // Determinism — every input producing this signal seeds the same
-  // hashGmapDemoSeed, so reload / re-render produces identical output.
-  // No Math.random anywhere in this function or its callees.
-  function buildDemoGovernanceSignal(nodeId, semantics, metric, range) {
-    const seed = hashGmapDemoSeed(
-      (nodeId || 'unknown') + '|' + (semantics.kind || 'unknown') + '|' + (metric || semantics.signalClass)
-    );
-    if (semantics.signalClass === 'exposure') {
-      // Synthetic exposure roll-up. Counts are bounded by the kind:
-      // a typical BS has 2-4 child surfaces; a Capability spans
-      // 1-3 surfaces; a Process owns 1-2; Authority synthetic spans
-      // a few profiles + grants.
-      let totalLow, totalHigh;
-      switch (semantics.kind) {
-        case 'business':  totalLow = 2; totalHigh = 4; break;
-        case 'cap':       totalLow = 1; totalHigh = 3; break;
-        case 'proc':      totalLow = 1; totalHigh = 2; break;
-        case 'authority': totalLow = 1; totalHigh = 3; break;
-        default:          totalLow = 1; totalHigh = 3;
-      }
-      const total    = totalLow + (seed % (totalHigh - totalLow + 1));
-      const affected = Math.min(total, ((seed >> 3) % (total + 1)));
-      const drivers  = ['outcome drift', 'evidence drift', 'authority drift', 'coverage drift'];
-      const primaryDriver = drivers[(seed >> 5) % drivers.length];
-      const contributors  = ['primary contributor A', 'primary contributor B', 'primary contributor C'];
-      const primaryContributor = contributors[(seed >> 7) % contributors.length];
-      let band;
-      if      (affected === 0)        band = 'No exposure';
-      else if (affected < total / 2)  band = 'Watch';
-      else if (affected < total)      band = 'Drifting';
-      else                            band = 'Critical';
-      return {
-        signalClass:         'exposure',
-        affected_count:      affected,
-        total_count:         total,
-        primary_driver:      primaryDriver,
-        primary_contributor: primaryContributor,
-        exposure_band:       band,
-        demo:                true,
-      };
-    }
-    // Direct drift / usage drift / preview: derive baseline + current
-    // from the existing buildDemoDriftSeries (which gives a stable
-    // time-series). Latest point becomes the current value; the median
-    // of the window becomes the synthetic baseline.
-    const seriesMetric = metric || (semantics.metricOptions[0] && semantics.metricOptions[0].value) || 'escalation-rate';
-    const series = buildDemoDriftSeries(nodeId, seriesMetric, range || '7d');
-    const current  = series.points[series.points.length - 1].v;
-    // Median of the window as the baseline anchor — stable, simple,
-    // honest about its synthetic origin.
-    const sorted   = series.points.map(function (p) { return p.v; }).slice().sort(function (a, b) { return a - b; });
-    const baseline = sorted[Math.floor(sorted.length / 2)];
-    const delta    = current - baseline;
-    const drivers = ['consequence', 'confidence', 'policy', 'context'];
-    const driver  = drivers[(seed >> 4) % drivers.length];
-    let windowLabel;
-    switch (range || '7d') {
-      case '24h': windowLabel = '24h'; break;
-      case '30d': windowLabel = '30d'; break;
-      default:    windowLabel = '7d';
-    }
-    // Synthetic volume — proportional to seed so larger graphs hash
-    // to higher volumes; bounded so it stays readable.
-    const volume = 100 + (seed % 4000);
-    return {
-      signalClass: semantics.signalClass,
-      metric:      seriesMetric,
-      label:       series.label,
-      unit:        series.unit,
-      baseline:    baseline,
-      current:     current,
-      delta:       delta,
-      driver:      driver,
-      window:      windowLabel,
-      volume:      volume,
-      series:      series,
-      demo:        true,
-    };
-  }
-
-  // gmapNodeKindLabel returns a human-readable kind string for the
-  // selected node, drawn from gmapPositions[nodeId].kind. Falls back
-  // to "Node" when the kind is missing or unrecognised.
-  function gmapNodeKindLabel(nodeId) {
-    const pos = nodeId ? gmapPositions[nodeId] : null;
-    if (!pos) return '';
-    switch (pos.kind) {
-      case 'business':  return 'Business Service';
-      case 'related':   return 'Related Service';
-      case 'cap':       return 'Capability';
-      case 'proc':      return 'Process';
-      case 'surface':   return 'Decision Surface';
-      case 'ai':        return 'AI System';
-      case 'authority': return 'Authority';
-      case 'coverage':  return 'Coverage';
-      case 'more':      return 'More';
-      default:          return 'Node';
-    }
-  }
-
-  // updateGmapEvidenceTrayHeader writes the selected-node text into
-  // the header. When no node is selected, the placeholder reverts.
-  // The kind label sits beside the name for context.
-  function updateGmapEvidenceTrayHeader() {
-    const nodeEl = document.getElementById('gmap-evidence-tray-node');
-    if (!nodeEl) return;
-    const nodeId = gmapSelectedId;
-    if (!nodeId || !gmapPositions[nodeId]) {
-      nodeEl.textContent = 'Select a graph node to inspect runtime evidence.';
-      return;
-    }
-    // Read the rendered DOM card's data-node-name (the canonical
-    // display name set by addNode); fall back to id when missing.
-    const canvas = document.getElementById('gmap-canvas');
-    let displayName = nodeId;
-    if (canvas) {
-      const nodes = canvas.querySelectorAll('.gmap-node');
-      for (let i = 0; i < nodes.length; i++) {
-        if (nodes[i].dataset.nodeId === nodeId) {
-          displayName = nodes[i].dataset.nodeName || nodeId;
-          break;
-        }
-      }
-    }
-    const kind = gmapNodeKindLabel(nodeId);
-    nodeEl.innerHTML = '<span class="gmap-evidence-tray-node-kind">' + escHtml(kind) + '</span> ' +
-      '<strong>' + escHtml(displayName) + '</strong>';
-  }
-
-  // Phase 2B Step 40 (D25e) — render the drift panel's content shape
-  // for the currently-selected node. For runtime-bearing nodes
-  // (direct_drift, usage_drift) the panel includes metric + range
-  // selectors, summary tiles, and a time-series chart. For exposure
-  // nodes the panel hides the metric selector + chart and shows the
-  // exposure tiles + an explanatory copy block. For unknown kinds it
-  // shows the preview placeholder. The caller (the tab switcher) is
-  // responsible for ensuring this only runs while the Drift tab is
-  // active.
-  function renderGmapEvidenceTrayDriftPanel() {
-    const panel = document.getElementById('gmap-evidence-tray-panel');
-    if (!panel) return;
-    const nodeId = gmapSelectedId;
-    if (!nodeId || !gmapPositions[nodeId]) {
-      panel.innerHTML =
-        '<div class="gmap-evidence-tray-empty">Select a graph node to inspect runtime evidence.</div>';
-      return;
-    }
-    const semantics = getGmapEvidenceSignalSemantics(nodeId);
-
-    // Compact subtitle stays at the top above the two-column layout.
-    const subtitleHtml =
-      '<div class="gmap-evidence-tray-subtitle">' + escHtml(semantics.subtitle) + '</div>';
-
-    // D26f — full D25e disclaimer is preserved in the DOM via the
-    // title attribute on the compact provenance line. The visible
-    // copy is short ("Demo signal · …") so the chart can dominate;
-    // hover/title surfaces the long form, and the trust-test pin
-    // (substring on the body) keeps matching.
-    const provenanceFull = 'Illustrative demo signal. Not calculated from runtime envelopes.';
-    const provenanceCompact =
-      '<div class="gmap-evidence-tray-provenance-compact" ' +
-        'title="' + escHtml(provenanceFull) + '">' +
-        escHtml(provenanceFull) +
-      '</div>';
-
-    if (semantics.signalClass === 'direct_drift' || semantics.signalClass === 'usage_drift') {
-      // Selectors row — kind-aware metric options. Compact variant
-      // lives inside the left signal column rather than spanning the
-      // tray full-width.
-      let metricOptionsHtml = '';
-      semantics.metricOptions.forEach(function (opt, i) {
-        metricOptionsHtml +=
-          '<option value="' + escHtml(opt.value) + '"' + (i === 0 ? ' selected' : '') + '>' +
-          escHtml(opt.label) + '</option>';
-      });
-      const controls =
-        '<div class="gmap-evidence-tray-controls gmap-evidence-tray-controls-compact">' +
-          '<label class="gmap-evidence-tray-control"><span>Metric</span>' +
-            '<select id="gmap-evidence-tray-metric">' + metricOptionsHtml + '</select></label>' +
-          '<label class="gmap-evidence-tray-control"><span>Range</span>' +
-            '<select id="gmap-evidence-tray-range">' +
-              '<option value="24h">24h</option>' +
-              '<option value="7d" selected>7d</option>' +
-              '<option value="30d">30d</option>' +
-            '</select></label>' +
-        '</div>';
-      panel.innerHTML =
-        subtitleHtml +
-        '<div class="gmap-evidence-tray-analytic-layout">' +
-          '<div class="gmap-evidence-tray-signal-column">' +
-            '<div class="gmap-evidence-tray-signal-list" id="gmap-evidence-tray-signal-list"></div>' +
-            controls +
-            provenanceCompact +
-          '</div>' +
-          '<div class="gmap-evidence-tray-chart-panel">' +
-            '<div class="gmap-evidence-tray-chart" id="gmap-evidence-tray-chart">' +
-              '<svg class="gmap-evidence-tray-chart-svg" id="gmap-evidence-tray-chart-svg" ' +
-                'viewBox="0 0 600 100" preserveAspectRatio="none" aria-hidden="true"></svg>' +
-            '</div>' +
-          '</div>' +
-        '</div>';
-    } else if (semantics.signalClass === 'exposure') {
-      // Exposure layout — same two-column shell, but the right panel
-      // hosts the exposure-explanation copy block instead of a fake
-      // direct-drift chart. D25e rule: structural nodes never directly
-      // drift.
-      panel.innerHTML =
-        subtitleHtml +
-        '<div class="gmap-evidence-tray-analytic-layout">' +
-          '<div class="gmap-evidence-tray-signal-column">' +
-            '<div class="gmap-evidence-tray-signal-list" id="gmap-evidence-tray-signal-list"></div>' +
-            provenanceCompact +
-          '</div>' +
-          '<div class="gmap-evidence-tray-chart-panel">' +
-            '<div class="gmap-evidence-tray-exposure-explanation">' +
-              'Exposure is derived from associated runtime decision surfaces. ' +
-              'Real contributing-surface analytics will be wired when runtime ' +
-              'signals are available. Open a child surface to see direct drift signals.' +
-            '</div>' +
-          '</div>' +
-        '</div>';
-    } else {
-      // Preview placeholder for unknown / unsupported kinds.
-      panel.innerHTML =
-        subtitleHtml +
-        provenanceCompact +
-        '<div class="gmap-evidence-tray-exposure-explanation">' +
-          escHtml(semantics.emptyText) +
-        '</div>';
-    }
-    wireGmapEvidenceTraySelectors();
-    renderGmapEvidenceTrayTiles();
-    renderGmapEvidenceTrayChart();
-  }
-
-  // notifyGmapEvidenceTraySelectionChanged is called from
-  // selectGovernanceMapNode whenever the primary selection changes.
-  // It refreshes the tray header always, and the panel content only
-  // when the tray is expanded AND a kind-aware tab is active (the panel
-  // is hidden when collapsed, so re-rendering it then is wasted DOM
-  // work). D25e — the Drift panel rebuilds its shape because different
-  // node kinds produce different layouts. D26c — the Activity panel
-  // also re-renders so its local selection filter (surface/business/
-  // process) reflects the new node, but it does NOT re-fetch since the
-  // session-level item set is unchanged.
-  function notifyGmapEvidenceTraySelectionChanged() {
-    updateGmapEvidenceTrayHeader();
-    if (!gmapEvidenceTrayExpanded) return;
-    if (gmapEvidenceTrayActiveTab === 'drift') {
-      renderGmapEvidenceTrayDriftPanel();
-    } else if (gmapEvidenceTrayActiveTab === 'activity') {
-      renderGmapEvidenceTrayActivityPanel();
-    }
-  }
-
-  // ── D26c: Activity tab — Explorer runtime envelope feed ────────────────
-  // The Activity tab consumes the same isolated runtime feed introduced
-  // by D26a (GET /explorer/envelopes) and reuses the D26b row mapper
-  // (mapExplorerEnvelopeToRecordRow) so Records and Activity present a
-  // consistent view of the same data. Unlike the Drift tab, Activity is
-  // real runtime data — provenance copy makes that distinction explicit.
-  //
-  // Selection context: the backend has no node-scoped envelope filter
-  // yet, so the renderer applies a local match against the raw D26a
-  // fields surface_id / business_service_id / process_id when the
-  // selected node's kind allows it. For other kinds (AI System,
-  // Capability, Authority, Coverage, More) the panel shows the
-  // unfiltered session list with an honest copy line.
-
-  async function loadGmapEvidenceActivity() {
-    gmapEvidenceActivityLoading = true;
-    gmapEvidenceActivityError   = '';
-    if (gmapEvidenceTrayActiveTab === 'activity' && gmapEvidenceTrayExpanded) {
-      renderGmapEvidenceTrayActivityPanel();
-    }
-    try {
-      const headers = { 'Accept': 'application/json' };
-      const tok = (typeof getToken === 'function') ? getToken() : null;
-      if (tok) headers['Authorization'] = 'Bearer ' + tok;
-      const res = await fetch('/explorer/envelopes?limit=50', { headers, credentials: 'same-origin' });
-      if (!res.ok) {
-        gmapEvidenceActivityError = 'Could not load runtime activity';
-        gmapEvidenceActivityItems = [];
-        return;
-      }
-      const payload = await res.json();
-      const items = (payload && Array.isArray(payload.items)) ? payload.items : [];
-      // Keep raw D26a items so the filter helper can read snake_case
-      // fields directly. Mapping happens lazily in the renderer.
-      gmapEvidenceActivityItems = items.filter(it => it && typeof it === 'object' && it.id);
-    } catch (e) {
-      gmapEvidenceActivityError = 'Could not load runtime activity';
-      gmapEvidenceActivityItems = [];
-    } finally {
-      gmapEvidenceActivityLoading    = false;
-      gmapEvidenceActivityLoadedOnce = true;
-      if (gmapEvidenceTrayActiveTab === 'activity' && gmapEvidenceTrayExpanded) {
-        renderGmapEvidenceTrayActivityPanel();
-      }
-    }
-  }
-
-  // filterGmapEvidenceActivityForSelection narrows the session-level
-  // item list to entries that match the currently-selected graph node
-  // when the node's kind has a stable mapping to an envelope summary
-  // field. surface → surface_id, business/related → business_service_id,
-  // proc → process_id. AI System / Capability / Authority / Coverage /
-  // More return the unfiltered list with kind='unsupported' so the
-  // renderer can show an honest copy line.
-  //
-  // Returns: { rows, filtered, kind, emptyForSelection }
-  //   - rows                — the items the renderer should display
-  //   - filtered            — true if a local match narrowed the list
-  //   - kind                — 'session' | 'surface' | 'business' |
-  //                            'process' | 'unsupported'
-  //   - emptyForSelection   — true when the kind supports filtering but
-  //                            no items matched (renderer falls back to
-  //                            the full session list with a "no match"
-  //                            note)
-  function filterGmapEvidenceActivityForSelection(items, nodeId) {
-    const safe = Array.isArray(items) ? items : [];
-    if (!nodeId || !gmapPositions[nodeId]) {
-      return { rows: safe, filtered: false, kind: 'session', emptyForSelection: false };
-    }
-    const pos = gmapPositions[nodeId];
-    const colon = nodeId.indexOf(':');
-    const rawId = colon >= 0 ? nodeId.slice(colon + 1) : nodeId;
-    if (pos.kind === 'surface') {
-      const sub = safe.filter(it => it && it.surface_id === rawId);
-      return {
-        rows: sub.length ? sub : safe,
-        filtered: sub.length > 0,
-        kind: 'surface',
-        emptyForSelection: sub.length === 0,
-      };
-    }
-    if (pos.kind === 'business' || pos.kind === 'related') {
-      const sub = safe.filter(it => it && it.business_service_id === rawId);
-      return {
-        rows: sub.length ? sub : safe,
-        filtered: sub.length > 0,
-        kind: 'business',
-        emptyForSelection: sub.length === 0,
-      };
-    }
-    if (pos.kind === 'proc') {
-      const sub = safe.filter(it => it && it.process_id === rawId);
-      return {
-        rows: sub.length ? sub : safe,
-        filtered: sub.length > 0,
-        kind: 'process',
-        emptyForSelection: sub.length === 0,
-      };
-    }
-    return { rows: safe, filtered: false, kind: 'unsupported', emptyForSelection: false };
-  }
-
-  function renderGmapEvidenceTrayActivityPanel() {
-    const panel = document.getElementById('gmap-evidence-tray-panel');
-    if (!panel) return;
-
-    // Loading / error / empty branches first — they short-circuit the
-    // selection-filter logic below.
-    if (gmapEvidenceActivityLoading && !gmapEvidenceActivityLoadedOnce) {
-      panel.innerHTML =
-        '<div class="gmap-evidence-tray-empty">Loading runtime activity…</div>';
-      return;
-    }
-    if (gmapEvidenceActivityError) {
-      panel.innerHTML =
-        '<div class="gmap-evidence-tray-empty">' + escHtml(gmapEvidenceActivityError) + '</div>';
-      return;
-    }
-    if (gmapEvidenceActivityLoadedOnce && gmapEvidenceActivityItems.length === 0) {
-      panel.innerHTML =
-        '<div class="gmap-evidence-tray-subtitle">' +
-          'Activity uses real Explorer runtime envelopes. Drift signals remain illustrative until analytics is wired.' +
-        '</div>' +
-        '<div class="gmap-evidence-tray-empty">' +
-          'No runtime activity yet.<br>' +
-          'Run an Explorer evaluation to create an envelope.' +
-        '</div>';
-      return;
-    }
-
-    const filter = filterGmapEvidenceActivityForSelection(gmapEvidenceActivityItems, gmapSelectedId);
-    let provenance;
-    if (filter.kind === 'surface') {
-      provenance = filter.filtered
-        ? 'Locally filtered from recent Explorer runtime envelopes by surface_id match.'
-        : 'No matching runtime activity for this selected node in the recent Explorer envelope list. Showing the latest session activity instead.';
-    } else if (filter.kind === 'business') {
-      provenance = filter.filtered
-        ? 'Locally filtered from recent Explorer runtime envelopes by business_service_id match.'
-        : 'No matching runtime activity for this selected node in the recent Explorer envelope list. Showing the latest session activity instead.';
-    } else if (filter.kind === 'process') {
-      provenance = filter.filtered
-        ? 'Locally filtered from recent Explorer runtime envelopes by process_id match.'
-        : 'No matching runtime activity for this selected node in the recent Explorer envelope list. Showing the latest session activity instead.';
-    } else if (filter.kind === 'unsupported') {
-      provenance = 'Showing recent Explorer runtime envelopes for this session. Node-scoped filtering for this kind requires a future analytics endpoint.';
-    } else {
-      provenance = 'Showing recent Explorer runtime envelopes for this session.';
-    }
-
-    const subtitle =
-      '<div class="gmap-evidence-tray-subtitle">' +
-        'Activity uses real Explorer runtime envelopes. Drift signals remain illustrative until analytics is wired.' +
-      '</div>';
-    const note =
-      '<div class="gmap-evidence-tray-disclaimer">' + escHtml(provenance) + '</div>';
-
-    const list = filter.rows.map(it => {
-      const r = mapExplorerEnvelopeToRecordRow(it) || { id: String(it.id || '') };
-      const outcomeCls = r.outcomeClass ? ' ' + r.outcomeClass : '';
-      const outcomeText = r.outcome && r.outcome !== '—' ? r.outcome : (r.state || '—');
-      const authority = 'profile ' + escHtml(r.profileId || '—') +
-        ' / grant ' + escHtml(r.grantId || '—') +
-        ' / agent ' + escHtml(r.agent || '—');
-      return (
-        '<div class="gmap-evidence-tray-activity-row" data-envelope-id="' + escHtml(r.id) + '">' +
-          '<div class="gmap-evidence-tray-activity-row-head">' +
-            '<span class="gmap-evidence-tray-activity-time">' + escHtml(r.time || '—') + '</span>' +
-            '<span class="records-outcome-badge' + outcomeCls + '">' + escHtml(outcomeText) + '</span>' +
-            '<span class="gmap-evidence-tray-activity-state">' + escHtml(r.state || '—') + '</span>' +
-          '</div>' +
-          '<div class="gmap-evidence-tray-activity-row-body">' +
-            '<span><strong>Reason</strong> ' + escHtml(r.reason || '—') + '</span>' +
-            '<span><strong>Surface</strong> ' + escHtml(r.surface || '—') + '</span>' +
-            '<span><strong>Business service</strong> ' + escHtml(r.bs || '—') + '</span>' +
-            '<span><strong>Process</strong> ' + escHtml(r.processId || '—') + '</span>' +
-            '<span><strong>Request</strong> ' + escHtml(r.requestSource || '—') + '</span>' +
-            '<span><strong>Authority</strong> ' + authority + '</span>' +
-            '<span class="gmap-evidence-tray-activity-id">id ' + escHtml(r.id) + '</span>' +
-          '</div>' +
-        '</div>'
-      );
-    }).join('');
-
-    panel.innerHTML = subtitle + note +
-      '<div class="gmap-evidence-tray-activity-list">' + list + '</div>';
-  }
-
-  // applyGmapEvidenceTrayState toggles the expanded class, syncs
-  // ARIA, and (on expand) populates the panel + triggers a re-fit
-  // so the graph repositions to the smaller canvas-scroll height.
-  function applyGmapEvidenceTrayState() {
-    const tray = document.getElementById('gmap-evidence-tray');
-    const toggle = document.getElementById('gmap-evidence-tray-toggle');
-    if (!tray || !toggle) return;
-    tray.classList.toggle('is-expanded', gmapEvidenceTrayExpanded);
-    toggle.setAttribute('aria-expanded', String(gmapEvidenceTrayExpanded));
-    const lbl = gmapEvidenceTrayExpanded ? 'Collapse runtime evidence tray' : 'Expand runtime evidence tray';
-    toggle.setAttribute('aria-label', lbl);
-    toggle.setAttribute('title', lbl);
-    const glyph = toggle.querySelector('span');
-    if (glyph) glyph.textContent = gmapEvidenceTrayExpanded ? '▼' : '▲';
-    if (gmapEvidenceTrayExpanded) {
-      // Phase 2B Step 40 (D25e) — render the kind-aware drift panel
-      // (subtitle + disclaimer + tiles + chart-or-explanation). Only
-      // the Drift tab gets this treatment; other tabs keep their
-      // "Coming soon" placeholders managed by the tab switcher.
-      if (gmapEvidenceTrayActiveTab === 'drift') {
-        renderGmapEvidenceTrayDriftPanel();
-      } else if (gmapEvidenceTrayActiveTab === 'activity') {
-        // D26c — Activity is real Explorer runtime data. Trigger a load
-        // on every expand so newly-evaluated envelopes appear without
-        // a full reload, and render the panel immediately so the
-        // loading state is visible while the fetch resolves.
-        renderGmapEvidenceTrayActivityPanel();
-        loadGmapEvidenceActivity();
-      }
-    }
-    // Re-fit so the graph repositions to the new canvas-scroll height.
-    // The CSS height transition takes 0.18s; defer the fit to the
-    // next animation frame so the layout has settled. fitGmapToBounds
-    // reads scrollEl.clientHeight at fire time, so the post-transition
-    // height is what it sees. Skip when there's no data yet.
-    if (typeof window.requestAnimationFrame === 'function' && typeof fitGmapToBounds === 'function') {
-      window.setTimeout(function () {
-        if (typeof fitGmapToBounds === 'function') fitGmapToBounds();
-      }, 200);
-    }
-  }
-
-  // Wire the tray's expand/collapse toggle, tab switching, and
-  // metric/range selectors. Idempotent IIFE pattern.
-  (function wireGmapEvidenceTray() {
-    const toggle = document.getElementById('gmap-evidence-tray-toggle');
-    if (toggle) {
-      toggle.addEventListener('click', function () {
-        gmapEvidenceTrayExpanded = !gmapEvidenceTrayExpanded;
-        applyGmapEvidenceTrayState();
-      });
-    }
-    const tabs = document.querySelectorAll('.gmap-evidence-tray-tab');
-    const panel = document.getElementById('gmap-evidence-tray-panel');
-    if (tabs && panel) {
-      tabs.forEach(function (tab) {
-        tab.addEventListener('click', function () {
-          const which = tab.dataset.tab || 'drift';
-          gmapEvidenceTrayActiveTab = which;
-          tabs.forEach(function (t) {
-            const active = t === tab;
-            t.classList.toggle('is-active', active);
-            t.setAttribute('aria-selected', String(active));
-          });
-          // D25e — the Drift tab's content shape depends on the
-          // selected node's kind (direct drift / usage drift / exposure
-          // / preview). renderGmapEvidenceTrayDriftPanel dispatches on
-          // getGmapEvidenceSignalSemantics(nodeId).
-          // D26c — the Activity tab consumes real Explorer runtime
-          // envelopes from the D26a feed.
-          if (which === 'drift') {
-            renderGmapEvidenceTrayDriftPanel();
-          } else if (which === 'activity') {
-            renderGmapEvidenceTrayActivityPanel();
-            loadGmapEvidenceActivity();
-          } else {
-            const labelMap = { overview: 'Overview', evidence: 'Evidence' };
-            panel.innerHTML = '<div class="gmap-evidence-tray-coming-soon">' +
-              escHtml(labelMap[which] || which) + ' — coming soon. Drift signals ship first; ' +
-              'overview / evidence panels arrive with the runtime analytics endpoint.' +
-              '</div>';
-          }
-        });
-      });
-    }
-    wireGmapEvidenceTraySelectors();
-  })();
-
-  // wireGmapEvidenceTraySelectors binds change events on the metric +
-  // range dropdowns. Re-binds on every drift-tab restoration because
-  // the panel's innerHTML is regenerated by the tab switcher.
-  function wireGmapEvidenceTraySelectors() {
-    const metric = document.getElementById('gmap-evidence-tray-metric');
-    const range  = document.getElementById('gmap-evidence-tray-range');
-    if (metric) {
-      metric.addEventListener('change', function () {
-        renderGmapEvidenceTrayTiles();
-        renderGmapEvidenceTrayChart();
-      });
-    }
-    if (range) {
-      range.addEventListener('change', function () {
-        renderGmapEvidenceTrayChart();
-      });
-    }
-  }
-
-  // Phase 2B Step 22 — wire graph density filter chips (D19).
+    // Phase 2B Step 22 — wire graph density filter chips (D19).
   //
   // Click semantics:
   //   - "All" resets every category in gmapVisibilityFilters to true
@@ -4547,7 +3767,7 @@
           return;
         }
         refreshChipPressedStates();
-        applyGmapVisibilityFilters();
+        ExplorerGraph.renderer.applyVisibilityFilters();
       });
     });
 
@@ -4864,92 +4084,46 @@
   // wrapper because existing test pins assert call-shape
   // `mapContextGraphToCardLayout(payload, view)` (explorer_test.go
   // lines 5274–5285). All call-sites are unchanged.
-  function mapContextGraphToCardLayout(projection, view) {
-    var adapter = window.MIDASExplorerGraph && window.MIDASExplorerGraph.contextAdapter;
-    if (adapter && typeof adapter.mapToCardLayout === 'function') {
-      return adapter.mapToCardLayout(projection, view);
-    }
-    // Defensive empty shape; adapter module is loaded by index.html
-    // before this IIFE runs, so the fallback only fires in atypical
-    // load-failure scenarios.
-    return {
-      business_service: null,
-      ai_systems: [],
-      coverage: null,
-      authority_summary: null,
-      capabilities: [],
-      processes: [],
-      surfaces: [],
-      relationships: { outgoing: [], incoming: [] },
-    };
-  }
-
   function refreshGovernanceMap() {
     if (gmapMode !== 'map') return; // only fetch when the pane is visible
-    // Workbench fetch routes through the (currentGraphView,
-    // currentGraphRootId) state pair. catalogue-selection entry
-    // points (showBusinessServiceRecord / showBusinessServiceMap)
-    // reset both to ('service', <bs id>); a 'reframe-around-this'
-    // action sets them to (<target view>, <target id>) before this
-    // function is called. Either way, by the time we read them here
-    // they describe the graph the operator is asking to see.
     const rootId = currentGraphRootId;
     if (!rootId || rootId === gmapLastBSId) return;
     gmapLastBSId = rootId;
     gmapSelectedId = null;
     setGovernanceMapStatus('Loading…');
     const fetchToken = ++gmapInFlight;
-
     if (!_authorityGraphAdapterLogged) {
       console.log('Authority Graph adapter active');
       _authorityGraphAdapterLogged = true;
     }
-    // depth=5 = MaxDepth so every projected node is visible
-    // regardless of layer. The renderer derives connectors from
-    // the adapted shape itself; projection edges are discarded.
     const fetchView = currentGraphView;
-    // D32a-impl-2 — Route fetch + Context-shape mapping through the
-    // graph shell. shell.refresh() invokes the Context adapter's
-    // fetch (which wraps ExplorerAPI.graphs.context) and
-    // mapToCardLayout (which produces the card-shape this renderer
-    // consumes), then updates store.loadingByKey / errorByKey /
-    // graphDataByLens.context. The shell+adapter form the formal
-    // production fetch path; the inline rendering primitives
-    // (renderGovernanceMap, renderGovernanceMapEmpty,
-    // renderGovernanceMapError) remain as the rendering
-    // implementation and are dispatched through the bridge by the
-    // shell's render() — or, here, directly from the local
-    // orchestration so the cancel-token + dedup semantics specific
-    // to this workbench loop are preserved.
-    ExplorerGraph.shell.refresh({
-      lens:  'context',
-      view:  fetchView,
-      id:    rootId,
-      depth: 5,
-    })
+    // D32a-impl-8 — Module-direct dispatch. Shell.refresh fetches via
+    // adapter + maps to card layout; status sentinels and the success
+    // payload route directly into context-graph-view.js renderers
+    // (renderContextGraphEmpty / renderContextGraphError /
+    // renderContextGraph). The inline workbench loop only owns the
+    // cancel-token + dedup semantics (gmapInFlight / gmapLastBSId).
+    ExplorerGraph.shell.refresh({ lens: 'context', view: fetchView, id: rootId, depth: 5 })
       .then(payloadOrLayout => {
         if (fetchToken !== gmapInFlight) return; // a newer fetch superseded this
         if (payloadOrLayout && payloadOrLayout.__status === 404) {
-          renderGovernanceMapEmpty('No Context Graph for this service yet.', rootId);
+          ExplorerGraph.contextView.renderContextGraphEmpty('No Context Graph for this service yet.', rootId, _gmapRenderCtx);
           return;
         }
         if (payloadOrLayout && payloadOrLayout.__status === 501) {
-          renderGovernanceMapEmpty('Governance map is not configured on this server.', rootId);
+          ExplorerGraph.contextView.renderContextGraphEmpty('Governance map is not configured on this server.', rootId, _gmapRenderCtx);
           return;
         }
         if (payloadOrLayout && payloadOrLayout.__status) {
-          renderGovernanceMapError('Governance map fetch failed (HTTP ' + payloadOrLayout.__status + ').');
+          ExplorerGraph.contextView.renderContextGraphError('Governance map fetch failed (HTTP ' + payloadOrLayout.__status + ').', _gmapRenderCtx);
           return;
         }
-        // shell.refresh resolves to the already-mapped card layout
-        // when fetch succeeded, so no second call into the adapter
-        // is needed here.
         gmapData = payloadOrLayout;
-        renderGovernanceMap(payloadOrLayout);
+        ExplorerGraph.contextView.renderContextGraph(payloadOrLayout, _gmapRenderCtx);
       })
       .catch(err => {
         if (fetchToken !== gmapInFlight) return;
-        renderGovernanceMapError('Network error: ' + (err && err.message || 'fetch failed'));
+        ExplorerGraph.contextView.renderContextGraphError('Network error: ' + (err && err.message || 'fetch failed'), _gmapRenderCtx);
       });
   }
 
@@ -5123,7 +4297,7 @@
       return;
     }
     if (hasOwningServiceFallback()) {
-      showBusinessServiceMap(currentSelectedService);
+      MIDASExplorerServices.showMap(currentSelectedService);
       return;
     }
     // Dead state — no-op. Button is disabled.
@@ -5140,10 +4314,6 @@
   // tear-down lives in graph-renderer.js (clearCanvas); this inline
   // declaration retains the legacy name for any caller still
   // referencing it by the inline binding.
-  function clearGovernanceMapCanvas() {
-    return ExplorerGraph.renderer.clearCanvas();
-  }
-
   // D32a-impl-3 — Thin compatibility shims. The production empty/error
   // renderers live in graph/context/context-graph-view.js
   // (renderContextGraphEmpty / renderContextGraphError); these inline
@@ -5152,14 +4322,6 @@
   // setGovernanceMapCurrentRoot / setGovernanceMapDetailsName /
   // setGovernanceMapDetailsFields / setGovernanceMapSummary helpers
   // are invoked through the ctx hooks.
-  function renderGovernanceMapEmpty(message, bsId) {
-    return ExplorerGraph.contextView.renderContextGraphEmpty(message, bsId, _gmapRenderCtx);
-  }
-
-  function renderGovernanceMapError(message) {
-    return ExplorerGraph.contextView.renderContextGraphError(message, _gmapRenderCtx);
-  }
-
   // ── Layout helpers ────────────────────────────────────────────────────────
   // distributeRow returns N top-left x-coordinates for nodes laid out
   // along a horizontal range [x0, x1]. The caller's range is treated as
@@ -5202,10 +4364,6 @@
   // and a non-dragged node remains attached at both ends.
   // D32a-impl-3 — Thin compatibility shim. Production
   // effectiveGmapPosition lives in graph-renderer.js.
-  function effectiveGmapPosition(id) {
-    return ExplorerGraph.renderer.effectiveGmapPosition(id);
-  }
-
   // GMAP_ANCHORS is extracted to
   // /explorer/assets/js/governance-map/layout.js
   // (D27j-ui-foundation-5); available via local const at the top of
@@ -5243,10 +4401,6 @@
   // connector builder (with hover metadata + hit-target twin) lives in
   // graph-renderer.js. The renderer module reads source/target endpoint
   // labels via the connectorEndpointLabel hook below.
-  function addLiveConnector(srcId, srcAnchor, dstId, dstAnchor, cls) {
-    return ExplorerGraph.renderer.addLiveConnector(srcId, srcAnchor, dstId, dstAnchor, cls);
-  }
-
   // addConnectorHitTarget creates the wider invisible twin path. Same
   // SVG layer (#gmap-svg), same `d`, but stroke: transparent and
   // stroke-width: 12 (set in CSS) so the operator's pointer captures
@@ -5256,10 +4410,6 @@
   // carries an aria-label).
   // D32a-impl-3 — Thin compatibility shim. The production wide-stroke
   // hit-target builder lives in graph-renderer.js.
-  function addConnectorHitTarget(p1, p2, kindInfo, srcId, dstId, srcLabel, dstLabel) {
-    return ExplorerGraph.renderer.addConnectorHitTarget(p1, p2, kindInfo, srcId, dstId, srcLabel, dstLabel);
-  }
-
   // gmapVisibleConnectorForHoverTarget resolves a pointer target to
   // the visible connector path. Accepts either a visible path
   // (.gmap-connector) or a hit target (.gmap-connector-hit-target).
@@ -5329,8 +4479,8 @@
   function repaintGmapConnectors() {
     for (let i = 0; i < gmapConnectors.length; i++) {
       const c = gmapConnectors[i];
-      const sp = effectiveGmapPosition(c.srcId);
-      const dp = effectiveGmapPosition(c.dstId);
+      const sp = ExplorerGraph.renderer.effectiveGmapPosition(c.srcId);
+      const dp = ExplorerGraph.renderer.effectiveGmapPosition(c.dstId);
       if (!sp || !dp) continue;
       const sFn = GMAP_ANCHORS[c.srcAnchor];
       const dFn = GMAP_ANCHORS[c.dstAnchor];
@@ -5630,10 +4780,6 @@
   // caller can call this unconditionally.
   // D32a-impl-3 — Thin compatibility shim. Production addMoreNode
   // lives in graph-renderer.js.
-  function addMoreNode(layerKey, layerLabel, total, rendered, pos) {
-    return ExplorerGraph.renderer.addMoreNode(layerKey, layerLabel, total, rendered, pos);
-  }
-
   // D32a-impl-3 — Thin compatibility shim. The production Context
   // Graph renderer (~819 lines of node card + connector + summary
   // emission) lives in graph/context/context-graph-view.js
@@ -5642,10 +4788,6 @@
   // implementation is module-owned. The ctx hook bundle below carries
   // the still-inline orchestration helpers the view module dispatches
   // through.
-  function renderGovernanceMap(data) {
-    return ExplorerGraph.contextView.renderContextGraph(data, _gmapRenderCtx);
-  }
-
   // addNode positions an HTML node card and registers click + keyboard
   // handlers for selection. Each card carries its own details payload as
   // a JSON-encoded data attribute so the details panel can read it on
@@ -5656,10 +4798,6 @@
   // _rendererHooks.attachDragHandlers / .selectNode /
   // .applyMultiSelection (defined below) so the still-inline drag /
   // multi-select / inspector orchestration runs unchanged.
-  function addNode(spec, pos) {
-    return ExplorerGraph.renderer.addNode(spec, pos);
-  }
-
   // attachGmapDragHandlers wires pointer events on a node so the user
   // can drag it. The flow:
   //
@@ -5682,16 +4820,8 @@
   // (in-memory), no fetch/XHR, no localStorage / sessionStorage /
   // cookie / IndexedDB.
   // D32a-impl-4 — Thin shim. Production node-drag handler (~125 lines) lives in graph-interactions.js (attachNodeDragHandlers).
-  function attachGmapDragHandlers(node, nodeId) {
-    return ExplorerGraph.interactions.attachNodeDragHandlers(node, nodeId);
-  }
-
   // D32a-impl-3 — Thin compatibility shim. Production addConnector
   // lives in graph-renderer.js.
-  function addConnector(p1, p2, cls) {
-    return ExplorerGraph.renderer.addConnector(p1, p2, cls);
-  }
-
   // D32a-impl-4 — Thin shim. Production selectGovernanceMapNode lives in graph/context/context-graph-inspector.js (selectNode). The inline gmapSelectedId binding is kept in sync via the selection module.
   function selectGovernanceMapNode(nodeId) {
     gmapSelectedId = nodeId;
@@ -5725,13 +4855,13 @@
     if (!action || typeof action !== 'object') return;
     switch (action.kind) {
       case 'view-business-service-record':
-        if (action.target_id && typeof showBusinessServiceRecord === 'function') {
-          showBusinessServiceRecord(action.target_id);
+        if (action.target_id && typeof MIDASExplorerServices !== 'undefined') {
+          MIDASExplorerServices.showRecord(action.target_id);
         }
         return;
       case 'view-capability-record':
-        if (action.target_id && typeof showCapabilityRecord === 'function') {
-          showCapabilityRecord(action.target_id);
+        if (action.target_id && typeof MIDASExplorerCapabilities !== 'undefined') {
+          MIDASExplorerCapabilities.showRecord(action.target_id);
         }
         return;
       case 'reframe-around-this':
@@ -7199,8 +6329,9 @@
       renderCoverage(payload);
       // Cluster 2: keep the Services-view coverage summary in sync with
       // whatever Records / the right-panel coverage card shows.
-      if (typeof updateServicesCoverageSummary === 'function') {
-        updateServicesCoverageSummary(payload && payload.records);
+      if (typeof MIDASExplorerServices !== 'undefined' &&
+          typeof MIDASExplorerServices.updateCoverageSummary === 'function') {
+        MIDASExplorerServices.updateCoverageSummary(payload && payload.records);
       }
       // Cluster 5: keep the Settings Decision-Records-card stat in sync.
       if (typeof updateSettingsCoverageCount === 'function') {
@@ -8218,14 +7349,14 @@
   // /v1/businessservices fetch populates it, and the record + map
   // sub-views activate via showBusinessServiceRecord() and
   // showBusinessServiceMap() once the operator clicks through.
-  setTimeout(showServicesCatalogue, 0);
-  setTimeout(loadBusinessServicesList, 0);
+  setTimeout(function () { MIDASExplorerServices.showCatalogue(); }, 0);
+  setTimeout(function () { MIDASExplorerServices.loadCatalogue(); }, 0);
 
   // Capabilities view bootstrap — load the live capability list once,
   // independently of which top-level view is currently active. The list
   // is small (no pagination today) and the catalogue is the landing
   // point when the operator clicks the Capabilities sidebar item.
-  setTimeout(loadCapabilitiesList, 0);
+  setTimeout(function () { MIDASExplorerCapabilities.loadCatalogue(); }, 0);
 
   // Initialise the Records view content. D26b: the view consumes the
   // D26a runtime feed (GET /explorer/envelopes). Initial render shows a
@@ -8339,22 +7470,20 @@
     section.style.display = 'block';
   }
 
-  // D32a-impl-3 — MIDASExplorerGovernanceMapBridge is now a
-  // compatibility alias. The production rendering primitives moved
-  // out of the inline IIFE into graph-renderer.js +
-  // graph/context/context-graph-view.js (D32a-impl-3); this bridge no
-  // longer OWNS rendering — it forwards legacy names to the inline
-  // thin shims, which in turn delegate to the modules. The bridge
-  // remains so any consumer that historically read these properties
-  // (no known external consumer at this time) continues to resolve.
-  // Future tranche may delete the bridge once we are confident no
-  // external listener relies on it.
-  window.MIDASExplorerGovernanceMapBridge = window.MIDASExplorerGovernanceMapBridge || {};
-  window.MIDASExplorerGovernanceMapBridge.renderGovernanceMap        = renderGovernanceMap;
-  window.MIDASExplorerGovernanceMapBridge.renderGovernanceMapEmpty   = renderGovernanceMapEmpty;
-  window.MIDASExplorerGovernanceMapBridge.renderGovernanceMapError   = renderGovernanceMapError;
-  window.MIDASExplorerGovernanceMapBridge.refreshGovernanceMap       = refreshGovernanceMap;
-  window.MIDASExplorerGovernanceMapBridge.setGovernanceMapStatus     = setGovernanceMapStatus;
+  // D32a-impl-7 — MIDASExplorerGovernanceMapBridge removed. The bridge
+  // was kept through D32a-impl-3..6 as a compatibility alias for the
+  // five legacy inline names (renderGovernanceMap, renderGovernanceMapEmpty,
+  // renderGovernanceMapError, refreshGovernanceMap, setGovernanceMapStatus).
+  // After D32a-impl-{3,4,5} extracted the production renderers into
+  // graph-renderer.js + graph/context/context-graph-view.js + graph-camera.js
+  // / graph-inspector.js / context-graph-inspector.js, no module
+  // consumer reaches into the bridge — the shell's render() method
+  // (its only consumer) had zero call-sites and was also removed in
+  // D32a-impl-7 from graph-shell.js. The inline renderGovernanceMap /
+  // *Empty / *Error / refreshGovernanceMap / setGovernanceMapStatus
+  // functions still exist inline (their bodies are pinned by tests in
+  // explorer_d32a_test.go::TestExplorer_D32aImpl3_*); they are reachable
+  // by name directly without the bridge alias.
 
 })();
 </script>

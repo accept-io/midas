@@ -77,23 +77,28 @@
     font-family: var(--font-mono);
   }
 
-  /* MIDAS logo: four equal white bars; bars 2 & 3 translated down 2px */
+  /* D32b-impl-4 — MIDAS logo. Single SVG asset (see
+   * /explorer/assets/img/midas-logo.svg) sized to the sidebar brand
+   * row. The SVG already bakes the dark rounded-tile background
+   * (#05070D) plus the 4 white bars with bars 2 & 3 down-shifted by
+   * 2 px (height: 20 px). The element is an <img>, so the prior
+   * .midas-logo-mark span rules are no longer applicable — the SVG
+   * scales cleanly to whatever box size the sidebar gives it. */
   .midas-logo-mark {
+    width: 28px;
+    height: 28px;
+    display: inline-block;
+    flex-shrink: 0;
+    /* Subtle border so the dark tile reads as a distinct mark
+     * against the equally-dark sidebar surface. */
+    border-radius: 6px;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06);
+  }
+  /* Collapsed sidebar — the brand row collapses but the mark must
+   * remain visible and centred. */
+  body.sidebar-collapsed .midas-logo-mark {
+    width: 24px;
     height: 24px;
-    display: inline-flex;
-    align-items: flex-start;
-    gap: 4px;
-  }
-  .midas-logo-mark span {
-    width: 5px;
-    height: 20px;
-    background: #ffffff;
-    border-radius: 1px;
-    display: block;
-  }
-  .midas-logo-mark span:nth-child(2),
-  .midas-logo-mark span:nth-child(3) {
-    transform: translateY(2px);
   }
 
   .shell-nav {

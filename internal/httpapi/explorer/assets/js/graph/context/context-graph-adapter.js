@@ -17,10 +17,11 @@
 // that assert `mapContextGraphToCardLayout(payload, view)` call-shape
 // remain green while the implementation is module-owned.
 //
-// The bridge mechanism (window.MIDASExplorerGovernanceMapBridge) is
-// the production seam for the rendering primitives that remain
-// inline (renderGovernanceMap, addNode, addLiveConnector, …) — see
-// graph-shell.js's render path for the dispatch flow.
+// D32a-impl-3..7 — production rendering primitives were extracted
+// into graph-renderer.js + graph/context/context-graph-view.js, so
+// the adapter has no inline dependencies left. The legacy
+// MIDASExplorerGovernanceMapBridge compatibility alias was removed
+// in D32a-impl-7.
 //
 // Public surface (all on window.MIDASExplorerGraph.contextAdapter):
 //

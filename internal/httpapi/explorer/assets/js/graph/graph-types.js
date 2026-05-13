@@ -45,24 +45,28 @@
 
   window.MIDASExplorerGraph = window.MIDASExplorerGraph || {};
 
-  // Authority lens (D31l → D31m).
+  // Authority lens (D31f → D31m backend; D32b-impl-1 front-end).
+  // The constants below are the canonical client-side allow-list and
+  // mirror the wire-level strings emitted by the backend Authority
+  // Graph projection. Adding or removing a kind here without a backend
+  // change is an error.
   var AUTHORITY_NODE_KINDS = Object.freeze([
     'business_service',
-    'process',
     'decision_surface',
-    'profile',
-    'grant',
+    'authority_profile',
+    'authority_grant',
+    'agent',
     'fail_mode_policy',
     'escalation_target',
   ]);
   var AUTHORITY_EDGE_KINDS = Object.freeze([
-    'owns',
-    'evaluates_at',
-    'governs',
-    'binds',
-    'escalates_via',
-    'rolls_up_to',
-    'governs_with',
+    'business_service_has_surface',
+    'surface_uses_profile',
+    'profile_has_grant',
+    'grant_authorises_agent',
+    'surface_has_fail_mode_policy',
+    'business_service_has_fail_mode_policy',
+    'profile_escalates_to',
   ]);
 
   // Context lens (legacy /v1/graphs/context payload).

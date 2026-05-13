@@ -95,10 +95,22 @@ var explorerGraphJSFiles = []string{
 	"graph/graph-interactions",
 	"graph/graph-selection",
 	"graph/graph-inspector",
+	"graph/graph-drawer",
 	"graph/graph-shell",
 	"graph/context/context-graph-adapter",
 	"graph/context/context-graph-inspector",
 	"graph/context/context-graph-view",
+	"graph/context/context-evidence-tray",
+	"graph/authority/authority-graph-adapter",
+	"graph/authority/authority-graph-view",
+	"graph/authority/authority-graph-inspector",
+	"graph/authority/authority-diagnostics-panel",
+	"graph/authority/authority-surface-posture-panel",
+	"drift/drift-chart-formatters",
+	"drift/drift-chart-demo-adapter",
+	"drift/drift-series-chart",
+	"drift/drift-series-list",
+	"drift/drift-analytics-panel",
 	"services/services-view",
 	"capabilities/capabilities-view",
 }
@@ -681,19 +693,19 @@ func TestExplorer_HTML_MainScriptStillInline(t *testing.T) {
 		"})();",
 		// Bootstrap + view router (must remain inline).
 		"function showView(",
-		// Governance Map render (must remain inline).
-		"function renderGovernanceMap(data)",
 		// Records render (must remain inline).
 		"function renderExplorerEnvelopeDetailSections(env)",
 		// API fetch wrappers (must remain inline).
 		"function loadExplorerRuntimeRecords()",
-		// Filter state (must remain inline).
-		"const gmapVisibilityFilters",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("main inline script must still contain %q", want)
 		}
 	}
+	// D32a-impl-8 — the production graph renderer was extracted to
+	// graph-renderer.js + graph/context/context-graph-view.js; the
+	// inline shims have been deleted. Module ownership is asserted
+	// by explorer_d32a_test.go::TestExplorer_D32aImpl{3,4}_*.
 }
 
 // ---------------------------------------------------------------------------
@@ -865,15 +877,16 @@ func TestExplorer_HTML_MainScriptStillInline_Foundation4(t *testing.T) {
 		"(function () {",
 		"'use strict';",
 		"})();",
-		"function renderGovernanceMap(data)",
 		"function renderExplorerEnvelopeDetailSections(env)",
 		"function loadExplorerRuntimeRecords()",
-		"const gmapVisibilityFilters",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("main inline script must still contain %q", want)
 		}
 	}
+	// D32a-impl-8 — production renderGovernanceMap + gmapVisibilityFilters
+	// were extracted to graph-renderer.js + graph/context/context-graph-view.js.
+	// Module ownership is asserted by explorer_d32a_test.go::TestExplorer_D32aImpl3_*.
 }
 
 // ---------------------------------------------------------------------------
@@ -2553,6 +2566,10 @@ func TestExplorer_HTML_GovernanceMap_CompactEdgeLegend(t *testing.T) {
 	}
 
 	// === 10. D26g-impl-1 + D26g-impl-2 regressions ===
+	// D32b-impl-2 removed the canvas-level .gmap-view-mode-toggle in
+	// favour of the Service Workbench mode toolbar in the workbench
+	// header; the remaining toolbar pins still cover Back / Search /
+	// current-root / filter chips, all of which D26g-impl-1 introduced.
 	for _, want := range []string{
 		// D26g-impl-1 toolbar.
 		`class="governance-map-toolbar`,
@@ -2560,7 +2577,6 @@ func TestExplorer_HTML_GovernanceMap_CompactEdgeLegend(t *testing.T) {
 		`id="gmap-search-input"`,
 		`id="gmap-current-root"`,
 		`class="gmap-filter-chips"`,
-		`class="gmap-view-mode-toggle"`,
 		// D26g-impl-2 clusters.
 		`class="gmap-mode-rail"`,
 		`class="gmap-camera-cluster"`,
@@ -2619,265 +2635,36 @@ func TestExplorer_HTML_GovernanceMap_CompactEdgeLegend(t *testing.T) {
 	}
 }
 
-// TestExplorer_HTML_GovernanceMap_ViewModeIconToggle pins the
-// D26g-impl-4 contract: the Form / Graph segmented toggle at the
-// right edge of the workbench toolbar is now icon-only. Visible
-// text labels ("Form" / "Graph") were dropped; inline SVGs convey
-// meaning, and aria-label + title preserve it for assistive tech
-// and on-hover discovery. The container, both segments, both
-// data-view-mode attributes, the .is-active default state on the
-// Graph segment, the .gmap-view-mode-feedback channel, and the
-// existing JS wiring (which binds via .gmap-view-mode-segment +
-// data-view-mode, not text content) all continue to work.
+// TestExplorer_HTML_GovernanceMap_ViewModeIconToggle was a D26g-impl-4
+// contract test that pinned the icon-only Form / Graph segmented toggle
+// at the right edge of the workbench toolbar. D32b-impl-2 superseded
+// that toggle with the operator-facing Service Workbench mode toolbar
+// (Form View | Context Graph | Authority Graph) in the workbench
+// header above the canvas. The canvas-level icon toggle was removed
+// entirely; the body of this function is retained as a single negative
+// pin so a future regression that reintroduces the old markup fails
+// loudly rather than re-shipping a duplicate control surface.
 func TestExplorer_HTML_GovernanceMap_ViewModeIconToggle(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
-	rec := performRequest(t, srv, http.MethodGet, "/explorer", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	body := getExplorerAllJS(t, srv)
-
-	// === 1. Toggle container + segment hooks preserved ===
-	for _, want := range []string{
+	body := performRequest(t, srv, http.MethodGet, "/explorer", nil).Body.String()
+	for _, gone := range []string{
 		`class="gmap-view-mode-toggle"`,
-		`role="group"`,
-		`aria-label="View mode"`,
 		`class="gmap-view-mode-segment"`,
-		`class="gmap-view-mode-segment is-active"`,
 		`data-view-mode="form"`,
 		`data-view-mode="graph"`,
-		`class="gmap-view-mode-feedback"`,
-		`aria-live="polite"`,
 	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D26g-impl-4: toggle structural hook %q must remain", want)
+		if strings.Contains(body, gone) {
+			t.Errorf("D32b-impl-2: canvas-level Form/Graph toggle markup must remain removed: %q", gone)
 		}
 	}
-
-	// === 2. Scoped extraction of the toggle markup ===
-	toggleIdx := strings.Index(body, `class="gmap-view-mode-toggle"`)
-	if toggleIdx < 0 {
-		t.Fatal("D26g-impl-4: .gmap-view-mode-toggle not found")
-	}
-	toggleEnd := strings.Index(body[toggleIdx:], `</div>`)
-	if toggleEnd < 0 {
-		t.Fatal("D26g-impl-4: .gmap-view-mode-toggle closing tag not found")
-	}
-	toggleBody := body[toggleIdx : toggleIdx+toggleEnd]
-
-	// === 3. Each segment carries an inline SVG icon ===
-	svgCount := strings.Count(toggleBody, "<svg")
-	if svgCount != 2 {
-		t.Errorf("D26g-impl-4: toggle must contain exactly 2 inline SVG icons (one per segment), got %d", svgCount)
-	}
-	// Icon stroke uses currentColor so the active-state colour shift
-	// recolours the icon without per-icon CSS.
-	if !strings.Contains(toggleBody, `stroke="currentColor"`) {
-		t.Error("D26g-impl-4: SVG icons must use stroke=\"currentColor\" so the active-state colour shift propagates")
-	}
-	// SVGs are decorative (the button itself carries the aria-label).
-	if !strings.Contains(toggleBody, `aria-hidden="true"`) {
-		t.Error("D26g-impl-4: inline SVG icons must carry aria-hidden=\"true\" (button aria-label provides the accessible name)")
-	}
-
-	// === 4. ARIA + title preserve meaning per segment ===
-	for _, want := range []string{
-		`aria-label="Form view"`,
-		`aria-label="Graph view"`,
-		`title="Form view"`,
-		`title="Graph view"`,
-	} {
-		if !strings.Contains(toggleBody, want) {
-			t.Errorf("D26g-impl-4: segment must declare %q for accessibility / discoverability", want)
-		}
-	}
-
-	// === 5. Visible text labels removed from segment content ===
-	// Negative pins scoped to the toggle markup so the words "Form"
-	// and "Graph" can still appear elsewhere on the page (e.g. in JS
-	// strings, comments, the "Form view coming soon" feedback).
-	for _, gone := range []string{
-		`>Form<`,
-		`>Graph<`,
-	} {
-		if strings.Contains(toggleBody, gone) {
-			t.Errorf("D26g-impl-4: visible text %q must be removed from segment content (icons replace it)", gone)
-		}
-	}
-
-	// === 6. Active-state default — Graph is active, Form is inactive ===
-	graphIdx := strings.Index(toggleBody, `data-view-mode="graph"`)
-	if graphIdx < 0 {
-		t.Fatal("D26g-impl-4: graph segment not found")
-	}
-	// Look at the opening tag of the graph segment; it must carry
-	// is-active + aria-pressed=true.
-	graphTag := toggleBody[graphIdx-100 : graphIdx+100]
-	if graphIdx < 100 {
-		graphTag = toggleBody[:graphIdx+100]
-	}
-	if !strings.Contains(graphTag, "is-active") {
-		t.Error("D26g-impl-4: graph segment must ship with class=\"… is-active\" (default mode)")
-	}
-	if !strings.Contains(graphTag, `aria-pressed="true"`) {
-		t.Error("D26g-impl-4: graph segment must ship with aria-pressed=\"true\"")
-	}
-	// Form segment is inactive by default.
-	formIdx := strings.Index(toggleBody, `data-view-mode="form"`)
-	if formIdx < 0 {
-		t.Fatal("D26g-impl-4: form segment not found")
-	}
-	formTag := toggleBody[formIdx-100 : formIdx+100]
-	if formIdx < 100 {
-		formTag = toggleBody[:formIdx+100]
-	}
-	if strings.Contains(formTag, "is-active") {
-		t.Error("D26g-impl-4: form segment must NOT ship with .is-active (Graph is the default)")
-	}
-	if !strings.Contains(formTag, `aria-pressed="false"`) {
-		t.Error("D26g-impl-4: form segment must ship with aria-pressed=\"false\"")
-	}
-
-	// === 7. Existing JS wiring still binds by selector + data-* ===
-	// The handler queries .gmap-view-mode-segment + the feedback
-	// element; nothing depends on text content. Pin both.
-	for _, want := range []string{
-		`document.querySelectorAll('.gmap-view-mode-segment')`,
-		`document.querySelector('.gmap-view-mode-feedback')`,
-		"wireGmapViewModeToggle",
-		"Form view coming soon",
-		"3000",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D26g-impl-4: view-mode wiring literal %q must remain", want)
-		}
-	}
-
-	// === 8. Toggle CSS supports icon-only sizing ===
-	// The previous text-button padding (3px 10px) is replaced with
-	// fixed width/height so the toolbar's right edge does not jitter
-	// when the active segment swaps. CSS lives in governance-map.css
-	// after D27j-ui-foundation-2.
-	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
-	segRuleIdx := strings.Index(gmapCSS, "  .gmap-view-mode-segment {")
-	if segRuleIdx < 0 {
-		t.Fatal("D26g-impl-4: .gmap-view-mode-segment CSS rule not found in governance-map.css")
-	}
-	segRuleEnd := strings.Index(gmapCSS[segRuleIdx:], "}")
-	segRuleBody := gmapCSS[segRuleIdx : segRuleIdx+segRuleEnd]
-	for _, want := range []string{
-		"width: 26px;",
-		"height: 22px;",
-		"padding: 0;",
-		"display: inline-flex;",
-		"align-items: center;",
-		"justify-content: center;",
-	} {
-		if !strings.Contains(segRuleBody, want) {
-			t.Errorf("D26g-impl-4: .gmap-view-mode-segment rule must declare %q (icon-only sizing)", want)
-		}
-	}
-	// Old text-button padding is gone from the rule.
-	if strings.Contains(segRuleBody, "padding: 3px 10px;") {
-		t.Error("D26g-impl-4: .gmap-view-mode-segment rule must drop the old text-button padding (3px 10px)")
-	}
-
-	// === 9. Active state still visually distinct ===
-	if !strings.Contains(gmapCSS, ".gmap-view-mode-segment.is-active") {
-		t.Error("D26g-impl-4: .gmap-view-mode-segment.is-active rule must remain so the active mode is visually obvious")
-	}
-
-	// === 10. D26g-impl-1 toolbar regression ===
-	if !strings.Contains(body, `class="governance-map-toolbar`) {
-		t.Error("D26g-impl-4 must NOT remove the workbench toolbar (D26g-impl-1)")
-	}
-	toolbarIdx := strings.Index(body, `class="governance-map-toolbar`)
-	toolbarEnd := strings.Index(body[toolbarIdx:], `class="governance-map-body"`)
-	toolbarBody := body[toolbarIdx : toolbarIdx+toolbarEnd]
-	for _, want := range []string{
-		`id="gmap-back-button"`,
-		`id="gmap-current-root"`,
-		`id="gmap-search-input"`,
-		`class="gmap-filter-chips"`,
-		`class="gmap-view-mode-toggle"`,
-	} {
-		if !strings.Contains(toolbarBody, want) {
-			t.Errorf("D26g-impl-4: toolbar must still contain %q", want)
-		}
-	}
-	// Filter chips: data-kind values must remain stable so the existing
-	// gmapVisibilityFilters wiring keeps working; visible labels were
-	// updated to descriptive forms by D27j-ui-1 when the chips moved
-	// from a flat row into the grouped Layers popover.
-	for _, want := range []string{
-		`data-kind="all"`,
-		`data-kind="business"`,
-		`data-kind="capability"`,
-		`data-kind="process"`,
-		`data-kind="surface"`,
-		`data-kind="ai"`,
-		`data-kind="bindings"`,
-		`data-kind="synthetic"`,
-		`>All<`,
-		`>Business services<`,
-		`>Capabilities<`,
-		`>Processes<`,
-		`>Decision surfaces<`,
-		`>AI systems<`,
-		`>AI bindings<`,
-		`>Authority / Coverage<`,
-	} {
-		if !strings.Contains(toolbarBody, want) {
-			t.Errorf("D27j-ui-1: filter chip token %q must remain in toolbar markup", want)
-		}
-	}
-
-	// === 11. D26g-impl-2 + D26g-impl-3 regressions ===
-	for _, want := range []string{
-		// D26g-impl-2 clusters.
-		`class="gmap-mode-rail"`,
-		`class="gmap-camera-cluster"`,
-		`id="gmap-pan-mode-button"`,
-		`id="gmap-select-mode-button"`,
-		`id="gmap-zoom-in"`,
-		`id="gmap-zoom-out"`,
-		`id="gmap-fit-button"`,
-		`id="gmap-centre-button"`,
-		`id="gmap-focus-toggle"`,
-		// D26g-impl-3 compact legend.
-		`class="gmap-legend-overlay"`,
-		"Service relationship",
-		"AI binding",
-		"Authority",
-		"Evidence",
-		"Coverage gap",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D26g-impl-4 must NOT remove prior D26g-impl-2/3 affordance %q", want)
-		}
-	}
-
-	// === 12. D26f tray + D26b–D26e records flow regression ===
-	// computeRecordsRuntimeMetrics moved to records/envelope-summary.js
-	// in D27j-ui-foundation-6; checked separately.
-	envelopeSummaryJSImpl4 := getExplorerAsset(t, srv, "/explorer/assets/js/records/envelope-summary.js")
-	if !strings.Contains(envelopeSummaryJSImpl4, "function computeRecordsRuntimeMetrics(rows)") {
-		t.Error("D26g-impl-4 must NOT remove prior D25e/D26b-f affordance \"function computeRecordsRuntimeMetrics(rows)\" (records/envelope-summary.js)")
-	}
-	for _, want := range []string{
-		"gmap-evidence-tray-analytic-layout",
-		"gmap-evidence-tray-signal-column",
-		"gmap-evidence-tray-chart-panel",
-		"function loadExplorerRuntimeRecords()",
-		"function loadGmapEvidenceActivity()",
-		"async function loadExplorerEnvelopeDetail(envelopeId, onResolved)",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("D26g-impl-4 must NOT remove prior D25e/D26b-f affordance %q", want)
-		}
+	// The polite-live feedback span is retained so any future graph-
+	// canvas-only affordance has a stable announce target.
+	if !strings.Contains(body, `class="gmap-view-mode-feedback"`) {
+		t.Error("D32b-impl-2: .gmap-view-mode-feedback (polite-live announce target) must remain")
 	}
 }
+
 
 // TestExplorer_HTML_GovernanceMap_ToolbarContextWording pins the
 // D26i Part 1 contract: setGovernanceMapCurrentRoot now writes a
@@ -4279,32 +4066,26 @@ func TestExplorer_HTML_GovernanceMap_ToolbarRestructure(t *testing.T) {
 		t.Error("D26g-impl-1: View context (#gmap-current-root) must live inside .governance-map-toolbar")
 	}
 
-	// === Move 3: View-mode toggle lives in the toolbar's right group ===
-	// D26g-impl-1 removed .gmap-top-right-overlay; the Form/Graph
+	// === Move 3: The toolbar's right group remains structurally intact ===
+	// D26g-impl-1 removed .gmap-top-right-overlay; the Form/Graph icon
 	// toggle and feedback line moved into the toolbar's right group.
+	// D32b-impl-2 then removed the icon toggle (its role was assumed
+	// by the Service Workbench mode toolbar above the canvas) but kept
+	// the polite-live feedback span as a stable announce target. Pin
+	// the right-group's invariants: .gmap-top-right-overlay must remain
+	// gone, and the feedback span must remain present.
 	if strings.Contains(body, `class="gmap-top-right-overlay"`) {
 		t.Error("D26g-impl-1: .gmap-top-right-overlay markup must be removed (children relocated into .governance-map-toolbar)")
 	}
 	for _, want := range []string{
-		`class="gmap-view-mode-toggle"`,
 		`class="gmap-view-mode-feedback"`,
-		`aria-label="View mode"`,
-		`data-view-mode="form"`,
-		`data-view-mode="graph"`,
-		// D26g-impl-4 — visible "Form" / "Graph" text replaced with
-		// inline SVG icons; aria-label/title preserve meaning.
-		`aria-label="Form view"`,
-		`aria-label="Graph view"`,
-		`is-active`,
-		`aria-pressed="true"`,
-		`aria-pressed="false"`,
 	} {
 		if !strings.Contains(body, want) {
-			t.Errorf("D26g-impl-1 toolbar literal missing: %q", want)
+			t.Errorf("D26g-impl-1 / D32b-impl-2 toolbar literal missing: %q", want)
 		}
 	}
-	if !strings.Contains(toolbarBody, `class="gmap-view-mode-toggle"`) {
-		t.Error("D26g-impl-1: Form/Graph toggle must live inside .governance-map-toolbar (right group)")
+	if !strings.Contains(toolbarBody, `class="gmap-view-mode-feedback"`) {
+		t.Error("D26g-impl-1 / D32b-impl-2: .gmap-view-mode-feedback span must live inside .governance-map-toolbar (right group)")
 	}
 	// Inspector toggle is in the rail, not the toolbar (D24f).
 	if strings.Contains(toolbarBody, `id="gmap-inspector-toggle"`) {
@@ -5406,7 +5187,18 @@ func TestExplorer_HTML_GovernanceMap_SearchAndFocus(t *testing.T) {
 	if toolbarIdx < 0 {
 		t.Fatal("governance-map-toolbar not found in markup")
 	}
-	if !strings.Contains(body[toolbarIdx:toolbarIdx+4096], `id="gmap-search-input"`) {
+	// Scope the look-up to the toolbar block — bounded by the next
+	// closing of `.governance-map-toolbar-right` (the toolbar's last
+	// internal group) rather than a fixed byte window. The toolbar-
+	// left group expanded in D32b-impl-2a (Service Workbench mode
+	// toolbar) and again in D32b-impl-3 (icon-only SVGs), making the
+	// previous 4096-byte slice too short to reach the search input.
+	toolbarEnd := strings.Index(body[toolbarIdx:], `</div>
+        <!-- Phase 2B Step 16`)
+	if toolbarEnd < 0 {
+		toolbarEnd = 10000
+	}
+	if !strings.Contains(body[toolbarIdx:toolbarIdx+toolbarEnd], `id="gmap-search-input"`) {
 		t.Error(`gmap-search-input must live inside .governance-map-toolbar (D26g-impl-1 relocation)`)
 	}
 
@@ -6633,9 +6425,11 @@ func TestExplorer_HTML_GovernanceMap_BackStackHistory(t *testing.T) {
 		t.Error("D24h-fix: fallback gate must reference currentSelectedService (the owning BS id)")
 	}
 	// goBackOrToOwningService prefers history when present; falls
-	// back to showBusinessServiceMap(currentSelectedService).
-	if !strings.Contains(body, "showBusinessServiceMap(currentSelectedService)") {
-		t.Error("D24h-fix: fallback handler must call showBusinessServiceMap(currentSelectedService) to navigate to the owning BS")
+	// back to MIDASExplorerServices.showMap(currentSelectedService).
+	// D32a-impl-7 — the inline showBusinessServiceMap shim was
+	// removed; the fallback now invokes the module method directly.
+	if !strings.Contains(body, "MIDASExplorerServices.showMap(currentSelectedService)") {
+		t.Error("D24h-fix: fallback handler must call MIDASExplorerServices.showMap(currentSelectedService) to navigate to the owning BS")
 	}
 	// Click handler wired to the new entry point, not directly to
 	// goBackInGraphHistory.
@@ -7009,10 +6803,16 @@ func TestExplorer_HTML_Polish_BannersRemoved(t *testing.T) {
 }
 
 // TestExplorer_HTML_Polish_FaviconPresent asserts the MIDAS favicon is
-// declared as an inline-SVG data URI in <head>. The SVG semantics —
-// black background plus four white rectangles arranged as the MIDAS
-// logo bars — are pinned at the source level so a regression to a
-// different glyph (or to an external asset) fails this test.
+// declared in <head>. The Polish-PR contract originally inlined the
+// favicon as an SVG data URI; D32b-impl-4 replaced the data URI with a
+// reference to the canonical SVG asset (assets/img/midas-logo.svg) so
+// the favicon and the sidebar mark share byte-identical geometry.
+// The favicon must still:
+//   • declare rel="icon" + type="image/svg+xml"
+//   • be served from the embedded Explorer FS (no external network fetch)
+//   • render four white bars with bars 2 & 3 down-shifted by 2 px
+// The asset payload is fetched directly so the bar-count + down-shift
+// pins survive both the data-URI and asset-path eras.
 func TestExplorer_HTML_Polish_FaviconPresent(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
@@ -7021,32 +6821,48 @@ func TestExplorer_HTML_Polish_FaviconPresent(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	body := getExplorerAllJS(t, srv)
+	body := rec.Body.String()
 
 	// Favicon link element — must declare rel="icon" with an SVG MIME
-	// type. The data: URI form keeps the asset inline (no external
-	// fetch, satisfies the no-external-assets guardrail).
+	// type. The href can be either a data: URI (legacy) OR the
+	// canonical /explorer/assets/img/midas-logo.svg asset path
+	// (D32b-impl-4). Both forms satisfy the no-external-network-fetch
+	// guardrail because the asset lives inside the embedded Explorer FS.
 	if !strings.Contains(body, `rel="icon"`) {
 		t.Fatal("Polish PR: <link rel=\"icon\"> missing from <head>")
 	}
 	if !strings.Contains(body, `type="image/svg+xml"`) {
 		t.Error("Polish PR: favicon link must declare type=\"image/svg+xml\"")
 	}
-	if !strings.Contains(body, `href="data:image/svg+xml,`) {
-		t.Error("Polish PR: favicon must be inlined as a data URI (no external assets)")
+	dataURI := strings.Contains(body, `href="data:image/svg+xml,`)
+	canonical := strings.Contains(body, `href="/explorer/assets/img/midas-logo.svg"`)
+	if !dataURI && !canonical {
+		t.Error("Polish PR / D32b-impl-4: favicon must be inlined as a data URI OR reference /explorer/assets/img/midas-logo.svg")
 	}
 
-	// MIDAS mark semantics: count the white-fill <rect> elements in
-	// the favicon SVG. Four bars = MIDAS logo. The fill color is
-	// percent-encoded as %23fff inside the data URI.
-	whiteRectCount := strings.Count(body, `fill='%23fff'`)
-	if whiteRectCount < 4 {
-		t.Errorf("Polish PR: favicon must contain 4 white-bar <rect> elements; "+
-			"found %d `fill='%%23fff'` occurrences", whiteRectCount)
+	// Fetch the favicon SVG payload (either inline or asset) so the
+	// 4-bar geometry pin works regardless of which form ships.
+	var svg string
+	if canonical {
+		assetRec := performRequest(t, srv, http.MethodGet, "/explorer/assets/img/midas-logo.svg", nil)
+		if assetRec.Code != http.StatusOK {
+			t.Fatalf("D32b-impl-4: /explorer/assets/img/midas-logo.svg want 200, got %d", assetRec.Code)
+		}
+		svg = assetRec.Body.String()
+	} else {
+		svg = body
 	}
-	// And one black-fill <rect> for the background.
-	if !strings.Contains(body, `fill='%23000'`) {
-		t.Error("Polish PR: favicon must contain a black background <rect>")
+
+	// MIDAS mark semantics: 4 white <rect> bars on a dark background.
+	// The canonical SVG uses literal #FFFFFF / #05070D; the legacy
+	// data URI used percent-encoded %23fff / %23000. Count both forms.
+	whiteBars := strings.Count(svg, `fill="#FFFFFF"`) + strings.Count(svg, `fill='%23fff'`)
+	if whiteBars < 4 {
+		t.Errorf("Polish PR / D32b-impl-4: favicon SVG must contain 4 white-bar <rect> elements; got %d", whiteBars)
+	}
+	darkBg := strings.Contains(svg, `fill="#05070D"`) || strings.Contains(svg, `fill='%23000'`)
+	if !darkBg {
+		t.Error("Polish PR / D32b-impl-4: favicon SVG must contain a dark background <rect>")
 	}
 }
 
@@ -7493,17 +7309,22 @@ func TestExplorer_HTML_LayersControl_StructureAndAccessibility(t *testing.T) {
 	}
 
 	// The button + panel must live inside .governance-map-toolbar-centre,
-	// between the search input and the view-mode toggle.
+	// to the right of the search input. The original D27j-ui-1 contract
+	// also required the Layers button to sit before the canvas-level
+	// Form/Graph view-mode toggle; D32b-impl-2 removed that toggle, so
+	// the comparison anchor changed to .gmap-view-mode-feedback (the
+	// retained polite-live span that still sits at the right edge of
+	// the toolbar).
 	idxSearch := strings.Index(body, `id="gmap-search-input"`)
 	idxLayersBtn := strings.Index(body, `id="gmap-layers-button"`)
-	idxViewToggle := strings.Index(body, `class="gmap-view-mode-toggle"`)
-	if idxSearch < 0 || idxLayersBtn < 0 || idxViewToggle < 0 {
-		t.Fatalf("D27j-ui-1: toolbar reading-order pins missing (search=%d, layers=%d, viewtoggle=%d)",
-			idxSearch, idxLayersBtn, idxViewToggle)
+	idxFeedback := strings.Index(body, `class="gmap-view-mode-feedback"`)
+	if idxSearch < 0 || idxLayersBtn < 0 || idxFeedback < 0 {
+		t.Fatalf("D27j-ui-1 / D32b-impl-2: toolbar reading-order pins missing (search=%d, layers=%d, feedback=%d)",
+			idxSearch, idxLayersBtn, idxFeedback)
 	}
-	if !(idxSearch < idxLayersBtn && idxLayersBtn < idxViewToggle) {
-		t.Errorf("D27j-ui-1: layers button must sit between search input and view-mode toggle (search=%d, layers=%d, viewtoggle=%d)",
-			idxSearch, idxLayersBtn, idxViewToggle)
+	if !(idxSearch < idxLayersBtn && idxLayersBtn < idxFeedback) {
+		t.Errorf("D27j-ui-1 / D32b-impl-2: layers button must sit between search input and view-mode feedback span (search=%d, layers=%d, feedback=%d)",
+			idxSearch, idxLayersBtn, idxFeedback)
 	}
 
 	// Panel must default hidden.
@@ -9607,28 +9428,29 @@ func TestExplorer_HTML_GraphRenderingFunctions_StillInline_Theme4c(t *testing.T)
 	}
 	body := getExplorerAllJS(t, srv)
 
+	// D32a-impl-8 — production renderer extracted to graph modules;
+	// the inline shims were deleted. The conceptual JS surface now
+	// contains the module-native names. Pin those instead.
 	for _, want := range []string{
-		`function renderGovernanceMap(data)`,
+		`function renderContextGraph(data, ctx)`,
 		`function addNode(spec, pos)`,
-		`function addLiveConnector`,
-		`function applyGmapVisibilityFilters()`,
+		`function addLiveConnector(srcId, srcAnchor, dstId, dstAnchor, cls)`,
+		`function applyVisibilityFilters(`,
 	} {
 		if !strings.Contains(body, want) {
-			t.Errorf("D27j-ui-theme-4c: %q must remain inline (no JS changes in this tranche)", want)
+			t.Errorf("D27j-ui-theme-4c / D32a-impl-8: %q must remain present in the conceptual JS surface", want)
 		}
 	}
 
 	// Negative pins scoped to each named graph-rendering function's
-	// body slice. The slice runs from the function declaration to
-	// either the next top-level `function ` declaration in the
-	// inline IIFE or a fixed 8000-byte bound, whichever is shorter
-	// — comfortable for all four functions while keeping the slice
-	// bounded so we don't accidentally cover unrelated code.
+	// body slice (module-native names). The slice runs from the
+	// function declaration to a fixed 8000-byte bound, comfortable
+	// for the relevant module functions.
 	graphFnDecls := []string{
-		`function renderGovernanceMap(data)`,
+		`function renderContextGraph(data, ctx)`,
 		`function addNode(spec, pos)`,
-		`function addLiveConnector`,
-		`function applyGmapVisibilityFilters()`,
+		`function addLiveConnector(srcId, srcAnchor, dstId, dstAnchor, cls)`,
+		`function applyVisibilityFilters(`,
 	}
 	forbidden := []string{
 		`kind: 'failmode'`,
@@ -9860,12 +9682,13 @@ func TestExplorer_HTML_Theme4d_NoSelectedPathJSIntroduced(t *testing.T) {
 		}
 	}
 
-	// Existing render functions remain inline (CSS-only sanity check).
+	// D32a-impl-8 — production renderer functions live in graph
+	// modules; pin the module-native names in the conceptual JS surface.
 	for _, want := range []string{
-		`function renderGovernanceMap(data)`,
+		`function renderContextGraph(data, ctx)`,
 		`function addNode(spec, pos)`,
-		`function addLiveConnector`,
-		`function applyGmapVisibilityFilters()`,
+		`function addLiveConnector(srcId, srcAnchor, dstId, dstAnchor, cls)`,
+		`function applyVisibilityFilters(`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("D27j-ui-theme-4d: %q must remain inline (no JS changes)", want)
