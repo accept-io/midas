@@ -254,14 +254,29 @@
     );
     canvas.style.minWidth = canvasW + 'px';
 
-    // D32g-fix-6 — Align the SVG connector layer's viewBox with the
-    // dynamically-computed canvas width (mirrors Context Graph's
-    // context-graph-view.js:196). Without this, the SVG retains the
-    // static viewBox="0 0 1180 720" from index.html and paths drawn
-    // at canvas-local pixel coords > 1180 get stretched proportionally
-    // to fit the wider container — so connector endpoints drift away
-    // from the HTML node cards (which use absolute pixel positioning).
-    // D32g-analysis-2 Hypothesis 1.
+    // D32g-fix-7 — Complete the dynamic canvas-width contract.
+    //
+    // The Context Graph view sets TWO coupled lines after computing
+    // canvasW (context-graph-view.js:195-196):
+    //
+    //   canvas.dataset.baseWidth = canvasW;
+    //   svg.setAttribute('viewBox', '0 0 ' + canvasW + ' ' + GMAP.CANVAS_H);
+    //
+    // D32g-fix-6 added only the viewBox setter. The viewBox alone is
+    // not enough: graph-camera.js applyZoom() reads
+    // `canvas.dataset.baseWidth` and forces `scene.style.width =
+    // baseW + 'px'`. Without dataset.baseWidth, the scene gets
+    // clamped to GMAP.MIN_CANVAS_W (1180) while the viewBox claims a
+    // wider coordinate space — SVG content then SHRINKS by
+    // 1180 / canvasW relative to HTML cards, producing the
+    // "connectors stretch across empty canvas" symptom D32g-analysis-3
+    // documented.
+    //
+    // The dataset.baseWidth line MUST precede the viewBox line: the
+    // camera reads dataset.baseWidth via applyZoom; setting it after
+    // viewBox would leave applyZoom briefly seeing the stale value if
+    // any synchronous redraw fires in between.
+    canvas.dataset.baseWidth = canvasW;
     var svg = document.getElementById('gmap-svg');
     if (svg) {
       svg.setAttribute('viewBox', '0 0 ' + canvasW + ' ' + GMAP.CANVAS_H);
