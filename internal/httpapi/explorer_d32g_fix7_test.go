@@ -119,12 +119,14 @@ func TestExplorer_D32gFix7_NoBroaderRefactor(t *testing.T) {
 		WithExplorerEnabled(true)
 	js := getExplorerAsset(t, srv, "/explorer/assets/js/graph/authority/authority-graph-view.js")
 
+	// D32h-impl-1 — The kind-bucketed planner (var ROWS / var GOV)
+	// was replaced by the chain-aware spec-driven planner. The
+	// remaining "no broader refactor" pins guard against renderer
+	// convergence helpers that D32g-fix-7 itself did not introduce.
 	for _, want := range []string{
 		"function renderAuthorityGraph(payload, ctx)",
 		"function _anchorsForEdge(edge, srcPos, dstPos)",
-		"_computeNodeOverlays(projection)",
-		"var ROWS = ['business_service', 'decision_surface', 'authority_profile', 'authority_grant', 'agent']",
-		"var GOV  = ['fail_mode_policy', 'escalation_target']",
+		"_computeNodeOverlays",
 	} {
 		if !strings.Contains(js, want) {
 			t.Errorf("D32g-fix-7 must not remove existing Authority view surface: %q", want)

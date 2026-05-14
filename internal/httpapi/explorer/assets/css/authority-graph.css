@@ -768,3 +768,278 @@ body[data-graph-lens="authority"] .gmap-legend-overlay {
 .authority-layer-fail-mode-off .authority-connector-business_service_has_fail_mode_policy {
   display: none;
 }
+
+/* ── D32h-fix-1 — Lens-aware bottom workbench routing ───────────────────
+ * The Authority Graph and the Context Graph share the vertical column
+ * beneath .governance-map-workbench. Each lens owns its own bottom
+ * workbench element:
+ *   • #gmap-evidence-tray         — Context: existing Drift Analytics
+ *   • #gmap-authority-workbench   — Authority Workbench (this tranche)
+ * The active lens is surfaced as body[data-graph-lens] by the existing
+ * inline workbench code; we route visibility from that single
+ * attribute so Context behaviour is unchanged and the modules never
+ * have to coordinate visibility imperatively. */
+body[data-graph-lens="authority"] #gmap-evidence-tray {
+  display: none;
+}
+body[data-graph-lens="authority"] #gmap-authority-workbench {
+  display: flex;
+}
+body[data-graph-lens="context"] #gmap-authority-workbench {
+  display: none;
+}
+
+/* ── D32h-fix-1 — Authority Workbench shell ─────────────────────────────
+ * Mirrors .gmap-evidence-tray's geometry so the column reserved for the
+ * bottom workbench is identical regardless of lens — switching lenses
+ * does not reflow the canvas. */
+/* D32h-fix-2d-converge — Height-driven collapse model matching
+ * Context's evidence tray contract (governance-map.css:1246-1265).
+ * Collapsed state shows only the 36px header bar (overflow hidden
+ * clips the body). Expanded state grows to 320px. Animates `height`
+ * (not `max-height`) so the visible affordance follows the
+ * `.is-expanded` class toggle. The previous `min-height: 36px;
+ * max-height: 280px; transition: max-height …` form let content
+ * drive the rendered height — collapse was a no-op visually, which
+ * was the root cause of the operator-reported "workbench has no
+ * close control" and "defaults open" defects. Convergence tracked
+ * in docs/analysis/D32h-fix-2d-parity-letterbox-divergence.md. */
+.gmap-authority-workbench {
+  flex-direction: column;
+  background: var(--surface-container-low);
+  border-top: 1px solid var(--outline-variant);
+  color: var(--on-surface);
+  height: 36px;
+  overflow: hidden;
+  transition: height 0.18s ease-out;
+}
+/* D32h-fix-2d — The previous `.gmap-authority-workbench[hidden] {
+ * display: none !important; }` rule has been deleted. Its
+ * `!important` was silently overriding the lens-aware reveal at
+ * body[data-graph-lens="authority"] #gmap-authority-workbench
+ * (display: flex), leaving the workbench permanently invisible at
+ * runtime even when the Authority lens was active. The lens-aware
+ * rules at lines 782-790 above cover both lens states through
+ * normal specificity, and the HTML `hidden` attribute's UA default
+ * (display: none) handles the no-lens-set boot fallback.
+ * Regression-guarded by
+ * TestExplorer_D32hFix2d_AuthorityWorkbenchNotHiddenByImportantOverride. */
+.gmap-authority-workbench.is-expanded {
+  height: 320px;
+}
+/* D32h-fix-2d-converge — Header chrome aligned with Context tray
+ * (governance-map.css:1266-1342). Explicit height:36px+flex-shrink:0
+ * keeps the header visible when the workbench is collapsed to 36px.
+ * Padding and font-family match Context. Title styling switches to
+ * uppercase eyebrow form (11px, 700, 0.08em, --slate-300) so the
+ * two lenses' letterbox chrome are visually indistinguishable apart
+ * from the lens-specific subtitle content. */
+.gmap-authority-workbench-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  height: 36px;
+  flex-shrink: 0;
+  background: var(--surface-container-lowest);
+  border-bottom: 1px solid var(--outline-variant);
+  font-family: var(--font-display);
+}
+.gmap-authority-workbench-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--slate-300);
+}
+.gmap-authority-workbench-subtitle {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--slate-400);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gmap-authority-workbench-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 22px;
+  background: var(--surface-container-low);
+  border: 1px solid var(--outline-variant);
+  border-radius: 4px;
+  color: var(--slate-400);
+  cursor: pointer;
+  font-family: inherit;
+  padding: 0;
+  font-size: 14px;
+  line-height: 1;
+}
+.gmap-authority-workbench-toggle:hover {
+  background: var(--surface-container);
+  color: var(--on-surface);
+}
+.gmap-authority-workbench-toggle:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+/* D32h-fix-2d-converge — Body / tabs / panel chrome aligned with
+ * Context tray (governance-map.css:1345-1368). Body gets explicit
+ * flex:1 1 auto + min-height:0 so it expands within the height-driven
+ * collapse model. Tab strip gets the Material surface-container-lowest
+ * background so the active tab's surface-container-low background
+ * reads as a raised tab on a deeper surface. */
+.gmap-authority-workbench-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.gmap-authority-workbench-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 6px 14px 0;
+  border-bottom: 1px solid var(--outline-variant);
+  background: var(--surface-container-lowest);
+  flex: 0 0 auto;
+}
+.gmap-authority-workbench-tab {
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  color: var(--slate-400);
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  border-top-left-radius: 6px;
+  border-top-right-radius: 6px;
+  cursor: pointer;
+}
+.gmap-authority-workbench-tab:hover {
+  color: var(--on-surface);
+}
+.gmap-authority-workbench-tab.is-active {
+  color: var(--on-surface);
+  background: var(--surface-container-low);
+  border-color: var(--outline-variant);
+}
+.gmap-authority-workbench-panel {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 12px 16px 16px;
+}
+
+/* D32h-fix-2d-converge — Panel-content token migration. Shell-chrome
+ * concerns (background, border, text) move to the defined Material
+ * Design tokens used by Context's tray + tokens.css. Severity / status
+ * colours move to the `--badge-bad/warn/info` convention-with-fallback
+ * tokens used by drift-analytics.css and the broader Explorer (so a
+ * future theme-aware badge palette catches Authority alongside Drift).
+ * The translucent rgba background overlays on the per-severity
+ * diagnostic-severity badges are preserved intentionally — they are
+ * brand-tinted overlays of the badge text colour, not theme-bound
+ * surfaces. */
+.authority-workbench-section {
+  margin-bottom: 12px;
+}
+.authority-workbench-section:last-child {
+  margin-bottom: 0;
+}
+.authority-workbench-section-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--slate-400);
+  margin: 0 0 6px;
+}
+.authority-workbench-section-context {
+  font-size: 11px;
+  color: var(--slate-400);
+  margin: 0 0 6px;
+  font-style: italic;
+}
+.authority-workbench-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 4px 16px;
+}
+.authority-workbench-stat {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  padding: 4px 0;
+  border-bottom: 1px dotted var(--outline-variant);
+}
+.authority-workbench-stat-label {
+  color: var(--slate-400);
+}
+.authority-workbench-stat-value {
+  color: var(--on-surface);
+  font-weight: 600;
+}
+.authority-workbench-stat-emphasis .authority-workbench-stat-value {
+  color: var(--badge-warn, #fbbf24);
+}
+.authority-workbench-stat-gap .authority-workbench-stat-value {
+  color: var(--badge-bad, #f87171);
+}
+.authority-workbench-stat-critical .authority-workbench-stat-value {
+  color: var(--badge-bad, #ef4444);
+}
+.authority-workbench-stat-warning .authority-workbench-stat-value {
+  color: var(--badge-warn, #f59e0b);
+}
+.authority-workbench-stat-info .authority-workbench-stat-value {
+  color: var(--badge-info, #60a5fa);
+}
+.authority-workbench-empty {
+  font-size: 12px;
+  color: var(--slate-400);
+  padding: 8px 0;
+  font-style: italic;
+}
+.authority-workbench-diagnostics {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.authority-workbench-diagnostic {
+  font-size: 12px;
+  padding: 4px 0;
+  border-bottom: 1px dotted var(--outline-variant);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: baseline;
+}
+.authority-workbench-diagnostic-severity {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--surface-container);
+}
+.authority-workbench-diagnostic-critical .authority-workbench-diagnostic-severity {
+  color: var(--badge-bad, #ef4444);
+  background: rgba(239,68,68,0.12);
+}
+.authority-workbench-diagnostic-warning .authority-workbench-diagnostic-severity {
+  color: var(--badge-warn, #f59e0b);
+  background: rgba(245,158,11,0.12);
+}
+.authority-workbench-diagnostic-info .authority-workbench-diagnostic-severity {
+  color: var(--badge-info, #60a5fa);
+  background: rgba(96,165,250,0.12);
+}
+.authority-workbench-diagnostic-kind {
+  color: var(--on-surface);
+  font-weight: 600;
+}
+.authority-workbench-diagnostic-message {
+  color: var(--slate-400);
+}

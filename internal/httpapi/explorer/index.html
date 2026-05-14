@@ -599,6 +599,63 @@
             </div>
           </div>
         </section>
+        <!-- D32h-fix-1 — Authority Workbench. Lens-specific sibling
+             of #gmap-evidence-tray. Hidden under Context lens via
+             body[data-graph-lens] CSS rule; revealed under Authority.
+             The Drift Analytics tray (#gmap-evidence-tray) remains
+             the Context lens's bottom workbench — its DOM, behaviour,
+             and contents are untouched. -->
+        <section id="gmap-authority-workbench"
+                 class="gmap-authority-workbench"
+                 aria-label="Authority Workbench"
+                 hidden>
+          <div class="gmap-authority-workbench-header">
+            <span class="gmap-authority-workbench-title"
+                  data-authority-workbench-title>Authority Workbench</span>
+            <span class="gmap-authority-workbench-subtitle"
+                  data-authority-workbench-subtitle>Select a graph node to inspect authority posture.</span>
+            <button type="button"
+                    id="gmap-authority-workbench-toggle"
+                    class="gmap-authority-workbench-toggle"
+                    aria-expanded="false"
+                    aria-controls="gmap-authority-workbench"
+                    aria-label="Expand Authority Workbench"
+                    title="Expand Authority Workbench"><span aria-hidden="true">&#x25B2;</span></button>
+          </div>
+          <div class="gmap-authority-workbench-body" id="gmap-authority-workbench-body">
+            <div class="gmap-authority-workbench-tabs" role="tablist">
+              <button type="button"
+                      class="gmap-authority-workbench-tab is-active"
+                      data-authority-tab="overview"
+                      role="tab"
+                      aria-selected="true">Overview</button>
+              <button type="button"
+                      class="gmap-authority-workbench-tab"
+                      data-authority-tab="fail-mode"
+                      role="tab"
+                      aria-selected="false">Fail Mode</button>
+              <button type="button"
+                      class="gmap-authority-workbench-tab"
+                      data-authority-tab="escalation"
+                      role="tab"
+                      aria-selected="false">Escalation</button>
+              <button type="button"
+                      class="gmap-authority-workbench-tab"
+                      data-authority-tab="grants"
+                      role="tab"
+                      aria-selected="false">Grants</button>
+              <button type="button"
+                      class="gmap-authority-workbench-tab"
+                      data-authority-tab="evidence"
+                      role="tab"
+                      aria-selected="false">Evidence</button>
+            </div>
+            <div class="gmap-authority-workbench-panel"
+                 id="gmap-authority-workbench-panel"
+                 data-authority-workbench-panel
+                 role="tabpanel"></div>
+          </div>
+        </section>
       </div>
       <!-- D32b-impl-3 — The previous .authority-graph-panels overlay
            was removed. Authority diagnostics + surface_posture now
@@ -1558,6 +1615,10 @@
      Diagnostics + surface_posture panels are deferred to D32b-impl-2;
      this tranche enables the basic lens. -->
 <script src="/explorer/assets/js/graph/authority/authority-graph-adapter.js"></script>
+<!-- D32h-impl-1 — Pure Authority layout helper. Consumes the typed
+     spec emitted by the adapter (mapToCardLayout) and returns a
+     position map + canvasW/canvasH. DOM-free; testable in isolation. -->
+<script src="/explorer/assets/js/graph/authority/authority-graph-layout.js"></script>
 <script src="/explorer/assets/js/graph/authority/authority-graph-inspector.js"></script>
 <!-- D32b-impl-2 — Authority panel modules. Each owns one panel and
      reads its data from the projection envelope passed to render().
@@ -1575,6 +1636,11 @@
      renderAuthorityGraph dispatches into authorityOverlays.render
      after a successful paint. -->
 <script src="/explorer/assets/js/graph/authority/authority-graph-overlays.js"></script>
+<!-- D32h-fix-1 — Authority Workbench (lens-aware bottom workbench).
+     Reads projection-derived data from the view's
+     window.MIDASExplorerGraph._lastAuthorityProjection cache; never
+     fetches; never modifies the Context Drift Analytics tray. -->
+<script src="/explorer/assets/js/graph/authority/authority-graph-workbench.js"></script>
 <!-- D32a-impl-5 — Explorer Services + Capabilities view modules.
      Each owns the production view orchestration formerly inline in
      index.html. Loaded after the graph modules so the services view's
@@ -1800,6 +1866,15 @@
       if (window.MIDASExplorerGraph && window.MIDASExplorerGraph.contextEvidenceTray &&
           typeof window.MIDASExplorerGraph.contextEvidenceTray.notifySelectionChanged === 'function') {
         window.MIDASExplorerGraph.contextEvidenceTray.notifySelectionChanged();
+      }
+      // D32h-fix-1 — Authority Workbench is the lens-aware peer of the
+      // Context evidence tray. Notify it on the same selection-change
+      // pulse so its per-selection tabs (Fail Mode, Escalation, Grants)
+      // re-render. The workbench gates on selectedGraphLens === 'authority'
+      // itself so this is safe under both lenses.
+      if (window.MIDASExplorerGraph && window.MIDASExplorerGraph.authorityWorkbench &&
+          typeof window.MIDASExplorerGraph.authorityWorkbench.notifySelectionChanged === 'function') {
+        try { window.MIDASExplorerGraph.authorityWorkbench.notifySelectionChanged(); } catch (_) { /* swallow */ }
       }
     },
     getGmapData: function () { return (typeof gmapData !== 'undefined') ? gmapData : null; },
@@ -4856,8 +4931,37 @@
   // D32a-impl-3 — Thin compatibility shim. Production addConnector
   // lives in graph-renderer.js.
   // D32a-impl-4 — Thin shim. Production selectGovernanceMapNode lives in graph/context/context-graph-inspector.js (selectNode). The inline gmapSelectedId binding is kept in sync via the selection module.
+  //
+  // D32h-fix-2b — Lens-aware dispatch. When the active graph lens is
+  // 'authority', route to ExplorerGraph.authorityInspector.selectNode
+  // so the Authority inspector module's lens-specific field
+  // formatting (kind-aware per-row formatters at
+  // authority-graph-inspector.js:50-153) actually runs — previously
+  // it was registered with the lens-agnostic inspector dispatch but
+  // never reached from the click path, leaving Authority drawer
+  // Inspector content Context-shaped. The Context branch is byte-
+  // identical to the pre-tranche shim and the literal substring
+  // ExplorerGraph.contextInspector.selectNode(nodeId) is preserved
+  // for the existing source-string tests at
+  // explorer_d32a_test.go:1490 and explorer_d32b_debug2_test.go:322.
+  // gmapSelectedId is set BEFORE dispatch so every callsite that
+  // reads the inline primary-selection binding (1839, 1840, 2360,
+  // 3389, 3802, 4200, 4390, 4791, 4842) observes the same value
+  // regardless of which inspector runs.
   function selectGovernanceMapNode(nodeId) {
+    if (!nodeId) return;
     gmapSelectedId = nodeId;
+    var lens = 'context';
+    try {
+      lens = (window.MIDASExplorerStore &&
+              window.MIDASExplorerStore.getState &&
+              window.MIDASExplorerStore.getState().selectedGraphLens) || 'context';
+    } catch (_) { /* default to context */ }
+    if (lens === 'authority' &&
+        ExplorerGraph.authorityInspector &&
+        typeof ExplorerGraph.authorityInspector.selectNode === 'function') {
+      return ExplorerGraph.authorityInspector.selectNode(nodeId);
+    }
     return ExplorerGraph.contextInspector.selectNode(nodeId);
   }
 

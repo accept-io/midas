@@ -55,6 +55,74 @@
                             // per-render so it never overlaps a wider main row
   };
 
+  // ── Authority Graph layout constants (D32h-impl-1 / D32h-fix-2f) ──────
+  //
+  // D32h-fix-2f — Per the Authority Graph design specification
+  // ([docs/design/D32h-authority-graph-design-specification.md §5.2 / §5.5]),
+  // y-anchors are DERIVED from a top margin plus a vertical step rather
+  // than declared as a fixed-y table. The AUTHORITY_LAYERS table object
+  // is retained (and its values populated from the derived expression)
+  // so D32h-impl-1 contract pins for the key names BUSINESS / SURFACE /
+  // PROFILE / GRANT / AGENT remain satisfied. The previous fixed values
+  // (24 / 144 / 264 / 384 / 504, step = 120) are replaced by the
+  // spec-derived values (40 / 144 / 248 / 352 / 456, step = NODE_H + 40
+  // = 104). The visual rhythm tightens by 16 px per row.
+
+  // AUTHORITY_TOP_MARGIN — padding above the Business Service row.
+  // Spec §5.2. The BS row's y equals this constant.
+  window.MIDASGovernanceMap.GMAP.AUTHORITY_TOP_MARGIN = 40;
+
+  // AUTHORITY_VERTICAL_STEP — distance between Authority Graph levels
+  // (BS → Surface → Profile → Grant → Agent). Spec §5.5 derivation:
+  // NODE_H (64) + 40 padding = 104. The fixed-y AUTHORITY_LAYERS table
+  // is populated from this step so any future tightening / loosening of
+  // the rhythm flows from a single constant.
+  window.MIDASGovernanceMap.GMAP.AUTHORITY_VERTICAL_STEP =
+    window.MIDASGovernanceMap.GMAP.NODE_H + 40;
+
+  // AUTHORITY_BOTTOM_MARGIN — padding below the deepest visible Authority
+  // node when canvasH is computed. Spec §5.2 / §15. Replaces the
+  // hardcoded 24 px tail in the layout helper.
+  window.MIDASGovernanceMap.GMAP.AUTHORITY_BOTTOM_MARGIN = 60;
+
+  // AUTHORITY_LAYERS — preserved as a table object so existing key-name
+  // contract pins remain satisfied. Y values are derived from
+  // AUTHORITY_TOP_MARGIN + n * AUTHORITY_VERTICAL_STEP per the spec
+  // ordering BUSINESS, SURFACE, PROFILE, GRANT, AGENT.
+  (function () {
+    var top  = window.MIDASGovernanceMap.GMAP.AUTHORITY_TOP_MARGIN;
+    var step = window.MIDASGovernanceMap.GMAP.AUTHORITY_VERTICAL_STEP;
+    window.MIDASGovernanceMap.GMAP.AUTHORITY_LAYERS = {
+      BUSINESS: { y: top + 0 * step },
+      SURFACE:  { y: top + 1 * step },
+      PROFILE:  { y: top + 2 * step },
+      GRANT:    { y: top + 3 * step },
+      AGENT:    { y: top + 4 * step },
+    };
+  })();
+
+  // AUTHORITY_CHAIN_GAP — horizontal separator between independent
+  // Surface→Profile→Grant→Agent chains. Mirrors Context's `midGap`
+  // between caps and procs. Larger than the row-internal NODE_GAP so
+  // chains read as visually distinct groups.
+  window.MIDASGovernanceMap.GMAP.AUTHORITY_CHAIN_GAP = 48;
+
+  // AUTHORITY_LANE_GAP — spec §5.2 name for the same horizontal gap
+  // between lanes. Aliased to AUTHORITY_CHAIN_GAP so the layout helper
+  // and tests can consume the spec-named constant while the original
+  // D32h-impl-1 pin on AUTHORITY_CHAIN_GAP survives.
+  window.MIDASGovernanceMap.GMAP.AUTHORITY_LANE_GAP =
+    window.MIDASGovernanceMap.GMAP.AUTHORITY_CHAIN_GAP;
+
+  // AUTHORITY_SIDECAR_GAP — horizontal gap between a spine node and an
+  // attached governance sidecar (fail-mode policy adjacent to its
+  // owning surface; escalation target adjacent to its owning profile).
+  // Differs from GOV_GAP so the per-owner sidecar geometry stays
+  // independent of the (Context-only) right-side governance strip.
+  // Spec §5.2 fallback is NODE_W/2 (110); the smaller 36-px value is
+  // retained as the authoritative Authority sidecar geometry.
+  window.MIDASGovernanceMap.GMAP.AUTHORITY_SIDECAR_GAP = 36;
+
   // ── Map zoom state ────────────────────────────────────────────────────────
   // Multiplicative zoom: in-button multiplies by STEP, out-button divides
   // by STEP. Range is clamped to [MIN, MAX]. The current value is preserved

@@ -55,7 +55,15 @@
   function _gmap()     { return window.MIDASGovernanceMap    || {}; }
   function _renderer() { return (window.MIDASExplorerGraph && window.MIDASExplorerGraph.renderer) || null; }
   function _adapter()  { return (window.MIDASExplorerGraph && window.MIDASExplorerGraph.authorityAdapter) || null; }
+  function _layout()   { return (window.MIDASExplorerGraph && window.MIDASExplorerGraph.authorityLayout) || null; }
   function _shell()    { return (window.MIDASExplorerGraph && window.MIDASExplorerGraph.shell) || null; }
+  function _renderCtx() {
+    // D32h-impl-1 — Resolve the shared `_gmapRenderCtx` hook bag that
+    // index.html exposes for both lenses. Match the Context view's
+    // pattern of deferring camera/selection/summary to a stable hook
+    // contract rather than calling camera helpers directly.
+    return (window.MIDASExplorerGraph && window.MIDASExplorerGraph._renderCtx) || null;
+  }
   function _store()    { return window.MIDASExplorerStore || null; }
   function _escHtml(s) {
     var fn = _utils().escHtml;
@@ -104,7 +112,28 @@
           renderAuthorityGraphError('Authority Graph fetch failed (HTTP ' + payload.__status + ').');
           return payload;
         }
-        renderAuthorityGraph(payload, { view: 'service', rootId: rootId });
+        // D32h-impl-1 — Pass the shared render-context hook bag so
+        // the view can dispatch camera + selection + summary through
+        // the same seam Context uses (no direct camera imports).
+        var sharedCtx = _renderCtx() || {};
+        var renderCtx = {
+          view:    'service',
+          rootId:  rootId,
+          // Inherited from _gmapRenderCtx; each is optional and the
+          // view branches on typeof === 'function'.
+          setStatus:           sharedCtx.setStatus,
+          setCurrentRoot:      sharedCtx.setCurrentRoot,
+          setSummary:          sharedCtx.setSummary,
+          setDetailsName:      sharedCtx.setDetailsName,
+          setDetailsFields:    sharedCtx.setDetailsFields,
+          selectNode:          sharedCtx.selectNode,
+          applyZoom:           sharedCtx.applyZoom,
+          focusOnRoot:         sharedCtx.focusOnRoot,
+          applyFitMode:        sharedCtx.applyFitMode,
+          scheduleFitToView:   sharedCtx.scheduleFitToView,
+          applyMultiSelection: sharedCtx.applyMultiSelection,
+        };
+        renderAuthorityGraph(payload, renderCtx);
         return payload;
       })
       .catch(function (err) {
@@ -196,7 +225,6 @@
       return;
     }
     var GMAP = (_gmap().GMAP) || { NODE_W: 220, NODE_H: 64, NODE_GAP: 32, MIN_CANVAS_W: 1180, EDGE_PAD: 72 };
-    var distributeRow = _gmap().distributeRow;
 
     setAuthorityGraphStatus('');
 
@@ -204,142 +232,145 @@
     var canvas = document.getElementById('gmap-canvas');
     if (!canvas) return;
 
-    var projection = adapter.normalise(payload);
-    if (!projection.nodes.length) {
+    // D32h-impl-1 — Spec-driven layout. The shell passes a
+    // mapToCardLayout-shaped payload through (graph-shell.js:201-205);
+    // when the payload is the raw projection (direct render dispatch /
+    // test isolation) we adapt it ourselves so the renderer never has
+    // to branch on payload shape.
+    var spec;
+    if (payload && Array.isArray(payload.chains)) {
+      spec = payload;
+    } else if (typeof adapter.mapToCardLayout === 'function') {
+      spec = adapter.mapToCardLayout(payload, ctx.view || 'service');
+    } else {
+      // Defensive fallback — wrap the raw projection in a chain-less
+      // spec so the orphan/unlinked path still renders something.
+      var fallback = adapter.normalise(payload);
+      spec = {
+        lens:         'authority',
+        view:         ctx.view || '',
+        root:         null,
+        nodes:        fallback.nodes,
+        edges:        fallback.edges,
+        nodesByRef:   {},
+        chains:       [],
+        governance:   { failModePolicies: [], escalationTargets: [], unlinked: [] },
+        unlinked:     fallback.nodes,
+        summary:      fallback.summary,
+        diagnostics:  fallback.diagnostics,
+        diagnosticSummary: fallback.diagnosticSummary,
+        surfacePosture:    fallback.surfacePosture,
+      };
+    }
+
+    if (!spec || !Array.isArray(spec.nodes) || spec.nodes.length === 0) {
       renderAuthorityGraphEmpty('Authority Graph has no nodes for this service.', ctx.rootId || '');
       return;
     }
 
-    // D32f-impl-1 — Cache the latest projection on the namespace so the
-    // inspector + overlays module can read diagnostics / posture for the
-    // selected node WITHOUT re-fetching. Stored as a frozen snapshot;
-    // the next refresh overwrites it.
-    window.MIDASExplorerGraph._lastAuthorityProjection = payload || null;
+    // D32f-impl-1 — Cache the spec on the namespace so the inspector +
+    // overlays module can read diagnostics / posture for the selected
+    // node WITHOUT re-fetching. The spec is a superset of the
+    // projection (same nodes / edges / diagnostics / surface_posture
+    // arrays), so existing consumers continue to work unchanged.
+    window.MIDASExplorerGraph._lastAuthorityProjection = spec;
 
     // D32f-impl-1 — Pre-compute the per-node overlay indexes ONCE per
-    // render. Each map is keyed by "<kind>:<id>".
-    //   _diagnosticsByNode    → { "decision_surface:surf-…": "critical"|"warning"|"info" }
-    //   _postureBySurface     → { "surf-…": { fmp_status, agent_status, profile_status, … } }
-    //   _diagnosticDetails    → { "decision_surface:surf-…": [Diagnostic, …] }
-    var overlays = _computeNodeOverlays(projection);
+    // render. The spec carries the same diagnostics + surface_posture
+    // arrays as the raw projection, so this helper is unchanged.
+    var overlays = _computeNodeOverlays({
+      diagnostics:    spec.diagnostics,
+      surface_posture: spec.surfacePosture,
+    });
 
-    // Group nodes by kind row (subject/authority/agent layout) and by
-    // governance column (fail_mode_policy / escalation_target).
-    var ROWS = ['business_service', 'decision_surface', 'authority_profile', 'authority_grant', 'agent'];
-    var GOV  = ['fail_mode_policy', 'escalation_target'];
-    var rowY = {};
-    for (var r = 0; r < ROWS.length; r++) {
-      rowY[ROWS[r]] = 24 + r * (GMAP.NODE_H + 56);
-    }
+    // D32h-impl-1 — Pure layout planner. Returns positions, canvasW,
+    // canvasH. The view's only remaining math is canvasW propagation
+    // to the coordinate-contract two-liner.
+    //
+    // D32h-fix-2c — Thread the current layer state from the overlays
+    // module into the helper so visibility is a first-class layout
+    // decision. When the overlays module is absent (test isolation),
+    // computeAuthorityLayout defaults to all-visible. The helper now
+    // also returns visibleNodes and visibleEdges, which drive the
+    // paint and connector-emit loops below.
+    var layout = _layout();
+    var overlaysForLayerState = window.MIDASExplorerGraph && window.MIDASExplorerGraph.authorityOverlays;
+    var layerState = (overlaysForLayerState && typeof overlaysForLayerState.getLayerState === 'function')
+      ? overlaysForLayerState.getLayerState()
+      : undefined;
+    var layoutResult = (layout && typeof layout.computeAuthorityLayout === 'function')
+      ? layout.computeAuthorityLayout(spec, GMAP, layerState)
+      : { positions: {}, visibleNodes: [], visibleEdges: [], canvasW: GMAP.MIN_CANVAS_W, canvasH: GMAP.CANVAS_H, chainOrder: [], sidecarSlots: {}, anchorsHint: {} };
 
-    var byKind = {};
-    for (var i = 0; i < projection.nodes.length; i++) {
-      var n = projection.nodes[i];
-      if (!n || !n.kind) continue;
-      if (!byKind[n.kind]) byKind[n.kind] = [];
-      byKind[n.kind].push(n);
-    }
-
-    // Decide canvas width to fit the widest row.
-    var widest = 0;
-    for (var k = 0; k < ROWS.length; k++) {
-      var arr = byKind[ROWS[k]] || [];
-      var rowWidth = arr.length * GMAP.NODE_W + Math.max(0, arr.length - 1) * GMAP.NODE_GAP;
-      if (rowWidth > widest) widest = rowWidth;
-    }
-    var govCount = (byKind.fail_mode_policy || []).length + (byKind.escalation_target || []).length;
-    var canvasW = Math.max(
-      GMAP.MIN_CANVAS_W,
-      widest + GMAP.EDGE_PAD * 2 + (govCount > 0 ? GMAP.NODE_W + 80 : 0)
-    );
+    var positions    = layoutResult.positions    || {};
+    var visibleNodes = layoutResult.visibleNodes || [];
+    var visibleEdges = layoutResult.visibleEdges || [];
+    var canvasW      = layoutResult.canvasW      || GMAP.MIN_CANVAS_W;
     canvas.style.minWidth = canvasW + 'px';
 
-    // D32g-fix-7 — Complete the dynamic canvas-width contract.
-    //
-    // The Context Graph view sets TWO coupled lines after computing
-    // canvasW (context-graph-view.js:195-196):
-    //
-    //   canvas.dataset.baseWidth = canvasW;
-    //   svg.setAttribute('viewBox', '0 0 ' + canvasW + ' ' + GMAP.CANVAS_H);
-    //
-    // D32g-fix-6 added only the viewBox setter. The viewBox alone is
-    // not enough: graph-camera.js applyZoom() reads
-    // `canvas.dataset.baseWidth` and forces `scene.style.width =
-    // baseW + 'px'`. Without dataset.baseWidth, the scene gets
-    // clamped to GMAP.MIN_CANVAS_W (1180) while the viewBox claims a
-    // wider coordinate space — SVG content then SHRINKS by
-    // 1180 / canvasW relative to HTML cards, producing the
-    // "connectors stretch across empty canvas" symptom D32g-analysis-3
-    // documented.
-    //
-    // The dataset.baseWidth line MUST precede the viewBox line: the
-    // camera reads dataset.baseWidth via applyZoom; setting it after
-    // viewBox would leave applyZoom briefly seeing the stale value if
-    // any synchronous redraw fires in between.
+    // D32g-fix-7 — Coordinate contract. Two-liner, preserved verbatim
+    // from Context (context-graph-view.js:195-196). dataset.baseWidth
+    // MUST precede the viewBox setter so graph-camera.applyZoom()
+    // reads the post-layout width on its first synchronous read.
     canvas.dataset.baseWidth = canvasW;
     var svg = document.getElementById('gmap-svg');
     if (svg) {
       svg.setAttribute('viewBox', '0 0 ' + canvasW + ' ' + GMAP.CANVAS_H);
     }
 
-    var positions = {};
-
-    // Place each kind row.
-    for (var ri = 0; ri < ROWS.length; ri++) {
-      var kind = ROWS[ri];
-      var list = byKind[kind] || [];
-      if (!list.length) continue;
-      var xs = (typeof distributeRow === 'function')
-        ? distributeRow(list.length, GMAP.EDGE_PAD, canvasW - (govCount > 0 ? GMAP.NODE_W + 80 : 0) - GMAP.EDGE_PAD)
-        : _fallbackDistribute(list.length, GMAP.EDGE_PAD, canvasW - GMAP.EDGE_PAD, GMAP);
-      for (var ni = 0; ni < list.length; ni++) {
-        var node = list[ni];
-        var pos = { x: xs[ni], y: rowY[kind] };
-        positions[_refKey({ kind: node.kind, id: node.id })] = pos;
-        _paintNode(node, pos, renderer, adapter, overlays);
-      }
+    // D32h-fix-2c — Paint nodes from layoutResult.visibleNodes. The
+    // helper has already decided what is visible based on layerState;
+    // off-layer governance nodes are absent from this list so the
+    // canvas no longer paints DOM cards that CSS would just hide.
+    // Position-mirroring into shared renderer state (read by
+    // addLiveConnector via effectiveGmapPosition) happens once here
+    // per painted node.
+    for (var vni = 0; vni < visibleNodes.length; vni++) {
+      var ventry = visibleNodes[vni];
+      if (!ventry || !ventry.node) continue;
+      var vpos = positions[ventry.refKey];
+      if (!vpos) continue;
+      _state().positions[ventry.refKey] = vpos;
+      // D32h-fix-2f — Forward the visibleNode entry so _paintNode can
+      // attach data-missing-below / data-shared-by structural metadata
+      // to the painted card. The metadata is layout-driven (computed in
+      // computeAuthorityLayout) and is independent of the projection-
+      // derived posture overlay path.
+      _paintNode(ventry.node, vpos, renderer, adapter, overlays, ventry);
     }
 
-    // Governance column (right edge). Distribute fmp + escalation_target
-    // vertically with consistent spacing.
-    var govX = canvasW - GMAP.NODE_W - GMAP.EDGE_PAD;
-    var govList = [];
-    for (var gi = 0; gi < GOV.length; gi++) {
-      var govKind = GOV[gi];
-      var govArr  = byKind[govKind] || [];
-      for (var gj = 0; gj < govArr.length; gj++) govList.push(govArr[gj]);
-    }
-    for (var gp = 0; gp < govList.length; gp++) {
-      var gNode = govList[gp];
-      var gPos = { x: govX, y: 24 + gp * (GMAP.NODE_H + 32) };
-      positions[_refKey({ kind: gNode.kind, id: gNode.id })] = gPos;
-      _paintNode(gNode, gPos, renderer, adapter, overlays);
-    }
-
-    // Paint edges. The lens-agnostic addLiveConnector takes anchor
-    // names from GMAP_ANCHORS. D32g-fix-3: anchor-side selection now
-    // routes through _anchorsForEdge which uses the actual relative
-    // positions of source + target nodes (via
-    // MIDASGovernanceMap.pickAnchorSides) for governance crossings
-    // so the source anchor faces the target wherever the target
-    // happens to sit on the canvas. Spine edges keep their fixed
-    // top-down ['bottom', 'top'] pair.
-    for (var ei = 0; ei < projection.edges.length; ei++) {
-      var edge = projection.edges[ei];
-      if (!edge || !edge.src || !edge.dst) continue;
-      var srcKey = _refKey(edge.src);
-      var dstKey = _refKey(edge.dst);
-      // D32g-fix-3 — Structural-edge guardrail: drop edges whose
-      // endpoints are missing from the position map (a node was
-      // filtered out, lens-switch race, etc.). Without this the
-      // connector pipeline can paint a path with one valid end and
-      // one undefined end, producing a connector that "stops short".
-      if (!positions[srcKey] || !positions[dstKey]) continue;
-      var anchors = _anchorsForEdge(edge, positions[srcKey], positions[dstKey]);
+    // D32h-fix-2c — Connector emission iterates layoutResult.visibleEdges.
+    // The helper has filtered governance edges per layerState; the view
+    // no longer walks spec.chains or governance.owners directly. Each
+    // visibleEdge entry carries srcKey, dstKey, kind, and anchors —
+    // anchors is either an explicit pair (spine: ['bottom','top']) or
+    // the sentinel 'pick' (governance: route through pickAnchorSides
+    // via _anchorsForEdge). The structural-edge guardrail and the
+    // _anchorsForEdge call shape are byte-identical to the pre-D32h-fix-2c
+    // emitSpine / emitGovernance helpers, so the D32g-fix-3 invariants
+    // remain pinned.
+    function emitVisibleEdge(e) {
+      if (!e) return;
+      var srcKey   = e.srcKey;
+      var dstKey   = e.dstKey;
+      var edgeKind = e.kind;
+      if (!positions[srcKey] || !positions[dstKey]) return;
       _state().positions[srcKey] = positions[srcKey];
       _state().positions[dstKey] = positions[dstKey];
-      var cls = 'authority-connector ' + adapter.connectorClassForEdge(edge);
+      var anchors;
+      if (e.anchors === 'pick') {
+        anchors = _anchorsForEdge({ kind: edgeKind }, positions[srcKey], positions[dstKey]);
+      } else if (e.anchors && e.anchors.length === 2) {
+        anchors = e.anchors;
+      } else {
+        anchors = ['bottom', 'top'];
+      }
+      var cls = 'authority-connector authority-connector-' + edgeKind;
       renderer.addLiveConnector(srcKey, anchors[0], dstKey, anchors[1], cls);
+    }
+
+    for (var vei = 0; vei < visibleEdges.length; vei++) {
+      emitVisibleEdge(visibleEdges[vei]);
     }
 
     // D32b-impl-2 — Render the Authority panels after a successful
@@ -360,17 +391,57 @@
       try { overlaysModule.render(payload); } catch (_) { /* swallow */ }
     }
 
-    // D32b-impl-2a — Schedule a fit-to-view after the Authority Graph
-    // first paints so the operator opens to a centred / framed graph
-    // rather than a top-aligned canvas. The Context lens does the
-    // equivalent via context-graph-view.js renderContextGraph; the
-    // Authority lens delegates to the same shared graph-camera helper
-    // (scheduleFitToView) so there is no parallel centring code path.
-    // Manual pan/zoom after the first fit is preserved — the helper
-    // schedules ONE fit per call, not a polling loop.
-    var camera = window.MIDASExplorerGraph && window.MIDASExplorerGraph.camera;
-    if (camera && typeof camera.scheduleFitToView === 'function') {
-      try { camera.scheduleFitToView(); } catch (_) { /* swallow */ }
+    // D32h-fix-1 — Render the lens-aware Authority Workbench. The
+    // workbench module reads from _lastAuthorityProjection (cached
+    // above) and paints projection-derived posture / fail-mode /
+    // escalation / grants / evidence content. No-op when the module
+    // is absent (test isolation) or the Workbench DOM has not yet
+    // been wired (idempotent init runs on DOMContentLoaded).
+    var workbenchModule = window.MIDASExplorerGraph && window.MIDASExplorerGraph.authorityWorkbench;
+    if (workbenchModule && typeof workbenchModule.render === 'function') {
+      try { workbenchModule.render(); } catch (_) { /* swallow */ }
+    }
+
+    // D32h-impl-1 — Camera + selection sequence via the shared
+    // `ctx` hook bag. Mirrors Context's
+    // context-graph-view.js:628-636 contract so both lenses defer to
+    // the same inline workbench orchestration. Each hook is optional
+    // (test isolation, early boot); the view no-ops when missing.
+    var rootCardId = spec.root ? _refKey({ kind: spec.root.kind, id: spec.root.id }) : '';
+    var rootDisplayName = (spec.root && (spec.root.label || spec.root.id)) || '';
+    if (typeof ctx.setCurrentRoot === 'function') {
+      try { ctx.setCurrentRoot(ctx.view || 'service', ctx.rootId || (spec.root && spec.root.id) || '', rootDisplayName); } catch (_) { /* swallow */ }
+    }
+    if (rootCardId) {
+      if (typeof ctx.selectNode === 'function') {
+        try { ctx.selectNode(rootCardId); } catch (_) { /* swallow */ }
+      }
+      if (window.MIDASExplorerGraph.state) {
+        window.MIDASExplorerGraph.state.selectedId = rootCardId;
+      }
+    }
+    if (typeof ctx.applyZoom === 'function') {
+      try { ctx.applyZoom(); } catch (_) { /* swallow */ }
+    }
+    if (rootCardId && typeof ctx.focusOnRoot === 'function') {
+      try { ctx.focusOnRoot(rootCardId); } catch (_) { /* swallow */ }
+    }
+    if (typeof ctx.applyFitMode === 'function') {
+      try { ctx.applyFitMode(true); } catch (_) { /* swallow */ }
+    }
+    if (typeof ctx.scheduleFitToView === 'function') {
+      try { ctx.scheduleFitToView(); } catch (_) { /* swallow */ }
+    } else {
+      // Defensive fallback for the direct-render-dispatch path that
+      // does not flow a ctx (renderer.render('authority', payload)).
+      // Reach into the camera module only when no hook is available.
+      var camera = window.MIDASExplorerGraph && window.MIDASExplorerGraph.camera;
+      if (camera && typeof camera.scheduleFitToView === 'function') {
+        try { camera.scheduleFitToView(); } catch (_) { /* swallow */ }
+      }
+    }
+    if (typeof ctx.applyMultiSelection === 'function') {
+      try { ctx.applyMultiSelection(); } catch (_) { /* swallow */ }
     }
   }
 
@@ -402,7 +473,7 @@
     }
   }
 
-  function _paintNode(node, pos, renderer, adapter, overlays) {
+  function _paintNode(node, pos, renderer, adapter, overlays, visibleEntry) {
     var details = _detailsFor(node, adapter);
     var nodeId  = _refKey({ kind: node.kind, id: node.id });
     // Mirror the node position into shared renderer state so
@@ -450,7 +521,16 @@
     // D32f-impl-1 — Annotate the freshly-painted node with
     // diagnostic + posture data-attributes. The renderer's addNode
     // appends synchronously, so the node is queryable here.
-    if (overlays) {
+    //
+    // D32h-fix-2f — Also propagate the structural metadata the layout
+    // helper emits on the visibleNode entry (missingBelow / sharedBy).
+    // The attributes carry layout-truth (chain truncation point,
+    // shared-by owner count) so downstream tooling and tests can pin
+    // structural correctness without re-deriving from the projection.
+    // No styled badge is painted in this tranche; visual semantics are
+    // deferred to D32h-fix-2e per the tranche table in §17 of the
+    // Authority Graph design specification.
+    if (overlays || visibleEntry) {
       var nodeEl = document.querySelector(
         '.gmap-node[data-node-id="' + (window.CSS && CSS.escape ? CSS.escape(nodeId) : nodeId) + '"]'
       );
@@ -458,19 +538,29 @@
         // Mirror the projection kind without the "authority-" prefix so
         // CSS selectors stay readable and contract tests can pin them.
         nodeEl.setAttribute('data-projection-kind', node.kind);
-        var sev = overlays.diagnosticsByNode[nodeId];
-        if (sev) {
-          nodeEl.setAttribute('data-diagnostic-severity', sev);
+        if (overlays) {
+          var sev = overlays.diagnosticsByNode[nodeId];
+          if (sev) {
+            nodeEl.setAttribute('data-diagnostic-severity', sev);
+          }
+          if (node.kind === 'decision_surface') {
+            var p = overlays.postureBySurface[node.id];
+            if (p) {
+              if (p.fail_mode_policy_status) nodeEl.setAttribute('data-fmp-status', p.fail_mode_policy_status);
+              if (p.agent_status)            nodeEl.setAttribute('data-agent-status', p.agent_status);
+              if (p.profile_status)          nodeEl.setAttribute('data-profile-status', p.profile_status);
+              if (p.grant_status)            nodeEl.setAttribute('data-grant-status', p.grant_status);
+              if (p.authority_status)        nodeEl.setAttribute('data-authority-status', p.authority_status);
+              if (p.escalation_status)       nodeEl.setAttribute('data-escalation-status', p.escalation_status);
+            }
+          }
         }
-        if (node.kind === 'decision_surface') {
-          var p = overlays.postureBySurface[node.id];
-          if (p) {
-            if (p.fail_mode_policy_status) nodeEl.setAttribute('data-fmp-status', p.fail_mode_policy_status);
-            if (p.agent_status)            nodeEl.setAttribute('data-agent-status', p.agent_status);
-            if (p.profile_status)          nodeEl.setAttribute('data-profile-status', p.profile_status);
-            if (p.grant_status)            nodeEl.setAttribute('data-grant-status', p.grant_status);
-            if (p.authority_status)        nodeEl.setAttribute('data-authority-status', p.authority_status);
-            if (p.escalation_status)       nodeEl.setAttribute('data-escalation-status', p.escalation_status);
+        if (visibleEntry) {
+          if (visibleEntry.missingBelow) {
+            nodeEl.setAttribute('data-missing-below', visibleEntry.missingBelow);
+          }
+          if (typeof visibleEntry.sharedBy === 'number' && visibleEntry.sharedBy > 1) {
+            nodeEl.setAttribute('data-shared-by', String(visibleEntry.sharedBy));
           }
         }
       }
@@ -620,15 +710,6 @@
     return window.MIDASExplorerGraph.state;
   }
 
-  function _fallbackDistribute(n, x0, x1, GMAP) {
-    if (n <= 0) return [];
-    if (n === 1) return [(x0 + x1) / 2 - GMAP.NODE_W / 2];
-    var stride = (x1 - x0 - GMAP.NODE_W) / (n - 1);
-    var out = [];
-    for (var i = 0; i < n; i++) out.push(x0 + i * stride);
-    return out;
-  }
-
   // ── Lens registration ─────────────────────────────────────────────────
   // The renderer dispatch table holds the per-lens impl. shell.render
   // (removed in D32a-impl-7) and direct callers both resolve through
@@ -647,7 +728,25 @@
         renderAuthorityGraphError('Authority Graph fetch failed (HTTP ' + payload.__status + ').');
         return;
       }
-      renderAuthorityGraph(payload, { view: 'service' });
+      // D32h-impl-1 — Surface the shared render-context hook bag for
+      // the dispatch-table render path too. Same six hooks as the
+      // refresh() path; falls back to defaults when index.html has
+      // not yet attached _renderCtx (very early boot, test isolation).
+      var sharedCtx2 = _renderCtx() || {};
+      renderAuthorityGraph(payload, {
+        view: 'service',
+        setStatus:           sharedCtx2.setStatus,
+        setCurrentRoot:      sharedCtx2.setCurrentRoot,
+        setSummary:          sharedCtx2.setSummary,
+        setDetailsName:      sharedCtx2.setDetailsName,
+        setDetailsFields:    sharedCtx2.setDetailsFields,
+        selectNode:          sharedCtx2.selectNode,
+        applyZoom:           sharedCtx2.applyZoom,
+        focusOnRoot:         sharedCtx2.focusOnRoot,
+        applyFitMode:        sharedCtx2.applyFitMode,
+        scheduleFitToView:   sharedCtx2.scheduleFitToView,
+        applyMultiSelection: sharedCtx2.applyMultiSelection,
+      });
       void mount; // mount resolution handled by the renderer dispatch
     },
     clear: function (mount) {

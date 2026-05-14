@@ -73,12 +73,21 @@
   // (the parent of #gmap-canvas). The stylesheet at
   // assets/css/authority-graph.css consumes these classes to hide
   // nodes, edges, and overlay markers.
+  // D32h-fix-1 — `defaultOn` flag governs the initial state of each
+  // layer chip. The Authority canvas is the *authority spine*; optional
+  // governance side-branches (fail-mode policy nodes + escalation
+  // target nodes) were dominating the default render and producing the
+  // tangled crossings reported on the Showcase service. They remain
+  // accessible — operators can toggle them on — but the *default* view
+  // is now spine-only, and operators inspect fail-mode + escalation
+  // detail in the Authority Workbench / drawer (where the underlying
+  // data was always available regardless of the graph-layer state).
   var LAYER_CHIPS = Object.freeze([
-    Object.freeze({ id: 'authority-spine', label: 'Authority spine', alwaysOn: true }),
-    Object.freeze({ id: 'diagnostics',     label: 'Diagnostics' }),
-    Object.freeze({ id: 'surface-posture', label: 'Surface posture' }),
-    Object.freeze({ id: 'escalation',      label: 'Escalation' }),
-    Object.freeze({ id: 'fail-mode',       label: 'Fail-mode policy' }),
+    Object.freeze({ id: 'authority-spine', label: 'Authority spine', alwaysOn: true, defaultOn: true }),
+    Object.freeze({ id: 'diagnostics',     label: 'Diagnostics',                       defaultOn: true }),
+    Object.freeze({ id: 'surface-posture', label: 'Surface posture',                   defaultOn: true }),
+    Object.freeze({ id: 'escalation',      label: 'Escalation',                        defaultOn: false }),
+    Object.freeze({ id: 'fail-mode',       label: 'Fail-mode policy',                  defaultOn: false }),
   ]);
 
   function _layerClassFor(chipID, state) {
@@ -280,9 +289,14 @@
     for (var i = 0; i < LAYER_CHIPS.length; i++) {
       var chip = LAYER_CHIPS[i];
       var disabledAttr = chip.alwaysOn ? ' disabled aria-disabled="true"' : '';
+      // D32h-fix-1 — Honour each chip's `defaultOn`. Spine and posture
+      // remain on; governance side-branches (fail-mode, escalation)
+      // default off and the corresponding canvas-side `*-off` class is
+      // applied below so the initial render matches the chip state.
+      var checkedAttr = chip.defaultOn === false ? '' : ' checked';
       html += (
         '<label class="authority-graph-layer-chip" data-layer-id="' + _escHtml(chip.id) + '">' +
-          '<input type="checkbox" class="authority-graph-layer-chip-input" data-layer-id="' + _escHtml(chip.id) + '" checked' + disabledAttr + '>' +
+          '<input type="checkbox" class="authority-graph-layer-chip-input" data-layer-id="' + _escHtml(chip.id) + '"' + checkedAttr + disabledAttr + '>' +
           '<span class="authority-graph-layer-chip-label">' + _escHtml(chip.label) + '</span>' +
         '</label>'
       );
@@ -290,6 +304,14 @@
     html += '</div>';
     mount.innerHTML = html;
     mount.dataset.layerChipsRendered = '1';
+    // Apply initial layer-off classes for any chip whose default is off.
+    // The chip change-handler below maintains state for subsequent toggles.
+    for (var di = 0; di < LAYER_CHIPS.length; di++) {
+      var defChip = LAYER_CHIPS[di];
+      if (defChip.defaultOn === false) {
+        _applyLayerState(defChip.id, 'off');
+      }
+    }
 
     mount.addEventListener('change', function (e) {
       if (!e.target || e.target.tagName !== 'INPUT') return;
@@ -362,13 +384,67 @@
   //   • the Layers-button interceptor is installed lazily (the button
   //     may not have been in the DOM when the module loaded, e.g.
   //     during async asset load ordering).
+  // D32h-fix-1 — Layer defaults are applied here (NOT only in
+  // renderLayerChipsInto) so the canvas reflects the spine-only
+  // default the very first time the Authority graph paints, even
+  // before the operator opens the drawer's "Posture & Help" tab.
+  // `_layerDefaultsApplied` tracks once-per-mount so subsequent renders
+  // never override an explicit operator toggle.
+  var _layerDefaultsApplied = false;
+  function _applyLayerDefaultsOnce() {
+    if (_layerDefaultsApplied) return;
+    var target = _layerTargetEl();
+    if (!target) return;
+    for (var i = 0; i < LAYER_CHIPS.length; i++) {
+      var chip = LAYER_CHIPS[i];
+      if (chip.defaultOn === false) {
+        _applyLayerState(chip.id, 'off');
+      }
+    }
+    _layerDefaultsApplied = true;
+  }
+
   function render(payload) {
     _ensureLayersButtonInterceptor();
+    _applyLayerDefaultsOnce();
     void payload;
   }
 
   function clear() {
     _removeLayersButtonInterceptor();
+    _layerDefaultsApplied = false;
+  }
+
+  // D32h-fix-2c — Public read API for the current layer state. The
+  // Authority view passes the result into computeAuthorityLayout(spec,
+  // GMAP, layerState) so visibility is a first-class layout decision
+  // rather than a CSS-only side-effect. Each chip id maps to a
+  // boolean (true = layer ON / visible). When the canvas-body target
+  // is absent (test isolation, very early boot), the function returns
+  // the configured `defaultOn` values from LAYER_CHIPS — keeping
+  // pre-D32h-fix-2c callers' fallback path stable. `authority-spine`
+  // is always true (alwaysOn: true at LAYER_CHIPS).
+  //
+  // Mirrors the same class-reading logic as _syncLayerChipState
+  // (renderLayerChipsInto uses it to keep chip <input>s in sync with
+  // the canvas state), so the two paths cannot drift.
+  function getLayerState() {
+    var target = _layerTargetEl();
+    var out = {};
+    for (var i = 0; i < LAYER_CHIPS.length; i++) {
+      var chip = LAYER_CHIPS[i];
+      if (chip.alwaysOn) {
+        out[chip.id] = true;
+        continue;
+      }
+      if (!target) {
+        out[chip.id] = (chip.defaultOn !== false);
+        continue;
+      }
+      var offClass = _layerClassFor(chip.id, 'off');
+      out[chip.id] = !target.classList.contains(offClass);
+    }
+    return out;
   }
 
   window.MIDASExplorerGraph.authorityOverlays = {
@@ -377,6 +453,7 @@
     renderLegendInto:     renderLegendInto,
     renderSummaryInto:    renderSummaryInto,
     renderLayerChipsInto: renderLayerChipsInto,
+    getLayerState:        getLayerState,
     // Test surface — pinned by Explorer contract tests.
     _LAYER_CHIPS:         LAYER_CHIPS,
     _layerClassFor:       _layerClassFor,

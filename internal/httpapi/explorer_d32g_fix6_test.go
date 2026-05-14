@@ -73,9 +73,13 @@ func TestExplorer_D32gFix6_ViewBoxUpdateAfterCanvasWComputed(t *testing.T) {
 		WithExplorerEnabled(true)
 	js := getExplorerAsset(t, srv, "/explorer/assets/js/graph/authority/authority-graph-view.js")
 
-	canvasWIdx := strings.Index(js, "var canvasW = Math.max(")
+	// D32h-impl-1 — canvasW is now derived from the pure layout helper
+	// (authority-graph-layout.js computeAuthorityLayout) rather than
+	// inlined Math.max() in the view. The view's binding has the same
+	// `var canvasW =` shape so the ordering pin still applies.
+	canvasWIdx := strings.Index(js, "var canvasW")
 	if canvasWIdx < 0 {
-		t.Fatal("D32g-fix-6: canvasW computation missing from authority-graph-view.js")
+		t.Fatal("D32g-fix-6: canvasW binding missing from authority-graph-view.js")
 	}
 	viewBoxIdx := strings.Index(js, "svg.setAttribute('viewBox'")
 	if viewBoxIdx < 0 {
@@ -115,13 +119,15 @@ func TestExplorer_D32gFix6_NoBroaderRefactor(t *testing.T) {
 		WithExplorerEnabled(true)
 	js := getExplorerAsset(t, srv, "/explorer/assets/js/graph/authority/authority-graph-view.js")
 
-	// Existing public surface must be intact.
+	// Existing public surface must be intact. D32h-impl-1 retired the
+	// kind-bucketed planner (var ROWS / var GOV) in favour of the
+	// chain-aware spec-driven planner; the remaining surface guards
+	// the function shape and helpers that D32g-fix-6 was scoped
+	// around.
 	for _, want := range []string{
 		"function renderAuthorityGraph(payload, ctx)",
 		"function _anchorsForEdge(edge, srcPos, dstPos)",
-		"_computeNodeOverlays(projection)",
-		"var ROWS = ['business_service', 'decision_surface', 'authority_profile', 'authority_grant', 'agent']",
-		"var GOV  = ['fail_mode_policy', 'escalation_target']",
+		"_computeNodeOverlays",
 	} {
 		if !strings.Contains(js, want) {
 			t.Errorf("D32g-fix-6 must not remove existing Authority view surface: %q", want)

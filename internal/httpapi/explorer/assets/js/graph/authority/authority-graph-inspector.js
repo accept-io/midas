@@ -187,6 +187,18 @@
     });
     if (!selectedNode) return;
     _renderInto(selectedNode);
+
+    // D32h-fix-2b — Notify the evidence-tray selection hook so the
+    // bottom workbench refreshes on Authority-node clicks. Mirrors
+    // Context's notify at context-graph-inspector.js:111-113. The
+    // _inspectorHooks bag (index.html:1864-1878) fans out to BOTH
+    // contextEvidenceTray.notifySelectionChanged and
+    // authorityWorkbench.notifySelectionChanged — each gates on the
+    // active lens internally, so the call is safe under either lens.
+    var hooks = (window.MIDASExplorerGraph && window.MIDASExplorerGraph._inspectorHooks) || {};
+    if (typeof hooks.notifyEvidenceTraySelectionChanged === 'function') {
+      hooks.notifyEvidenceTraySelectionChanged();
+    }
   }
 
   function _renderInto(selectedNode) {

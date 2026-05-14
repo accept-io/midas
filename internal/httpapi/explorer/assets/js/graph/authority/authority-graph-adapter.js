@@ -233,6 +233,303 @@
   // CSS class. This is the only place authority-status-like wording
   // lives client-side; it does NOT recompute summary/diagnostic
   // rollups — those come from the backend.
+  // mapToCardLayout — D32h-impl-1 — Authority card-layout adapter.
+  //
+  // Walks payload.edges once to derive topology, then returns a typed
+  // layout spec the renderer iterates as named slots. Mirrors Context's
+  // adapter methodology (Context emits business_service / capabilities
+  // / processes / surfaces / ai_systems / authority / coverage slots;
+  // Authority emits root / chains / governance / unlinked).
+  //
+  // Authority topology differs from Context: it is a multi-chain DAG
+  // (BS → Surface → Profile → Grant → Agent) rather than fan-out from a
+  // single root, so the spec models *chains* explicitly. Each chain
+  // anchors on a decision_surface; profile / grant / agent slots may be
+  // null when a surface is missing a downstream link. Shared profiles
+  // (used by more than one surface) are kept as a single visual node
+  // with multiple owner references — the layout planner decides
+  // centroid vs first-owner placement.
+  //
+  // Pass-through fields (nodes / edges / summary / diagnostics /
+  // diagnostic_summary / surface_posture) are preserved so the
+  // inspector + overlays modules continue to read the spec as if it
+  // were the raw projection. The spec is therefore a superset of
+  // normalise()'s output.
+  //
+  // Pure function: no DOM, no fetch, no module state.
+  function mapToCardLayout(projection, view) {
+    var lensField = 'authority';
+    var emptySpec = {
+      lens:              lensField,
+      view:              view || '',
+      depth:             0,
+      root:              null,
+      nodes:             [],
+      edges:             [],
+      nodesByRef:        {},
+      chains:            [],
+      governance:        { failModePolicies: [], escalationTargets: [], unlinked: [] },
+      unlinked:          [],
+      summary:           null,
+      diagnostics:       [],
+      diagnosticSummary: null,
+      surfacePosture:    [],
+    };
+
+    if (!projection || typeof projection !== 'object') return emptySpec;
+
+    var nodes = Array.isArray(projection.nodes) ? projection.nodes.slice() : [];
+    var edges = Array.isArray(projection.edges) ? projection.edges.slice() : [];
+
+    // Index nodes by "kind:id" so edge endpoints resolve in O(1).
+    // Also bucket by kind for chain/surface enumeration.
+    var nodesByRef = {};
+    var byKind = {
+      business_service:  [],
+      decision_surface:  [],
+      authority_profile: [],
+      authority_grant:   [],
+      agent:             [],
+      fail_mode_policy:  [],
+      escalation_target: [],
+    };
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      if (!n || !n.kind || !n.id) continue;
+      var refKey = n.kind + ':' + n.id;
+      nodesByRef[refKey] = n;
+      if (byKind[n.kind]) byKind[n.kind].push(n);
+    }
+
+    // Walk edges by kind. We build single-step adjacency maps; the
+    // chain walker below collapses them into 4-tuples per surface.
+    var surfaceProfile  = {}; // surfaceId → profileId (first wins; multi-edge cases are deterministic by edge order)
+    var profileGrant    = {}; // profileId → grantId
+    var grantAgent      = {}; // grantId   → agentId
+    var bsSurfaces      = {}; // bsId → [surfaceId, …]
+    var fmpOwnersBySurf = {}; // fmpId → Set(surfaceId) (own surface-level FMPs)
+    var fmpOwnersByBs   = {}; // fmpId → Set(bsId)      (BS-default FMPs)
+    var etOwners        = {}; // escalationTargetId → Set(profileId)
+
+    function addOwner(map, key, ownerKey) {
+      if (!map[key]) map[key] = {};
+      map[key][ownerKey] = true;
+    }
+    function ownerList(map, key) {
+      var out = [];
+      var bucket = map[key] || {};
+      var keys = Object.keys(bucket);
+      for (var i = 0; i < keys.length; i++) out.push(keys[i]);
+      return out;
+    }
+
+    for (var ei = 0; ei < edges.length; ei++) {
+      var e = edges[ei];
+      if (!e || !e.kind || !e.src || !e.dst) continue;
+      var srcId = e.src.id;
+      var dstId = e.dst.id;
+      switch (e.kind) {
+        case 'business_service_has_surface':
+          if (!bsSurfaces[srcId]) bsSurfaces[srcId] = [];
+          // Preserve backend emission order; dedupe.
+          if (bsSurfaces[srcId].indexOf(dstId) < 0) bsSurfaces[srcId].push(dstId);
+          break;
+        case 'surface_uses_profile':
+          if (!surfaceProfile[srcId]) surfaceProfile[srcId] = dstId;
+          break;
+        case 'profile_has_grant':
+          if (!profileGrant[srcId]) profileGrant[srcId] = dstId;
+          break;
+        case 'grant_authorises_agent':
+          if (!grantAgent[srcId]) grantAgent[srcId] = dstId;
+          break;
+        case 'surface_has_fail_mode_policy':
+          addOwner(fmpOwnersBySurf, dstId, srcId);
+          break;
+        case 'business_service_has_fail_mode_policy':
+          addOwner(fmpOwnersByBs, dstId, srcId);
+          break;
+        case 'profile_escalates_to':
+          addOwner(etOwners, dstId, srcId);
+          break;
+        default:
+          break;
+      }
+    }
+
+    // Root resolution. projection.root may be null in test isolation;
+    // fall back to the first business_service node so the spec is
+    // populated for fixture-driven tests too.
+    var rootRef = projection.root || null;
+    var rootNode = null;
+    if (rootRef && rootRef.id) {
+      rootNode = nodesByRef['business_service:' + rootRef.id] || null;
+    }
+    if (!rootNode && byKind.business_service.length > 0) {
+      rootNode = byKind.business_service[0];
+    }
+
+    // Chain extraction. One chain per decision_surface in backend
+    // emission order. Stable ordering is critical for deterministic
+    // layout — any tie-break that depends on hash iteration or random
+    // re-ordering will cause the layout to "flicker" between renders.
+    var seenSharedProfile = {}; // profileId → first chainId that included it
+    var seenSharedGrant   = {}; // grantId   → first chainId that included it
+    var seenSharedAgent   = {}; // agentId   → first chainId that included it
+    var chains = [];
+    for (var si = 0; si < byKind.decision_surface.length; si++) {
+      var surf = byKind.decision_surface[si];
+      var chainId = 'chain:' + surf.id;
+      var profileId = surfaceProfile[surf.id] || null;
+      var profileNode = profileId ? nodesByRef['authority_profile:' + profileId] || null : null;
+      var grantId   = profileId ? (profileGrant[profileId] || null) : null;
+      var grantNode = grantId   ? nodesByRef['authority_grant:' + grantId] || null : null;
+      var agentId   = grantId   ? (grantAgent[grantId] || null) : null;
+      var agentNode = agentId   ? nodesByRef['agent:' + agentId] || null : null;
+
+      // Track shared-node ownership. The first chain to see a profile
+      // (or grant, or agent) "anchors" it; subsequent chains contribute
+      // to its owner list but don't paint a duplicate card.
+      var chain = {
+        chainId:        chainId,
+        surface:        surf,
+        profile:        profileNode,
+        grant:          grantNode,
+        agent:          agentNode,
+        profileShared:  false,
+        grantShared:    false,
+        agentShared:    false,
+        missingProfile: !profileNode,
+        missingGrant:   !grantNode,
+        missingAgent:   !agentNode,
+      };
+      if (profileNode) {
+        if (seenSharedProfile[profileNode.id]) {
+          chain.profileShared = true;
+          chain.profileFirstOwnerChainId = seenSharedProfile[profileNode.id];
+        } else {
+          seenSharedProfile[profileNode.id] = chainId;
+        }
+      }
+      if (grantNode) {
+        if (seenSharedGrant[grantNode.id]) {
+          chain.grantShared = true;
+          chain.grantFirstOwnerChainId = seenSharedGrant[grantNode.id];
+        } else {
+          seenSharedGrant[grantNode.id] = chainId;
+        }
+      }
+      if (agentNode) {
+        if (seenSharedAgent[agentNode.id]) {
+          chain.agentShared = true;
+          chain.agentFirstOwnerChainId = seenSharedAgent[agentNode.id];
+        } else {
+          seenSharedAgent[agentNode.id] = chainId;
+        }
+      }
+      chains.push(chain);
+    }
+
+    // Build a reverse map from profile/grant/agent id to the chains
+    // that reference it. The layout planner uses this for centroid
+    // placement of shared nodes.
+    function ownersFromChains(field) {
+      var out = {};
+      for (var c = 0; c < chains.length; c++) {
+        var ch = chains[c];
+        var node = ch[field];
+        if (!node) continue;
+        if (!out[node.id]) out[node.id] = [];
+        out[node.id].push(ch.chainId);
+      }
+      return out;
+    }
+    var profileOwnerChains = ownersFromChains('profile');
+    var grantOwnerChains   = ownersFromChains('grant');
+    var agentOwnerChains   = ownersFromChains('agent');
+
+    // Governance sidecars. For each FMP/ET, attach owner references
+    // derived from the edge walk. owners[] is { kind, id } pairs so
+    // the layout planner can resolve owner positions without a second
+    // edge walk.
+    var fmpSpec = [];
+    for (var fi = 0; fi < byKind.fail_mode_policy.length; fi++) {
+      var fmp = byKind.fail_mode_policy[fi];
+      var surfOwnerIds = ownerList(fmpOwnersBySurf, fmp.id);
+      var bsOwnerIds   = ownerList(fmpOwnersByBs,   fmp.id);
+      var owners = [];
+      for (var soi = 0; soi < surfOwnerIds.length; soi++) {
+        owners.push({ kind: 'decision_surface', id: surfOwnerIds[soi] });
+      }
+      for (var boi = 0; boi < bsOwnerIds.length; boi++) {
+        owners.push({ kind: 'business_service', id: bsOwnerIds[boi] });
+      }
+      fmpSpec.push({
+        node:    fmp,
+        owners:  owners,
+        bsDefault: bsOwnerIds.length > 0 && surfOwnerIds.length === 0,
+        shared:    owners.length > 1,
+      });
+    }
+    var etSpec = [];
+    for (var eti = 0; eti < byKind.escalation_target.length; eti++) {
+      var et = byKind.escalation_target[eti];
+      var profOwnerIds = ownerList(etOwners, et.id);
+      var owners2 = [];
+      for (var poi = 0; poi < profOwnerIds.length; poi++) {
+        owners2.push({ kind: 'authority_profile', id: profOwnerIds[poi] });
+      }
+      etSpec.push({
+        node:   et,
+        owners: owners2,
+        shared: owners2.length > 1,
+      });
+    }
+
+    // Unlinked nodes — present in the projection but unreachable from
+    // any chain / governance owner reference. Keep them visible so an
+    // operator can spot orphaned governance data; the layout planner
+    // parks them in a deterministic "unlinked" band.
+    var assignedIds = {};
+    function markAssigned(node) { if (node && node.id) assignedIds[node.kind + ':' + node.id] = true; }
+    if (rootNode) markAssigned(rootNode);
+    for (var ca = 0; ca < chains.length; ca++) {
+      markAssigned(chains[ca].surface);
+      markAssigned(chains[ca].profile);
+      markAssigned(chains[ca].grant);
+      markAssigned(chains[ca].agent);
+    }
+    for (var fa = 0; fa < fmpSpec.length; fa++) markAssigned(fmpSpec[fa].node);
+    for (var ea = 0; ea < etSpec.length; ea++)  markAssigned(etSpec[ea].node);
+    var unlinked = [];
+    for (var ui = 0; ui < nodes.length; ui++) {
+      var u = nodes[ui];
+      if (!u || !u.kind || !u.id) continue;
+      if (assignedIds[u.kind + ':' + u.id]) continue;
+      unlinked.push(u);
+    }
+
+    return {
+      lens:               lensField,
+      view:               view || projection.view || '',
+      depth:              projection.depth || 0,
+      root:               rootNode,
+      nodes:              nodes,
+      edges:              edges,
+      nodesByRef:         nodesByRef,
+      chains:             chains,
+      profileOwnerChains: profileOwnerChains,
+      grantOwnerChains:   grantOwnerChains,
+      agentOwnerChains:   agentOwnerChains,
+      governance:         { failModePolicies: fmpSpec, escalationTargets: etSpec, unlinked: [] },
+      unlinked:           unlinked,
+      summary:            projection.summary || null,
+      diagnostics:        Array.isArray(projection.diagnostics)        ? projection.diagnostics        : [],
+      diagnosticSummary:  projection.diagnostic_summary || null,
+      surfacePosture:     Array.isArray(projection.surface_posture)    ? projection.surface_posture    : [],
+    };
+  }
+
   function nodeBadges(node) {
     var d = nodeTypedData(node);
     if (!d) return [];
@@ -293,6 +590,7 @@
   window.MIDASExplorerGraph.authorityAdapter = {
     fetch:                  fetchAuthorityGraph,
     normalise:              normalise,
+    mapToCardLayout:        mapToCardLayout,
     nodeKindLabel:          nodeKindLabel,
     nodeKindCategory:       nodeKindCategory,
     edgeKindLabel:          edgeKindLabel,

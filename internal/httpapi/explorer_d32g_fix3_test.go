@@ -181,9 +181,13 @@ func TestExplorer_D32gFix3_AuthorityViewUsesPickAnchorSides(t *testing.T) {
 	if !strings.Contains(js, "if (!govEdges[edge.kind]) return ['bottom', 'top'];") {
 		t.Error("D32g-fix-3: spine edges must keep the fixed ['bottom', 'top'] anchor pair")
 	}
-	// Edge paint loop passes positions into _anchorsForEdge.
-	if !strings.Contains(js, "_anchorsForEdge(edge, positions[srcKey], positions[dstKey])") {
-		t.Error("D32g-fix-3: edge paint loop must thread the resolved positions into _anchorsForEdge")
+	// D32h-impl-1 — Edge emission moved into the emitSpine /
+	// emitGovernance helpers, but the structural invariant still holds:
+	// _anchorsForEdge receives the resolved source and target
+	// positions. Match the new form `_anchorsForEdge({ kind: …},
+	// positions[srcKey], positions[dstKey])`.
+	if !strings.Contains(js, "_anchorsForEdge({ kind: edgeKind }, positions[srcKey], positions[dstKey])") {
+		t.Error("D32g-fix-3: edge emission helper must thread the resolved positions into _anchorsForEdge (now via emitGovernance)")
 	}
 }
 
@@ -216,8 +220,13 @@ func TestExplorer_D32gFix3_StructuralEdgeGuardrail(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
 	js := getExplorerAsset(t, srv, "/explorer/assets/js/graph/authority/authority-graph-view.js")
-	if !strings.Contains(js, "if (!positions[srcKey] || !positions[dstKey]) continue;") {
-		t.Error("D32g-fix-3: edge paint loop must skip edges with missing endpoints (structural guardrail)")
+	// D32h-impl-1 — Edge emission moved into helper functions
+	// (emitSpine / emitGovernance), so the guardrail now uses
+	// `return` rather than `continue` (the loop-form of the guard
+	// became the function-form). The invariant is identical: do not
+	// paint a path with one valid end and one undefined end.
+	if !strings.Contains(js, "if (!positions[srcKey] || !positions[dstKey]) return;") {
+		t.Error("D32g-fix-3: edge emission helper must skip edges with missing endpoints (structural guardrail)")
 	}
 }
 

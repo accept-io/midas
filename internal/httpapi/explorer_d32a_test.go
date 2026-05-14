@@ -2468,15 +2468,22 @@ func TestExplorer_D32aImpl9_InspectorHookDispatchesToModule(t *testing.T) {
 //     rendering the same canvas — see the operator-reported bug pinned
 //     by TestExplorer_D32bDebug1_*.
 // The 8,000-line ceiling from the D32a tranche prompt is enforced
-// here as a 7,550 ceiling so a future inline regression is loud
+// here as a 7,650 ceiling so a future inline regression is loud
 // rather than silent.
+//   • D32h-fix-1 — bumped 7,550 → 7,650 (+100 headroom) to absorb the
+//     lens-aware bottom-workbench DOM addition (~58 lines: a sibling
+//     <section id="gmap-authority-workbench"> next to the existing
+//     #gmap-evidence-tray, with five-tab markup). The Drift Analytics
+//     tray was NOT removed; both lens trays now coexist and CSS routes
+//     visibility from body[data-graph-lens]. The Authority canvas
+//     itself, the inspector, and Context behaviour are untouched.
 func TestExplorer_D32aImpl9_IndexHtmlReducedBelowImpl8(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
 	body := performRequest(t, srv, http.MethodGet, "/explorer", nil).Body.String()
 	lines := strings.Count(body, "\n") + 1
-	if lines > 7550 {
-		t.Errorf("D32a-impl-9 / D32b-debug-1: index.html line count %d exceeds 7550 — extraction discipline should hold", lines)
+	if lines > 7650 {
+		t.Errorf("D32a-impl-9 / D32b-debug-1 / D32h-fix-1: index.html line count %d exceeds 7650 — extraction discipline should hold", lines)
 	}
 }
 
