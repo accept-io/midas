@@ -349,6 +349,20 @@
     // _anchorsForEdge call shape are byte-identical to the pre-D32h-fix-2c
     // emitSpine / emitGovernance helpers, so the D32g-fix-3 invariants
     // remain pinned.
+    // D32h-fix-2f-hotfix-2 — Resolve the Authority-specific connector
+    // path generator once per render. The shared dominant-axis Bezier
+    // in MIDASGovernanceMap.curvePath produces S-knots for Authority's
+    // short same-lane spine deltas (Δy = 40 px) and horizontal swings
+    // for BS fan-outs; the Authority generator picks a straight line
+    // for same-lane vertical and a midline-Y / midline-X Bezier for
+    // cross-lane / horizontal cases. When the module is absent (test
+    // isolation), pathFn is undefined and addLiveConnector falls
+    // through to the shared helper — byte-identical to pre-hotfix-2.
+    var authorityConnectors = window.MIDASExplorerGraph && window.MIDASExplorerGraph.authorityConnectors;
+    var authPathFn = (authorityConnectors && typeof authorityConnectors.path === 'function')
+      ? authorityConnectors.path
+      : null;
+
     function emitVisibleEdge(e) {
       if (!e) return;
       var srcKey   = e.srcKey;
@@ -366,7 +380,7 @@
         anchors = ['bottom', 'top'];
       }
       var cls = 'authority-connector authority-connector-' + edgeKind;
-      renderer.addLiveConnector(srcKey, anchors[0], dstKey, anchors[1], cls);
+      renderer.addLiveConnector(srcKey, anchors[0], dstKey, anchors[1], cls, authPathFn);
     }
 
     for (var vei = 0; vei < visibleEdges.length; vei++) {
@@ -839,6 +853,11 @@
     window.MIDASExplorerGraph.drawer.registerLens('authority', {
       tabs: [
         {
+          // D33a-spike-2g-impl-5d — Tab label restored to 'Inspector'.
+          // (The earlier impl-5d rename to 'Showcase' was reverted
+          // per the impl-5d header-row-correction brief; the
+          // standalone X close action is also moved into the
+          // selected-node title row.)
           id: 'inspector', label: 'Inspector',
           render: function (ctx, mount) {
             // Authority inspector populates the existing

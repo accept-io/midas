@@ -6,8 +6,19 @@
 // Provides basic card-level formatting for every Authority node kind
 // using typed-data already present in the graph response. No extra
 // entity-detail APIs are called in this tranche — the inspector
-// shows what the graph already gives us. Diagnostics / surface posture
-// per-node rendering is deferred to D32b-impl-2.
+// shows what the graph already gives us.
+//
+// D33a-spike-2g-impl-5f — Inspector ownership cleanup. The Authority
+// Inspector tab owns ONLY the selected object's identity + direct
+// attributes (Kind / ID / Label / Connected edges + per-kind
+// specific fields + collapsed Technical details). Per-node
+// diagnostics belong to the Diagnostics tab (rendered by
+// `authority-diagnostics-panel.js`); per-surface posture belongs to
+// the Posture & Help tab (rendered by
+// `authority-surface-posture-panel.js`). The Inspector no longer
+// composes a governance overlay; the `_buildOverlayHTML` /
+// `_diagnosticsForNode` / `_postureForSurface` / `_axisAttr`
+// helpers that produced it were retired here.
 //
 // External dependencies:
 //   window.MIDASExplorerGraph.inspector.setName / setFields / setSummary /
@@ -47,99 +58,141 @@
   // The field lists below match D32b-impl-1's required-fields contract:
   // anything in the contract appears here, anything else is dropped.
 
+  // D33a-spike-2g-impl-5e — Per-kind formatters now return two
+  // sublists: `specific` (human-useful selected-node attributes
+  // for the primary visible pane) and `technical` (raw / debug /
+  // numeric fields that move into a collapsed "Technical details"
+  // section). The primary block of fields (Kind / ID / Label /
+  // Connected edges) is composed separately by `_primaryRows()`
+  // below and rendered BEFORE the per-kind specific list, so each
+  // formatter only needs to declare the node-specific extras.
+  //
+  // `name` and `id` are intentionally omitted from `specific` —
+  // they're carried by the selected-node title and the primary ID
+  // row. Per-kind values that duplicate the title (e.g.
+  // `n.id` / `d.name`) move to `technical` only if they carry
+  // additional information.
+
   function _formatBusinessService(d, n) {
-    return [
-      ['id',                   n.id || ''],
-      ['name',                 d.name || ''],
-      ['status',               d.status || ''],
-      ['owner',                d.owner || ''],
-      ['service_type',         d.service_type || ''],
-      ['fail_mode_policy_id',  d.fail_mode_policy_id || '—'],
-    ];
+    void n;
+    return {
+      specific: [
+        ['status',        d.status || ''],
+        ['owner',         d.owner || ''],
+        ['service_type',  d.service_type || ''],
+        ['external_ref',  d.external_ref ? _obj(d.external_ref) : ''],
+      ],
+      technical: [
+        ['fail_mode_policy_id', d.fail_mode_policy_id || ''],
+      ],
+    };
   }
 
   function _formatDecisionSurface(d, n) {
-    return [
-      ['id',                       n.id || ''],
-      ['version',                  d.version != null ? String(d.version) : ''],
-      ['name',                     d.name || ''],
-      ['status',                   d.status || ''],
-      ['process_id',               d.process_id || ''],
-      ['business_service_id',      d.business_service_id || ''],
-      ['effective_policy_source',  d.effective_policy_source || ''],
-      ['effective_policy_id',      d.effective_policy_id || '—'],
-      ['inherits_bs_policy',       _bool(d.inherits_bs_policy)],
-    ];
+    void n;
+    return {
+      specific: [
+        ['status',                   d.status || ''],
+        ['process_id',               d.process_id || ''],
+        ['effective_policy_source',  d.effective_policy_source || ''],
+        ['effective_policy_id',      d.effective_policy_id || ''],
+        ['inherits_bs_policy',       _bool(d.inherits_bs_policy)],
+      ],
+      technical: [
+        ['version',             d.version != null ? String(d.version) : ''],
+        ['business_service_id', d.business_service_id || ''],
+      ],
+    };
   }
 
   function _formatAuthorityProfile(d, n) {
-    return [
-      ['id',                    n.id || ''],
-      ['version',               d.version != null ? String(d.version) : ''],
-      ['surface_id',            d.surface_id || ''],
-      ['name',                  d.name || ''],
-      ['status',                d.status || ''],
-      ['validity_status',       d.validity_status || ''],
-      ['confidence_threshold',  d.confidence_threshold != null ? String(d.confidence_threshold) : ''],
-      ['consequence_threshold', d.consequence_threshold != null ? String(d.consequence_threshold) : ''],
-      ['escalation_mode',       d.escalation_mode || ''],
-      ['escalation_target_id',  d.escalation_target_id || '—'],
-      ['fail_mode',             d.fail_mode || ''],
-    ];
+    void n;
+    return {
+      specific: [
+        ['status',                d.status || ''],
+        ['surface_id',            d.surface_id || ''],
+        ['escalation_target_id',  d.escalation_target_id || ''],
+        ['fail_mode',             d.fail_mode || ''],
+      ],
+      technical: [
+        ['version',                d.version != null ? String(d.version) : ''],
+        ['validity_status',        d.validity_status || ''],
+        ['confidence_threshold',   d.confidence_threshold != null ? String(d.confidence_threshold) : ''],
+        ['consequence_threshold',  d.consequence_threshold != null ? String(d.consequence_threshold) : ''],
+        ['escalation_mode',        d.escalation_mode || ''],
+      ],
+    };
   }
 
   function _formatAuthorityGrant(d, n) {
-    return [
-      ['id',              n.id || ''],
-      ['profile_id',      d.profile_id || ''],
-      ['agent_id',        d.agent_id || ''],
-      ['status',          d.status || ''],
-      ['validity_status', d.validity_status || ''],
-      ['capabilities',    _list(d.capabilities)],
-      ['constraints',     _obj(d.constraints)],
-    ];
+    void n;
+    return {
+      specific: [
+        ['status',        d.status || ''],
+        ['agent_id',      d.agent_id || ''],
+        ['capabilities',  _list(d.capabilities)],
+      ],
+      technical: [
+        ['profile_id',      d.profile_id || ''],
+        ['validity_status', d.validity_status || ''],
+        ['constraints',     _obj(d.constraints)],
+      ],
+    };
   }
 
   function _formatAgent(d, n) {
-    return [
-      ['id',                n.id || ''],
-      ['name',              d.name || ''],
-      ['type',              d.type || ''],
-      ['owner',             d.owner || ''],
-      ['model_version',     d.model_version || ''],
-      ['operational_state', d.operational_state || ''],
-    ];
+    void n;
+    return {
+      specific: [
+        ['operational_state', d.operational_state || ''],
+        ['type',              d.type || ''],
+        ['owner',             d.owner || ''],
+      ],
+      technical: [
+        ['model_version', d.model_version || ''],
+      ],
+    };
   }
 
   function _formatFailModePolicy(d, n) {
-    return [
-      ['id',                   n.id || ''],
-      ['version',              d.version != null ? String(d.version) : ''],
-      ['name',                 d.name || ''],
-      ['status',               d.status || ''],
-      ['effective_date',       d.effective_date || ''],
-      ['effective_until',      d.effective_until || ''],
-      ['business_owner',       d.business_owner || ''],
-      ['technical_owner',      d.technical_owner || ''],
-      ['origin',               d.origin || ''],
-      ['managed',              _bool(d.managed)],
-      ['rule_count_by_class',  _obj(d.rule_count_by_class)],
-    ];
+    void n;
+    return {
+      specific: [
+        ['status',          d.status || ''],
+        ['effective_date',  d.effective_date || ''],
+        ['business_owner',  d.business_owner || ''],
+        ['technical_owner', d.technical_owner || ''],
+      ],
+      // The raw rule-count map (JSON-shaped) is moved into the
+      // technical list below so the primary visible pane is not
+      // dominated by it. View Record remains the route to the
+      // full record.
+      technical: [
+        ['version',             d.version != null ? String(d.version) : ''],
+        ['effective_until',     d.effective_until || ''],
+        ['origin',              d.origin || ''],
+        ['managed',             _bool(d.managed)],
+        ['rule_count_by_class', _obj(d.rule_count_by_class)],
+      ],
+    };
   }
 
   function _formatEscalationTarget(d, n) {
-    return [
-      ['id',               n.id || ''],
-      ['version',          d.version != null ? String(d.version) : ''],
-      ['name',             d.name || ''],
-      ['kind',             d.kind || ''],
-      ['handle',           d.handle || ''],
-      ['status',           d.status || ''],
-      ['effective_date',   d.effective_date || ''],
-      ['effective_until',  d.effective_until || ''],
-      ['business_owner',   d.business_owner || ''],
-      ['technical_owner',  d.technical_owner || ''],
-    ];
+    void n;
+    return {
+      specific: [
+        ['kind',    d.kind || ''],
+        ['handle',  d.handle || ''],
+        ['status',  d.status || ''],
+      ],
+      technical: [
+        ['version',         d.version != null ? String(d.version) : ''],
+        ['effective_date',  d.effective_date || ''],
+        ['effective_until', d.effective_until || ''],
+        ['business_owner',  d.business_owner || ''],
+        ['technical_owner', d.technical_owner || ''],
+      ],
+    };
   }
 
   var FORMATTERS = {
@@ -151,6 +204,66 @@
     fail_mode_policy:  _formatFailModePolicy,
     escalation_target: _formatEscalationTarget,
   };
+
+  // _primaryRows composes the fixed primary block — Kind / ID /
+  // Label / Connected edges — in the documented order. Connected
+  // edges is omitted when the carrier did not supply
+  // `details._connected_edges` (production view does not emit it).
+  function _primaryRows(kindLabel, id, label, connectedEdges) {
+    var rows = [
+      ['Kind',  kindLabel || ''],
+      ['ID',    id || ''],
+      ['Label', label || ''],
+    ];
+    if (connectedEdges != null) {
+      rows.push(['Connected edges', String(connectedEdges)]);
+    }
+    return rows;
+  }
+
+  // _renderFieldRowsHtml renders an array of [key, value] pairs
+  // as the existing `.gmap-details-row` markup. Empty values fall
+  // back to `—` so the row stays visually balanced.
+  function _renderFieldRowsHtml(rows) {
+    if (!Array.isArray(rows) || !rows.length) return '';
+    var html = '';
+    for (var i = 0; i < rows.length; i++) {
+      var pair = rows[i];
+      var k = pair[0];
+      var v = pair[1];
+      var raw = (v == null || v === '') ? '—' : String(v);
+      html +=
+        '<div class="gmap-details-row">' +
+          '<span class="gmap-details-key">' + _escHtml(String(k)) + '</span>' +
+          '<span class="gmap-details-val">' + _escHtml(raw) + '</span>' +
+        '</div>';
+    }
+    return html;
+  }
+
+  // _renderTechnicalDetailsHtml wraps the technical rows in a
+  // native `<details>` element so the section is collapsed by
+  // default. Empty technical lists are omitted entirely.
+  function _renderTechnicalDetailsHtml(rows) {
+    // Drop rows whose value is empty so the collapsed section
+    // doesn't render `—` lines for fields the projection pruned.
+    var present = [];
+    for (var i = 0; i < (rows || []).length; i++) {
+      var pair = rows[i];
+      if (pair && pair[1] !== '' && pair[1] !== null && pair[1] !== undefined) {
+        present.push(pair);
+      }
+    }
+    if (!present.length) return '';
+    return (
+      '<details class="gmap-details-technical">' +
+        '<summary>Technical details</summary>' +
+        '<div class="gmap-details-technical-body">' +
+          _renderFieldRowsHtml(present) +
+        '</div>' +
+      '</details>'
+    );
+  }
 
   // ── Value coercers ────────────────────────────────────────────────────
   function _bool(v) {
@@ -214,23 +327,58 @@
     if (typeof insp.setName === 'function') {
       insp.setName(projLabel || projId);
     }
+
+    // D33a-spike-2g-impl-5e — Three-block selected-node content
+    // model. The Authority inspector composes its own field HTML
+    // (primary block + node-specific block + collapsed technical
+    // details) and writes it directly to `#gmap-details-fields`,
+    // bypassing the shared `inspector.setFields` uniform-row
+    // renderer. The shared inspector helper is still used for
+    // setName / setSummary / setGovernance — only the field-rows
+    // slot is locally composed.
+    var primary = _primaryRows(kindLabel, projId, projLabel, details && details._connected_edges);
     var formatter = FORMATTERS[projKind];
-    var rows = formatter ? formatter(details, { id: projId, label: projLabel }) : [];
-    if (typeof insp.setFields === 'function') {
-      // Filter empty values so the inspector card stays compact when
-      // the projection prunes a field. The contract requires fields
-      // be SUPPORTED (formatter handles the kind); the rail only
-      // shows rows where the value is non-empty.
-      insp.setFields(rows.filter(function (r) { return r[1] !== '' && r[1] !== null && r[1] !== undefined; }));
+    var formatted = formatter ? formatter(details, { id: projId, label: projLabel }) : { specific: [], technical: [] };
+    var specificRows = (formatted && formatted.specific) ? formatted.specific.filter(function (r) {
+      return r && r[1] !== '' && r[1] !== null && r[1] !== undefined;
+    }) : [];
+    var technicalRows = (formatted && formatted.technical) ? formatted.technical : [];
+
+    var fieldsEl = document.getElementById('gmap-details-fields');
+    if (fieldsEl) {
+      fieldsEl.innerHTML =
+        _renderFieldRowsHtml(primary) +
+        _renderFieldRowsHtml(specificRows) +
+        _renderTechnicalDetailsHtml(technicalRows);
+    } else if (typeof insp.setFields === 'function') {
+      // Defensive fallback for test isolation / partial asset
+      // loads: route the visible rows through the shared helper
+      // so the inspector still renders something. Technical
+      // details are dropped in this path because the shared
+      // renderer doesn't support nested HTML.
+      insp.setFields(primary.concat(specificRows));
     }
+
+    // D33a-spike-2g-impl-5f — Inspector ownership cleanup. The
+    // Authority Inspector tab now owns ONLY the selected object's
+    // identity + direct attributes. Per-node diagnostics and
+    // surface posture (previously injected into the shared
+    // `#gmap-details-governance` slot via `_buildOverlayHTML`) are
+    // owned by the Diagnostics and Posture & Help tabs, rendered
+    // by `authority-diagnostics-panel.js` and
+    // `authority-surface-posture-panel.js` respectively.
+    //
+    // setSummary/setGovernance are still called so that switching
+    // selections (or lenses) clears any prior content the shared
+    // helpers might have written. Context Graph continues to use
+    // both slots — `setSummary([])` here only clears the slot when
+    // the Authority lens is active; Context's own inspector path
+    // re-populates them when Context is active.
     if (typeof insp.setSummary === 'function') {
-      insp.setSummary([['Kind', kindLabel]]);
+      insp.setSummary([]);
     }
-    // D32f-impl-1 — Compose the Governance section from per-selection
-    // overlays: diagnostics that name this node, plus surface-posture
-    // when the selection is a decision_surface.
     if (typeof insp.setGovernance === 'function') {
-      insp.setGovernance(_buildOverlayHTML(projKind, projId));
+      insp.setGovernance('');
     }
     if (typeof insp.setActions === 'function') {
       insp.setActions([]);
@@ -238,112 +386,6 @@
     if (typeof insp.setInlineActions === 'function') {
       insp.setInlineActions(selectedNode, []);
     }
-  }
-
-  // _buildOverlayHTML returns an HTML fragment with two optional
-  // subsections — Diagnostics + Posture — driven by the cached
-  // projection. Returns an empty string when neither subsection has
-  // content; the inspector frame's setGovernance call then leaves the
-  // governance container empty.
-  function _buildOverlayHTML(projKind, projId) {
-    var projection = window.MIDASExplorerGraph && window.MIDASExplorerGraph._lastAuthorityProjection;
-    if (!projection) return '';
-
-    var html = '';
-
-    // ── Diagnostics for the selected node ───────────────────────────────
-    var diagnostics = _diagnosticsForNode(projection, projKind, projId);
-    if (diagnostics.length > 0) {
-      var rows = '';
-      for (var i = 0; i < diagnostics.length; i++) {
-        var d = diagnostics[i];
-        rows += (
-          '<li class="authority-inspector-diagnostic authority-inspector-diagnostic-' + _escHtml(d.severity || '') + '">' +
-            '<span class="authority-inspector-diagnostic-severity" data-diagnostic-severity="' + _escHtml(d.severity || '') + '">' + _escHtml(d.severity || '') + '</span>' +
-            '<span class="authority-inspector-diagnostic-kind">' + _escHtml(d.kind || '') + '</span>' +
-            (d.message ? '<span class="authority-inspector-diagnostic-message">' + _escHtml(d.message) + '</span>' : '') +
-          '</li>'
-        );
-      }
-      html += (
-        '<section class="authority-inspector-section authority-inspector-section-diagnostics" aria-label="Diagnostics">' +
-          '<h4 class="authority-inspector-section-title">Diagnostics</h4>' +
-          '<ul class="authority-inspector-diagnostics-list">' + rows + '</ul>' +
-        '</section>'
-      );
-    }
-
-    // ── Posture (surface only) ─────────────────────────────────────────
-    if (projKind === 'decision_surface') {
-      var posture = _postureForSurface(projection, projId);
-      if (posture) {
-        var pairs = [
-          ['Authority status',   posture.authority_status],
-          ['Profile status',     posture.profile_status],
-          ['Grant status',       posture.grant_status],
-          ['Agent status',       posture.agent_status],
-          ['Fail-mode policy',   posture.fail_mode_policy_status],
-          ['Escalation',         posture.escalation_status],
-          ['Highest severity',   posture.highest_severity],
-        ];
-        var pHTML = '';
-        for (var p = 0; p < pairs.length; p++) {
-          if (!pairs[p][1]) continue;
-          pHTML += (
-            '<div class="authority-inspector-posture-row">' +
-              '<span class="authority-inspector-posture-key">' + _escHtml(pairs[p][0]) + '</span>' +
-              '<span class="authority-inspector-posture-val" data-posture-axis="' + _escHtml(_axisAttr(pairs[p][0])) + '" data-posture-value="' + _escHtml(pairs[p][1]) + '">' + _escHtml(pairs[p][1]) + '</span>' +
-            '</div>'
-          );
-        }
-        if (pHTML) {
-          html += (
-            '<section class="authority-inspector-section authority-inspector-section-posture" aria-label="Surface posture">' +
-              '<h4 class="authority-inspector-section-title">Surface posture</h4>' +
-              '<div class="authority-inspector-posture">' + pHTML + '</div>' +
-            '</section>'
-          );
-        }
-      }
-    }
-
-    return html;
-  }
-
-  function _axisAttr(label) {
-    return String(label || '').toLowerCase().replace(/\s+/g, '-');
-  }
-
-  // _diagnosticsForNode returns the deterministic list of Diagnostic
-  // records whose NodeRefs include (projKind, projId).
-  function _diagnosticsForNode(projection, projKind, projId) {
-    var out = [];
-    var diags = (projection && projection.diagnostics) || [];
-    for (var i = 0; i < diags.length; i++) {
-      var d = diags[i];
-      if (!d || !Array.isArray(d.node_refs)) continue;
-      for (var j = 0; j < d.node_refs.length; j++) {
-        var ref = d.node_refs[j];
-        if (ref && ref.kind === projKind && ref.id === projId) {
-          out.push(d);
-          break;
-        }
-      }
-    }
-    return out;
-  }
-
-  // _postureForSurface returns the surface_posture entry for the
-  // selected surface, or null when none exists.
-  function _postureForSurface(projection, surfaceID) {
-    var postures = (projection && projection.surface_posture) || [];
-    for (var i = 0; i < postures.length; i++) {
-      var p = postures[i];
-      if (p && p.surface && p.surface.id === surfaceID) {
-        return p;
-      }
-    }
-    return null;
   }
 
   // renderNode — lens dispatch entry point. graph-inspector.render

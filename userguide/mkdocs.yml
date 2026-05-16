@@ -1,0 +1,99 @@
+# MIDAS User Guide — Material for MkDocs configuration.
+#
+# Source:   userguide/src/**/*.md          (authored)
+# Output:   internal/httpapi/help/static/  (committed; embedded via //go:embed)
+# Served:   /help/ (by the MIDAS Go server; see internal/httpapi/help.go)
+#
+# Regenerate via `make help-build` (runs squidfunk/mkdocs-material in Docker —
+# no Python install required on the host).
+
+site_name: MIDAS User Guide
+site_description: User-facing help for the MIDAS application experience.
+# `site_url` is intentionally omitted — Material requires a scheme + host
+# when set, and we serve the generated site at `/help/` under the same
+# origin as the Explorer. `use_directory_urls: true` produces relative
+# links in the generated HTML, so they resolve correctly under the `/help/`
+# prefix without needing an absolute base URL.
+docs_dir: src
+site_dir: ../internal/httpapi/help/static
+use_directory_urls: true
+strict: true
+
+# We intentionally do not link out to a repo from the in-app guide.
+repo_url: ""
+edit_uri: ""
+
+theme:
+  name: material
+  language: en
+  features:
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - toc.follow
+    - content.code.copy
+    - search.highlight
+    - search.suggest
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  font: false
+  icon:
+    repo: ""
+
+# Anchors come from heading slugs by default. `attr_list` is enabled so a
+# page can override or add an explicit anchor via `## Heading {#explicit}`
+# when the slug would otherwise drift with content edits.
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+nav:
+  - Home: index.md
+  - Explorer:
+      - explorer/index.md
+      - Navigation: explorer/navigation.md
+      - Records: explorer/records.md
+      - Search: explorer/search.md
+  - Graphs:
+      - graphs/index.md
+      - Context Graph: graphs/context-graph.md
+      - Authority Graph: graphs/authority-graph.md
+  - Governance:
+      - governance/index.md
+      - Business Services: governance/business-services.md
+      - Decision Surfaces: governance/decision-surfaces.md
+      - Authority Profiles: governance/authority-profiles.md
+      - Authority Grants: governance/authority-grants.md
+      - Fail-mode Policy: governance/fail-mode-policy.md
+      - Coverage: governance/coverage.md
+  - Evidence:
+      - evidence/index.md
+      - Evidence Envelopes: evidence/evidence-envelopes.md
+      - Audit Events: evidence/audit-events.md
+      - Integrity: evidence/integrity.md
+  - Operations:
+      - operations/index.md
+      - Diagnostics: operations/diagnostics.md
+      - Drift: operations/drift.md

@@ -2,3 +2,9 @@ Accept MIDAS
 Copyright 2026 Accept.io
 
 This product includes software developed by Accept.io and contributors.
+
+This product includes selected icons from the Lucide project
+(https://lucide.dev/), used under the ISC licence. Some Lucide icons
+are derived from Feather and are covered by the MIT licence notice
+included in Lucide's licence file. A copy of the relevant licence text
+is included at internal/httpapi/explorer/assets/icons/lucide/LICENSE.

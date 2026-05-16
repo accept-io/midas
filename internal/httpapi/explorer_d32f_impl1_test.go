@@ -221,37 +221,63 @@ func TestExplorer_D32fImpl1_AdapterPostureBadgeSourceFixed(t *testing.T) {
 	}
 }
 
-// TestExplorer_D32fImpl1_InspectorRendersDiagnostics pins the
-// inspector's Diagnostics subsection (selected-node diagnostics
-// surfaced from projection.diagnostics[]).
+// TestExplorer_D32fImpl1_InspectorRendersDiagnostics — superseded by
+// D33a-spike-2g-impl-5f. Selected-node diagnostics no longer live in
+// the Inspector tab's governance overlay; ownership moved to the
+// Diagnostics tab, rendered by authority-diagnostics-panel.js. This
+// test now pins the new ownership: the inspector must NOT carry the
+// overlay surface, and the diagnostics panel module must surface
+// severity / kind / message / node_refs from `projection.diagnostics`.
 func TestExplorer_D32fImpl1_InspectorRendersDiagnostics(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
-	js := getExplorerAsset(t, srv, "/explorer/assets/js/graph/authority/authority-graph-inspector.js")
-	if !strings.Contains(js, "_diagnosticsForNode") {
-		t.Error("D32f-impl-1: inspector must define _diagnosticsForNode helper")
+	insp := getExplorerAsset(t, srv, "/explorer/assets/js/graph/authority/authority-graph-inspector.js")
+	// Match function DEFINITIONS, not bare names — the impl-5f
+	// commit-message-style header comment legitimately enumerates
+	// the retired helpers by name to document the move, and we
+	// don't want that comment to fail the contract pin.
+	for _, gone := range []string{
+		"function _diagnosticsForNode(",
+		"function _buildOverlayHTML(",
+		"authority-inspector-section-diagnostics",
+	} {
+		if strings.Contains(insp, gone) {
+			t.Errorf("D32f-impl-1 (post-impl-5f): inspector must NOT carry retired overlay symbol %q", gone)
+		}
 	}
-	if !strings.Contains(js, "authority-inspector-section-diagnostics") {
-		t.Error("D32f-impl-1: inspector Diagnostics subsection must use the .authority-inspector-section-diagnostics class")
-	}
-	if !strings.Contains(js, "_lastAuthorityProjection") {
-		t.Error("D32f-impl-1: inspector must read MIDASExplorerGraph._lastAuthorityProjection for selected-node overlays")
+	panel := getExplorerAsset(t, srv, "/explorer/assets/js/graph/authority/authority-diagnostics-panel.js")
+	for _, want := range []string{
+		"diagnostics",
+		"severity",
+	} {
+		if !strings.Contains(panel, want) {
+			t.Errorf("D32f-impl-1 (post-impl-5f): diagnostics panel module must reference %q", want)
+		}
 	}
 }
 
-// TestExplorer_D32fImpl1_InspectorRendersPosture pins the inspector's
-// Surface Posture subsection for decision_surface selections.
+// TestExplorer_D32fImpl1_InspectorRendersPosture — superseded by
+// D33a-spike-2g-impl-5f. Surface-posture rendering moved out of the
+// Inspector governance overlay and is owned by the Posture & Help
+// tab, rendered by authority-surface-posture-panel.js. This test
+// now pins the new ownership.
 func TestExplorer_D32fImpl1_InspectorRendersPosture(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
-	js := getExplorerAsset(t, srv, "/explorer/assets/js/graph/authority/authority-graph-inspector.js")
-	if !strings.Contains(js, "_postureForSurface") {
-		t.Error("D32f-impl-1: inspector must define _postureForSurface helper")
+	insp := getExplorerAsset(t, srv, "/explorer/assets/js/graph/authority/authority-graph-inspector.js")
+	// Match function DEFINITIONS, not bare names (the file's
+	// header comment enumerates the retired helpers).
+	for _, gone := range []string{
+		"function _postureForSurface(",
+		"authority-inspector-section-posture",
+	} {
+		if strings.Contains(insp, gone) {
+			t.Errorf("D32f-impl-1 (post-impl-5f): inspector must NOT carry retired posture overlay symbol %q", gone)
+		}
 	}
-	if !strings.Contains(js, "authority-inspector-section-posture") {
-		t.Error("D32f-impl-1: inspector Surface Posture subsection must use the .authority-inspector-section-posture class")
-	}
-	// Posture must surface all six axes.
+	panel := getExplorerAsset(t, srv, "/explorer/assets/js/graph/authority/authority-surface-posture-panel.js")
+	// The Posture & Help tab module must surface all six posture
+	// axes the Authority projection emits.
 	for _, axis := range []string{
 		"authority_status",
 		"profile_status",
@@ -260,8 +286,8 @@ func TestExplorer_D32fImpl1_InspectorRendersPosture(t *testing.T) {
 		"fail_mode_policy_status",
 		"escalation_status",
 	} {
-		if !strings.Contains(js, axis) {
-			t.Errorf("D32f-impl-1: inspector posture subsection must surface axis %q", axis)
+		if !strings.Contains(panel, axis) {
+			t.Errorf("D32f-impl-1 (post-impl-5f): posture panel must surface axis %q", axis)
 		}
 	}
 }

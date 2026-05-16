@@ -244,14 +244,32 @@
     return _state.positions[id] || null;
   }
 
+  // _resolvePathD — pick the path generator for a connector. When a
+  // lens-specific `pathFn` is supplied (D32h-fix-2f-hotfix-2) use it
+  // and pass the anchor-side hints so the generator can pick a path
+  // shape per anchor pair; otherwise fall back to the shared
+  // dominant-axis Bezier. Context never passes pathFn, so its
+  // geometry is byte-identical to pre-tranche.
+  function _resolvePathD(p1, p2, srcAnchor, dstAnchor, pathFn) {
+    if (typeof pathFn === 'function') {
+      try {
+        var d = pathFn(p1, p2, srcAnchor, dstAnchor);
+        if (typeof d === 'string' && d) return d;
+      } catch (_) { /* fall through to shared helper */ }
+    }
+    return _curvePath(p1[0], p1[1], p2[0], p2[1]);
+  }
+
   // addConnector — production SVG path adder. Returns the appended
   // <path> element (or null when the SVG container is missing).
-  function addConnector(p1, p2, cls) {
+  // D32h-fix-2f-hotfix-2: accepts optional anchor hints + pathFn so
+  // lens-specific connector geometry can override the shared helper.
+  function addConnector(p1, p2, cls, srcAnchor, dstAnchor, pathFn) {
     var svg = document.getElementById('gmap-svg');
     if (!svg) return null;
     var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     path.setAttribute('class', cls);
-    path.setAttribute('d', _curvePath(p1[0], p1[1], p2[0], p2[1]));
+    path.setAttribute('d', _resolvePathD(p1, p2, srcAnchor, dstAnchor, pathFn));
     svg.appendChild(path);
     return path;
   }
@@ -259,13 +277,15 @@
   // addConnectorHitTarget — invisible wide-stroke twin that captures
   // pointer events for connector hover. aria-hidden so screen readers
   // do not re-announce the relationship (visible path carries the
-  // aria-label).
-  function addConnectorHitTarget(p1, p2, kindInfo, srcId, dstId /*, srcLabel, dstLabel*/) {
+  // aria-label). The hit target MUST use the same path geometry as
+  // the visible path so hover precision matches the rendered line —
+  // D32h-fix-2f-hotfix-2 threads the same pathFn here.
+  function addConnectorHitTarget(p1, p2, kindInfo, srcId, dstId, srcAnchor, dstAnchor, pathFn /*, srcLabel, dstLabel*/) {
     var svg = document.getElementById('gmap-svg');
     if (!svg) return null;
     var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     path.setAttribute('class', 'gmap-connector-hit-target');
-    path.setAttribute('d', _curvePath(p1[0], p1[1], p2[0], p2[1]));
+    path.setAttribute('d', _resolvePathD(p1, p2, srcAnchor, dstAnchor, pathFn));
     path.setAttribute('data-connector-kind', kindInfo.kind);
     path.setAttribute('data-source-node-id', srcId);
     path.setAttribute('data-target-node-id', dstId);
@@ -279,7 +299,7 @@
   // be resolved. Both the visible and hit-target paths are pushed
   // into _state.connectors so a drag/repaint pass updates them in
   // lockstep.
-  function addLiveConnector(srcId, srcAnchor, dstId, dstAnchor, cls) {
+  function addLiveConnector(srcId, srcAnchor, dstId, dstAnchor, cls, pathFn) {
     var sp = effectiveGmapPosition(srcId);
     var dp = effectiveGmapPosition(dstId);
     if (!sp || !dp) return null;
@@ -287,7 +307,11 @@
     var sFn = anchors[srcAnchor];
     var dFn = anchors[dstAnchor];
     if (!sFn || !dFn) return null;
-    var pathEl = addConnector(sFn(sp), dFn(dp), cls);
+    // D32h-fix-2f-hotfix-2: pass the anchor-side hints + optional
+    // lens-specific pathFn to addConnector. Backward-compatible: when
+    // pathFn is absent, addConnector falls through to the shared
+    // _curvePath. Context call sites do not pass pathFn.
+    var pathEl = addConnector(sFn(sp), dFn(dp), cls, srcAnchor, dstAnchor, pathFn);
     if (!pathEl) return null;
     pathEl.classList.add('gmap-connector');
     var kindInfo = _connectorKindFromCls(cls);
@@ -304,7 +328,9 @@
       'aria-label',
       kindInfo.label + ' from ' + srcLabel + ' to ' + dstLabel
     );
-    var hitEl = addConnectorHitTarget(sFn(sp), dFn(dp), kindInfo, srcId, dstId, srcLabel, dstLabel);
+    // Hit target uses the SAME path geometry as the visible path so
+    // hover hit-detection matches the rendered line precisely.
+    var hitEl = addConnectorHitTarget(sFn(sp), dFn(dp), kindInfo, srcId, dstId, srcAnchor, dstAnchor, pathFn);
     if (hitEl) {
       hitEl.gmapVisibleConnector = pathEl;
       pathEl.gmapHitTarget = hitEl;

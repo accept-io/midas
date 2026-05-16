@@ -265,6 +265,11 @@ func (s *Server) WithExplorerEnabled(enabled bool) *Server {
 		s.mux.HandleFunc("GET /explorer/envelopes/", s.explorerReadAuthHandler(s.handleExplorerGetEnvelope))
 		s.mux.HandleFunc("GET /explorer/coverage", s.explorerReadAuthHandler(s.handleExplorerCoverage))
 		s.mux.HandleFunc("GET /explorer/", s.handleExplorerAssets)
+		// D33x-help-1 — mount the embedded MIDAS User Guide at /help/.
+		// Registering only the trailing-slash route lets Go's ServeMux
+		// auto-redirect /help → /help/ (subtree-handler behaviour). See
+		// internal/httpapi/help.go for the static file server.
+		s.mux.HandleFunc("GET /help/", s.handleHelpAssets)
 	}
 	return s
 }

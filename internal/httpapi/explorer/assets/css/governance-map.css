@@ -1780,28 +1780,190 @@
     display: block;
   }
   .gmap-details-title {
-    font-size: 12px;
+    font-size: 13px;
     text-transform: uppercase;
     letter-spacing: 0.08em;
     color: var(--slate-500);
     margin-bottom: 6px;
   }
+  /* D33a-spike-2g-impl-5d — Drawer header simplification.
+     The shared `#gmap-right-rail-title` is updated by the drawer
+     module on every tab switch to mirror the active tab's label.
+     impl-5d hides it in the inspector slot so the selected-node
+     title (`.gmap-details-name`) becomes the top visible content
+     heading — users already know this panel is the selected-node
+     drawer because it opens on tap. The header bar itself stays in
+     DOM so the close button remains accessible. The visible tab
+     label (drawer.tabs) is renamed 'Inspector' → 'Showcase' in
+     authority-graph-view.js. */
+  #gmap-right-rail-title {
+    display: none;
+  }
+  /* The static 'Selected node' section title (index.html:1490) is
+     also redundant: it sits directly above the selected-node title
+     itself. Hide the first `.gmap-details-title` inside the
+     inspector panel only — other sections (Map summary, Fail-mode
+     policy, Evidence, Config) keep their titles. The `:first-child`
+     selector matches the static index.html structure where the
+     `.gmap-details-section` containing the Selected-node title is
+     the first child of the inspector tabpanel. */
+  #gmap-rail-panel-inspector > .gmap-details-section:first-child > .gmap-details-title {
+    display: none;
+  }
   .gmap-details-name {
-    font-size: 16px;
+    /* D33a-spike-2g-impl-5b — bumped 16 → 18 px so the selected-node
+       title reads as the primary inspector heading without being so
+       large it crowds the field rows below. */
+    font-size: 18px;
     font-weight: 700;
     color: var(--on-surface);
     margin-bottom: 4px;
+    /* Long demo IDs / labels (e.g. `Showcase: Fail-mode override`)
+       must wrap inside the drawer rather than overflow horizontally. */
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    min-width: 0;
+  }
+  /* D33a-spike-2g-impl-5d — Inspector title row. Selected-node name
+     on the left grows to fill remaining width; the close/collapse
+     glyph (`|->`) sits flush right. The row keeps the close glyph
+     on the same baseline as the title without forcing the title to
+     wrap prematurely; the title falls back to wrap via its own
+     overflow-wrap when it exceeds the remaining track. */
+  .gmap-details-name-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+  .gmap-details-name-row > .gmap-details-name {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .gmap-details-name-close {
+    flex: 0 0 auto;
+    align-self: flex-start;
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    color: var(--slate-500);
+    font-family: var(--font-mono);
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1;
+    padding: 2px 6px;
+    margin: 0;
+    border-radius: var(--radius-pill, 4px);
+  }
+  .gmap-details-name-close:hover,
+  .gmap-details-name-close:focus-visible {
+    color: var(--on-surface);
+    background: var(--surface-container);
+    outline: none;
   }
   .gmap-details-row {
-    display: flex;
-    justify-content: space-between;
-    font-size: 12px;
+    /* D33a-spike-2g-impl-5c — value-dominant grid. impl-5b used a
+       fixed 140 px label column which left long values (IDs such
+       as `surf-demo-no-profile`, `proc-demo-authority-showcase`)
+       crammed into a sliver of the row and forced them into many
+       short fragments. The minmax label column collapses to 96 px
+       when the drawer is narrow and grows to 120 px when there's
+       room, while `minmax(0, 1fr)` lets the value column shrink
+       below its content size so wrapping works inside the grid.
+       Column-gap tightened 16 → 14 px so the value column gains a
+       couple of pixels back; row padding tightened 4 → 3 px so the
+       selected-node section fits in the normal drawer height
+       without forcing a vertical scrollbar. */
+    display: grid;
+    grid-template-columns: minmax(96px, 120px) minmax(0, 1fr);
+    column-gap: 14px;
+    align-items: baseline;
+    font-size: 13px;
     padding: 3px 0;
     border-bottom: 1px dotted var(--outline-variant);
+    min-width: 0;
   }
   .gmap-details-row:last-child { border-bottom: 0; }
-  .gmap-details-key { color: var(--slate-500); font-family: var(--font-mono); font-size: 11px; }
-  .gmap-details-val { color: var(--on-surface); font-family: var(--font-mono); font-size: 11px; }
+  .gmap-details-key {
+    /* D33a-spike-2g-impl-5b — 11 px mono → 13 px sans, muted. Mono
+       gave key/value an unintended "log line" look; sans matches the
+       drawer's body typography. */
+    color: var(--slate-500);
+    font-size: 13px;
+    font-weight: 500;
+    min-width: 0;
+  }
+  .gmap-details-val {
+    /* D33a-spike-2g-impl-5b/c — 13 px sans / 600 with `min-width: 0`
+       so the value cell can shrink below its content size inside
+       the grid track. Without `min-width: 0`, grid items default
+       to `auto` and refuse to shrink, which produced the
+       horizontal scrollbar impl-5b's review surfaced. With
+       `min-width: 0` + `overflow-wrap: anywhere`, long hyphenated
+       IDs (e.g. `surf-demo-override`) wrap cleanly inside the
+       value column. */
+    color: var(--on-surface);
+    font-size: 13px;
+    font-weight: 600;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  /* D33a-spike-2g-impl-5e — Technical Details collapsible. Native
+     <details> element keeps the raw / debug / numeric fields out
+     of the primary visible pane; the section is collapsed by
+     default so normal selected-node inspection isn't dominated by
+     low-priority numeric maps. Operators expand the section when
+     they need the raw values; View Record remains the route to
+     the full backend record. Placed AFTER the canonical
+     `.gmap-details-row` / `.gmap-details-val` rules so test
+     helpers that bound a rule body via `strings.Index(css,
+     selector + " {")` continue to find the canonical rule first. */
+  details.gmap-details-technical {
+    margin-top: var(--space-3);
+  }
+  details.gmap-details-technical > summary {
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--slate-500);
+    padding: 6px 0 4px;
+    border-top: 1px dotted var(--outline-variant);
+    list-style: none;
+    user-select: none;
+  }
+  details.gmap-details-technical > summary::-webkit-details-marker {
+    display: none;
+  }
+  details.gmap-details-technical > summary::before {
+    content: '▸';
+    display: inline-block;
+    margin-right: 6px;
+    transition: transform 120ms ease;
+  }
+  details.gmap-details-technical[open] > summary::before {
+    transform: rotate(90deg);
+  }
+  .gmap-details-technical-body {
+    padding-top: 4px;
+  }
+  /* Tighter row treatment for technical rows so the collapsed
+     block doesn't push the drawer past its visible height when
+     the operator opens it. Inherits the impl-5c value-dominant
+     grid + min-width: 0 + overflow-wrap from `.gmap-details-row`,
+     `.gmap-details-key`, `.gmap-details-val`. */
+  .gmap-details-technical-body .gmap-details-row {
+    font-size: 12px;
+    padding: 2px 0;
+  }
+  .gmap-details-technical-body .gmap-details-key,
+  .gmap-details-technical-body .gmap-details-val {
+    font-size: 12px;
+  }
 
   /* D27j-ui-3a — right rail three-tab shell. The .gmap-right-rail
      class is additive on top of .governance-map-details so the
@@ -1942,16 +2104,22 @@
     outline-offset: 1px;
   }
   .gmap-right-rail-panel {
-    /* D27j-ui-3a-refine-3e — padding allowance back on the left.
-       3a-refine-3a parked the chromeless strip flush at the rail's
-       right edge (`right: 0`); 3e makes the strip state-dependent
-       and parks it at the panel's LEFT edge (panel-canvas seam) in
-       expanded state. Panel content therefore needs the
-       (--gmap-right-rail-handle-width + var(--space-3)) allowance
-       on the left so rows clear the labels. Collapsed panels are
-       display:none, so this padding is operationally irrelevant in
-       collapsed state. */
-    padding: var(--space-3) var(--space-3) var(--space-3) calc(var(--gmap-right-rail-handle-width) + var(--space-3));
+    /* D27j-ui-3a-refine-3e — padding allowance for the chromeless
+       vertical tab strip parked at the panel's left edge in
+       expanded state.
+       D33a-spike-2g-impl-5c — left padding tightened from
+       (handle + space-3 = 40 px) to (handle + space-2 = 36 px) so
+       the gutter between the tab rail and content lands inside the
+       documented 24-32 px target. Horizontal padding on the right
+       trimmed to space-2 (8 px) so the value column gains 4 px of
+       horizontal headroom. `overflow-x: hidden` guarantees no
+       horizontal scrollbar appears when long values wrap; the
+       inspector content is constrained to the panel content box.
+       `overflow-y: auto` remains as a defensive fallback for
+       overflow cases, but the normal selected-node view is
+       expected to fit within the visible panel height. */
+    padding: var(--space-3) var(--space-2) var(--space-3) calc(var(--gmap-right-rail-handle-width) + var(--space-2));
+    overflow-x: hidden;
     overflow-y: auto;
     flex: 1 1 auto;
     min-height: 0;
@@ -1973,7 +2141,13 @@
      tab strip; the close button sits on the right edge with
      standard space-3 breathing room. */
   .gmap-right-rail-header {
-    display: flex;
+    /* D33a-spike-2g-impl-5d — Standalone header bar (the large
+       INSPECTOR title + top-right X close) is hidden. The close
+       affordance moves into the selected-node title row inside
+       the inspector panel; the old X button retains its
+       `data-rail-close="true"` marker so it's still wired but
+       sits in a hidden subtree. */
+    display: none;
     align-items: center;
     justify-content: space-between;
     padding: var(--space-3) var(--space-3) 0 calc(var(--gmap-right-rail-handle-width) + var(--space-3));
@@ -2056,6 +2230,19 @@
   .gmap-details-actions { display: flex; flex-wrap: wrap; gap: 8px; }
   .gmap-details-actions:empty { display: none; }
   .gmap-details-actions:not(:empty) { margin-top: 12px; }
+
+  /* D33a-spike-2g-impl-5f — Inspector ownership cleanup. The
+     "Map summary" `.gmap-details-section` in `index.html` shares
+     the `#gmap-details-summary` slot between the Context Graph
+     lens (which still populates it via setSummary) and the
+     Authority Graph lens (which clears it on every selection).
+     Removing the DOM scaffold would regress Context; instead, the
+     parent `.gmap-details-section` is hidden when its summary
+     slot is empty so no orphan "Map summary" heading renders in
+     the Authority Inspector tab. */
+  .gmap-details-section:has(> #gmap-details-summary:empty) {
+    display: none;
+  }
 
   /* D27j-ui-3b — Inspector Governance section. Compact reference
      rows for the FailModePolicy subsection. The wrapper container

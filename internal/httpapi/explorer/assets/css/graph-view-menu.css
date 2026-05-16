@@ -58,3 +58,19 @@
   background: var(--surface-2, rgba(0, 0, 0, 0.04));
   border-color: var(--border-muted, rgba(0, 0, 0, 0.08));
 }
+
+/* D33x-help-1 — Toolbar Help button. Sibling of .graph-view-menu inside
+ * .governance-map-toolbar-right. Reuses .service-workbench-icon-mode
+ * (transparent bg, currentColor stroke, hover/focus rings) so the visual
+ * vocabulary stays consistent with the lens switcher. The explicit
+ * width/height matches .graph-view-menu-button (28×22) so the button
+ * aligns vertically with the menu group; no .graph-view-menu-button
+ * class is applied because the help button is NOT part of the menu's
+ * four-button group (TestExplorer_D32dImpl4_FourMenuButtons pins that
+ * count). The left-margin gives the button breathing room from the
+ * lens-menu pill. */
+.gmap-help-button {
+  width: 28px;
+  height: 22px;
+  margin-left: 4px;
+}

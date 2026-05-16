@@ -864,9 +864,15 @@ func TestExplorer_D32aImpl3_RendererOwnsProductionPrimitives(t *testing.T) {
 	for _, want := range []string{
 		"function clearCanvas(",
 		"function addNode(spec, pos)",
-		"function addConnector(p1, p2, cls)",
+		// D32h-fix-2f-hotfix-2 — addConnector / addLiveConnector grew
+		// optional anchor-side + lens pathFn parameters so Authority
+		// connectors can override the shared dominant-axis Bezier.
+		// Backward-compatible: existing five-arg calls still work
+		// (pathFn defaults to undefined; addConnector falls through to
+		// the shared _curvePath).
+		"function addConnector(p1, p2, cls, srcAnchor, dstAnchor, pathFn)",
 		"function addConnectorHitTarget(",
-		"function addLiveConnector(srcId, srcAnchor, dstId, dstAnchor, cls)",
+		"function addLiveConnector(srcId, srcAnchor, dstId, dstAnchor, cls, pathFn)",
 		"function addMoreNode(",
 		"function effectiveGmapPosition(id)",
 		"function applyVisibilityFilters(",
@@ -2468,7 +2474,7 @@ func TestExplorer_D32aImpl9_InspectorHookDispatchesToModule(t *testing.T) {
 //     rendering the same canvas — see the operator-reported bug pinned
 //     by TestExplorer_D32bDebug1_*.
 // The 8,000-line ceiling from the D32a tranche prompt is enforced
-// here as a 7,650 ceiling so a future inline regression is loud
+// here as a 7,660 ceiling so a future inline regression is loud
 // rather than silent.
 //   • D32h-fix-1 — bumped 7,550 → 7,650 (+100 headroom) to absorb the
 //     lens-aware bottom-workbench DOM addition (~58 lines: a sibling
@@ -2477,13 +2483,18 @@ func TestExplorer_D32aImpl9_InspectorHookDispatchesToModule(t *testing.T) {
 //     tray was NOT removed; both lens trays now coexist and CSS routes
 //     visibility from body[data-graph-lens]. The Authority canvas
 //     itself, the inspector, and Context behaviour are untouched.
+//   • D33x-help-1 — bumped 7,650 → 7,660 (+10 headroom) for the
+//     toolbar Help button + two `<script>` tags loading the help
+//     modules. Both the button and the script-tag block are followed
+//     by single-line comments so the extraction discipline is
+//     preserved; the bump only accommodates the legitimate +5 lines.
 func TestExplorer_D32aImpl9_IndexHtmlReducedBelowImpl8(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
 	body := performRequest(t, srv, http.MethodGet, "/explorer", nil).Body.String()
 	lines := strings.Count(body, "\n") + 1
-	if lines > 7650 {
-		t.Errorf("D32a-impl-9 / D32b-debug-1 / D32h-fix-1: index.html line count %d exceeds 7650 — extraction discipline should hold", lines)
+	if lines > 7660 {
+		t.Errorf("D32a-impl-9 / D32b-debug-1 / D32h-fix-1 / D33x-help-1: index.html line count %d exceeds 7660 — extraction discipline should hold", lines)
 	}
 }
 
@@ -2771,6 +2782,15 @@ func TestExplorer_D32bImpl1_AuthorityInspectorSupportsAllSevenKinds(t *testing.T
 // TestExplorer_D32bImpl1_AuthorityInspectorCoversRequiredFields pins
 // the per-kind required-fields contract from the D32b-impl-1 prompt.
 // Each field must appear as a quoted token in the inspector source.
+//
+// D33a-spike-2g-impl-5e — the three-block content model promoted the
+// `name` field out of the per-kind field rows and into the
+// selected-node title (rendered via `insp.setName(projLabel || projId)`
+// from the projection's `_label`, which the adapter sources from
+// `node.label`, which is the entity's name). The per-kind required-
+// fields lists below were narrowed accordingly: `name` is no longer
+// required to appear as a `['name', …]` row. The title-source
+// contract is verified by a sibling assertion below.
 func TestExplorer_D32bImpl1_AuthorityInspectorCoversRequiredFields(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
@@ -2780,13 +2800,13 @@ func TestExplorer_D32bImpl1_AuthorityInspectorCoversRequiredFields(t *testing.T)
 		fields []string
 	}
 	required := []fieldSet{
-		{"business_service",  []string{"name", "status", "owner", "service_type", "fail_mode_policy_id"}},
-		{"decision_surface",  []string{"version", "name", "status", "process_id", "business_service_id", "effective_policy_source", "effective_policy_id", "inherits_bs_policy"}},
-		{"authority_profile", []string{"version", "surface_id", "name", "status", "validity_status", "confidence_threshold", "consequence_threshold", "escalation_mode", "escalation_target_id", "fail_mode"}},
+		{"business_service",  []string{"status", "owner", "service_type", "fail_mode_policy_id"}},
+		{"decision_surface",  []string{"version", "status", "process_id", "business_service_id", "effective_policy_source", "effective_policy_id", "inherits_bs_policy"}},
+		{"authority_profile", []string{"version", "surface_id", "status", "validity_status", "confidence_threshold", "consequence_threshold", "escalation_mode", "escalation_target_id", "fail_mode"}},
 		{"authority_grant",   []string{"profile_id", "agent_id", "status", "validity_status", "capabilities", "constraints"}},
-		{"agent",             []string{"name", "type", "owner", "model_version", "operational_state"}},
-		{"fail_mode_policy",  []string{"version", "name", "status", "effective_date", "effective_until", "business_owner", "technical_owner", "origin", "managed", "rule_count_by_class"}},
-		{"escalation_target", []string{"version", "name", "kind", "handle", "status", "effective_date", "effective_until", "business_owner", "technical_owner"}},
+		{"agent",             []string{"type", "owner", "model_version", "operational_state"}},
+		{"fail_mode_policy",  []string{"version", "status", "effective_date", "effective_until", "business_owner", "technical_owner", "origin", "managed", "rule_count_by_class"}},
+		{"escalation_target", []string{"version", "kind", "handle", "status", "effective_date", "effective_until", "business_owner", "technical_owner"}},
 	}
 	for _, fs := range required {
 		for _, f := range fs.fields {
@@ -2797,6 +2817,11 @@ func TestExplorer_D32bImpl1_AuthorityInspectorCoversRequiredFields(t *testing.T)
 				t.Errorf("D32b-impl-1: inspector must surface field %q for kind %q", f, fs.kind)
 			}
 		}
+	}
+	// post-impl-5e contract: the entity name flows to the selected-
+	// node title via setName, not via a per-kind field row.
+	if !strings.Contains(js, "insp.setName(") {
+		t.Error("D32b-impl-1 (post-impl-5e): inspector must call insp.setName(...) — entity name flows to the selected-node title, not to a `['name', …]` field row")
 	}
 }
 
@@ -3961,10 +3986,17 @@ func TestExplorer_D32bImpl3_LensProvidersRegistered(t *testing.T) {
 	// Diagnostics | Posture). D32g-fix-1 relabelled the third tab to
 	// "Posture & Help" when it grew to host the consolidated posture
 	// list + full summary counts + layer toggle chips + the legend
-	// that previously lived above the canvas. Inspector + Diagnostics
-	// labels are unchanged.
+	// that previously lived above the canvas. D33a-spike-2g-impl-5d
+	// renamed the inspector tab user-facing label `Inspector` →
+	// `Showcase` (slot id stays 'inspector'); accept either label
+	// here so the historical pin survives the additive change while
+	// the impl-5d test (D33aSpike2gImpl5d_InspectorTabRenamedToShowcase)
+	// pins the new value exactly.
+	if !strings.Contains(viewJS, "label: 'Inspector'") &&
+		!strings.Contains(viewJS, "label: 'Showcase'") {
+		t.Error("D32b-impl-3 (post-D32g, post-impl-5d): Authority drawer registration must declare label 'Inspector' or 'Showcase' for the inspector slot")
+	}
 	for _, want := range []string{
-		"label: 'Inspector'",
 		"label: 'Diagnostics'",
 		"label: 'Posture & Help'",
 	} {

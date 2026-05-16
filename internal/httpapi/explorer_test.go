@@ -9446,7 +9446,7 @@ func TestExplorer_HTML_GraphRenderingFunctions_StillInline_Theme4c(t *testing.T)
 	for _, want := range []string{
 		`function renderContextGraph(data, ctx)`,
 		`function addNode(spec, pos)`,
-		`function addLiveConnector(srcId, srcAnchor, dstId, dstAnchor, cls)`,
+		`function addLiveConnector(srcId, srcAnchor, dstId, dstAnchor, cls, pathFn)`,
 		`function applyVisibilityFilters(`,
 	} {
 		if !strings.Contains(body, want) {
@@ -9461,7 +9461,7 @@ func TestExplorer_HTML_GraphRenderingFunctions_StillInline_Theme4c(t *testing.T)
 	graphFnDecls := []string{
 		`function renderContextGraph(data, ctx)`,
 		`function addNode(spec, pos)`,
-		`function addLiveConnector(srcId, srcAnchor, dstId, dstAnchor, cls)`,
+		`function addLiveConnector(srcId, srcAnchor, dstId, dstAnchor, cls, pathFn)`,
 		`function applyVisibilityFilters(`,
 	}
 	forbidden := []string{
@@ -9699,7 +9699,7 @@ func TestExplorer_HTML_Theme4d_NoSelectedPathJSIntroduced(t *testing.T) {
 	for _, want := range []string{
 		`function renderContextGraph(data, ctx)`,
 		`function addNode(spec, pos)`,
-		`function addLiveConnector(srcId, srcAnchor, dstId, dstAnchor, cls)`,
+		`function addLiveConnector(srcId, srcAnchor, dstId, dstAnchor, cls, pathFn)`,
 		`function applyVisibilityFilters(`,
 	} {
 		if !strings.Contains(body, want) {

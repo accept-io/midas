@@ -214,6 +214,7 @@ var nonContractAllowlist = []struct {
 }{
 	{"/auth/", "local IAM and OIDC mechanics; not part of API contract"},
 	{"/explorer", "developer sandbox per ADR memory mode; not part of API contract"},
+	{"/help/", "D33x-help-1 embedded MIDAS User Guide (static documentation served from //go:embed); user-facing help surface, not part of API contract"},
 }
 
 func isNonContract(path string) bool {
