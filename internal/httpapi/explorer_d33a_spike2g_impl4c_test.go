@@ -99,8 +99,9 @@ func TestExplorer_D33aSpike2gImpl4c_AuthorityThinCardThemeStillRegistered(t *tes
 	if !strings.Contains(js, "'"+d33aSpike2gImpl4cThemeName+"'") {
 		t.Errorf("D33a-spike-2g-impl-4c: _THEMES must still contain %q", d33aSpike2gImpl4cThemeName)
 	}
-	if !strings.Contains(js, "var DEFAULT_THEME  = 'classic';") {
-		t.Error("D33a-spike-2g-impl-4c: DEFAULT_THEME must remain 'classic'")
+	// D37f — DEFAULT_THEME promoted to 'html-card'; 'classic' remains in _THEMES.
+	if !strings.Contains(js, "var DEFAULT_THEME  = 'html-card';") {
+		t.Error("D33a-spike-2g-impl-4c/D37f: DEFAULT_THEME must be 'html-card' (D37f promotion)")
 	}
 }
 
@@ -527,15 +528,26 @@ func TestExplorer_D33aSpike2gImpl4c_HoverRemainsConnectorFocused(t *testing.T) {
 
 // TestExplorer_D33aSpike2gImpl4c_NodeClickBehaviourPreserved pins
 // that impl-4c did not regress the existing node-click handoff to
-// the PoC inspector. Click → select → focus → root-path emphasis →
-// inspector render — the existing wiring must still be in source.
+// the inspector. Click → select → focus → root-path emphasis →
+// inspector render — the wiring must still be in source.
+//
+// D33x-list-mode — The "inspector render" half of this handoff
+// shifted from the floating PoC card to the production right
+// drawer. The PoC's tap handler no longer calls
+// `_renderInspector(node)`; it dispatches through the renderer
+// hook (`_rendererHooks.selectNode(nodeId)`) which lens-routes
+// into `authorityInspector.selectNode`, which reads the carrier
+// DOM the PoC paints under `#gmap-canvas`. The CLICK → SELECT →
+// FOCUS chain is unchanged; only the inspector destination moved.
 func TestExplorer_D33aSpike2gImpl4c_NodeClickBehaviourPreserved(t *testing.T) {
 	js := d33aSpike2gImpl4cReadPoc(t)
 	for _, want := range []string{
 		"_cy.on('tap', 'node', function (evt)",
 		"_focusNode(node)",
 		"_emphasiseRootPath(node)",
-		"_renderInspector(node)",
+		// D33x-list-mode — inspector handoff is now the renderer-
+		// hook dispatch into authorityInspector.selectNode.
+		"hooks.selectNode(nodeId)",
 	} {
 		if !strings.Contains(js, want) {
 			t.Errorf("D33a-spike-2g-impl-4c: click→inspector handoff missing — %q", want)

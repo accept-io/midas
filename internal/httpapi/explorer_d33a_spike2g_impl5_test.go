@@ -297,36 +297,52 @@ func TestExplorer_D33aSpike2gImpl5_TapStillRoutesThroughRendererHook(t *testing.
 	}
 	body := js[start : start+len(opener)+end]
 
+	// D33x-list-mode — Floating PoC inspector render call retired.
+	// The tap handler now dispatches solely into the production
+	// right drawer via the renderer hook.
 	for _, want := range []string{
 		"_rendererHooks",
 		"hooks.selectNode(nodeId)",
-		"_renderInspector(node)", // PoC inspector still renders
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("D33a-spike-2g-impl-5: tap handler must still contain %q", want)
 		}
+	}
+	if strings.Contains(body, "_renderInspector(node)") {
+		t.Error("D33x-list-mode: tap handler must NOT call the retired _renderInspector(node) — floating PoC card removed")
 	}
 	if !strings.Contains(body, "try {") || !strings.Contains(body, "} catch (_) {") {
 		t.Error("D33a-spike-2g-impl-5: tap-handler hook routing must remain wrapped in try/catch")
 	}
 }
 
-// ── 9. PoC inspector still present ───────────────────────────────────
+// ── 9. PoC inspector aside retired ───────────────────────────────────
 
-// TestExplorer_D33aSpike2gImpl5_PocInspectorStillPresent pins that
-// the PoC inspector aside has NOT been removed in this tranche.
-// Removal is reserved for a later tranche after browser verification.
+// TestExplorer_D33aSpike2gImpl5_PocInspectorStillPresent — superseded
+// by D33x-list-mode. The floating PoC inspector aside has been
+// retired in favour of the production right drawer. The test now
+// asserts the inverse contract: the floating-card render path is
+// GONE and the carrier-DOM contract that feeds the production drawer
+// REMAINS.
 func TestExplorer_D33aSpike2gImpl5_PocInspectorStillPresent(t *testing.T) {
 	js := d33aSpike2gImpl5ReadPoc(t)
-	for _, want := range []string{
+	for _, gone := range []string{
 		"function _renderInspector(node)",
 		"function _renderInspectorEmpty(",
-		"_inspectorEl",
-		"cytoscape-poc-inspector",
-		"_renderInspector(node)",
+		"function _wireInspectorToggle(",
+		"function _setInspectorExpanded(",
+	} {
+		if strings.Contains(js, gone) {
+			t.Errorf("D33x-list-mode: floating PoC inspector aside must remain retired — found %q", gone)
+		}
+	}
+	for _, want := range []string{
+		"_renderInspectorCarriers",
+		"cytoscape-poc-inspector-carrier",
+		"hooks.selectNode(nodeId)",
 	} {
 		if !strings.Contains(js, want) {
-			t.Errorf("D33a-spike-2g-impl-5: PoC inspector surface element %q must remain", want)
+			t.Errorf("D33x-list-mode: production right-drawer wiring must remain — missing %q", want)
 		}
 	}
 }

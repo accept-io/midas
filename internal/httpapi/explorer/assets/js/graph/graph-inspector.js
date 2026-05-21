@@ -17,8 +17,6 @@
 //     the Action button click handlers.
 //
 // Public surface on window.MIDASExplorerGraph.inspector:
-//   register(lens, impl)        — lens dispatch table (D32a-impl-1)
-//   renderNode(lens, node, mount) / clear(lens, mount)
 //   show(mount) / hide(mount)   — lens-agnostic frame toggles
 //   setName(name)               — write #gmap-details-name textContent
 //   setFields(rows)             — render #gmap-details-fields rows
@@ -28,6 +26,20 @@
 //   setInlineActions(node, actions)
 //                               — render reframe button(s) on a node
 //                                 card's inline-actions slot
+//
+// D37p-clean-2 — Dead Inspector Dispatcher Retirement.
+//
+// The pre-D37p-clean-2 module also exposed three dispatch functions
+// (`register(lens, impl)` / `renderNode(lens, node, mount)` /
+// `clear(lens, mount)`) plus an internal `_impls` registry. The
+// entire dispatch surface had zero runtime call-sites — every live
+// consumer reaches the frame setters directly via
+// `MIDASExplorerGraph.inspector.set*` and reaches Authority's per-
+// node renderer via `MIDASExplorerGraph.authorityInspector.selectNode`
+// (or its `_rendererHooks.selectNode` analogue). The dispatch
+// functions + registry are removed here; the lens-agnostic frame
+// setters + show/hide remain because every existing inspector
+// consumer continues to use them.
 
 (function () {
   'use strict';
@@ -43,27 +55,16 @@
     return (window.MIDASExplorerGraph && window.MIDASExplorerGraph._actionDispatcher) || null;
   }
 
-  // ── Lens dispatch (D32a-impl-1 / D32a-impl-2). ──────────────────────
-  var _impls = {};
-  function register(lens, impl) {
-    if (!lens || !impl) return;
-    _impls[lens] = impl;
-  }
+  // ── Frame mount resolution (used by show / hide). ───────────────────
+  //
+  // D37p-clean-2 — `_resolveMount` previously also served the retired
+  // `renderNode` / `clear` dispatch functions. With those gone, the
+  // helper is still needed by show / hide so the inspector frame can
+  // be toggled on the default `#gmap-details` mount without callers
+  // having to thread the element.
   function _resolveMount(mount) {
     if (mount && typeof mount.appendChild === 'function') return mount;
     return document.getElementById('gmap-details') || document.body;
-  }
-  function renderNode(lens, node, mount) {
-    var impl = _impls[lens];
-    if (!impl || typeof impl.renderNode !== 'function') return;
-    try { impl.renderNode(node, _resolveMount(mount)); } catch (e) {
-      if (window.console && window.console.error) window.console.error('inspector error', lens, e);
-    }
-  }
-  function clear(lens, mount) {
-    var impl = _impls[lens];
-    if (!impl || typeof impl.clear !== 'function') return;
-    try { impl.clear(_resolveMount(mount)); } catch (_) { /* swallow */ }
   }
   function show(mount) {
     var el = _resolveMount(mount);
@@ -181,10 +182,10 @@
     else el.removeAttribute('hidden');
   }
 
+  // D37p-clean-2 — Dispatcher methods (register / renderNode / clear)
+  // retired; the live frame-setter surface stays because every existing
+  // inspector consumer consumes it directly.
   window.MIDASExplorerGraph.inspector = {
-    register:         register,
-    renderNode:       renderNode,
-    clear:            clear,
     show:             show,
     hide:             hide,
     setName:          setName,

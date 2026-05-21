@@ -265,17 +265,25 @@ func TestExplorer_D33aSpike2gImpl5b_CarrierIncludesConnectedEdgeCount(t *testing
 
 // ── 7. PoC inspector remains ─────────────────────────────────────────
 
-// TestExplorer_D33aSpike2gImpl5b_PocInspectorStillPresent pins that
-// impl-5b has not removed the duplicate PoC inspector aside.
+// TestExplorer_D33aSpike2gImpl5b_PocInspectorStillPresent — superseded
+// by D33x-list-mode. The floating PoC inspector aside has been
+// retired in favour of the production right drawer.
 func TestExplorer_D33aSpike2gImpl5b_PocInspectorStillPresent(t *testing.T) {
 	js := d33aSpike2gImpl5bRead(t, d33aSpike2gImpl5bPocPath)
-	for _, want := range []string{
+	for _, gone := range []string{
 		"function _renderInspector(node)",
-		"cytoscape-poc-inspector",
-		"_renderInspector(node)",
+		"function _renderInspectorEmpty(",
+	} {
+		if strings.Contains(js, gone) {
+			t.Errorf("D33x-list-mode: floating PoC inspector aside must remain retired — found %q", gone)
+		}
+	}
+	for _, want := range []string{
+		"_renderInspectorCarriers",
+		"cytoscape-poc-inspector-carrier",
 	} {
 		if !strings.Contains(js, want) {
-			t.Errorf("D33a-spike-2g-impl-5b: PoC inspector surface element %q must remain", want)
+			t.Errorf("D33x-list-mode: production right-drawer wiring must remain — missing %q", want)
 		}
 	}
 }

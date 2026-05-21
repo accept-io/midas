@@ -1,11 +1,17 @@
 /* /explorer/assets/css/authority-cytoscape-poc.css
  *
- * Cytoscape.js Authority Graph PoC — visual chrome.
+ * Authority Graph — Cytoscape HTML-card renderer visual chrome.
+ * (Filename retained as internal naming debt per D37b — this is
+ * the production Authority stylesheet, not a PoC stylesheet.)
  *
- * Scope: the entire stylesheet is gated by `body.cytoscape-poc-active`
- * so removing the PoC script and clearing that body class fully
- * disables every rule here. No rules collide with the production
- * Authority Graph, Context Graph, or any other lens.
+ * Scope: the entire stylesheet is gated by host-owned renderer
+ * identity — `.midas-graph-viewport[data-active-renderer=
+ * "authority"]`. As of D37b the GraphViewport host
+ * (graph-viewport.js) sets this attribute when
+ * `viewport.activateById('authority')` succeeds, and clears it (or
+ * restores the baseline) on deactivation. The D35f cleanup tranche
+ * retired `body.cytoscape-poc-active` as the activation flag; no
+ * CSS rule here keys off body classes any more.
  *
  * Visual intent: workbench-grade, Palantir-adjacent — controlled
  * typography, restrained palette, design tokens for surfaces/outlines/
@@ -13,23 +19,40 @@
  * Cytoscape can pick them up at render time.
  */
 
-body.cytoscape-poc-active #gmap-canvas {
+.midas-graph-viewport[data-active-renderer="authority"] #gmap-canvas {
   /* Hide the production Authority canvas when the PoC is active.
    * The element still exists so its child references survive; only
    * the visual surface is suppressed. */
   display: none !important;
 }
 
-body.cytoscape-poc-active .cytoscape-poc-mount {
-  /* D33a-impl-1 — Drop the misleading `min-height: 720px` that pushed
-   * nodes below the visible viewport on shorter screens. The parent
-   * `.governance-map-canvas-scroll` is `height: 100%` inside the
-   * workbench grid cell; `height: 100%` here propagates that height
-   * to Cytoscape so fit() sees the real viewport. A small fallback
-   * keeps the canvas usable on very short heights. */
-  position: relative;
-  width: 100%;
-  height: 100%;
+.midas-graph-viewport[data-active-renderer="authority"] .cytoscape-poc-mount {
+  /* D37d-authority-cytoscape-mount-visibility-fix — Position the
+   * mount as an absolute overlay anchored to the slot's four edges.
+   *
+   * Pre-D37d the mount was `position: relative; width: 100%;
+   * height: 100%;`. In `.midas-graph-renderer-slot`'s block-flow
+   * formatting context the mount was a SIBLING of the pre-existing
+   * `.governance-map-canvas-scroll` (which is `height: 100%`).
+   * Both siblings claimed the full slot height, so the second
+   * (the mount) was laid out BELOW the visible viewport and
+   * clipped invisible by `.midas-graph-viewport { overflow:
+   * hidden }`. Cytoscape mounted into the off-screen container,
+   * emitted "container has invalid dimensions" warnings, and
+   * rendered nothing visible. See
+   * docs/design/D37c-authority-cytoscape-blank-state-root-cause-assessment.md.
+   *
+   * `position: absolute; inset: 0;` lifts the mount out of normal
+   * flow and anchors it to the slot (the slot is itself
+   * `position: absolute; inset: 0;` and provides the containing
+   * block). The mount now overlays the legacy canvas-scroll
+   * sibling and fills the visible viewport exactly.
+   *
+   * `overflow: hidden` is retained as Cytoscape canvas-discipline
+   * (D35h contract). The strategic clip is still
+   * `.midas-graph-viewport { overflow: hidden }`. */
+  position: absolute;
+  inset: 0;
   min-height: 480px;
   background: var(--surface-container-lowest, #0c111c);
   border: 1px solid var(--outline-variant, #475569);
@@ -39,90 +62,49 @@ body.cytoscape-poc-active .cytoscape-poc-mount {
   color: var(--on-surface, #e2e8f0);
 }
 
-/* ── Shared toggle button (legend + inspector headers) ───────────── */
-body.cytoscape-poc-active .cytoscape-poc-toggle {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 6px 10px;
-  background: var(--surface-container, #222838);
-  border: 0;
-  border-bottom: 1px solid var(--outline-variant, #475569);
-  color: var(--on-surface, #e2e8f0);
-  font: inherit;
-  font-size: 11px;
-  cursor: pointer;
-  text-align: left;
-  /* D33a-impl-1 — The chip header is always interactive even though
-   * the surrounding legend body uses pointer-events: none below. */
-  pointer-events: auto;
-}
-body.cytoscape-poc-active .cytoscape-poc-toggle:hover,
-body.cytoscape-poc-active .cytoscape-poc-toggle:focus-visible {
-  background: var(--surface-container-low, #1a1f2e);
-  outline: none;
-}
-body.cytoscape-poc-active .cytoscape-poc-toggle-label {
-  flex: 1 1 auto;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-weight: 500;
-}
-body.cytoscape-poc-active .cytoscape-poc-toggle-glyph {
-  flex: 0 0 auto;
-  font-size: 10px;
-  color: var(--on-surface-variant, #94a3b8);
-  transition: transform 0.18s ease-out;
-}
-body.cytoscape-poc-active [data-expanded="false"] .cytoscape-poc-toggle-glyph {
-  transform: rotate(-90deg);
-}
-body.cytoscape-poc-active .cytoscape-poc-status-chip {
-  display: inline-block;
-  padding: 1px 6px;
-  border-radius: 10px;
-  background: var(--primary, #7aa2ff);
-  color: var(--surface-container-lowest, #0c111c);
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  /* D33a-impl-1 — Status chip replaces the prior #gmap-status text
-   * hijack. Operators see "PoC" only inside the PoC's own chrome. */
-}
-body.cytoscape-poc-active .cytoscape-poc-theme-chip {
-  /* D33a-spike-1 — Surfaces the active theme name in the legend chip
-   * so the operator can tell which variant is rendering. Sits next to
-   * the "PoC" status chip; subtler styling to avoid competing with it. */
-  display: inline-block;
-  padding: 1px 6px;
-  border-radius: 10px;
-  background: var(--surface-container, #222838);
-  border: 1px solid var(--outline-variant, #475569);
-  color: var(--on-surface-variant, #94a3b8);
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
+/* D33x-left-poc-panel — Shared toggle/chip rules retired.
+ * The `.cytoscape-poc-toggle*`, `.cytoscape-poc-status-chip`, and
+ * `.cytoscape-poc-theme-chip` selectors styled the header of the
+ * floating "Authority Graph" left PoC panel (legend) and the
+ * already-retired floating PoC inspector card. Both surfaces were
+ * removed in their respective tranches; the shared toggle rules
+ * have no remaining DOM consumer. */
 
-/* ── D33a-spike-2 — HTML card overlay ──────────────────────────────
+/* ── D33a-spike-2 + D37f — HTML card overlay (production default) ──
  *
- * Active only when the html-card theme is selected (mount carries
- * data-cy-theme="html-card"). The overlay container is pointer-
- * events: none so Cytoscape continues to receive all interaction
- * events. Cards are presentational only.
+ * As of D37f the HTML-card overlay is the default Authority visual,
+ * scoped to `[data-active-renderer="authority"]`. The pre-D37f
+ * `[data-cy-theme="html-card"]` qualifier has been dropped — cards
+ * render under default Authority activation regardless of the
+ * underlying cy theme (themes still exist for engineering
+ * exploration via `?cyTheme=`).
+ *
+ * D37f also fixed the overlay's clip model. The pre-D37f rule
+ * declared `overflow: hidden`, which would have clipped cards in
+ * the overlay's UNTRANSFORMED coordinate space and produced the
+ * D34/D35e disappearing-card bug under the new D34i two-tier
+ * transform. The overlay is a projection layer, NOT a clip
+ * authority. The strategic clip remains `.midas-graph-viewport
+ * { overflow: hidden }`; `.cytoscape-poc-mount`'s own
+ * `overflow: hidden` remains as Cytoscape canvas discipline.
+ *
+ * `transform-origin: top left` is REQUIRED by the D34i projection
+ * model — the overlay's runtime transform (`_syncLayer` writes
+ * `translate(cy.pan.x, cy.pan.y) scale(cy.zoom)`) must originate
+ * at the top-left of the overlay box so the `translate` component
+ * lands at the same screen pixel as Cytoscape's own projection.
+ *
+ * Overlay + cards are pointer-events:none so Cytoscape owns all
+ * hit-testing.
  */
-body.cytoscape-poc-active .cytoscape-poc-mount[data-cy-theme="html-card"] .cytoscape-poc-html-overlay {
+.midas-graph-viewport[data-active-renderer="authority"] .cytoscape-poc-html-overlay {
   position: absolute;
   inset: 0;
-  overflow: hidden;
   pointer-events: none;
   z-index: 5;
+  transform-origin: top left;
 }
-body.cytoscape-poc-active .cytoscape-poc-mount[data-cy-theme="html-card"] .cytoscape-poc-html-card {
+.midas-graph-viewport[data-active-renderer="authority"] .cytoscape-poc-html-card {
   position: absolute;
   top: 0;
   left: 0;
@@ -146,14 +128,61 @@ body.cytoscape-poc-active .cytoscape-poc-mount[data-cy-theme="html-card"] .cytos
   gap: 4px;
   overflow: hidden;
 }
-body.cytoscape-poc-active .cytoscape-poc-mount[data-cy-theme="html-card"] .cytoscape-poc-html-card-kind {
+.midas-graph-viewport[data-active-renderer="authority"] .cytoscape-poc-html-card-kind {
   display: inline-block;
   font-size: 9px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--on-surface-variant, #94a3b8);
 }
-body.cytoscape-poc-active .cytoscape-poc-mount[data-cy-theme="html-card"] .cytoscape-poc-html-card-title {
+
+/* D37f-rich-card — Header row hosts the per-kind icon + the kind chip
+ * on a single flex line. The icon inherits `currentColor` so its
+ * stroke colour follows the icon-wrap container, which defaults to
+ * the same neutral token as the kind chip. */
+.midas-graph-viewport[data-active-renderer="authority"] .authority-html-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  min-height: 18px;
+}
+.midas-graph-viewport[data-active-renderer="authority"] .authority-html-card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  color: var(--on-surface-variant, #94a3b8);
+}
+.midas-graph-viewport[data-active-renderer="authority"] .authority-html-card-icon svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+
+/* Meta row — chip-of-chips, only rendered when at least one token
+ * is sourced from real projection data. */
+.midas-graph-viewport[data-active-renderer="authority"] .authority-html-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+.midas-graph-viewport[data-active-renderer="authority"] .authority-html-card-meta-chip {
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--on-surface, #e2e8f0);
+  background: rgba(122, 162, 255, 0.12);
+  border: 1px solid rgba(122, 162, 255, 0.35);
+  border-radius: 3px;
+  padding: 1px 5px;
+  line-height: 1.2;
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .cytoscape-poc-html-card-title {
   flex: 1 1 auto;
   font-size: 13px;
   font-weight: 600;
@@ -165,7 +194,7 @@ body.cytoscape-poc-active .cytoscape-poc-mount[data-cy-theme="html-card"] .cytos
   overflow: hidden;
   word-break: break-word;
 }
-body.cytoscape-poc-active .cytoscape-poc-mount[data-cy-theme="html-card"] .cytoscape-poc-html-card-status {
+.midas-graph-viewport[data-active-renderer="authority"] .cytoscape-poc-html-card-status {
   font-size: 10px;
   color: var(--on-surface-variant, #94a3b8);
   text-transform: uppercase;
@@ -173,163 +202,110 @@ body.cytoscape-poc-active .cytoscape-poc-mount[data-cy-theme="html-card"] .cytos
 }
 /* Per-kind border colour for HTML cards. Mirrors the design-spec
  * §4.1 category palette so identity reads at a glance. */
-body.cytoscape-poc-active .cytoscape-poc-mount[data-cy-theme="html-card"] .cytoscape-poc-html-card[data-kind="business_service"] {
+.midas-graph-viewport[data-active-renderer="authority"] .cytoscape-poc-html-card[data-kind="business_service"] {
   border: 2px solid var(--primary, #7aa2ff);
 }
-body.cytoscape-poc-active .cytoscape-poc-mount[data-cy-theme="html-card"] .cytoscape-poc-html-card[data-kind="decision_surface"] {
+.midas-graph-viewport[data-active-renderer="authority"] .cytoscape-poc-html-card[data-kind="decision_surface"] {
   border-color: var(--badge-info, #1f4f8a);
 }
-body.cytoscape-poc-active .cytoscape-poc-mount[data-cy-theme="html-card"] .cytoscape-poc-html-card[data-kind="authority_profile"] {
+.midas-graph-viewport[data-active-renderer="authority"] .cytoscape-poc-html-card[data-kind="authority_profile"] {
   border-color: var(--badge-good, #1d6b3f);
 }
-body.cytoscape-poc-active .cytoscape-poc-mount[data-cy-theme="html-card"] .cytoscape-poc-html-card[data-kind="authority_grant"] {
+.midas-graph-viewport[data-active-renderer="authority"] .cytoscape-poc-html-card[data-kind="authority_grant"] {
   border-color: var(--badge-warn, #8a601f);
 }
-body.cytoscape-poc-active .cytoscape-poc-mount[data-cy-theme="html-card"] .cytoscape-poc-html-card[data-kind="agent"] {
+.midas-graph-viewport[data-active-renderer="authority"] .cytoscape-poc-html-card[data-kind="agent"] {
   border-color: var(--slate-300, #cbd5e1);
 }
-body.cytoscape-poc-active .cytoscape-poc-mount[data-cy-theme="html-card"] .cytoscape-poc-html-card[data-kind="fail_mode_policy"] {
+.midas-graph-viewport[data-active-renderer="authority"] .cytoscape-poc-html-card[data-kind="fail_mode_policy"] {
   border-color: var(--slate-400, #94a3b8);
   border-style: dashed;
 }
-body.cytoscape-poc-active .cytoscape-poc-mount[data-cy-theme="html-card"] .cytoscape-poc-html-card[data-kind="escalation_target"] {
+.midas-graph-viewport[data-active-renderer="authority"] .cytoscape-poc-html-card[data-kind="escalation_target"] {
   border-color: var(--slate-400, #94a3b8);
   border-style: dashed;
 }
-body.cytoscape-poc-active .cytoscape-poc-mount[data-cy-theme="html-card"] .cytoscape-poc-html-card[data-root="true"] {
+.midas-graph-viewport[data-active-renderer="authority"] .cytoscape-poc-html-card[data-root="true"] {
   box-shadow: 0 0 0 1px var(--primary, #7aa2ff), 0 2px 16px rgba(122, 162, 255, 0.25);
 }
 
-/* ── Legend overlay — top-left, collapsible ──────────────────────── */
-body.cytoscape-poc-active .cytoscape-poc-legend {
-  position: absolute;
-  top: 12px;
-  left: 12px;
-  z-index: 10;
-  width: 260px;
-  background: var(--surface-container-low, #1a1f2e);
-  border: 1px solid var(--outline-variant, #475569);
-  border-radius: 4px;
-  font-size: 11px;
-  line-height: 1.4;
-  overflow: hidden;
-  /* D33a-impl-1 — Body never intercepts graph drags, but the header
-   * toggle keeps pointer-events: auto so it remains clickable. */
-  pointer-events: none;
-  transition: width 0.18s ease-out;
-}
-body.cytoscape-poc-active .cytoscape-poc-legend[data-expanded="false"] {
-  width: 140px;
-}
-body.cytoscape-poc-active .cytoscape-poc-legend-body {
-  padding: 10px 12px;
-  pointer-events: none;
-}
-body.cytoscape-poc-active .cytoscape-poc-legend[data-expanded="false"] .cytoscape-poc-legend-body {
-  display: none;
-}
-body.cytoscape-poc-active .cytoscape-poc-legend-title {
-  display: block;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--on-surface-variant, #94a3b8);
-  margin-bottom: 8px;
-}
-body.cytoscape-poc-active .cytoscape-poc-legend-title-future {
-  margin-top: 14px;
-}
-body.cytoscape-poc-active .cytoscape-poc-legend-kinds {
-  display: grid;
-  grid-template-columns: 16px 1fr;
-  gap: 4px 8px;
-  margin: 0;
-}
-body.cytoscape-poc-active .cytoscape-poc-legend-kinds dt {
-  display: flex;
-  align-items: center;
-}
-body.cytoscape-poc-active .cytoscape-poc-legend-kinds dd {
-  margin: 0;
-  color: var(--on-surface, #e2e8f0);
-}
-body.cytoscape-poc-active .cytoscape-poc-swatch {
-  display: inline-block;
-  width: 12px;
-  height: 12px;
-  border-radius: 2px;
-  vertical-align: middle;
-}
-body.cytoscape-poc-active .cytoscape-poc-legend-future {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-body.cytoscape-poc-active .cytoscape-poc-legend-future li {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--on-surface-variant, #94a3b8);
-  margin-bottom: 2px;
-}
-body.cytoscape-poc-active .cytoscape-poc-placeholder {
-  color: var(--slate-400, #94a3b8);
-  font-size: 8px;
-  opacity: 0.6;
+/* D37f — Selected-state mirror. `_syncCards` toggles `.selected`
+ * onto the card when the corresponding Cytoscape node is selected
+ * (`n.selected()`). The rule adds an accent outline so the
+ * selected card is visually distinct from neighbouring cards
+ * without interfering with per-kind border colour. */
+.midas-graph-viewport[data-active-renderer="authority"] .cytoscape-poc-html-card.selected {
+  box-shadow: 0 0 0 2px var(--primary, #7aa2ff), 0 4px 20px rgba(122, 162, 255, 0.35);
 }
 
-/* ── Inspector overlay — top-right, collapsible ──────────────────── */
-body.cytoscape-poc-active .cytoscape-poc-inspector {
+/* ── D37k-impl-1 — Edge-label overlay (single shared chip) ─────────
+ *
+ * The overlay tier sits above the html-card overlay (z-index 7 vs
+ * cards' z-index 5) so a relationship label appearing at an edge
+ * midpoint that passes behind a card is visible. The overlay
+ * receives the same `_syncLayer` model-space transform as the
+ * cards overlay, so the chip — positioned in model coords inside —
+ * tracks the cy viewport across pan/zoom without a separate
+ * transform pipeline. One shared chip is re-used across edge
+ * hovers; no per-edge DOM. */
+.midas-graph-viewport[data-active-renderer="authority"] .cytoscape-poc-edge-label-overlay {
   position: absolute;
-  top: 12px;
-  right: 12px;
-  z-index: 10;
-  width: 320px;
-  max-height: 60%;
-  background: var(--surface-container-low, #1a1f2e);
+  inset: 0;
+  pointer-events: none;
+  z-index: 7;
+  transform-origin: top left;
+}
+.midas-graph-viewport[data-active-renderer="authority"] .cytoscape-poc-edge-label-chip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  /* transform set per-hover by JS as
+   * `translate(model.x, model.y) translate(-50%, -50%)` so the
+   * chip centres on the edge midpoint in model coords. */
+  display: inline-flex;
+  align-items: center;
+  max-width: 280px;
+  padding: 6px 10px;
+  background: var(--surface-container, #222838);
   border: 1px solid var(--outline-variant, #475569);
   border-radius: 4px;
+  color: var(--on-surface, #e2e8f0);
+  font-family: var(--font-display, Inter, 'Segoe UI', system-ui, sans-serif);
   font-size: 12px;
-  line-height: 1.5;
+  font-weight: 500;
+  line-height: 1.3;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
   overflow: hidden;
-  transition: width 0.18s ease-out, max-height 0.18s ease-out;
+  text-overflow: ellipsis;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.40);
+  pointer-events: none;
+  user-select: none;
 }
-body.cytoscape-poc-active .cytoscape-poc-inspector[data-expanded="false"] {
-  width: 140px;
-  max-height: 32px;
-}
-body.cytoscape-poc-active .cytoscape-poc-inspector-body {
-  padding: 10px 12px;
-  overflow-y: auto;
-}
-body.cytoscape-poc-active .cytoscape-poc-inspector[data-expanded="false"] .cytoscape-poc-inspector-body {
+.midas-graph-viewport[data-active-renderer="authority"] .cytoscape-poc-edge-label-chip[hidden] {
   display: none;
 }
-body.cytoscape-poc-active .cytoscape-poc-inspector-empty {
-  color: var(--on-surface-variant, #94a3b8);
-  font-size: 11px;
-  margin: 0;
-}
-body.cytoscape-poc-active .cytoscape-poc-inspector-fields {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
-  gap: 4px 12px;
-  margin: 0;
-}
-body.cytoscape-poc-active .cytoscape-poc-inspector-fields dt {
-  color: var(--on-surface-variant, #94a3b8);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-body.cytoscape-poc-active .cytoscape-poc-inspector-fields dd {
-  margin: 0;
-  color: var(--on-surface, #e2e8f0);
-  word-break: break-word;
-}
+
+/* ── Legend overlay retired (D33x-left-poc-panel) ─────────────────
+ * The floating top-left `.cytoscape-poc-legend` aside with its
+ * "NODE KINDS" + "FUTURE OVERLAYS" body was PoC-only chrome. The
+ * MIDAS Posture & Help drawer tab owns the equivalent posture +
+ * legend information now. All `.cytoscape-poc-legend*` and
+ * `.cytoscape-poc-swatch` / `.cytoscape-poc-placeholder` rules
+ * have been removed; the corresponding JS helpers
+ * (`_renderLegend`, `_setLegendExpanded`, `_legendRow`) were
+ * retired in the same tranche. */
+
+/* ── Inspector overlay retired (D33x-list-mode) ───────────────────
+ * The floating top-right `.cytoscape-poc-inspector` aside was
+ * removed in favour of the production right drawer (`#gmap-details`)
+ * which is fed by the carrier-DOM contract under `#gmap-canvas` (see
+ * `_renderInspectorCarriers` in authority-cytoscape-poc.js). The
+ * `cytoscape-poc-inspector-carrier` marker CLASS lives on hidden
+ * `.gmap-node` elements and has no visible style of its own. */
 
 /* ── Unavailable / loading overlay ───────────────────────────────── */
-body.cytoscape-poc-active .cytoscape-poc-unavailable {
+.midas-graph-viewport[data-active-renderer="authority"] .cytoscape-poc-unavailable {
   position: absolute;
   inset: 0;
   display: flex;

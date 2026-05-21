@@ -32,7 +32,13 @@
 //     Reads node-DOM dataset (set by the view's addNode) and pushes
 //     fields through the lens-agnostic inspector frame.
 //   renderNode(node, mount)
-//     Lens-dispatch entry-point used by graph-inspector.register.
+//     Forward-compatible direct entry-point. D37p-clean-2 retired the
+//     `graph-inspector.register('authority', ...)` dispatcher adapter
+//     that used to drive this; the function is preserved on the
+//     public surface for any external diagnostic / future caller.
+//   clear(mount)
+//     Resets the lens-agnostic frame setters (preserved alongside
+//     renderNode).
 
 (function () {
   'use strict';
@@ -406,16 +412,20 @@
     void mount;
   }
 
-  // ── Register with the lens-agnostic inspector dispatch ───────────────
-  var inspectorImpl = {
-    renderNode: renderNode,
-    clear:      clear,
-  };
-
-  if (window.MIDASExplorerGraph.inspector && typeof window.MIDASExplorerGraph.inspector.register === 'function') {
-    window.MIDASExplorerGraph.inspector.register('authority', inspectorImpl);
-  }
-
+  // ── Public surface ───────────────────────────────────────────────────
+  //
+  // D37p-clean-2 — Inspector dispatcher retirement. The pre-D37p-clean-2
+  // module additionally wired an `inspectorImpl = { renderNode, clear }`
+  // against the dead `MIDASExplorerGraph.inspector.register('authority',
+  // …)` dispatcher. The dispatcher had zero call-sites at runtime;
+  // every live Authority inspector path reaches this module via
+  // `MIDASExplorerGraph.authorityInspector.selectNode(nodeId)` (e.g.
+  // the inline graph-shell selectNode hook in index.html and the
+  // surface-posture panel). Both the `inspectorImpl` adapter and the
+  // `inspector.register('authority', …)` call are removed here.
+  // `renderNode` and `clear` are kept on the public surface for
+  // forward-compatibility; their behaviour (driving the lens-agnostic
+  // frame setters) is unchanged.
   window.MIDASExplorerGraph.authorityInspector = {
     selectNode: selectNode,
     renderNode: renderNode,

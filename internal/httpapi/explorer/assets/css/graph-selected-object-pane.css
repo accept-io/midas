@@ -1,0 +1,83 @@
+/* /explorer/assets/css/graph-selected-object-pane.css
+ *
+ * D37p-pane-1 — Shared Selected-Object Pane Shell styles.
+ *
+ * Generic shell-level styles for any lens that uses the shared
+ * pane shell. Today the Context pane retains its own wrapper +
+ * styles in `context-selected-object-pane.css`; this file adds
+ * forward-compatible rules scoped to a generic
+ * `[data-selected-object-pane]` attribute that future lens
+ * wrappers (Authority, Knowledge, etc.) can opt into without
+ * touching Context's locked DOM contract.
+ *
+ * No Context-specific class names. No Authority canvas-edge
+ * selectors. No drawer selectors. No global selectors.
+ *
+ * The rules below are intentionally minimal: structure +
+ * accessibility hints only. Visual identity per lens stays in
+ * each lens's own stylesheet.
+ */
+
+/* ── Generic wrapper ─────────────────────────────────────────────── */
+
+.midas-graph-viewport [data-selected-object-pane] {
+  /* Generic pane wrapper. Specific positioning lives in each
+   * lens's stylesheet so per-lens visual identity stays explicit. */
+  box-sizing: border-box;
+}
+
+.midas-graph-viewport [data-selected-object-pane][hidden] {
+  /* Honour the [hidden] attribute even when descendant rules raise
+   * the wrapper's specificity. */
+  display: none !important;
+}
+
+/* ── Header / body / footer scaffolding ──────────────────────────── */
+
+.midas-graph-viewport [data-selected-object-pane-header] {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  box-sizing: border-box;
+}
+
+.midas-graph-viewport [data-selected-object-pane-body] {
+  box-sizing: border-box;
+  overflow-y: auto;
+}
+
+.midas-graph-viewport [data-selected-object-pane-body]:focus {
+  /* Body region is keyboard-focusable via tabindex="-1"; the shell
+   * gives it a subtle visible focus ring so keyboard users see
+   * which region has scroll focus. */
+  outline: 2px solid transparent;
+  outline-offset: -2px;
+}
+
+.midas-graph-viewport [data-selected-object-pane-footer] {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  box-sizing: border-box;
+}
+
+/* ── Close button focus-visible affordance ───────────────────────── */
+
+.midas-graph-viewport [data-selected-object-pane] button:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 1px;
+}
+
+/* ── Generic section structure ───────────────────────────────────── */
+
+.midas-graph-viewport [data-selected-object-pane-section] {
+  /* Generic section container. Per-section visual styling lives
+   * in each lens's stylesheet so providers control their own
+   * vocabulary. */
+  display: block;
+  box-sizing: border-box;
+}
+
+.midas-graph-viewport [data-selected-object-pane-section][hidden] {
+  display: none !important;
+}

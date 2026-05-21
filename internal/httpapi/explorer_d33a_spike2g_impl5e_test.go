@@ -304,14 +304,19 @@ func TestExplorer_D33aSpike2gImpl5e_DrawerLayoutFromImpl5cPreserved(t *testing.T
 
 // ── 9. PoC inspector aside still present ─────────────────────────────
 
+// TestExplorer_D33aSpike2gImpl5e_PocInspectorStillPresent — superseded
+// by D33x-list-mode. Floating card retired; carrier contract remains.
 func TestExplorer_D33aSpike2gImpl5e_PocInspectorStillPresent(t *testing.T) {
 	js := d33aSpike2gImpl5eRead(t, d33aSpike2gImpl5ePocPath)
+	if strings.Contains(js, "function _renderInspector(node)") {
+		t.Error("D33x-list-mode: floating PoC inspector aside must remain retired — found _renderInspector function")
+	}
 	for _, want := range []string{
-		"function _renderInspector(node)",
-		"cytoscape-poc-inspector",
+		"_renderInspectorCarriers",
+		"cytoscape-poc-inspector-carrier",
 	} {
 		if !strings.Contains(js, want) {
-			t.Errorf("D33a-spike-2g-impl-5e: PoC inspector surface element %q must remain", want)
+			t.Errorf("D33x-list-mode: production right-drawer wiring must remain — missing %q", want)
 		}
 	}
 }

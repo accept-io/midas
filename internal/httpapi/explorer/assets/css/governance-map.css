@@ -108,6 +108,78 @@
        is untouched. */
     position: relative;
   }
+
+  /* D35a-midas-graph-viewport-foundation — Additive structural
+   * wrapper introduced as the future shared graph-viewport host.
+   *
+   * `.midas-graph-viewport` fills `.governance-map-body`'s single-
+   * column grid cell. It is the future sole graph clip boundary
+   * and the anchor for graph chrome (mode rail, camera cluster,
+   * legend, tooltip). In D35a it is structural only:
+   *   • `position: relative` so the absolute-positioned chrome
+   *     elements that used to anchor to `.governance-map-body`
+   *     continue to anchor to a same-sized box (no visual change).
+   *   • `min-height: 0` so the viewport can shrink with the grid
+   *     row without forcing a minimum height that would propagate
+   *     to ancestors.
+   *   • NO `overflow` rule yet. Existing renderer overflow rules
+   *     (`.governance-map-canvas-scroll { overflow: auto }`,
+   *     `.context-cy-spike-mount { overflow: hidden }`, etc.) are
+   *     preserved unchanged so D35a is visually invariant.
+   *
+   * D35b introduced the renderer-host abstraction that uses this
+   * viewport as the activation surface. D35d migrated Authority
+   * Cytoscape; D35e migrated Context Cytoscape.
+   *
+   * STRATEGIC CLIP AUTHORITY (D35f-enforced):
+   *   `.midas-graph-viewport` is now the strategic clip authority
+   *   for graph content. D35e removed the overlay-level
+   *   `overflow: hidden` from `.context-cy-spike-overlay` because
+   *   pre-transform clipping at the overlay produced the user-
+   *   reported "disappearing card" symptom. D35f promotes the
+   *   clip role here.
+   *
+   *   The native Context Graph's `.governance-map-canvas-scroll
+   *   { overflow: auto }` is a DESCENDANT of the viewport and is
+   *   unaffected — `auto` on a descendant scrolls inside the
+   *   ancestor's hidden clip, so native Context's virtual-canvas
+   *   scroll behaviour is preserved.
+   *
+   *   The per-renderer mount clip surfaces (e.g.
+   *   `.context-cy-spike-mount { overflow: hidden }` and
+   *   `.cytoscape-poc-mount { overflow: hidden }`) remain as
+   *   defence-in-depth for each cy instance's canvas-discipline,
+   *   but the viewport is now the authoritative outer boundary.
+   *
+   * Host-owned renderer identity (D35f): the host
+   * (graph-viewport.js) publishes
+   * `data-active-renderer="<rendererId>"` on this element so CSS
+   * keyed on the renderer (e.g. hiding `#gmap-canvas` while a
+   * Cytoscape renderer is mounted) can target it without relying
+   * on body classes. The body-class activation flags
+   * (`body.cytoscape-poc-active`, `body.context-cy-spike-active`)
+   * are retired in D35f. */
+  .midas-graph-viewport {
+    position: relative;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  /* D35a — `.midas-graph-renderer-slot` is the future single home
+   * for whichever renderer is active. In D35a it simply wraps the
+   * existing graph DOM (`.governance-map-canvas-scroll` →
+   * `#gmap-canvas` → `#gmap-scene` / `#gmap-svg` / cards) so the
+   * structure is in place; renderer activation logic remains
+   * unchanged.
+   *
+   * `position: absolute; inset: 0` lets the slot fill the
+   * viewport regardless of the viewport's grid sizing — matching
+   * the eventual Authority Cytoscape and Context Cytoscape mount
+   * geometry. */
+  .midas-graph-renderer-slot {
+    position: absolute;
+    inset: 0;
+  }
   /* D26g-impl-2 — Canvas control clusters split by purpose.
      The original .gmap-camera-bar (D24c, vertical 8-button strip)
      mixed interaction-mode and camera/viewport controls. D26g-impl-2
@@ -201,6 +273,31 @@
   .gmap-camera-cluster button[aria-pressed="true"] {
     background: var(--surface-container);
     color: var(--primary, #4ea1ff);
+  }
+  /* D37h — Current-zoom badge. The `<span id="gmap-zoom-percent">`
+     sits between the zoom-out and fit buttons. It is non-interactive
+     (no hover, no cursor change); tabular figures keep the digit
+     widths stable as the percentage changes (87% → 100%). Height
+     matches the 32x32 icon-button footprint so the badge aligns
+     visually with its neighbours. */
+  .gmap-camera-cluster .gmap-zoom-percent {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 32px;
+    min-width: 40px;
+    padding: 0 8px;
+    font-family: var(--font-display, Inter, 'Segoe UI', system-ui, sans-serif);
+    font-variant-numeric: tabular-nums;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    color: var(--on-surface-variant, #94a3b8);
+    background: transparent;
+    border: none;
+    cursor: default;
+    user-select: none;
+    white-space: nowrap;
   }
   /* Phase 2B Step 39 (D24i-fix3) — active mode-toggle button. The
      `is-active` class layered on top of aria-pressed="true"

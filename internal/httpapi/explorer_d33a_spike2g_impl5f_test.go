@@ -291,20 +291,32 @@ func TestExplorer_D33aSpike2gImpl5f_HeaderSimplificationPreserved(t *testing.T) 
 
 // ── 8. PoC inspector still present ───────────────────────────────────
 
-// TestExplorer_D33aSpike2gImpl5f_PocInspectorStillPresent pins that
-// the PoC inspector aside (`.cytoscape-poc-inspector`) and its
-// `_renderInspector` entry point still exist. The PoC inspector
-// remains until the MIDAS Inspector pane is visually accepted.
+// TestExplorer_D33aSpike2gImpl5f_PocInspectorStillPresent — superseded
+// by D33x-list-mode. The floating PoC inspector aside has been
+// retired; the MIDAS production right drawer (fed by the
+// `_renderInspectorCarriers` contract) is now the canonical
+// selected-node surface. This test asserts the inverse contract:
+// the floating-card render path is GONE and the carrier-DOM
+// contract REMAINS.
 func TestExplorer_D33aSpike2gImpl5f_PocInspectorStillPresent(t *testing.T) {
 	js := d33aSpike2gImpl5fRead(t, d33aSpike2gImpl5fPocPath)
-	for _, want := range []string{
+	for _, gone := range []string{
 		"function _renderInspector(",
-		"cytoscape-poc-inspector",
-		"cytoscape-poc-inspector-body",
-		"cytoscape-poc-inspector-fields",
+		"function _renderInspectorEmpty(",
+		"function _wireInspectorToggle(",
+		"function _setInspectorExpanded(",
+	} {
+		if strings.Contains(js, gone) {
+			t.Errorf("D33x-list-mode: floating PoC inspector aside must remain retired — found %q", gone)
+		}
+	}
+	for _, want := range []string{
+		"_renderInspectorCarriers",
+		"cytoscape-poc-inspector-carrier",
+		"hooks.selectNode(nodeId)",
 	} {
 		if !strings.Contains(js, want) {
-			t.Errorf("D33a-spike-2g-impl-5f: PoC inspector aside must remain — missing %q", want)
+			t.Errorf("D33x-list-mode: production right-drawer wiring must remain — missing %q", want)
 		}
 	}
 }

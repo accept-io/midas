@@ -26,9 +26,6 @@
 // Public surface (all on window.MIDASExplorerGraph.renderer unless
 // noted):
 //
-//   register(lens, impl)             — lens dispatch table (D32a-impl-1)
-//   render(lens, payload, mount)     — dispatch (D32a-impl-1)
-//   clear(lens, mount)               — dispatch (D32a-impl-1)
 //   lensAgnosticConnectorPath(...)   — pure SVG path math (D32a-impl-2)
 //   lensAgnosticNodePosition(...)    — pure id→pos lookup (D32a-impl-2)
 //   clearCanvas()                    — production clear (D32a-impl-3)
@@ -121,42 +118,20 @@
   }
 
   // ────────────────────────────────────────────────────────────────────
-  // Lens dispatch (D32a-impl-1, retained).
+  // D37p-clean-1 — Dead Renderer Dispatcher Retirement.
+  //
+  // The pre-D37p-clean-1 module exposed three dispatch functions
+  // (`register(lens, impl)` / `render(lens, payload, mount)` /
+  // `clear(lens, mount)`) plus an internal `_impls` registry. The
+  // entire dispatch surface had zero live callers: every consumer
+  // had migrated to the GraphViewport host's renderer registry
+  // (`MIDASExplorerGraph.viewport.register` / `activateById` /
+  // `deactivate`), the strategic camera bus, selection bridge, and
+  // selected-object pane shell. The dispatch functions are removed
+  // here; the lens-agnostic helpers below (path math, card / connector
+  // builders, visibility filters) stay because legacy Context still
+  // uses them through `MIDASExplorerGraph.renderer.<helper>`.
   // ────────────────────────────────────────────────────────────────────
-  var _impls = {};
-  function register(lens, impl) {
-    if (!lens || !impl) return;
-    _impls[lens] = impl;
-  }
-  function _resolveMount(mount) {
-    if (mount && typeof mount.appendChild === 'function') return mount;
-    return document.querySelector('.gmap-canvas') ||
-           document.getElementById('gmap-canvas') ||
-           document.body;
-  }
-  function render(lens, payload, mount) {
-    var impl = _impls[lens];
-    if (!impl || typeof impl.render !== 'function') {
-      if (window.console && window.console.warn) {
-        window.console.warn('No renderer registered for lens:', lens);
-      }
-      return;
-    }
-    try {
-      impl.render(payload, _resolveMount(mount));
-    } catch (e) {
-      if (window.console && window.console.error) {
-        window.console.error('renderer error', lens, e);
-      }
-    }
-  }
-  function clear(lens, mount) {
-    var impl = _impls[lens];
-    if (!impl || typeof impl.clear !== 'function') return;
-    try {
-      impl.clear(_resolveMount(mount));
-    } catch (_) { /* swallow */ }
-  }
 
   // ────────────────────────────────────────────────────────────────────
   // Lens-agnostic SVG path math (D32a-impl-2, retained).
@@ -343,23 +318,46 @@
     return pathEl;
   }
 
-  // addNode — production node card builder. The drag-handler hook +
-  // multi-select hook are wired so the still-inline orchestration
-  // (gmapSelectedNodeIds membership + applyGmapMultiSelection /
-  // selectGovernanceMapNode) keeps working without moving them in
-  // this tranche.
-  function addNode(spec, pos) {
-    var scene = document.getElementById('gmap-scene');
-    if (!scene) return;
+  // ────────────────────────────────────────────────────────────────────
+  // buildNodeCardElement(spec) → HTMLElement
+  //
+  // D37r-tranche-B' — pure DOM factory extracted from `addNode` so the
+  // native Context card DOM can be reused as a template by the shared
+  // Cytoscape HTML overlay module (graph-platform/graph-cytoscape-
+  // overlay.js) without inviting the legacy renderer's positional /
+  // event / drag side-effects into a Cytoscape-hosted overlay.
+  //
+  // Purity contract:
+  //   • Owns DOM construction ONLY: element creation, class assignment,
+  //     dataset attributes, aria-label, and innerHTML composition.
+  //   • Has no dependency on `_hooks`, `_state`, `#gmap-scene`, the
+  //     `_renderCtx` namespace, the inline IIFE, or any legacy
+  //     renderer global. It is a function from spec to element.
+  //   • Returns an unattached HTMLElement. Callers own position,
+  //     event wiring, drag wiring, and DOM insertion.
+  //   • Spec shape is the same `{id, kind, cls, label, name, meta,
+  //     badges, details, actions}` shape `addNode` has always
+  //     consumed. Semantics preserved verbatim: the produced DOM is
+  //     byte-equivalent to the DOM `addNode` produced pre-extraction
+  //     (apart from the `style.left/top` writes, which remain in
+  //     `addNode` because they are positional concerns, not card
+  //     construction).
+  //
+  // The reuse contract is enforced by a source-contract test:
+  // `TestExplorer_GraphRenderer_AddNodeUsesBuildNodeCardElement` (see
+  // internal/httpapi/explorer_graph_cytoscape_overlay_module_test.go)
+  // asserts that `addNode`'s card-body DOM is produced by this helper
+  // and not by inline `createElement` / `innerHTML` on the card body.
+  // ────────────────────────────────────────────────────────────────────
+  function buildNodeCardElement(spec) {
+    spec = spec || {};
     var node = document.createElement('button');
     node.type = 'button';
     node.className = 'gmap-node ' + (spec.cls || '');
-    node.style.left = pos.x + 'px';
-    node.style.top  = pos.y + 'px';
     node.dataset.nodeId = spec.id;
     node.dataset.nodeKind = spec.kind || '';
     node.dataset.nodeName = spec.name || '';
-    node.setAttribute('aria-label', spec.label + ': ' + (spec.name || spec.id));
+    node.setAttribute('aria-label', (spec.label || '') + ': ' + (spec.name || spec.id || ''));
     var badgesHtml = (spec.badges || []).map(function (b) {
       return '<span class="gmap-badge ' + _escHtml(b.cls || '') + '">' + _escHtml(b.text || '') + '</span>';
     }).join('');
@@ -377,6 +375,27 @@
     try {
       node.dataset.nodeActions = JSON.stringify(spec.actions || []);
     } catch (_) { /* actions optional */ }
+    return node;
+  }
+
+  // addNode — production node card builder. The drag-handler hook +
+  // multi-select hook are wired so the still-inline orchestration
+  // (gmapSelectedNodeIds membership + applyGmapMultiSelection /
+  // selectGovernanceMapNode) keeps working without moving them in
+  // this tranche.
+  //
+  // D37r-tranche-B' — DOM construction is delegated to
+  // `buildNodeCardElement(spec)` so the Cytoscape Context path can
+  // reuse the same factory as its overlay template. `addNode`'s
+  // signature, return value, early-return on missing `#gmap-scene`,
+  // position application, event wiring, drag wiring, and append are
+  // unchanged.
+  function addNode(spec, pos) {
+    var scene = document.getElementById('gmap-scene');
+    if (!scene) return;
+    var node = buildNodeCardElement(spec);
+    node.style.left = pos.x + 'px';
+    node.style.top  = pos.y + 'px';
     // Click = selection only. Navigation is gated behind an explicit
     // action button rendered by the inspector. Ctrl/Cmd-click toggles
     // multi-select membership through the inline hook to keep the
@@ -473,14 +492,20 @@
     }
   }
 
+  // D37p-clean-1 — Dispatch functions (register / render / clear) were
+  // retired; the helper surface below stays because legacy Context
+  // still consumes it.
   window.MIDASExplorerGraph.renderer = {
-    register:                  register,
-    render:                    render,
-    clear:                     clear,
     lensAgnosticConnectorPath: lensAgnosticConnectorPath,
     lensAgnosticNodePosition:  lensAgnosticNodePosition,
     clearCanvas:               clearCanvas,
     addNode:                   addNode,
+    // D37r-tranche-B' — Pure DOM factory for native Context cards.
+    // Reused by the strategic Cytoscape Context renderer as its overlay
+    // template so Cytoscape Context cards are produced by the same code
+    // path as native cards. addNode remains the native renderer's entry
+    // point.
+    buildNodeCardElement:      buildNodeCardElement,
     addConnector:              addConnector,
     addConnectorHitTarget:     addConnectorHitTarget,
     addLiveConnector:          addLiveConnector,

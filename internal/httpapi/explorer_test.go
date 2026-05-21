@@ -3814,16 +3814,20 @@ func TestExplorer_HTML_GovernanceMap_CameraPuck(t *testing.T) {
 
 	// === Regression pins — every prior camera/search/filter/focus
 	// affordance must still be present after the relocation. ===
+	// (D37p-impl-4 retired the inline `wireGmapZoomControls` /
+	// `wireGmapCentreButton` / `wireGmapFitButton` IIFEs; the
+	// underlying camera helpers `setGmapZoom` / `focusGmapOnRoot` /
+	// `fitGmapToBounds` / `focusGmapOnNode` / `applyGmapZoom` remain
+	// in markup and are reached through the shared
+	// `graphCameraToolbarAdapter` + `graphCameraBus` + the
+	// `native-context` delegate.)
 	for _, want := range []string{
 		"fitGmapToBounds",
 		"focusGmapOnRoot",
 		"focusGmapOnNode",
 		"setGmapZoom",
 		"applyGmapZoom",
-		"wireGmapZoomControls",
 		"wireGmapWheelZoom",
-		"wireGmapCentreButton",
-		"wireGmapFitButton",
 		"gmap-search-input",
 		"gmap-filter-chip",
 		"gmap-focus-toggle",
@@ -5424,36 +5428,34 @@ func TestExplorer_HTML_GovernanceMap_WheelZoomCursorAnchored(t *testing.T) {
 		}
 	}
 
-	// === Decision pin (Option A): toolbar +/- buttons NOT cursor-anchored ===
-	// The toolbar zoom-in/-out IIFE keeps its existing simple form.
-	// The wheel handler is the only place that consumes
-	// getBoundingClientRect / clientX / clientY in camera math.
-	wireZoomIdx := strings.Index(body, "wireGmapZoomControls")
-	if wireZoomIdx < 0 {
-		t.Fatal("wireGmapZoomControls IIFE not found")
-	}
-	wireZoomTail := body[wireZoomIdx:]
-	wireZoomEnd := strings.Index(wireZoomTail, "})();")
-	if wireZoomEnd < 0 {
-		t.Fatal("wireGmapZoomControls IIFE end marker not found")
-	}
-	wireZoomBody := wireZoomTail[:wireZoomEnd]
+	// === Decision pin (Option A): toolbar +/- wiring NOT cursor-anchored ===
+	// D37p-impl-4 retired the inline `wireGmapZoomControls` IIFE and
+	// moved the toolbar +/- binding into the shared
+	// `graph-camera-toolbar-adapter.js`. The cursor-anchoring
+	// invariant remains: only the wheel handler consumes
+	// getBoundingClientRect / clientX / clientY in camera math; the
+	// toolbar adapter dispatches via `graphCameraBus.zoomIn()` /
+	// `.zoomOut()` and never touches pointer coordinates.
+	adapterJS := getExplorerAsset(t, srv, "/explorer/assets/js/graph/graph-platform/graph-camera-toolbar-adapter.js")
 	for _, illegal := range []string{
 		"getBoundingClientRect",
 		"clientX",
 		"clientY",
 	} {
-		if strings.Contains(wireZoomBody, illegal) {
+		if strings.Contains(adapterJS, illegal) {
 			t.Errorf("Decision pin (Option A) violated: toolbar +/- button wiring must NOT contain %q (cursor anchoring belongs only to the wheel handler)", illegal)
 		}
 	}
-	// Toolbar +/- buttons still use the simple multiplicative form.
+	// The multiplicative form lives in the native-context delegate
+	// (`cam.setZoom(cam.getZoom() * bounds.STEP)`); the underlying
+	// `GMAP_ZOOM` bounds object is still consulted. We pin both.
 	for _, want := range []string{
-		"setGmapZoom(gmapZoom * GMAP_ZOOM.STEP)",
-		"setGmapZoom(gmapZoom / GMAP_ZOOM.STEP)",
+		"cam.setZoom(cam.getZoom() * bounds.STEP)",
+		"cam.setZoom(cam.getZoom() / bounds.STEP)",
+		"GMAP_ZOOM",
 	} {
-		if !strings.Contains(wireZoomBody, want) {
-			t.Errorf("Toolbar +/- buttons must still use the existing simple zoom form %q", want)
+		if !strings.Contains(adapterJS, want) {
+			t.Errorf("Toolbar +/- delegate must use the existing multiplicative zoom form / bounds (%q)", want)
 		}
 	}
 
@@ -5629,57 +5631,60 @@ func TestExplorer_HTML_GovernanceMap_CentreOnRootButton(t *testing.T) {
 		t.Error("D26g-impl-2: gmap-centre-button must live inside the camera cluster")
 	}
 
-	// === Wiring IIFE pins ===
+	// === Wiring pins (D37p-impl-4) ===
+	// The inline `wireGmapCentreButton` IIFE was retired in D37p-impl-4.
+	// The centre-button click now dispatches through
+	// `graphCameraToolbarAdapter` → `graphCameraBus.focusRoot()` →
+	// `native-context` delegate. That delegate reads view + rootId from
+	// `_renderCtx`, computes the per-view prefix, and calls the same
+	// `MIDASExplorerGraph.camera.focusRoot(prefix + rootId)` helper
+	// `focusGmapOnRoot(prefix + currentGraphRootId)` used to invoke.
+	// Pin the new dispatch path AND the delegate's prefix logic.
+	if !strings.Contains(body, `id="gmap-centre-button"`) {
+		t.Error("Step 18: centre button DOM id must remain in markup")
+	}
+	adapterJS := getExplorerAsset(t, srv, "/explorer/assets/js/graph/graph-platform/graph-camera-toolbar-adapter.js")
 	for _, want := range []string{
-		`wireGmapCentreButton`,
-		`getElementById('gmap-centre-button')`,
-		// The click handler must call focusGmapOnRoot with a prefix +
-		// currentGraphRootId expression. Pin the call literal directly
-		// so a regression that hard-codes 'bs:' prefix surfaces here.
-		`focusGmapOnRoot(prefix + currentGraphRootId)`,
-		// Re-derived rootCardId via the per-view prefix map. Pin the
-		// three branches so a regression that drops one view surfaces.
-		`currentGraphView === 'ai_system'`,
-		`currentGraphView === 'decision_surface'`,
+		// Adapter binds the centre button to the bus's focusRoot
+		// command via the locked button → command mapping.
+		`'gmap-centre-button'`,
+		`'focusRoot'`,
+		// native-context delegate's prefix derivation mirrors the
+		// retired inline IIFE's branches; no prefix branch was lost.
+		`view === 'ai_system'`,
+		`view === 'decision_surface'`,
+		`'ai:'`,
+		`'surf:'`,
+		`'bs:'`,
+		// Calls the same legacy camera helper the retired IIFE
+		// indirectly reached via the focusGmapOnRoot shim.
+		`cam.focusRoot(rootCardId)`,
 	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("Step 18 wiring literal missing: %q", want)
+		if !strings.Contains(adapterJS, want) {
+			t.Errorf("Step 18 wiring literal missing from D37p-impl-4 adapter: %q", want)
 		}
 	}
 
 	// === Negative pins ===
-	// Camera control != navigation. The Centre button's wiring block
-	// must NOT call refreshGovernanceMap, NOT call setGmapZoom, and
-	// must NOT assign to currentGraphView / currentGraphRootId /
-	// gmapHistory. Scope the search to the wireGmapCentreButton IIFE
-	// body so unrelated callers are tolerated.
-	wireIdx := strings.Index(body, "wireGmapCentreButton")
-	if wireIdx < 0 {
-		t.Fatal("wireGmapCentreButton IIFE not found")
-	}
-	// Bound the IIFE roughly — find the next `})();` closer after the
-	// IIFE name.
-	wireEnd := strings.Index(body[wireIdx:], "})();")
-	if wireEnd < 0 {
-		t.Fatal("wireGmapCentreButton IIFE end marker not found")
-	}
-	wireBody := body[wireIdx : wireIdx+wireEnd]
+	// Camera control != navigation. The centre-button dispatch path
+	// (adapter → bus → native-context delegate) must NOT touch
+	// refresh / render / history / state-mutation surfaces.
+	adapterJSForNegatives := adapterJS
 	for _, illegal := range []string{
 		"refreshGovernanceMap",
 		"setGmapZoom",
 		"gmapHistory.push",
 		"renderGovernanceMap(",
 	} {
-		if strings.Contains(wireBody, illegal) {
+		if strings.Contains(adapterJSForNegatives, illegal) {
 			t.Errorf("Centre wiring must NOT contain %q (it is camera control, not navigation)", illegal)
 		}
 	}
 	// Mutation guards: assignment to graph-state variables is `=`
-	// followed by something other than `=`. The regex disambiguates
-	// assignment from the comparison operator (===) used in the
-	// view-prefix branches.
+	// followed by something other than `=`. The adapter must not
+	// mutate graph-state locals.
 	assignRE := regexp.MustCompile(`(currentGraphView|currentGraphRootId|gmapHistory|gmapDragOverrides|gmapZoom)\s*=[^=]`)
-	if loc := assignRE.FindString(wireBody); loc != "" {
+	if loc := assignRE.FindString(adapterJSForNegatives); loc != "" {
 		t.Errorf("Centre wiring must NOT mutate graph state; found assignment-like form %q", loc)
 	}
 

@@ -1,0 +1,159 @@
+/* /explorer/assets/css/cytoscape-html-overlay.css
+ *
+ * D34a-cytoscape-html-overlay-spike — MIDAS-owned HTML overlay layer.
+ *
+ * Gated CSS for the spike's overlay. Every selector is scoped under
+ * `body.cytoscape-poc-active` so the rules are completely inert when
+ * the Cytoscape PoC is not the active Authority renderer. Removing
+ * the spike means deleting this stylesheet, the `<link>` tag in
+ * `index.html`, and the `cytoscape-html-overlay.js` script + its
+ * `<script>` tag.
+ *
+ * The `.gmap-node-label`, `.gmap-node-name`, `.gmap-node-meta`,
+ * `.gmap-badge` sub-classes used INSIDE each card come from the
+ * existing MIDAS Context Graph stylesheet (`governance-map.css`) and
+ * are reused unchanged — they only carry typography + colour, so
+ * they are inert when used outside the production `.gmap-node`
+ * selector.
+ */
+
+/* ── Overlay layer ─────────────────────────────────────────────────
+ * Absolutely positioned inside the Cytoscape mount so it shares the
+ * same overflow box. `pointer-events: none` lets pan/zoom/drag fall
+ * through to the canvas; cards re-enable pointer events below.
+ */
+body.cytoscape-poc-active .midas-cy-overlay-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 6;
+  overflow: hidden;
+}
+
+/* ── Card ──────────────────────────────────────────────────────────
+ * Each card is `position: absolute` at the layer's origin and
+ * translated to the node's rendered position by JS (translate3d +
+ * translate(-50%, -50%) so the card centre aligns with the node
+ * centre). The visual baseline mirrors the Context Graph
+ * `.gmap-node` card: light surface, rounded corners, drop shadow,
+ * left accent strip coloured by kind.
+ */
+body.cytoscape-poc-active .midas-cy-overlay-card {
+  position: absolute;
+  left: 0;
+  top: 0;
+  /* Initial transform overridden by JS on first sync. */
+  transform: translate3d(0, 0, 0) translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 200px;
+  max-width: 260px;
+  padding: 8px 12px 8px 14px;
+  background: var(--surface-container-low, #1a1f2e);
+  border: 1px solid var(--outline-variant, #475569);
+  border-left-width: 4px;
+  border-radius: 6px;
+  color: var(--on-surface, #e2e8f0);
+  font-family: var(--font-display, Inter, 'Segoe UI', system-ui, sans-serif);
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: left;
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.32);
+  transition: box-shadow 0.12s ease-out, border-color 0.12s ease-out;
+}
+body.cytoscape-poc-active .midas-cy-overlay-card:hover,
+body.cytoscape-poc-active .midas-cy-overlay-card:focus-visible {
+  border-color: var(--primary, #7aa2ff);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.42);
+  outline: none;
+}
+
+/* Root node — emphasise the kind accent strip. */
+body.cytoscape-poc-active .midas-cy-overlay-card[data-root="true"] {
+  border-color: var(--primary, #7aa2ff);
+}
+
+/* ── Per-kind accent strips ────────────────────────────────────────
+ * The colours match the Context Graph palette so a side-by-side
+ * comparison reads as a single design language.
+ */
+body.cytoscape-poc-active .midas-cy-overlay-card-business_service {
+  border-left-color: var(--primary, #7aa2ff);
+}
+body.cytoscape-poc-active .midas-cy-overlay-card-decision_surface {
+  border-left-color: #6eb4ff;
+}
+body.cytoscape-poc-active .midas-cy-overlay-card-authority_profile {
+  border-left-color: #75e2a3;
+}
+body.cytoscape-poc-active .midas-cy-overlay-card-authority_grant {
+  border-left-color: #f5c85a;
+}
+body.cytoscape-poc-active .midas-cy-overlay-card-agent {
+  border-left-color: #c4ccd6;
+}
+body.cytoscape-poc-active .midas-cy-overlay-card-fail_mode_policy {
+  border-left-color: #94a3b8;
+}
+body.cytoscape-poc-active .midas-cy-overlay-card-escalation_target {
+  border-left-color: #e85757;
+}
+
+/* ── Sub-element overrides ────────────────────────────────────────
+ * The Context Graph CSS scopes `.gmap-node-label` under `.gmap-node`,
+ * so when those sub-classes appear inside our card they pick up only
+ * their own colour/font rules (typography is what we want; layout is
+ * what we don't). The few overrides below pin sizes inside the
+ * overlay context.
+ */
+body.cytoscape-poc-active .midas-cy-overlay-card .gmap-node-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--on-surface-variant, #94a3b8);
+}
+body.cytoscape-poc-active .midas-cy-overlay-card .gmap-node-name {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--on-surface, #e2e8f0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+body.cytoscape-poc-active .midas-cy-overlay-card .gmap-node-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  font-size: 11px;
+  color: var(--on-surface-variant, #94a3b8);
+  margin-top: 2px;
+}
+body.cytoscape-poc-active .midas-cy-overlay-card .gmap-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 9px;
+  background: var(--surface-container, #222838);
+  border: 1px solid var(--outline-variant, #475569);
+  color: var(--on-surface, #e2e8f0);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+body.cytoscape-poc-active .midas-cy-overlay-card .gmap-badge.bind {
+  background: rgba(110, 180, 255, 0.18);
+  border-color: rgba(110, 180, 255, 0.50);
+  color: #6eb4ff;
+}
+body.cytoscape-poc-active .midas-cy-overlay-card .gmap-badge.warn {
+  background: rgba(245, 200, 90, 0.18);
+  border-color: rgba(245, 200, 90, 0.50);
+  color: #f5c85a;
+}

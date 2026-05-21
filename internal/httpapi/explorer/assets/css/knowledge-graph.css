@@ -1,0 +1,50 @@
+/* /explorer/assets/css/knowledge-graph.css
+   D36a — Knowledge Graph renderer shell, minimal placeholder styling.
+
+   Token-aligned per docs/design/midas-graph-viewport.md.
+   Renderer mount is inside .midas-graph-renderer-slot (host-supplied);
+   no chrome, no clipping, no layering — the host owns those.
+
+   Identity is host-owned via [data-active-renderer="knowledge-graph"]
+   on .midas-graph-viewport (D35f contract). No body classes. */
+
+.midas-graph-viewport[data-active-renderer="knowledge-graph"] .knowledge-graph-mount {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  /* Padding is composed at runtime by the renderer using
+     ctx.getSafeArea() so chrome-aware insets work for free. */
+}
+
+.knowledge-graph-mount-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-width: 480px;
+  padding: var(--space-5);
+  background: var(--surface-container);
+  color: var(--on-surface);
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--radius-panel);
+  font-family: var(--font-body);
+  text-align: center;
+}
+
+.knowledge-graph-mount-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--on-surface);
+}
+
+.knowledge-graph-mount-body {
+  font-size: 13px;
+  color: var(--on-surface-variant);
+}
+
+.knowledge-graph-mount-note {
+  font-size: 12px;
+  color: var(--outline);
+}

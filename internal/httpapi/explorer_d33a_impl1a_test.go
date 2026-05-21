@@ -76,6 +76,13 @@ func TestExplorer_D33aImpl1a_RenderPayloadDoesNotLeaveBlankCanvasForEmptyElement
 // pins the strengthened post-init fit. Double rAF (next frame + one
 // after) + a 120 ms fallback covers the cases where the parent grid
 // track sizes only on a subsequent pass.
+//
+// D33x-fit-zoom-root — `_settleFit` now delegates from the retired
+// symmetric `_cy.fit(undefined, _safeAreaPadding())` budget to the
+// new asymmetric `_fitToAvailableCanvas(_cy)` helper (which uses
+// `cy.viewport({zoom, pan})` to honour per-side overlay insets).
+// The rAF/setTimeout settle contract is unchanged; only the fit
+// implementation moved.
 func TestExplorer_D33aImpl1a_RenderPayloadInitialisesCyAfterMountIsMeasurable(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
@@ -84,7 +91,10 @@ func TestExplorer_D33aImpl1a_RenderPayloadInitialisesCyAfterMountIsMeasurable(t 
 	for _, want := range []string{
 		"function _settleFit()",
 		"_cy.resize();",
-		"_cy.fit(undefined, _safeAreaPadding());",
+		// D33x-fit-zoom-root — settle path delegates to the new
+		// asymmetric helper instead of the retired symmetric
+		// cy.fit(undefined, _safeAreaPadding()) shape.
+		"_fitToAvailableCanvas(_cy)",
 		// Outer rAF + nested rAF.
 		"window.requestAnimationFrame(function ()",
 		"window.requestAnimationFrame(_settleFit)",
@@ -124,22 +134,34 @@ func TestExplorer_D33aImpl1a_ClearOverlaysDoesNotRemoveCytoscapeMount(t *testing
 	}
 }
 
-// TestExplorer_D33aImpl1a_CytoscapeMountKeepsMeasurableHeight pins the
-// CSS fallback. height: 100% inherits parent height; min-height: 480px
-// keeps a usable floor when the parent grid track collapses (e.g.
-// during transient layout passes). The pre-tranche 720 floor is gone.
+// TestExplorer_D33aImpl1a_CytoscapeMountKeepsMeasurableHeight pins
+// that the Authority Cytoscape mount has a usable measurable height.
+//
+// D33a-impl-1a originally pinned `height: 100%` + `min-height: 480px`.
+// D37d (authority-cytoscape-mount-visibility-fix) replaced
+// `position: relative; width: 100%; height: 100%;` with
+// `position: absolute; inset: 0;` to overlay the slot rather than
+// stack below the legacy `.governance-map-canvas-scroll` sibling.
+// `inset: 0` anchors the mount to the slot's four edges so the
+// mount has measurable width AND height without an explicit
+// `height: 100%`. `min-height: 480px` remains as the floor when
+// the parent grid track collapses. The pre-tranche 720 floor is
+// still gone. See docs/design/D37c-authority-cytoscape-blank-state-
+// root-cause-assessment.md.
 func TestExplorer_D33aImpl1a_CytoscapeMountKeepsMeasurableHeight(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
 	css := getExplorerAsset(t, srv, "/explorer/assets/css/authority-cytoscape-poc.css")
 	css = stripCSSComments(css)
 
+	// D37d — mount is anchored via `inset: 0` (not `height: 100%`).
+	// Mount still declares a min-height floor.
 	for _, want := range []string{
-		"height: 100%",
+		"inset: 0",
 		"min-height: 480px",
 	} {
 		if !strings.Contains(css, want) {
-			t.Errorf("D33a-impl-1a: mount must keep %q so the canvas has measurable height", want)
+			t.Errorf("D33a-impl-1a/D37d: mount must keep %q so the canvas has measurable height", want)
 		}
 	}
 	if strings.Contains(css, "min-height: 720px") {

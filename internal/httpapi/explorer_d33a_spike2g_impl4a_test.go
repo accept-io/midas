@@ -66,8 +66,9 @@ func TestExplorer_D33aSpike2gImpl4a_AuthorityThinCardThemeStillRegistered(t *tes
 	if !strings.Contains(js, "'"+d33aSpike2gImpl4aThemeName+"'") {
 		t.Errorf("D33a-spike-2g-impl-4a: _THEMES must still contain %q", d33aSpike2gImpl4aThemeName)
 	}
-	if !strings.Contains(js, "var DEFAULT_THEME  = 'classic';") {
-		t.Error("D33a-spike-2g-impl-4a: DEFAULT_THEME must remain 'classic'")
+	// D37f — DEFAULT_THEME promoted to 'html-card'; 'classic' remains in _THEMES.
+	if !strings.Contains(js, "var DEFAULT_THEME  = 'html-card';") {
+		t.Error("D33a-spike-2g-impl-4a/D37f: DEFAULT_THEME must be 'html-card' (D37f promotion)")
 	}
 	for _, want := range []string{
 		"function _resolveTheme()",

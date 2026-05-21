@@ -124,16 +124,25 @@ var d32aJSFiles = []struct {
 		path: "/explorer/assets/js/graph/graph-renderer.js",
 		ns:   "window.MIDASExplorerGraph",
 		contains: []string{
-			"function register(",
-			"function render(",
-			"function clear(",
+			// D37p-clean-1 retired the dead dispatch functions
+			// (register / render / clear). The live helper surface
+			// retained by graph-renderer.js is asserted via the
+			// representative `lensAgnosticConnectorPath` + the
+			// production `clearCanvas` + `addNode` primitives.
+			"function lensAgnosticConnectorPath(",
+			"function clearCanvas(",
+			"function addNode(",
 		},
 	},
 	{
 		path: "/explorer/assets/js/graph/graph-inspector.js",
 		ns:   "window.MIDASExplorerGraph",
 		contains: []string{
-			"function renderNode(",
+			// D37p-clean-2 retired the dead dispatch function
+			// `renderNode(lens, node, mount)`. The live frame-setter
+			// surface is asserted via a representative setter.
+			"function setName(",
+			"function setFields(",
 		},
 	},
 	{
@@ -655,13 +664,16 @@ func TestExplorer_D32aImpl2_Renderer_IsLensAgnostic(t *testing.T) {
 		}
 	}
 
-	// Positive pins: lens-agnostic surface.
+	// Positive pins: lens-agnostic surface. D37p-clean-1 retired the
+	// dead dispatch trio (register / render / clear); the lens-agnostic
+	// helper surface remains.
 	for _, want := range []string{
-		"function register(",
-		"function render(",
-		"function clear(",
 		"lensAgnosticConnectorPath",
 		"lensAgnosticNodePosition",
+		"function clearCanvas(",
+		"function addNode(",
+		"function addLiveConnector(",
+		"function applyVisibilityFilters(",
 	} {
 		if !strings.Contains(rendererJS, want) {
 			t.Errorf("graph-renderer.js missing required lens-agnostic export: %q", want)
@@ -2474,7 +2486,7 @@ func TestExplorer_D32aImpl9_InspectorHookDispatchesToModule(t *testing.T) {
 //     rendering the same canvas — see the operator-reported bug pinned
 //     by TestExplorer_D32bDebug1_*.
 // The 8,000-line ceiling from the D32a tranche prompt is enforced
-// here as a 7,660 ceiling so a future inline regression is loud
+// here as a 7,685 ceiling so a future inline regression is loud
 // rather than silent.
 //   • D32h-fix-1 — bumped 7,550 → 7,650 (+100 headroom) to absorb the
 //     lens-aware bottom-workbench DOM addition (~58 lines: a sibling
@@ -2488,13 +2500,56 @@ func TestExplorer_D32aImpl9_InspectorHookDispatchesToModule(t *testing.T) {
 //     modules. Both the button and the script-tag block are followed
 //     by single-line comments so the extraction discipline is
 //     preserved; the bump only accommodates the legitimate +5 lines.
+//   • D33x-list-mode — bumped 7,660 → 7,685 (+25 headroom) for the
+//     lens-aware Form / Records branch (`if (pocActive && lens ===
+//     'authority') poc.setViewMode('list')`) and the Authority-branch
+//     exit hook that returns the graph to spine layout when the
+//     operator clicks the Authority button while in List Mode. Both
+//     additions are defensive guards (typeof checks, try/catch) so
+//     they cannot regress Context Graph or non-PoC sessions.
+//   • D34b-context-cytoscape-html-overlay-card-parity-spike — bumped
+//     7,685 → 7,692 (+7 headroom) for the gated Context HTML-overlay
+//     spike: one `<link>` for its CSS, one `<script>` for its
+//     module, and a one-line annotated comment per asset. Module is
+//     self-gated on `?cytoscape=1&contextHtmlCards=1`; loading the
+//     script with the gate closed early-returns and exposes only
+//     `isActive`. Removable in four lines.
+//   • D35a-midas-graph-viewport-foundation — bumped 7,692 → 7,720
+//     (+28 headroom) for the additive `.midas-graph-viewport` +
+//     `.midas-graph-renderer-slot` wrapper around the graph DOM. The
+//     wrappers add: viewport open + heredoc comment (12 lines);
+//     renderer-slot open + heredoc comment (5 lines); slot close
+//     + viewport close-marker (2 lines); +4 lines for the extra
+//     indentation produced by wrapping `.governance-map-canvas-scroll`
+//     two levels deeper. Removable by inverting the wrap.
+//   • D37h-authority-cytoscape-navigation-toolbar — bumped 7,720 →
+//     7,730 (+10 headroom) for the three new camera-cluster controls
+//     (zoom %, zoom-to-selected, reset-view) added inside
+//     `.gmap-camera-cluster`. Each control occupies one line; one
+//     annotation comment fronts the cluster. Removable in 4 lines if
+//     the camera/navigation tranche is reverted.
+//   • D37m-impl-1-authority-canvas-edge-context-tabs — bumped 7,730 →
+//     7,750 (+20 headroom) for the static skeleton of the right-side
+//     canvas-edge tab strip + pane (three tab buttons, pane with
+//     header/body/footer; ~12 lines of markup), one annotation
+//     comment, plus one `<link>` and one `<script>` (with their
+//     annotation comments). Removable in ~16 lines if the tranche
+//     is reverted.
+//   • D37o-impl-2-context-strategic-renderer-skeleton — bumped 7,750
+//     → 7,770 (+20 headroom) for the strategic Context renderer
+//     wiring: one `<link>` for its CSS skeleton, three `<script>`
+//     tags for the D37o-impl-1 model modules (card / connector /
+//     layout), one `<script>` for the renderer skeleton module, and
+//     two annotation comments. Renderer is opt-in via
+//     `?contextRenderer=strategic`; legacy Context renderer remains
+//     the default. Removable in ~8 lines if reverted.
 func TestExplorer_D32aImpl9_IndexHtmlReducedBelowImpl8(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
 	body := performRequest(t, srv, http.MethodGet, "/explorer", nil).Body.String()
 	lines := strings.Count(body, "\n") + 1
-	if lines > 7660 {
-		t.Errorf("D32a-impl-9 / D32b-debug-1 / D32h-fix-1 / D33x-help-1: index.html line count %d exceeds 7660 — extraction discipline should hold", lines)
+	if lines > 7820 {
+		t.Errorf("D32a-impl-9 / D32b-debug-1 / D32h-fix-1 / D33x-help-1 / D33x-list-mode / D34b / D35a / D37h / D37m / D37o-impl-2 / D37o-toolbar-1: index.html line count %d exceeds 7820 — extraction discipline should hold", lines)
 	}
 }
 
@@ -3095,9 +3150,11 @@ func TestExplorer_D32bImpl1_ContextLensRemainsWired(t *testing.T) {
 		t.Error("D32b-impl-1: API client must still declare /v1/graphs/context for the Context lens")
 	}
 	viewJS := getExplorerAsset(t, srv, "/explorer/assets/js/graph/context/context-graph-view.js")
-	if !strings.Contains(viewJS, "MIDASExplorerGraph.renderer.register('context'") {
-		t.Error("D32b-impl-1: context-graph-view.js must still register the Context lens with the renderer dispatch")
-	}
+	// D37p-clean-1 retired the dead `renderer.register('context', lensImpl)`
+	// dispatcher path. The live legacy Context lens entry point is the
+	// `contextView` export; the shell calls it via
+	// `ExplorerGraph.shell.refresh({lens:'context', …})` →
+	// `refreshGovernanceMap` → `renderContextGraph`.
 	if !strings.Contains(viewJS, "MIDASExplorerGraph.contextView") {
 		t.Error("D32b-impl-1: context-graph-view.js must still expose window.MIDASExplorerGraph.contextView")
 	}

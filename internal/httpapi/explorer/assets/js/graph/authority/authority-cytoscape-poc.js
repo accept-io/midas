@@ -1,67 +1,78 @@
 // /explorer/assets/js/graph/authority/authority-cytoscape-poc.js
 //
-// Cytoscape.js Authority Graph PoC. Strategic evaluation prototype —
-// NOT production code. Self-contained and deletable: a single file
-// plus its CSS, plus a one-line script tag in index.html.
+// Authority Graph — Cytoscape HTML-card renderer on GraphViewport.
 //
-// Toggle:
-//   • Append ?cytoscape=1 to the Explorer URL.
-//     e.g. http://localhost:8080/explorer?cytoscape=1#services
-//   • Without the flag this module loads but does nothing — the
-//     existing Authority Graph view continues to own the render path
-//     byte-identically.
+// As of D37b this is the PRODUCTION Authority renderer. It registers
+// with the GraphViewport host under the renderer id `'authority'`
+// and is activated by normal Authority lens entry (no URL flag
+// required). The pre-D37b `?cytoscape=1` gate has been retired.
+//
+// Internal-naming debt: the file is still
+// `authority-cytoscape-poc.js`, the mount element class is still
+// `.cytoscape-poc-mount`, and several internal symbols still carry
+// `poc` in their name. Renaming would be a broad cross-file sweep
+// affecting hundreds of test assertions; D37b leaves those names
+// in place as documented internal naming debt and confines the
+// strategic rename to the renderer-id literal exposed by
+// GraphViewport (`'authority'`) and the user-facing surface (no
+// "PoC" wording in aria-label / status copy).
 //
 // Mechanism:
-//   • When the flag is present, the PoC registers itself as the
-//     'authority' lens implementation in the renderer dispatch table.
-//     `register('authority', impl)` overwrites the prior registration;
-//     because this module loads AFTER authority-graph-view.js the PoC
-//     wins. Removing the script tag from index.html restores the
-//     original view with zero residual state.
-//   • Existing fetch path (shell.refresh) flows the projection payload
-//     through to the PoC's render(payload, mount) hook unchanged.
+//   • The module's IIFE registers `_authorityRendererFactory` with
+//     GraphViewport under the id `'authority'` at module init.
+//   • It also overrides the `'authority'` entry in the lens-agnostic
+//     renderer dispatch table AND patches
+//     `ExplorerGraph.authorityView.refresh` so the normal Authority
+//     activation flow routes Authority projection fetches through
+//     `_pocRefresh` and renders them via Cytoscape inside the
+//     GraphViewport renderer slot.
+//   • The pre-D37b "production native" path (renderAuthorityGraph in
+//     authority-graph-view.js painting into `#gmap-canvas`) still
+//     exists as legacy code, but is no longer the default user-facing
+//     Authority path. A back-reference to the original refresh is
+//     stored on the namespace (`_pocOriginalRefresh`) for diagnostics.
 //
-// What this PoC demonstrates:
+// Capabilities:
 //   • Live Authority Graph data driving a Cytoscape canvas.
 //   • Deterministic vertical-lane layout (preset positions).
 //   • Hover behaviours: highlight focused node + its incident edges +
 //     directly-connected neighbours; dim everything else.
 //   • Edge hover: surface the relationship by emphasising endpoints.
-//   • Click: select node, render a minimal PoC inspector panel.
+//   • Click: select node; routes a payload through to the production
+//     drawer/inspector via `_renderInspectorCarriers`.
 //   • Background tap: clear selection / restore baseline.
 //   • Path emphasis: walk predecessors back to the Business Service
 //     root for any clicked spine node.
-//   • Node dragging with auto-routed edges (Cytoscape handles this
-//     natively — zero code required).
-//   • Workbench legend overlay: kind colours + future-overlay
-//     placeholders (drift, resilience, diagnostics, runtime evidence).
+//   • Node dragging with auto-routed edges (Cytoscape native).
+//   • Cached `_lastAuthorityProjection` so the existing diagnostics,
+//     surface-posture, and workbench panels render against the same
+//     payload.
 //
-// What this PoC deliberately does NOT solve:
-//   • Inspector integration with the existing #gmap-details right
-//     drawer. PoC shows its own inline panel.
-//   • Authority Workbench bottom letterbox.
-//   • Layer-state filtering (fail-mode toggle etc.).
-//   • Drift/resilience/diagnostics/runtime overlay rendering — only
-//     legend placeholders for now.
-//   • Visual semantics convergence with D32h-fix-2e tokens.
+// Known gaps still tracked by D37a §14 (G3 / G8 / G9):
+//   • Inspector integration uses the carrier-DOM bridge; some
+//     interactions remain less polished than the legacy native path.
+//   • Authority Workbench / diagnostics / posture panels are bridged
+//     via the cached projection but a richer integration is deferred
+//     to D37c.
+//   • Layer-state filtering, drift/resilience/diagnostics/runtime
+//     overlay rendering, and full visual-semantics convergence with
+//     D32h-fix-2e tokens are deferred follow-ups.
 
 (function () {
   'use strict';
 
-  // ── Activation gate ──────────────────────────────────────────────────
+  // ── Activation ───────────────────────────────────────────────────────
+  //
+  // D37b — Pre-D37b the module was gated on `?cytoscape=1`. That
+  // gate is RETIRED because the Cytoscape HTML-card renderer is now
+  // the production Authority renderer. `_isPocActive` is preserved
+  // as a public surface symbol (it returns `true` unconditionally
+  // now) for any test/diagnostic call sites that still query it; do
+  // not introduce new uses.
 
   function _isPocActive() {
-    try {
-      var sp = new URLSearchParams(window.location.search);
-      return sp.get('cytoscape') === '1';
-    } catch (_) {
-      return false;
-    }
-  }
-
-  if (!_isPocActive()) {
-    // No-op: original Authority view's lens registration stands.
-    return;
+    // D37b — always-on. Pre-D37b: `sp.get('cytoscape') === '1'`.
+    return true;
   }
 
   // ── D33a-spike-1 — Theme exploration (Cytoscape-native only) ─────────
@@ -85,7 +96,16 @@
   // tail. Existing themes stay at their established indices so all
   // prior contract pins continue to hold.
   var _THEMES        = ['classic', 'midas-card', 'object-card', 'object-card-v2', 'glass-card', 'holo-card', 'html-card', 'object-tile-v3', 'authority-thin-card-v1'];
-  var DEFAULT_THEME  = 'classic';
+  // D37f — Default theme promoted from `'classic'` to `'html-card'`.
+  // The `'html-card'` theme descriptor declares the small/faint
+  // 240×96 cy node footprint that matches the HTML card footprint —
+  // a necessary condition for `cy.fit()` to land cards inside the
+  // viewport when the HTML-card overlay is the default Authority
+  // visual. The theme system + `?cyTheme=…` query param remain for
+  // engineering exploration; HTML cards still render under any
+  // theme (the overlay install is no longer gated by theme as of
+  // D37f).
+  var DEFAULT_THEME  = 'html-card';
 
   function _resolveTheme() {
     try {
@@ -99,14 +119,17 @@
   }
   var _activeTheme = _resolveTheme();
 
-  // Mark <body> so CSS can hide #gmap-canvas and reveal the PoC mount.
-  if (document.body) {
-    document.body.classList.add('cytoscape-poc-active');
-  } else {
-    document.addEventListener('DOMContentLoaded', function () {
-      document.body.classList.add('cytoscape-poc-active');
-    });
-  }
+  // D35f-retire-transitional-renderer-debt — Body-class activation
+  // RETIRED. Pre-D35f the IIFE added `body.cytoscape-poc-active`
+  // unconditionally on `?cytoscape=1`, which keyed two load-bearing
+  // CSS rules: `#gmap-canvas { display: none !important }` and the
+  // `.cytoscape-poc-mount { ... }` geometry. D35f moves both rules
+  // onto `.midas-graph-viewport[data-active-renderer="authority"]`
+  // (the renderer id used to be `"authority-cytoscape"`; D37b
+  // promoted it to the production id `"authority"`). The
+  // GraphViewport host (graph-viewport.js) sets this attribute
+  // when `viewport.activateById('authority')` succeeds. The body
+  // class is no longer the source of truth.
 
   // ── Token resolution (use existing design tokens) ────────────────────
 
@@ -679,23 +702,37 @@
 
   var _cy = null;            // Cytoscape instance
   var _mountEl = null;       // <div> hosting the canvas
-  var _legendEl = null;      // workbench legend overlay
-  var _inspectorEl = null;   // PoC inspector panel
   var _lastProjection = null;
-  // D33a-impl-1 — Collapsible chrome state. Legend defaults expanded
-  // (reference info operators want visible); inspector defaults
-  // collapsed (no node selected). Inspector auto-expands on tap.
-  var _legendExpanded    = true;
-  var _inspectorExpanded = false;
+  // D33x-list-mode    — `_inspectorEl` + `_inspectorExpanded` retired;
+  //                     production right drawer (`#gmap-details`) is
+  //                     fed by the carrier DOM under `#gmap-canvas`
+  //                     (see `cytoscape-poc-inspector-carrier`) plus
+  //                     the `_rendererHooks.selectNode(nodeId)`
+  //                     tap-handler dispatch.
+  // D33x-left-poc-panel — `_legendEl` + `_legendExpanded` +
+  //                     `_renderLegend` + `_setLegendExpanded` +
+  //                     `_legendRow` + the `LEGEND_W_*` width
+  //                     reservations retired. The floating
+  //                     "Authority Graph" / NODE KINDS / FUTURE
+  //                     OVERLAYS panel was PoC-only chrome; the
+  //                     Authority projection's posture / layer
+  //                     legend is owned by the MIDAS Posture & Help
+  //                     drawer tab. Removing it frees up the left
+  //                     side of the cy mount for the graph.
 
-  // D33a-impl-1 — Compact / expanded widths used by _safeAreaPadding so
-  // the Cytoscape fit padding never tucks the graph underneath the
-  // legend / inspector chrome. Kept in sync with the CSS rules in
-  // authority-cytoscape-poc.css.
-  var LEGEND_W_COMPACT     = 140;
-  var LEGEND_W_EXPANDED    = 260;
-  var INSPECTOR_W_COMPACT  = 140;
-  var INSPECTOR_W_EXPANDED = 320;
+  // D33x-list-mode — Cytoscape-backed view mode. `graph` is the
+  // default (preset layout with edges + spine positions); `list`
+  // arranges nodes into a columnar layout grouped by kind and hides
+  // edges. The mode is toggled by the workbench Form / Records
+  // button when the active lens is `authority` and the PoC is
+  // active (`body.cytoscape-poc-active`). Re-rendering the graph
+  // (service refresh) resets to `graph`.
+  var _viewMode = 'graph';
+  // Snapshot of node positions captured the first time list mode is
+  // entered after a render. Restored when exiting list mode so the
+  // graph layout returns exactly as the PoC computed it (rather
+  // than re-running the spine layout function each toggle).
+  var _savedGraphPositions = null;
 
   // D33a-impl-1 — _safeAreaPadding reads MIDAS's `--gmap-overlay-inset-*`
   // tokens defined at [tokens.css:87-90] AND adds reserved-space for
@@ -703,6 +740,21 @@
   // padding)` accepts a single uniform value — we use the max of the
   // four side constraints so the graph never lands beneath a chrome
   // surface.
+  //
+  // D37q-viewport-4-impl — Per-edge safe-area handling:
+  //   • The `cytoscape({layout: {padding: …}})` API and `cy.fit(eles,
+  //     padding)` accept a SCALAR padding only. The `Math.max` collapse
+  //     here is therefore forced by Cytoscape's API at the initial
+  //     mount path.
+  //   • The user-visible final fit comes from `_settleFit()` (double
+  //     rAF + 120 ms timer) which delegates to `_fitToAvailableCanvas`
+  //     below. That helper consumes per-edge insets (L / R / T / B)
+  //     and applies them via `cy.viewport({zoom, pan})` — the
+  //     canonical per-edge consumption point for Authority.
+  //   • A future tranche could attempt per-edge at the initial mount
+  //     too by computing the fit transform directly and bypassing
+  //     `cytoscape({layout: {fit:true, padding: …}})` — out of scope
+  //     here per the D37q-viewport-4 safe-implementation directive.
   //
   // D33a-impl-1a — Clamped against the mount's current dimensions.
   // Without the clamp, the computed value (e.g. left = 56 inset + 260
@@ -727,15 +779,40 @@
       bottom = px(root.getPropertyValue('--gmap-overlay-inset-bottom'));
       left   = px(root.getPropertyValue('--gmap-overlay-inset-left'));
     } catch (_) { /* fall through with zeros */ }
-    var legendW    = _legendExpanded    ? LEGEND_W_EXPANDED    : LEGEND_W_COMPACT;
-    var inspectorW = _inspectorExpanded ? INSPECTOR_W_EXPANDED : INSPECTOR_W_COMPACT;
+    // D33x-list-mode — Inspector reservation removed along with the
+    // floating PoC card.
+    // D33x-left-poc-panel — Legend reservation removed along with
+    // the floating left PoC panel. Only the `--gmap-overlay-inset-*`
+    // tokens + a symmetric buffer drive the padding now.
     var buffer = 16;
     var computed = Math.max(
       top    + buffer,
-      right  + inspectorW + buffer,
+      right  + buffer,
       bottom + buffer,
-      left   + legendW    + buffer
+      left   + buffer
     );
+
+    // D35d-port-authority-cytoscape-to-graphviewport — Compose with
+    // the GraphViewport host's safe-area. The host computes per-edge
+    // insets from the live chrome geometry (`.gmap-mode-rail`,
+    // `.gmap-camera-cluster`, `.gmap-legend-overlay`), which is
+    // strictly more accurate than the static CSS-token values above.
+    // Use Math.max so the legacy floor (CSS tokens) and the host
+    // ceiling (live chrome) compose into a single scalar that never
+    // lets the graph land beneath any chrome surface, regardless of
+    // which signal is more conservative.
+    //
+    // Defensive: if the host or ctx is absent, the legacy `computed`
+    // value is used unchanged.
+    if (_rendererCtx && typeof _rendererCtx.getSafeArea === 'function') {
+      try {
+        var sa = _rendererCtx.getSafeArea();
+        if (sa) {
+          var hostMax = Math.max(sa.top || 0, sa.right || 0, sa.bottom || 0, sa.left || 0);
+          if (hostMax > computed) computed = hostMax;
+        }
+      } catch (_) { /* swallow — keep legacy computed */ }
+    }
 
     // Resolve clamp dimensions. Prefer the explicit dims argument
     // (post-init paths read the live mount), fall back to the
@@ -758,6 +835,805 @@
     return Math.max(FIT_PADDING_FLOOR, Math.min(computed, cap));
   }
 
+  // D33x-fit-zoom-root — Bottom-band reservation for the MIDAS camera
+  // cluster (`.gmap-camera-cluster`). The cluster is `position:
+  // absolute; bottom: 16; right: 16; height: ~40 px`. Reserve enough
+  // vertical room so the graph never lands beneath it.
+  var TOOLBAR_BOTTOM_RESERVED_PX = 40 + 24;
+  // D33x-fit-zoom-root — Top buffer. Above the cy canvas live the
+  // search/breadcrumb chrome (`.governance-map-toolbar`) and the
+  // shell header — both OUTSIDE the cy container. The buffer is
+  // purely cosmetic so the top-most edges of the graph aren't flush
+  // with the canvas border.
+  var FIT_TOP_BUFFER_PX = 16;
+  var FIT_SIDE_BUFFER_PX = 16;
+  // Production right drawer (`#gmap-details.gmap-right-rail`) width
+  // when expanded. Cytoscape lives inside the workbench grid cell
+  // which shrinks when the drawer opens, so the drawer-induced inset
+  // is already absorbed by `cy.resize()` reading the new container
+  // width. The constant below is reserved as a defensive ceiling
+  // when the drawer chrome may overlap (focus mode, transitioning
+  // state); it is NOT double-counted against the natural cy.width().
+  var RIGHT_DRAWER_OVERLAP_BUFFER = 0;
+  // Minimum visible region the fit will preserve before it stops
+  // applying per-side insets. Below this the math degenerates and
+  // we just centre the graph at zoom = min(cw/bb.w, ch/bb.h).
+  var FIT_MIN_VISIBLE_PX = 96;
+  // Sane zoom clamps for the fit + the centre-on-root affordance.
+  // Cytoscape's defaults (1e-50 .. 1e50) are unhelpful; these
+  // values keep labels readable without ever going so close that
+  // a single node fills the canvas.
+  var FIT_ZOOM_MAX = 2.0;
+  var FIT_ZOOM_MIN = 0.05;
+  // Centre-on-root: if current zoom is already at least this, just
+  // pan (preserves the operator's current detail level); otherwise
+  // bump to `CENTRE_READABLE_ZOOM`.
+  var CENTRE_READABLE_ZOOM = 0.85;
+  // Zoom-in / zoom-out step factor. Mirrors the legacy
+  // GMAP_ZOOM.STEP feel without coupling to that constant (which
+  // lives in a different module).
+  var ZOOM_STEP_FACTOR = 1.2;
+
+  // _fitToAvailableCanvas computes per-side overlay-aware insets
+  // and applies them via `cy.viewport({zoom, pan})`. Cytoscape's
+  // built-in `cy.fit(eles, padding)` takes only a SCALAR padding,
+  // which forces the largest single-side overlay onto every side
+  // (e.g. expanded legend = 260 + buffer = 276 px would reserve
+  // 276 on top + 276 on bottom too, leaving the graph cramped).
+  // This helper measures the insets independently per side so the
+  // graph uses the full vertical height plus the centre horizontal
+  // band between the legend and the inspector.
+  //
+  // Steps:
+  //   1. Read the elements' bounding box.
+  //   2. Compute per-side insets (legend = left only, inspector =
+  //      right only, camera cluster = bottom only, small top
+  //      buffer).
+  //   3. Derive zoom = min(visibleWidth/bb.w, visibleHeight/bb.h)
+  //      and clamp against the chosen min/max + Cytoscape's own
+  //      min/max.
+  //   4. Derive pan so the bb centre lands at the centre of the
+  //      visible region.
+  //   5. Apply zoom + pan atomically via `cy.viewport()`.
+  function _fitToAvailableCanvas(cy, opts) {
+    if (!cy) return;
+    opts = opts || {};
+    var eles;
+    try {
+      eles = opts.elements || cy.elements(':visible');
+    } catch (_) {
+      eles = cy.elements();
+    }
+    if (!eles || eles.length === 0) return;
+    var bb;
+    try { bb = eles.boundingBox(); } catch (_) { return; }
+    if (!bb || bb.w <= 0 || bb.h <= 0) return;
+
+    var cw = (typeof cy.width  === 'function') ? cy.width()  : 0;
+    var ch = (typeof cy.height === 'function') ? cy.height() : 0;
+    if (cw <= 0 || ch <= 0) return;
+
+    // D33x-list-mode    — Inspector reservation removed; right drawer
+    //                     naturally shrinks `cy.width()` when it
+    //                     opens, so the right inset is just the
+    //                     symmetric side buffer plus any defensive
+    //                     overlap allowance.
+    // D33x-left-poc-panel — Legend reservation removed; the floating
+    //                     left "Authority Graph" PoC panel was
+    //                     retired so the left inset is just the
+    //                     symmetric side buffer.
+
+    var L = FIT_SIDE_BUFFER_PX;
+    var R = FIT_SIDE_BUFFER_PX + RIGHT_DRAWER_OVERLAP_BUFFER;
+    var T = FIT_TOP_BUFFER_PX;
+    var B = TOOLBAR_BOTTOM_RESERVED_PX;
+
+    // Degenerate-viewport guard. If the insets would collapse the
+    // visible region below `FIT_MIN_VISIBLE_PX`, scale the side
+    // insets back proportionally so the graph stays visible. A
+    // 480 px-wide mount in a narrow split pane still gets a usable
+    // visible region.
+    if (cw - L - R < FIT_MIN_VISIBLE_PX) {
+      var hSlack = cw - FIT_MIN_VISIBLE_PX;
+      var hWeight = L + R;
+      if (hSlack > 0 && hWeight > 0) {
+        L = Math.max(FIT_SIDE_BUFFER_PX, L * hSlack / hWeight);
+        R = Math.max(FIT_SIDE_BUFFER_PX, R * hSlack / hWeight);
+      } else {
+        L = FIT_SIDE_BUFFER_PX;
+        R = FIT_SIDE_BUFFER_PX;
+      }
+    }
+    if (ch - T - B < FIT_MIN_VISIBLE_PX) {
+      var vSlack = ch - FIT_MIN_VISIBLE_PX;
+      var vWeight = T + B;
+      if (vSlack > 0 && vWeight > 0) {
+        T = Math.max(FIT_TOP_BUFFER_PX / 2, T * vSlack / vWeight);
+        B = Math.max(FIT_TOP_BUFFER_PX / 2, B * vSlack / vWeight);
+      } else {
+        T = FIT_TOP_BUFFER_PX / 2;
+        B = FIT_TOP_BUFFER_PX / 2;
+      }
+    }
+
+    var vw = Math.max(FIT_MIN_VISIBLE_PX, cw - L - R);
+    var vh = Math.max(FIT_MIN_VISIBLE_PX, ch - T - B);
+
+    var z = Math.min(vw / bb.w, vh / bb.h);
+    // Cytoscape's own min/max — respect them so we never push the
+    // viewport into a regime Cytoscape will then clamp back.
+    var cyMax = (typeof cy.maxZoom === 'function') ? cy.maxZoom() : Infinity;
+    var cyMin = (typeof cy.minZoom === 'function') ? cy.minZoom() : 0;
+    z = Math.min(z, isFinite(cyMax) ? cyMax : Infinity, FIT_ZOOM_MAX);
+    z = Math.max(z, cyMin || 0, FIT_ZOOM_MIN);
+
+    // Render the bb centre at the centre of the visible region.
+    var rcx = L + vw / 2;
+    var rcy = T + vh / 2;
+    var gx = bb.x1 + bb.w / 2;
+    var gy = bb.y1 + bb.h / 2;
+
+    try {
+      cy.viewport({
+        zoom: z,
+        pan: { x: rcx - gx * z, y: rcy - gy * z },
+      });
+    } catch (_) { /* swallow — Cytoscape silently rejects invalid */ }
+  }
+
+  // _zoomBy multiplies the current zoom by `factor`, anchored at the
+  // current viewport centre (NOT the cursor). Centre-anchoring keeps
+  // the graph's apparent centre stable across +/- presses, matching
+  // the legacy MIDAS toolbar feel.
+  function _zoomBy(cy, factor) {
+    if (!cy || !factor || !isFinite(factor)) return;
+    var cw = (typeof cy.width  === 'function') ? cy.width()  : 0;
+    var ch = (typeof cy.height === 'function') ? cy.height() : 0;
+    if (cw <= 0 || ch <= 0) return;
+    var current = (typeof cy.zoom === 'function') ? cy.zoom() : 1;
+    var next = current * factor;
+    var cyMax = (typeof cy.maxZoom === 'function') ? cy.maxZoom() : FIT_ZOOM_MAX;
+    var cyMin = (typeof cy.minZoom === 'function') ? cy.minZoom() : FIT_ZOOM_MIN;
+    next = Math.min(next, isFinite(cyMax) ? cyMax : FIT_ZOOM_MAX);
+    next = Math.max(next, cyMin || FIT_ZOOM_MIN);
+    try {
+      cy.zoom({
+        level: next,
+        renderedPosition: { x: cw / 2, y: ch / 2 },
+      });
+    } catch (_) { /* swallow */ }
+  }
+
+  // _findRootNode locates the Authority projection's root in the
+  // Cytoscape elements. Resolution order:
+  //   1. A node whose data carries `isRoot === true` (set by
+  //      mapProjectionToElements when projection.root matches).
+  //   2. A node whose data.kind is `business_service` (Authority
+  //      projection invariant: business_service is the layout root).
+  //   3. null — caller logs a debug message and returns.
+  function _findRootNode(cy) {
+    if (!cy) return null;
+    var roots;
+    try {
+      roots = cy.nodes().filter(function (n) {
+        var v = n.data('isRoot');
+        return v === true || v === 'true' || v === 1;
+      });
+    } catch (_) { roots = null; }
+    if (roots && roots.length > 0) return roots[0];
+    var bs;
+    try {
+      bs = cy.nodes().filter(function (n) {
+        var d = n.data();
+        if (!d) return false;
+        if (d.kind === 'business_service') return true;
+        if (d.raw && d.raw.kind === 'business_service') return true;
+        return false;
+      });
+    } catch (_) { bs = null; }
+    if (bs && bs.length > 0) return bs[0];
+    return null;
+  }
+
+  // _centerOnRoot pans (and optionally zooms) so the projection's
+  // root is centred and readable. Preserves the operator's current
+  // zoom if it's already at least `CENTRE_READABLE_ZOOM`; otherwise
+  // bumps zoom to `CENTRE_READABLE_ZOOM` so labels are legible.
+  //
+  // D37j — Centre-on-root exits any active authority-context view
+  // first. The legacy semantic "return to the projection root" is
+  // operationally only meaningful against the full graph.
+  function _centerOnRoot(cy) {
+    if (!cy) return;
+    _exitAuthorityContext();
+    var root = _findRootNode(cy);
+    if (!root) {
+      if (window.console && typeof window.console.debug === 'function') {
+        try {
+          window.console.debug('cytoscape-poc: centre-on-root — no root node found');
+        } catch (_) { /* swallow */ }
+      }
+      return;
+    }
+    var current = (typeof cy.zoom === 'function') ? cy.zoom() : 1;
+    var target = current;
+    if (current < CENTRE_READABLE_ZOOM) {
+      target = CENTRE_READABLE_ZOOM;
+    }
+    var cyMax = (typeof cy.maxZoom === 'function') ? cy.maxZoom() : FIT_ZOOM_MAX;
+    if (isFinite(cyMax)) target = Math.min(target, cyMax);
+    target = Math.min(target, FIT_ZOOM_MAX);
+    target = Math.max(target, FIT_ZOOM_MIN);
+    var cw = cy.width(), ch = cy.height();
+    if (cw <= 0 || ch <= 0) return;
+    var p;
+    try { p = root.position(); } catch (_) { p = null; }
+    if (!p) return;
+    try {
+      cy.viewport({
+        zoom: target,
+        pan: { x: cw / 2 - p.x * target, y: ch / 2 - p.y * target },
+      });
+    } catch (_) { /* swallow */ }
+  }
+
+  // ── D37h — Camera/navigation helpers for toolbar ─────────────────────
+  //
+  // Strict camera-only surface: every helper here operates on the
+  // current Cytoscape viewport state. None of them mutate the graph
+  // contents, filter the projection, hide elements, or re-query the
+  // backend. HTML cards stay pointer-passive and are kept aligned by
+  // the D37f two-tier overlay sync.
+
+  // _zoomToNode focuses the camera on a single Cytoscape node using
+  // the existing safe-area-aware `cy.fit(eles, padding)` model. It is
+  // a thin wrapper over `_fitToAvailableCanvas` so the visible-area
+  // calculation (inspector drawer, focus-mode chrome insets) is
+  // reused.
+  function _zoomToNode(cy, node) {
+    if (!cy || !node) return;
+    if (typeof node.length === 'number' && node.length === 0) return;
+    try {
+      _fitToAvailableCanvas(cy, { elements: node });
+    } catch (_) { /* swallow */ }
+  }
+
+  // _zoomToSelected focuses the camera on `cy.elements(':selected')`.
+  // When more than one node is selected the camera fits all of them
+  // (the simpler choice — documented in the D37h tranche report);
+  // when nothing is selected it is a no-op (the toolbar disables the
+  // button in that state anyway).
+  function _zoomToSelected(cy) {
+    if (!cy || typeof cy.elements !== 'function') return;
+    var selected;
+    try { selected = cy.elements(':selected'); } catch (_) { return; }
+    if (!selected || typeof selected.length !== 'number' || selected.length === 0) return;
+    _zoomToNode(cy, selected);
+  }
+
+  // _resetView restores a sensible whole-graph Authority camera. It
+  // intentionally does NOT use raw `cy.reset()` (which would set
+  // pan=(0,0), zoom=1 and ignore MIDAS safe-area chrome). Instead it
+  // delegates to the same `_fitToAvailableCanvas` helper that drives
+  // the Fit button, so the result respects inspector / focus-mode /
+  // camera-cluster insets.
+  //
+  // D37j — Reset exits any active authority-context view first so
+  // the user lands on the full Business-Service-rooted graph rather
+  // than a "fit-on-context" that looks identical to the unfit
+  // context view.
+  function _resetView(cy) {
+    if (!cy) return;
+    try {
+      _exitAuthorityContext();
+      if (typeof cy.elements === 'function') {
+        try { cy.elements().unselect(); } catch (_) { /* swallow */ }
+      }
+      _clearInteractionState();
+      _fitToAvailableCanvas(cy);
+    } catch (_) { /* swallow */ }
+  }
+
+  // _getZoomPercent reads `cy.zoom()` and returns it as a whole
+  // percentage. Returns null when no cy is mounted so the toolbar
+  // can render a `--%` placeholder without making one up.
+  function _getZoomPercent(cy) {
+    if (!cy || typeof cy.zoom !== 'function') return null;
+    var z;
+    try { z = cy.zoom(); } catch (_) { return null; }
+    if (typeof z !== 'number' || !isFinite(z) || z <= 0) return null;
+    return Math.round(z * 100);
+  }
+
+  // External viewport- and selection-change subscribers. The
+  // registries survive cy teardown so re-mounts re-attach the same
+  // subscribers to the fresh cy instance — subscribers do not need
+  // to know about the cy lifecycle.
+  var _viewportChangeHandlers  = [];
+  var _selectionChangeHandlers = [];
+
+  function _attachExternalHandlersToCy(cy) {
+    if (!cy || typeof cy.on !== 'function') return;
+    for (var i = 0; i < _viewportChangeHandlers.length; i++) {
+      try { cy.on('zoom pan resize', _viewportChangeHandlers[i]); } catch (_) {}
+    }
+    for (var j = 0; j < _selectionChangeHandlers.length; j++) {
+      try { cy.on('select unselect', _selectionChangeHandlers[j]); } catch (_) {}
+    }
+  }
+
+  function _onViewportChanged(handler) {
+    if (typeof handler !== 'function') return function () {};
+    _viewportChangeHandlers.push(handler);
+    if (_cy) { try { _cy.on('zoom pan resize', handler); } catch (_) {} }
+    return function () {
+      var idx = _viewportChangeHandlers.indexOf(handler);
+      if (idx >= 0) _viewportChangeHandlers.splice(idx, 1);
+      if (_cy) { try { _cy.off('zoom pan resize', handler); } catch (_) {} }
+    };
+  }
+
+  function _onSelectionChanged(handler) {
+    if (typeof handler !== 'function') return function () {};
+    _selectionChangeHandlers.push(handler);
+    if (_cy) { try { _cy.on('select unselect', handler); } catch (_) {} }
+    return function () {
+      var idx = _selectionChangeHandlers.indexOf(handler);
+      if (idx >= 0) _selectionChangeHandlers.splice(idx, 1);
+      if (_cy) { try { _cy.off('select unselect', handler); } catch (_) {} }
+    };
+  }
+
+  // ── D37j — Client-side authority-context view ─────────────────────────
+  //
+  // Operator question: "What is the authority context of this object?"
+  //
+  // When the operator selects a supported governance object and
+  // clicks the toolbar's `View authority context` control, the
+  // renderer hides every Cytoscape element that is not in the
+  // node's directed-traversal authority context (predecessors ∪
+  // successors ∪ self), plus the BS-default fail-mode-policy edge
+  // for any business_service in the focus (inherited policy
+  // semantics). The fit camera is then constrained to the visible
+  // collection via the existing safe-area-aware `_fitToAvailableCanvas`,
+  // which already filters to `cy.elements(':visible')`.
+  //
+  // The HTML card overlay mirrors visibility through the D37j
+  // `_syncCards` extension (`n.visible() → card.style.display`).
+  //
+  // Eligible focal kinds in D37j:
+  //   • decision_surface  — always inside the loaded BS, complete
+  //   • authority_profile — same; profile is bound to one surface
+  //   • authority_grant   — drilldown from profile/surface
+  //
+  // Disabled focal kinds in D37j (the loaded BS-rooted graph cannot
+  // represent the full context, so a client-side view would be
+  // misleading; deferred to D38a/b/c backend re-rooting):
+  //   • business_service  — already the default root
+  //   • agent             — cross-BS authorisation
+  //   • fail_mode_policy  — cross-BS policy applicability
+  //   • escalation_target — cross-BS escalation references
+  //
+  // The view is purely visual: no projection re-fetch, no graph
+  // mutation, no element removal. Exit restores all elements via
+  // `cy.elements().show()`.
+  var _AUTHORITY_CONTEXT_ELIGIBLE_KINDS = {
+    decision_surface:  true,
+    authority_profile: true,
+    authority_grant:   true,
+  };
+
+  var _authorityContextActive          = false;
+  var _authorityContextFocalNodeId     = '';
+  var _authorityContextFocalKind       = '';
+  var _authorityContextChangeHandlers  = [];
+
+  // _isAuthorityContextEligibleKind — single source of truth for
+  // which focal kinds D37j enables. The test suite pins this map
+  // to exactly the three supported kinds and bans the others.
+  function _isAuthorityContextEligibleKind(kind) {
+    if (!kind) return false;
+    return _AUTHORITY_CONTEXT_ELIGIBLE_KINDS[kind] === true;
+  }
+
+  // _getEligibleSelectedNode returns the single selected node IF
+  // it is eligible for authority-context view, else null. Multi-
+  // selection and unsupported kinds both return null so the toolbar
+  // can disable the control without an ambiguous reason.
+  function _getEligibleSelectedNode(cy) {
+    if (!cy || typeof cy.elements !== 'function') return null;
+    var sel;
+    try { sel = cy.elements(':selected'); } catch (_) { return null; }
+    if (!sel || typeof sel.length !== 'number' || sel.length !== 1) return null;
+    var n = sel[0];
+    if (!n || typeof n.data !== 'function') return null;
+    var kind = String(n.data('kind') || '');
+    if (!_isAuthorityContextEligibleKind(kind)) return null;
+    return n;
+  }
+
+  function _canViewAuthorityContext() {
+    return _getEligibleSelectedNode(_cy) !== null;
+  }
+
+  function _isAuthorityContextActive() {
+    return _authorityContextActive === true;
+  }
+
+  // _computeAuthorityContext returns the focus collection (nodes +
+  // edges) for an authority-context view rooted at `node`. The walk
+  // is directed: predecessors ∪ successors ∪ self. Additionally,
+  // any business_service in the predecessors path is extended with
+  // its business_service_has_fail_mode_policy edge → policy node
+  // so the inherited BS-default policy stays visible alongside the
+  // ancestor BS. Cytoscape's predecessors() / successors() each
+  // return both nodes and the path edges, so no extra edge-collection
+  // step is needed beyond the BS-default policy addition.
+  function _computeAuthorityContext(cy, node) {
+    if (!cy || !node) return null;
+    if (typeof node.predecessors !== 'function' ||
+        typeof node.successors   !== 'function') return null;
+    var focus;
+    try {
+      focus = node.predecessors().union(node.successors()).union(node);
+    } catch (_) { return null; }
+    if (!focus) return null;
+    // Inherited BS-default fail-mode-policy semantics: for each
+    // business_service ancestor in the focus, include its outgoing
+    // business_service_has_fail_mode_policy edge + target node.
+    try {
+      var bsNodes = focus.filter('node[kind = "business_service"]');
+      if (bsNodes && bsNodes.length) {
+        for (var i = 0; i < bsNodes.length; i++) {
+          var bs = bsNodes[i];
+          if (typeof bs.outgoers !== 'function') continue;
+          var defaultEdges = bs.outgoers('edge[kind = "business_service_has_fail_mode_policy"]');
+          if (defaultEdges && defaultEdges.length) {
+            focus = focus.union(defaultEdges);
+            if (typeof defaultEdges.targets === 'function') {
+              focus = focus.union(defaultEdges.targets());
+            }
+          }
+        }
+      }
+    } catch (_) { /* swallow — BS-default extension is best-effort */ }
+    return focus;
+  }
+
+  function _emitAuthorityContextChange() {
+    var handlers = _authorityContextChangeHandlers.slice();
+    for (var i = 0; i < handlers.length; i++) {
+      try { handlers[i](); } catch (_) { /* swallow per-handler errors */ }
+    }
+  }
+
+  // _viewAuthorityContext — enter context view for the currently
+  // selected eligible node. No-op when no eligible node is selected.
+  // Hides non-focus cy elements via `.hide()` (Cytoscape culls edges
+  // with hidden endpoints, so no edge bookkeeping is required), then
+  // calls `_syncCards()` to mirror visibility onto the HTML overlay,
+  // and fits camera to the visible (focus) collection.
+  function _viewAuthorityContext() {
+    if (!_cy) return false;
+    var node = _getEligibleSelectedNode(_cy);
+    if (!node) return false;
+    var focus = _computeAuthorityContext(_cy, node);
+    if (!focus || focus.length === 0) return false;
+    var nonFocus;
+    try { nonFocus = _cy.elements().difference(focus); } catch (_) { return false; }
+    try { nonFocus.hide(); } catch (_) { /* swallow */ }
+    _authorityContextActive      = true;
+    _authorityContextFocalNodeId = String(node.data('id') || '');
+    _authorityContextFocalKind   = String(node.data('kind') || '');
+    _syncCards();
+    try { _fitToAvailableCanvas(_cy); } catch (_) { /* swallow */ }
+    _emitAuthorityContextChange();
+    return true;
+  }
+
+  // _exitAuthorityContext — restore the full visible graph. Safe to
+  // call when context is not active (idempotent). Always shows every
+  // cy element so prior `.hide()` is reversed; clears state and
+  // re-syncs card visibility. Does NOT auto-fit (caller decides
+  // whether the camera should jump back).
+  function _exitAuthorityContext() {
+    if (!_authorityContextActive) return false;
+    if (_cy && typeof _cy.elements === 'function') {
+      try { _cy.elements().show(); } catch (_) { /* swallow */ }
+    }
+    _authorityContextActive      = false;
+    _authorityContextFocalNodeId = '';
+    _authorityContextFocalKind   = '';
+    _syncCards();
+    _emitAuthorityContextChange();
+    return true;
+  }
+
+  function _toggleAuthorityContext() {
+    return _authorityContextActive ? _exitAuthorityContext() : _viewAuthorityContext();
+  }
+
+  function _onAuthorityContextChanged(handler) {
+    if (typeof handler !== 'function') return function () {};
+    _authorityContextChangeHandlers.push(handler);
+    return function () {
+      var idx = _authorityContextChangeHandlers.indexOf(handler);
+      if (idx >= 0) _authorityContextChangeHandlers.splice(idx, 1);
+    };
+  }
+
+  // _checkAutoExitContext — Option A from the D37j brief: when the
+  // operator changes the selection to a node that is NOT the current
+  // focal node, the context view auto-exits. Bound to `cy.on('select',
+  // 'node', ...)` in `_wireInteractions`. The unselect event is
+  // intentionally not used as the trigger: an empty selection is a
+  // valid state inside context view (operator may un-select to view
+  // the surrounding context without losing the focus).
+  function _checkAutoExitContext() {
+    if (!_authorityContextActive || !_cy) return;
+    var sel;
+    try { sel = _cy.elements(':selected'); } catch (_) { return; }
+    if (!sel || sel.length === 0) return;
+    if (sel.length === 1) {
+      var selId = String(sel[0].data('id') || '');
+      if (selId === _authorityContextFocalNodeId) return;
+    }
+    _exitAuthorityContext();
+  }
+
+  // ── D33x-list-mode — Cytoscape-backed List Mode ──────────────────────
+  //
+  // List Mode arranges the Authority Graph's nodes into a columnar
+  // list inside the same Cytoscape instance. Edges are hidden;
+  // selection still routes to the production right drawer via the
+  // existing tap-handler + carrier-DOM contract; the Fit + zoom
+  // toolbar buttons remain functional.
+  //
+  // The mode is toggled by the workbench Form / Records button when
+  // the active lens is `authority` and `body.cytoscape-poc-active`
+  // is set (see the lens-aware branch in index.html). Outside that
+  // combination the button keeps its legacy behaviour
+  // (`MIDASExplorerServices.showRecord`).
+  //
+  // Group order (top to bottom, then column to column):
+  //   1. business_service   (root is sorted first within this group)
+  //   2. decision_surface
+  //   3. authority_profile
+  //   4. authority_grant
+  //   5. agent
+  //   6. fail_mode_policy
+  //   7. escalation_target
+  //   8. anything else      (sorted alphabetically by kind)
+  //
+  // Within each group, nodes sort by `label`, then `id`, with the
+  // single `isRoot:true` node pinned to the top of its bucket.
+  //
+  // Column wrapping:
+  //   - Estimate the number of rows that fit vertically inside the
+  //     usable canvas (`cy.height()` minus a safe-area buffer).
+  //   - Compute the minimum column count needed to fit every node
+  //     (capped at LIST_MAX_COLUMNS = 4).
+  //   - Distribute rows evenly across that column count so columns
+  //     stay roughly balanced.
+  //   - Group transitions cost an extra "blank row" so groups read
+  //     as distinct visual bands; the root is always the first
+  //     placement in column 0.
+  var LIST_GROUP_ORDER = [
+    'business_service',
+    'decision_surface',
+    'authority_profile',
+    'authority_grant',
+    'agent',
+    'fail_mode_policy',
+    'escalation_target',
+  ];
+  var LIST_ROW_PITCH      = 80;   // vertical distance between node centres (px)
+  var LIST_COL_PITCH      = 360;  // horizontal distance between column centres (px)
+  var LIST_TOP_PAD        = 60;   // top padding inside the cy mount (px)
+  var LIST_LEFT_PAD       = 60;   // left padding inside the cy mount (px)
+  var LIST_GROUP_GAP_ROWS = 1;    // blank rows inserted between groups
+  var LIST_MAX_COLUMNS    = 4;
+  var LIST_MIN_ROWS_PER_COL = 4;  // never collapse below this even on tiny viewports
+
+  // _computeListPositions returns `{ positions, columnCount,
+  // rowsPerColumn, ordered }`. Pure relative to `cy` + `availableH`;
+  // exposed on the public surface so tests can assert ordering and
+  // wrapping without instantiating Cytoscape.
+  function _computeListPositions(cy, availableH) {
+    var out = { positions: {}, columnCount: 1, rowsPerColumn: 0, ordered: [] };
+    if (!cy || typeof cy.nodes !== 'function') return out;
+
+    // Bucket by kind.
+    var buckets = {};
+    cy.nodes().forEach(function (n) {
+      var k = String(n.data('kind') || 'other');
+      (buckets[k] = buckets[k] || []).push(n);
+    });
+
+    // Sort each bucket: root first, then by label, then id.
+    function _sortInGroup(a, b) {
+      var ar = a.data('isRoot') ? 0 : 1;
+      var br = b.data('isRoot') ? 0 : 1;
+      if (ar !== br) return ar - br;
+      var al = String(a.data('label') || a.data('name') || a.data('id') || '').toLowerCase();
+      var bl = String(b.data('label') || b.data('name') || b.data('id') || '').toLowerCase();
+      if (al < bl) return -1;
+      if (al > bl) return 1;
+      var ai = String(a.data('id') || '');
+      var bi = String(b.data('id') || '');
+      if (ai < bi) return -1;
+      if (ai > bi) return 1;
+      return 0;
+    }
+
+    // Build ordered group list in the documented order, then append
+    // any leftover kinds alphabetically so unknown future kinds
+    // still get a deterministic place.
+    var ordered = [];
+    for (var i = 0; i < LIST_GROUP_ORDER.length; i++) {
+      var k = LIST_GROUP_ORDER[i];
+      if (buckets[k]) {
+        var arr = buckets[k].slice().sort(_sortInGroup);
+        ordered.push({ kind: k, nodes: arr });
+        delete buckets[k];
+      }
+    }
+    var leftover = Object.keys(buckets).sort();
+    for (var j = 0; j < leftover.length; j++) {
+      var arr2 = buckets[leftover[j]].slice().sort(_sortInGroup);
+      ordered.push({ kind: leftover[j], nodes: arr2 });
+    }
+
+    // Count effective rows (nodes + group gaps between successive
+    // groups). The first group does not get a leading gap.
+    var effectiveRows = 0;
+    for (var g = 0; g < ordered.length; g++) {
+      if (g > 0) effectiveRows += LIST_GROUP_GAP_ROWS;
+      effectiveRows += ordered[g].nodes.length;
+    }
+    if (effectiveRows === 0) return out;
+
+    // Resolve available rows from the canvas height. `availableH`
+    // is optional; if omitted, fall back to `cy.height()`.
+    var ch = 0;
+    if (typeof availableH === 'number' && availableH > 0) {
+      ch = availableH;
+    } else if (typeof cy.height === 'function') {
+      ch = cy.height();
+    }
+    var usableH = Math.max(0, ch - LIST_TOP_PAD - 24);
+    var rowsPerCol = Math.max(LIST_MIN_ROWS_PER_COL, Math.floor(usableH / LIST_ROW_PITCH));
+
+    // Minimum column count that fits effectiveRows, capped at
+    // LIST_MAX_COLUMNS. If the data genuinely can't fit, we still
+    // allow vertical overflow inside the last column (Cytoscape pans
+    // freely; we just prefer to avoid it).
+    var cols = Math.max(1, Math.ceil(effectiveRows / rowsPerCol));
+    if (cols > LIST_MAX_COLUMNS) cols = LIST_MAX_COLUMNS;
+    // Re-balance: rowsPerCol = ceil(effectiveRows / cols) so columns
+    // are evenly filled rather than the last column being sparse.
+    var perCol = Math.ceil(effectiveRows / cols);
+
+    var positions = {};
+    var col = 0;
+    var row = 0;
+    for (var gi = 0; gi < ordered.length; gi++) {
+      var group = ordered[gi];
+      if (gi > 0) {
+        // Insert a blank row before each non-first group. If the
+        // blank row would fall in the last position of a column,
+        // flush to the next column so the group header lines up at
+        // the top — but never split the very first group (root
+        // stays in column 0).
+        if (gi > 1 && row + LIST_GROUP_GAP_ROWS >= perCol && col < cols - 1) {
+          col++;
+          row = 0;
+        } else {
+          row += LIST_GROUP_GAP_ROWS;
+        }
+      }
+      for (var ni = 0; ni < group.nodes.length; ni++) {
+        if (row >= perCol && col < cols - 1) {
+          col++;
+          row = 0;
+        }
+        positions[group.nodes[ni].id()] = {
+          x: LIST_LEFT_PAD + col * LIST_COL_PITCH,
+          y: LIST_TOP_PAD  + row * LIST_ROW_PITCH,
+        };
+        row++;
+      }
+    }
+
+    out.positions     = positions;
+    out.columnCount   = cols;
+    out.rowsPerColumn = perCol;
+    out.ordered       = ordered;
+    return out;
+  }
+
+  // applyListLayout snapshots current graph-mode positions (once)
+  // then arranges nodes columnarly and hides edges. Idempotent:
+  // calling while already in list mode just recomputes positions
+  // (e.g. after a resize).
+  function applyListLayout() {
+    if (!_cy) return;
+    try {
+      // Snapshot positions BEFORE we move nodes, so switching back
+      // to graph mode restores the spine layout faithfully.
+      if (!_savedGraphPositions) {
+        _savedGraphPositions = {};
+        _cy.nodes().forEach(function (n) {
+          var p = n.position();
+          if (p && typeof p.x === 'number' && typeof p.y === 'number') {
+            _savedGraphPositions[n.id()] = { x: p.x, y: p.y };
+          }
+        });
+      }
+      var ch = (typeof _cy.height === 'function') ? _cy.height() : 0;
+      var plan = _computeListPositions(_cy, ch);
+      _cy.batch(function () {
+        // Hide edges. removeStyle() on graph-mode restore returns
+        // them to their stylesheet defaults (visible).
+        _cy.edges().style('display', 'none');
+        // Apply preset positions to every node we have a position
+        // for. Nodes outside `positions` (none in practice) keep
+        // their current position.
+        Object.keys(plan.positions).forEach(function (id) {
+          var n = _cy.getElementById(id);
+          if (n && n.length) n.position(plan.positions[id]);
+        });
+      });
+      _viewMode = 'list';
+      // Refit so the new column layout lands inside the visible
+      // region (same per-side inset model as the initial fit).
+      _fitToAvailableCanvas(_cy, { elements: _cy.nodes() });
+    } catch (_) { /* swallow — never break the active session */ }
+  }
+
+  // applyGraphLayout restores the snapshot taken when list mode was
+  // entered and unhides edges. If there is no snapshot (list mode
+  // was never entered), it just unhides edges so the call is a safe
+  // no-op for the graph-mode steady state.
+  function applyGraphLayout() {
+    if (!_cy) return;
+    try {
+      _cy.batch(function () {
+        _cy.edges().removeStyle('display');
+        if (_savedGraphPositions) {
+          Object.keys(_savedGraphPositions).forEach(function (id) {
+            var n = _cy.getElementById(id);
+            if (n && n.length) n.position(_savedGraphPositions[id]);
+          });
+        }
+      });
+      _viewMode = 'graph';
+      _savedGraphPositions = null;
+      _fitToAvailableCanvas(_cy);
+    } catch (_) { /* swallow */ }
+  }
+
+  // setViewMode is the public toggle. Accepts 'graph' or 'list'.
+  // Other inputs are silently ignored. Returns the resolved mode
+  // so callers can confirm what was applied.
+  function setViewMode(mode) {
+    if (mode !== 'graph' && mode !== 'list') return _viewMode;
+    if (mode === _viewMode) {
+      // Idempotent: re-apply so a resize / drawer toggle that
+      // happened between calls still gets a fresh fit.
+      if (mode === 'list') applyListLayout();
+      else                 applyGraphLayout();
+      return _viewMode;
+    }
+    if (mode === 'list') applyListLayout();
+    else                 applyGraphLayout();
+    return _viewMode;
+  }
+
+  function getViewMode() {
+    return _viewMode;
+  }
+
   // D33a-impl-1 — _clearOverlays removes any PoC unavailable / loading
   // overlay from the mount. Called by _renderPayload before Cytoscape
   // init so a prior loading message cannot leak over the rendered
@@ -771,166 +1647,165 @@
     }
   }
 
-  // D33a-impl-1 — Refit with the current safe-area padding. Called when
-  // legend / inspector expand state changes so the visible graph never
-  // ends up underneath a newly-expanded chrome surface.
+  // D33a-impl-1 — Refit when legend / inspector expand state changes
+  // so the graph never ends up underneath a newly-expanded chrome
+  // surface.
+  // D33x-fit-zoom-root — Delegates to `_fitToAvailableCanvas` so the
+  // per-side insets are honoured (matches the initial fit + the
+  // toolbar Fit button + the drawer/resize observers).
   function _refitWithSafeArea() {
     if (!_cy) return;
     try {
       _cy.resize();
-      _cy.fit(undefined, _safeAreaPadding());
+      _fitToAvailableCanvas(_cy);
     } catch (_) { /* swallow */ }
   }
 
+  // D35d-port-authority-cytoscape-to-graphviewport — renderer-host
+  // bridge state. `_rendererCtx` is the ctx object the GraphViewport
+  // host passed to `factory.mount(slotEl, ctx)`. It is consulted by
+  // `_safeAreaPadding` (for fit-padding composition) and stored so the
+  // factory's destroy can unsubscribe from `ctx.onResize`.
+  // `_rendererResizeUnsub` is the unsubscribe function returned by
+  // ctx.onResize. Both are cleared in the factory's destroy.
+  var _rendererCtx         = null;
+  var _rendererResizeUnsub = null;
+
+  // D35d — `_authorityRendererFactory` implements the
+  // MIDASGraphRendererFactory contract published by graph-viewport.js.
+  // It is the bridge between the GraphViewport host's activation
+  // lifecycle and the existing PoC internals (`_mountEl`, `_destroyCy`,
+  // `_renderPayload`, `_refitWithSafeArea`).
+  //
+  // mount(slotEl, ctx):
+  //   • Creates the `.cytoscape-poc-mount` element as a CHILD of
+  //     `slotEl` (the `.midas-graph-renderer-slot` element supplied by
+  //     the host). This replaces the pre-D35d behaviour of inserting
+  //     the mount before `#gmap-canvas` inside `.governance-map-
+  //     canvas-scroll` — the host's slot is now the strategic mount
+  //     parent.
+  //   • Stores ctx for later use by `_safeAreaPadding` and
+  //     `_uninstallPoc`.
+  //   • Subscribes to `ctx.onResize(...)` so window/drawer-induced
+  //     resize triggers `_refitWithSafeArea` (calls `cy.resize()` +
+  //     `_fitToAvailableCanvas`). Returns the unsubscribe.
+  //   • Does NOT call cy initialisation directly — that runs in
+  //     `_renderPayload` (lens-driven). The factory just owns the
+  //     mount root and the resize lifecycle.
+  //
+  // destroy():
+  //   • Unsubscribes the resize handler.
+  //   • Calls `_teardownPocResources()` to destroy cy + remove mount
+  //     DOM + clear PoC state. Does NOT call `_uninstallPoc` (which
+  //     would recurse into the host's `deactivate`).
+  //   • Clears `_rendererCtx` so a subsequent activate starts clean.
+  var _authorityRendererFactory = {
+    mount: function (slotEl, ctx) {
+      _rendererCtx = ctx || null;
+      // If a prior mount survived, remove it before creating the new
+      // one. Idempotent: a re-activation cleans the slot of stale
+      // Authority DOM without touching anything else in the slot.
+      if (_mountEl && _mountEl.parentNode) {
+        try { _mountEl.parentNode.removeChild(_mountEl); }
+        catch (_) { /* swallow */ }
+      }
+      _mountEl = document.createElement('div');
+      _mountEl.id = 'gmap-cytoscape-mount';
+      _mountEl.className = 'cytoscape-poc-mount';
+      _mountEl.setAttribute('role', 'application');
+      // D37b — production aria-label. The pre-D37b "(Cytoscape PoC)"
+      // suffix is retired; the user-facing renderer name is just
+      // "Authority Graph" because this is the production Authority
+      // renderer.
+      _mountEl.setAttribute('aria-label', 'Authority Graph');
+      try { slotEl.appendChild(_mountEl); } catch (_) { /* swallow */ }
+      // Subscribe to host resize. The factory owns only the
+      // unsubscribe; the host owns the underlying ResizeObserver.
+      if (ctx && typeof ctx.onResize === 'function') {
+        try { _rendererResizeUnsub = ctx.onResize(_refitWithSafeArea); }
+        catch (_) { _rendererResizeUnsub = null; }
+      }
+      return {
+        destroy: function () {
+          try { if (_rendererResizeUnsub) _rendererResizeUnsub(); }
+          catch (_) { /* swallow */ }
+          _rendererResizeUnsub = null;
+          _teardownPocResources();
+          _rendererCtx = null;
+        },
+      };
+    },
+  };
+
   function _ensureMount() {
     if (_mountEl && _mountEl.isConnected) return _mountEl;
-    var host = document.getElementById('gmap-canvas') || document.body;
-    var parent = host.parentNode || document.body;
 
-    _mountEl = document.createElement('div');
-    _mountEl.id = 'gmap-cytoscape-mount';
-    _mountEl.className = 'cytoscape-poc-mount';
-    _mountEl.setAttribute('role', 'application');
-    _mountEl.setAttribute('aria-label', 'Authority Graph (Cytoscape PoC)');
-    parent.insertBefore(_mountEl, host);
-
-    // Legend overlay — collapsible (D33a-impl-1). Header acts as a
-    // toggle; data-expanded drives CSS show/hide of the body.
-    _legendEl = document.createElement('aside');
-    _legendEl.className = 'cytoscape-poc-legend';
-    _legendEl.setAttribute('aria-label', 'Authority Graph workbench legend');
-    _legendEl.setAttribute('data-expanded', _legendExpanded ? 'true' : 'false');
-    _renderLegend(_legendEl);
-    _mountEl.appendChild(_legendEl);
-
-    // Inspector overlay — collapsible (D33a-impl-1). Auto-expands on
-    // node tap; collapses on background tap.
-    _inspectorEl = document.createElement('aside');
-    _inspectorEl.className = 'cytoscape-poc-inspector';
-    _inspectorEl.setAttribute('aria-label', 'Authority node inspector');
-    _inspectorEl.setAttribute('data-expanded', _inspectorExpanded ? 'true' : 'false');
-    _renderInspectorEmpty(_inspectorEl);
-    _mountEl.appendChild(_inspectorEl);
-
-    return _mountEl;
-  }
-
-  // D33a-impl-1 — _setLegendExpanded / _setInspectorExpanded update the
-  // data-expanded attribute and trigger a fit recomputation with the
-  // new safe-area padding. State changes are atomic — operators see a
-  // single resize transition, not two staggered ones.
-  function _setLegendExpanded(state) {
-    _legendExpanded = !!state;
-    if (_legendEl) _legendEl.setAttribute('data-expanded', _legendExpanded ? 'true' : 'false');
-    _refitWithSafeArea();
-  }
-  function _setInspectorExpanded(state) {
-    _inspectorExpanded = !!state;
-    if (_inspectorEl) _inspectorEl.setAttribute('data-expanded', _inspectorExpanded ? 'true' : 'false');
-    _refitWithSafeArea();
-  }
-
-  function _renderLegend(el) {
-    var pal = _resolvePalette();
-    el.innerHTML =
-      // D33a-impl-1 — Header is a clickable toggle. The toggle button
-      // surfaces collapse state to assistive tech via aria-expanded.
-      // The PoC status badge replaces the prior #gmap-status hijack.
-      '<button type="button" class="cytoscape-poc-toggle"' +
-        ' data-poc-toggle="legend"' +
-        ' aria-expanded="' + (_legendExpanded ? 'true' : 'false') + '"' +
-        ' aria-controls="cytoscape-poc-legend-body">' +
-        '<span class="cytoscape-poc-status-chip">PoC</span>' +
-        '<span class="cytoscape-poc-toggle-label">Authority Graph</span>' +
-        // D33a-spike-1 — Active theme name surfaced in the legend chip
-        // header so the operator can tell which variant is rendering.
-        '<span class="cytoscape-poc-theme-chip" data-poc-theme="' + _escHtml(_activeTheme) + '">' + _escHtml(_activeTheme) + '</span>' +
-        '<span class="cytoscape-poc-toggle-glyph" aria-hidden="true">▾</span>' +
-      '</button>' +
-      '<div id="cytoscape-poc-legend-body" class="cytoscape-poc-legend-body">' +
-        '<header class="cytoscape-poc-legend-title">Node kinds</header>' +
-        '<dl class="cytoscape-poc-legend-kinds">' +
-          _legendRow('Business Service',  pal.primary)    +
-          _legendRow('Decision Surface',  pal.badgeInfo)  +
-          _legendRow('Authority Profile', pal.badgeGood)  +
-          _legendRow('Authority Grant',   pal.badgeWarn)  +
-          _legendRow('Agent',             pal.onSurface)  +
-          _legendRow('Fail-Mode Policy',  pal.slate400)   +
-        '</dl>' +
-        '<header class="cytoscape-poc-legend-title cytoscape-poc-legend-title-future">Future overlays</header>' +
-        '<ul class="cytoscape-poc-legend-future">' +
-          '<li><span class="cytoscape-poc-placeholder">●</span> Drift</li>' +
-          '<li><span class="cytoscape-poc-placeholder">●</span> Resilience</li>' +
-          '<li><span class="cytoscape-poc-placeholder">●</span> Diagnostics</li>' +
-          '<li><span class="cytoscape-poc-placeholder">●</span> Runtime evidence</li>' +
-        '</ul>' +
-      '</div>';
-    // Wire toggle click; pointerdown stops propagation so a stray
-    // background-tap doesn't fire after a legend toggle.
-    var btn = el.querySelector('[data-poc-toggle="legend"]');
-    if (btn) {
-      btn.addEventListener('click', function (e) {
-        e.stopPropagation();
-        _setLegendExpanded(!_legendExpanded);
-        btn.setAttribute('aria-expanded', _legendExpanded ? 'true' : 'false');
-      });
+    // D35d + D37b — Route mount creation through the GraphViewport
+    // host (the production path post-D35a/D35b/D35c). The host's
+    // `activateById('authority')` (renderer id was `'authority-
+    // cytoscape'` pre-D37b; promoted to the production id `'authority'`
+    // in D37b) deactivates the previous renderer (typically
+    // 'native-context' — its destroy is a no-op so native DOM
+    // survives), then calls our factory's mount which creates
+    // `_mountEl` inside `.midas-graph-renderer-slot`. Subsequent
+    // calls during the same activation short-circuit
+    // via the `_mountEl.isConnected` guard above.
+    var vp = (window.MIDASExplorerGraph && window.MIDASExplorerGraph.viewport) || null;
+    if (vp &&
+        typeof vp.activateById === 'function' &&
+        typeof vp.getActiveRendererId === 'function' &&
+        typeof vp.getRendererSlotEl === 'function' &&
+        vp.getRendererSlotEl()) {
+      if (vp.getActiveRendererId() !== 'authority') {
+        // D35g + D37b — Activate by registered id `'authority'` (factory
+        // is already in the host's registry — see the IIFE-end
+        // registration block at the bottom of this module). Falls back
+        // to false if the renderer isn't registered, which is a
+        // fail-safe: install bails out.
+        try { vp.activateById('authority'); }
+        catch (_) { /* swallow — install bails below */ }
+      } else {
+        // Already active but mount was disconnected (e.g. cleared by
+        // a stray DOM op). Re-run the factory's mount to rebuild.
+        try {
+          var slotEl = vp.getRendererSlotEl();
+          _authorityRendererFactory.mount(slotEl, _rendererCtx || {
+            viewportEl:      vp.getViewportEl && vp.getViewportEl(),
+            slotEl:          slotEl,
+            getViewportRect: vp.getViewportRect,
+            getSafeArea:     vp.getSafeArea,
+            onResize:        vp.onResize,
+            hooks: (window.MIDASExplorerGraph && window.MIDASExplorerGraph._rendererHooks) || null,
+          });
+        } catch (_) { /* fall through to legacy fallback */ }
+      }
+      if (_mountEl) return _mountEl;
     }
-  }
-  function _legendRow(label, swatch) {
-    return '<dt><span class="cytoscape-poc-swatch" style="background:' + swatch + '"></span></dt>' +
-           '<dd>' + _escHtml(label) + '</dd>';
+
+    // D35f-retire-transitional-renderer-debt — Legacy fallback
+    // REMOVED. Pre-D35f, when the GraphViewport host was absent the
+    // PoC would fall back to inserting `.cytoscape-poc-mount` before
+    // `#gmap-canvas` inside `.governance-map-canvas-scroll`. That
+    // path was a transitional bridge for pre-D35a/D35b builds and
+    // headless harnesses without graph-viewport.js. Every shipped
+    // Explorer now loads the host BEFORE this module
+    // (graph-viewport.js precedes graph-renderer.js in index.html),
+    // so the host is always available. If the host is somehow
+    // absent, install fails safely (returns null mount) rather than
+    // building a parallel architecture.
+    _mountEl = null;
+    return null;
   }
 
-  function _renderInspectorEmpty(el) {
-    el.innerHTML =
-      '<button type="button" class="cytoscape-poc-toggle"' +
-        ' data-poc-toggle="inspector"' +
-        ' aria-expanded="' + (_inspectorExpanded ? 'true' : 'false') + '"' +
-        ' aria-controls="cytoscape-poc-inspector-body">' +
-        '<span class="cytoscape-poc-toggle-label">Inspector</span>' +
-        '<span class="cytoscape-poc-toggle-glyph" aria-hidden="true">▾</span>' +
-      '</button>' +
-      '<div id="cytoscape-poc-inspector-body" class="cytoscape-poc-inspector-body">' +
-        '<p class="cytoscape-poc-inspector-empty">Click a node to inspect.</p>' +
-      '</div>';
-    _wireInspectorToggle(el);
-  }
-  function _renderInspector(node) {
-    if (!_inspectorEl) return;
-    var d = node.data();
-    var raw = d.raw || {};
-    var connected = node.connectedEdges().length;
-    var fields = [];
-    fields.push(['Kind',  _humanKind(d.kind)]);
-    fields.push(['ID',    raw.id]);
-    if (d.label && d.label !== raw.id) fields.push(['Label', d.label]);
-    fields.push(['Connected edges', String(connected)]);
-    if (d.isRoot) fields.push(['Root', 'business service']);
-    var rows = fields.map(function (kv) {
-      return '<dt>' + _escHtml(kv[0]) + '</dt><dd>' + _escHtml(String(kv[1])) + '</dd>';
-    }).join('');
-    _inspectorEl.innerHTML =
-      '<button type="button" class="cytoscape-poc-toggle"' +
-        ' data-poc-toggle="inspector"' +
-        ' aria-expanded="' + (_inspectorExpanded ? 'true' : 'false') + '"' +
-        ' aria-controls="cytoscape-poc-inspector-body">' +
-        '<span class="cytoscape-poc-toggle-label">' + _escHtml(d.label || 'Inspector') + '</span>' +
-        '<span class="cytoscape-poc-toggle-glyph" aria-hidden="true">▾</span>' +
-      '</button>' +
-      '<div id="cytoscape-poc-inspector-body" class="cytoscape-poc-inspector-body">' +
-        '<dl class="cytoscape-poc-inspector-fields">' + rows + '</dl>' +
-      '</div>';
-    _wireInspectorToggle(_inspectorEl);
-  }
-  function _wireInspectorToggle(el) {
-    var btn = el.querySelector('[data-poc-toggle="inspector"]');
-    if (!btn) return;
-    btn.addEventListener('click', function (e) {
-      e.stopPropagation();
-      _setInspectorExpanded(!_inspectorExpanded);
-      btn.setAttribute('aria-expanded', _inspectorExpanded ? 'true' : 'false');
-    });
-  }
+  // D33x-left-poc-panel — `_setLegendExpanded`, `_renderLegend`, and
+  // `_legendRow` retired along with the floating left "Authority
+  // Graph" PoC panel. No replacement: the panel was redundant with
+  // the MIDAS Posture & Help drawer tab.
+  // D33x-list-mode — `_renderInspectorEmpty`, `_renderInspector`,
+  // and `_wireInspectorToggle` retired. The floating PoC card they
+  // composed has been removed; selected-node detail is rendered by
+  // the production right drawer (`#gmap-details`) via the carrier
+  // DOM contract (see `_renderInspectorCarriers` below).
 
   function _humanKind(k) {
     return String(k || '').replace(/_/g, ' ').replace(/\b\w/g, function (c) { return c.toUpperCase(); });
@@ -1090,6 +1965,15 @@
     // still-live `_cy` instance. Repeated renders go through this
     // path, so no overlay DOM accumulates across service switches.
     _destroyHtmlCardOverlay();
+    // D34a-cytoscape-html-overlay-spike — Tear down the MIDAS-rich
+    // HTML overlay before Cytoscape destroy. No-op when the spike
+    // gate is closed.
+    try {
+      var _htmlOverlayMod = window.MIDASExplorerGraph && window.MIDASExplorerGraph.cytoscapeHtmlOverlay;
+      if (_htmlOverlayMod && typeof _htmlOverlayMod.destroy === 'function') {
+        _htmlOverlayMod.destroy();
+      }
+    } catch (_) { /* swallow */ }
     // D33a-spike-2g-impl-5 — Drop the inspector carriers before
     // Cytoscape teardown so successive renders cannot accumulate
     // stale `.gmap-node` carriers under #gmap-canvas. Idempotent.
@@ -1098,67 +1982,268 @@
       try { _cy.destroy(); } catch (_) { /* swallow */ }
       _cy = null;
     }
+    // D33x-list-mode — Reset view-mode state across teardown so a
+    // fresh render starts in `graph` with no stale position snapshot.
+    _viewMode = 'graph';
+    _savedGraphPositions = null;
   }
 
-  // D33a-impl-1 — Full PoC teardown. Used by lensImpl.clear and the
-  // public _destroy surface. Releases Cytoscape, removes every
-  // PoC-owned DOM child (legend, inspector, unavailable overlays,
-  // mount itself), and clears the body class so disabling the PoC
-  // leaves zero residue. Idempotent: repeated calls are safe.
-  function _uninstallPoc() {
+  // D35d — `_teardownPocResources` does the actual DOM/cy cleanup
+  // work, extracted from the pre-D35d `_uninstallPoc`. The split
+  // exists because the GraphViewport host's `deactivate()` calls the
+  // factory's destroy, which calls this helper. `_uninstallPoc` now
+  // routes through the host (if active) so the host's active-renderer
+  // state is cleared too — but it must NOT call `_teardownPocResources`
+  // directly in that case, because the factory's destroy will do it.
+  //
+  // Strictly Authority-owned cleanup (no body-class flip — that
+  // remains transitional debt in `_uninstallPoc`).
+  function _teardownPocResources() {
     _destroyHtmlCardOverlay();
-    // D33a-spike-2g-impl-5 — Belt-and-braces clear of any carrier
-    // DOM the PoC dropped under #gmap-canvas. _destroyCy already
-    // calls _clearInspectorCarriers; the duplicate call here keeps
-    // _uninstallPoc idempotent if invoked outside the normal render
-    // path (test teardown, manual diagnostics).
     _clearInspectorCarriers();
     _destroyCy();
     if (_mountEl && _mountEl.parentNode) {
       _clearOverlays(_mountEl);
       _mountEl.parentNode.removeChild(_mountEl);
     }
-    _mountEl     = null;
-    _legendEl    = null;
-    _inspectorEl = null;
-    if (document.body && document.body.classList) {
-      document.body.classList.remove('cytoscape-poc-active');
+    _mountEl = null;
+    _viewMode = 'graph';
+    _savedGraphPositions = null;
+  }
+
+  // D33a-impl-1 — Full PoC teardown. Used by the public _uninstall
+  // surface and the GraphViewport factory destroy path (D37p-clean-1
+  // retired the dead `lensImpl.clear` route that used to call this).
+  // Releases Cytoscape, removes every
+  // PoC-owned DOM child (legend, inspector, unavailable overlays,
+  // mount itself), and clears the body class so disabling the PoC
+  // leaves zero residue. Idempotent: repeated calls are safe.
+  //
+  // D35d — Routes through the GraphViewport host's `deactivate()`
+  // when the host owns our activation. This ensures the host's
+  // active-renderer state is cleared and the factory's destroy runs
+  // (which calls `_teardownPocResources`). If the host is unavailable
+  // or doesn't own our activation, falls back to direct cleanup.
+  //
+  // Body-class removal is TRANSITIONAL DEBT scheduled for D35f.
+  // The `body.cytoscape-poc-active` class drives load-bearing CSS
+  // (most notably `body.cytoscape-poc-active #gmap-canvas { display:
+  // none !important }`) that the host's renderer-id model is meant
+  // to replace. Until every cy-based renderer is host-owned and the
+  // CSS migrates to a renderer-id attribute, the class stays.
+  function _uninstallPoc() {
+    // D33a-spike-2g-impl-5 — Belt-and-braces clear of any inspector
+    // carrier DOM the PoC dropped under #gmap-canvas. _destroyCy
+    // (reached via _teardownPocResources below OR via the factory's
+    // destroy when the host routes through deactivate) also calls
+    // _clearInspectorCarriers; the duplicate call here keeps
+    // _uninstallPoc idempotent if invoked outside the normal render
+    // path (test teardown, manual diagnostics). The carrier clear
+    // is itself idempotent so the double call is harmless.
+    _clearInspectorCarriers();
+
+    // D35d + D37b — Route the teardown through the GraphViewport host
+    // when it owns our activation. The host's deactivate() calls the
+    // factory's destroy, which calls _teardownPocResources, which
+    // calls _destroyCy + _clearInspectorCarriers + mount removal.
+    // If the host is unavailable OR 'authority' isn't the active id,
+    // fall back to direct teardown.
+    var vp = (window.MIDASExplorerGraph && window.MIDASExplorerGraph.viewport) || null;
+    var routedThroughHost = false;
+    if (vp &&
+        typeof vp.deactivate === 'function' &&
+        typeof vp.getActiveRendererId === 'function' &&
+        vp.getActiveRendererId() === 'authority') {
+      try { vp.deactivate(); routedThroughHost = true; }
+      catch (_) { routedThroughHost = false; }
+    }
+    if (!routedThroughHost) {
+      _teardownPocResources();
+    }
+    // D35f-retire-transitional-renderer-debt — Body-class removal
+    // RETIRED. The host's `viewport.deactivate()` (called via
+    // routedThroughHost above) clears the
+    // `data-active-renderer="authority"` attribute on
+    // `.midas-graph-viewport` (or restores it to the baseline
+    // 'native-context'), which is now the sole source of strategic
+    // renderer-state CSS keying. The pre-D35f
+    // `body.cytoscape-poc-active` flip is gone.
+  }
+
+  // ── D33a-spike-2 + D37f — Authority HTML-card overlay (production) ────
+  //
+  // The Authority HTML-card overlay is the PRODUCTION Authority
+  // visual as of D37f. Cytoscape continues to own layout, edges,
+  // hover, drag, pan, zoom, and hit-testing; the overlay is purely
+  // presentational. Overlay + cards are `pointer-events: none` so
+  // every tap falls through to Cytoscape's canvas.
+  //
+  // Projection model: D34i two-tier (lifted from the Context spike's
+  // canonical implementation pinned by D35e tests).
+  //
+  //   • LAYER tier: cy.pan + cy.zoom → ONE transform on the overlay
+  //     element. Updated on `pan zoom render resize` events. Cost
+  //     O(1) per event regardless of node count.
+  //   • CARDS tier: cy.node.position() (MODEL coords) → ONE transform
+  //     per card via `translate(model.x, model.y) translate(-50%, -50%)`.
+  //     Updated on `position bounds layoutstop add select unselect`
+  //     events. Also mirrors `n.selected()` onto each card's
+  //     `.selected` class.
+  //
+  // The layer's `scale(cy.zoom())` projects every card from model
+  // space to rendered space, so per-card transforms remain in model
+  // coordinates (no `renderedPosition` and no per-card `scale`).
+  // `transform-origin: top left` on the overlay (declared in
+  // authority-cytoscape-poc.css) MUST match Cytoscape's projection
+  // origin so `cy.pan(0,0)` lands at the same screen pixel.
+  //
+  // Each tier has its own rAF coalescing flag so a burst of
+  // pan/zoom collapses to one layer write per frame and a burst of
+  // drag-position events collapses to one card-tier write per frame.
+  //
+  // The overlay container, card elements, and both event listeners
+  // are torn down by _destroyHtmlCardOverlay. Wired into both
+  // _destroyCy (per-render teardown) and _uninstallPoc (full PoC
+  // teardown) so service refresh and lens unmount both leave a clean
+  // DOM.
+  //
+  // Pre-D37f the install was gated on `_activeTheme === 'html-card'`
+  // and the sync was a single-tier `renderedPosition` projection.
+  // D37f retired the theme-gate so HTML cards render by default, and
+  // adopted the proven D34i two-tier model.
+
+  // D34i two-tier event constants. Authority mirrors the Context
+  // spike's wiring verbatim.
+  var LAYER_SYNC_EVENTS = 'pan zoom render resize';
+  var CARDS_SYNC_EVENTS = 'position bounds layoutstop add select unselect';
+  var PROJECTION_MODEL  = 'layer-pan-zoom-card-model-position';
+
+  var _htmlOverlayEl    = null;   // <div> containing cards
+  var _htmlCardsByKey   = {};     // refKey -> <article> element
+  // Per-tier rAF flags + bound handlers. Each tier coalesces
+  // independently so the two cannot starve each other.
+  var _syncLayerRaf     = 0;
+  var _syncCardsRaf     = 0;
+  var _syncLayerBound   = null;
+  var _syncCardsBound   = null;
+
+  // D37k-impl-1 — HTML edge-label overlay (single shared chip).
+  //
+  // A new overlay tier above the cards overlay. One shared chip
+  // element is positioned in model coordinates at the hovered
+  // edge's midpoint and projected via the same `_syncLayer` pan/
+  // zoom transform that drives the cards overlay (so the chip
+  // tracks the cy viewport with no separate transform pipeline).
+  //
+  // The chip is hover-only: shown by `_focusEdge` (called from the
+  // existing `mouseover` 'edge' handler), hidden by
+  // `_clearInteractionState` (called from `mouseout` /
+  // `_focusNode` / background tap). No per-edge DOM — one chip,
+  // re-positioned on each hover. The cards-tier sync re-positions
+  // the chip when its edge's endpoints move (e.g. node drag).
+  var _edgeLabelOverlayEl     = null;
+  var _edgeLabelChipEl        = null;
+  var _edgeLabelFocusedEdgeId = '';
+
+  // _syncLayer — applies cy.pan + cy.zoom to the overlay element as
+  // ONE transform with `transform-origin: top left`. After this
+  // write, every descendant card is implicitly projected from model
+  // space to rendered space, including scale. Pan/zoom events bind
+  // here, so a burst of pan/zoom during user interaction collapses
+  // to one style write per frame (rAF-coalesced via `_syncLayerBound`).
+  //
+  // MUST NOT iterate `_htmlCardsByKey` — pan/zoom must cost O(1)
+  // per event regardless of node count. Pinned by D37f tests.
+  function _syncLayer() {
+    if (!_cy || !_htmlOverlayEl) return;
+    var pan, zoom;
+    try {
+      pan  = (typeof _cy.pan  === 'function') ? _cy.pan()  : { x: 0, y: 0 };
+      zoom = (typeof _cy.zoom === 'function') ? _cy.zoom() : 1;
+    } catch (_) { return; }
+    if (!pan || typeof zoom !== 'number') return;
+    var t = 'translate(' + pan.x + 'px,' + pan.y + 'px) scale(' + zoom + ')';
+    var stl = _htmlOverlayEl.style;
+    stl.transformOrigin = 'top left';
+    stl.webkitTransform = t;
+    stl.transform       = t;
+    // D37k-impl-1 — Project the edge-label overlay through the same
+    // pan/zoom transform as the cards overlay. The chip inside is
+    // positioned in model coordinates, so applying the layer
+    // transform here keeps the chip pinned to the hovered edge's
+    // midpoint across pan/zoom. Two style writes (cards overlay +
+    // edge overlay) — still O(1) per event, no card iteration.
+    if (_edgeLabelOverlayEl) {
+      var els = _edgeLabelOverlayEl.style;
+      els.transformOrigin = 'top left';
+      els.webkitTransform = t;
+      els.transform       = t;
     }
   }
 
-  // ── D33a-spike-2 — html-card overlay lifecycle ────────────────────────
+  // _syncCards — writes one transform per card in MODEL coordinates.
+  // The per-card transform centres the card on the model position via
+  // `translate(-50%, -50%)`. NO scale here — the layer's scale does
+  // the projection. Also mirrors cy selected state onto each card's
+  // `.selected` class.
   //
-  // The html-card theme renders a DOM card over each Cytoscape node.
-  // Cytoscape continues to handle layout, edges, hover, drag, pan,
-  // and zoom; the overlay is purely presentational. Container is
-  // `pointer-events: none` so taps fall through to Cytoscape — there
-  // are no interactive controls inside cards in this spike.
+  // Bound to `CARDS_SYNC_EVENTS` (position / bounds / layoutstop /
+  // add / select / unselect). Cy fires `position` per-frame during
+  // a node drag, so this re-runs per frame during drag — but the
+  // body is one style write per card, no DOM reflow, and is rAF-
+  // coalesced via `_syncCardsBound`.
   //
-  // Position-mapping uses node.renderedPosition() (vs cy.renderer().
-  // projectIntoViewport()). Both APIs are available in Cytoscape
-  // 3.30.2; renderedPosition returns viewport-relative coords
-  // directly, no manual projection step required. It also fires
-  // through the existing position-change events on every pan / zoom /
-  // node-drag, so a single 'render' handler keeps cards in sync.
-  //
-  // The overlay container, card elements, and pan/zoom listener are
-  // teared down by _destroyHtmlCardOverlay. Wired into both _destroyCy
-  // (per-render teardown) and _uninstallPoc (full PoC teardown) so
-  // service refresh and lens unmount both leave a clean DOM.
+  // MUST NOT use `renderedPosition` or per-card `scale(` — the layer
+  // already projects.
+  function _syncCards() {
+    if (!_cy || !_htmlCardsByKey) return;
+    var keys = Object.keys(_htmlCardsByKey);
+    for (var i = 0; i < keys.length; i++) {
+      var id = keys[i];
+      var card = _htmlCardsByKey[id];
+      if (!card) continue;
+      var n = _cy.$id(id);
+      if (!n || !n.length) {
+        card.style.display = 'none';
+        continue;
+      }
+      // D37j — Mirror Cytoscape visibility onto the HTML card so an
+      // authority-context view that hides non-focus cy nodes also
+      // hides their card overlays. Without this mirror, a hidden cy
+      // node would leave a floating card with no underlying node.
+      // The check is defensive (`typeof n.visible === 'function'`)
+      // so a future fixture that doesn't implement `visible` cannot
+      // break the cards tier.
+      if (typeof n.visible === 'function' && !n.visible()) {
+        card.style.display = 'none';
+        continue;
+      }
+      var p = n.position();
+      var t = 'translate(' + p.x + 'px,' + p.y + 'px) translate(-50%, -50%)';
+      card.style.webkitTransform = t;
+      card.style.transform       = t;
+      card.style.display = '';
+      if (n.selected()) card.classList.add('selected');
+      else              card.classList.remove('selected');
+    }
+    // D37k-impl-1 — Keep the hovered edge-label chip aligned when a
+    // node drag moves an edge endpoint. `position` events on nodes
+    // already fire this cards-tier sync, so the chip re-positions
+    // for free under the same rAF coalescing. Idempotent + no-op
+    // when no chip is shown.
+    _syncEdgeLabelPosition();
+  }
 
-  var _htmlOverlayEl   = null;   // <div> containing cards
-  var _htmlCardsByKey  = {};     // refKey -> <article> element
-  var _htmlSyncRaf     = 0;      // pending rAF id; 0 = none
-  var _htmlSyncBound   = null;   // bound listener for Cytoscape events
-
-  function _installHtmlCardOverlay(cy, mount, elements, themeName) {
+  function _installHtmlCardOverlay(cy, mount, elements) {
     if (!cy || !mount) return;
-    if (themeName !== 'html-card') return;
     _destroyHtmlCardOverlay();
 
     _htmlOverlayEl = document.createElement('div');
     _htmlOverlayEl.className = 'cytoscape-poc-html-overlay';
     _htmlOverlayEl.setAttribute('role', 'presentation');
+    // D37f — Cards are presentational; screen readers read node
+    // details from the right drawer when a node is selected.
+    _htmlOverlayEl.setAttribute('aria-hidden', 'true');
     mount.appendChild(_htmlOverlayEl);
 
     _htmlCardsByKey = {};
@@ -1171,44 +2256,111 @@
       _htmlCardsByKey[entry.data.id] = card;
     }
 
-    // Position cards immediately + on every pan/zoom/render/position event.
-    _htmlSyncBound = function () {
-      if (_htmlSyncRaf) return; // coalesce to one frame
+    // D34i two-tier event bindings. Each tier coalesces via its own
+    // rAF flag so a burst of pan/zoom collapses to one layer write
+    // per frame and a burst of drag position events collapses to one
+    // card-tier write per frame.
+    _syncLayerBound = function () {
+      if (_syncLayerRaf) return;
       if (typeof window.requestAnimationFrame === 'function') {
-        _htmlSyncRaf = window.requestAnimationFrame(function () {
-          _htmlSyncRaf = 0;
-          _updateHtmlCardOverlay(_cy);
+        _syncLayerRaf = window.requestAnimationFrame(function () {
+          _syncLayerRaf = 0;
+          _syncLayer();
         });
       } else {
-        _updateHtmlCardOverlay(_cy);
+        _syncLayer();
       }
     };
-    cy.on('render pan zoom position', _htmlSyncBound);
-    _updateHtmlCardOverlay(cy);
+    _syncCardsBound = function () {
+      if (_syncCardsRaf) return;
+      if (typeof window.requestAnimationFrame === 'function') {
+        _syncCardsRaf = window.requestAnimationFrame(function () {
+          _syncCardsRaf = 0;
+          _syncCards();
+        });
+      } else {
+        _syncCards();
+      }
+    };
+    try { cy.on(LAYER_SYNC_EVENTS, _syncLayerBound); } catch (_) { /* swallow */ }
+    try { cy.on(CARDS_SYNC_EVENTS, _syncCardsBound); } catch (_) { /* swallow */ }
+
+    // Initial paint — both tiers run once so the overlay lands at
+    // the right pan/zoom + cards land at their model positions.
+    if (typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(function () { _syncLayer(); _syncCards(); });
+    } else {
+      _syncLayer();
+      _syncCards();
+    }
   }
 
   function _buildHtmlCard(d) {
+    // D37f-rich-card — Validation candidate for the richer Authority
+    // card treatment inside the new Authority Cytoscape viewport. The
+    // legacy hook class names (`cytoscape-poc-html-card`, `-kind`,
+    // `-title`, `-status`) are preserved verbatim for test stability;
+    // Authority-specific class names (`authority-html-card-*`) are
+    // added alongside via classList.add so the richer structure is
+    // explicit in the DOM. This is a validation candidate, not a
+    // declaration of final strategic direction.
     var card = document.createElement('article');
     card.className = 'cytoscape-poc-html-card';
+    card.classList.add('authority-html-card');
     card.setAttribute('data-node-id', d.id);
     card.setAttribute('data-kind', d.kind || '');
     if (d.isRoot) card.setAttribute('data-root', 'true');
 
+    // Header row — contains the per-kind icon (leading) and the kind
+    // chip. The header isolates kind-identity glyphs from the title so
+    // the title gets the visual prominence the operator scans for.
+    var headerEl = document.createElement('div');
+    headerEl.className = 'authority-html-card-header';
+
+    // Per-kind icon — sourced from the MIDAS Icon Registry via the
+    // existing `_AUTHORITY_KIND_ICON_KEYS` map. Uses `inlineSvg` (not
+    // `cytoscapeDataURI`) so the SVG inherits `currentColor` from CSS
+    // and supports a real `<title>` for screen readers. Degrades
+    // silently when the registry is unavailable or the key is unknown
+    // — the card still renders without an icon. Same safe-fallback
+    // contract as `_iconForKind` on the cy-node styling path.
+    var iconKey = _AUTHORITY_KIND_ICON_KEYS[d.kind || ''];
+    var icons   = window.MIDASExplorerIcons;
+    if (iconKey && icons &&
+        typeof icons.has       === 'function' && icons.has(iconKey) &&
+        typeof icons.inlineSvg === 'function') {
+      var iconEl = document.createElement('span');
+      iconEl.className = 'authority-html-card-icon';
+      iconEl.setAttribute('aria-hidden', 'true');
+      iconEl.innerHTML = icons.inlineSvg(iconKey, {
+        size:   18,
+        title:  _nodeTypeLabel(d.kind || ''),
+      });
+      headerEl.appendChild(iconEl);
+    }
+
     // Kind chip + title. No invented badges. Real data only.
     var kindEl = document.createElement('span');
     kindEl.className = 'cytoscape-poc-html-card-kind';
+    kindEl.classList.add('authority-html-card-kind');
     kindEl.textContent = _nodeTypeLabel(d.kind || '');
 
     var titleEl = document.createElement('div');
     titleEl.className = 'cytoscape-poc-html-card-title';
+    titleEl.classList.add('authority-html-card-title');
     titleEl.textContent = String(d.label || d.id || '');
 
-    card.appendChild(kindEl);
+    headerEl.appendChild(kindEl);
+    card.appendChild(headerEl);
     card.appendChild(titleEl);
 
     // Status row — only emitted if the raw projection actually carries a
     // status field. No placeholder fakery. If the data isn't there, the
     // row is omitted entirely (an honest empty state).
+    // D37f-rich-card extends the existing status surface by adding
+    // `fail_mode_policy.status` and `escalation_target.status` — both
+    // already present in the backend projection when set; no projection
+    // change is required.
     var raw = d.raw || {};
     var status =
       (raw.business_service  && raw.business_service.status) ||
@@ -1216,58 +2368,196 @@
       (raw.authority_profile && raw.authority_profile.status) ||
       (raw.authority_grant   && raw.authority_grant.status) ||
       (raw.agent             && raw.agent.operational_state) ||
+      (raw.fail_mode_policy  && raw.fail_mode_policy.status)  ||
+      (raw.escalation_target && raw.escalation_target.status) ||
       '';
     if (status) {
       var statusEl = document.createElement('div');
       statusEl.className = 'cytoscape-poc-html-card-status';
+      statusEl.classList.add('authority-html-card-status');
       statusEl.textContent = String(status);
       card.appendChild(statusEl);
     }
+
+    // Meta row — emitted only when at least one meta token is sourced
+    // from real projection data. Mirrors the legacy
+    // `cytoscape-html-overlay.js` badge pattern. Honest empty state if
+    // nothing applies — no invented badges.
+    var metaTokens = [];
+    if (raw.authority_grant && raw.authority_grant.agent_id) {
+      metaTokens.push('AGENT BOUND');
+    }
+    if (d.isRoot) {
+      metaTokens.push('ROOT');
+    }
+    if (metaTokens.length > 0) {
+      var metaEl = document.createElement('div');
+      metaEl.className = 'authority-html-card-meta';
+      for (var mi = 0; mi < metaTokens.length; mi++) {
+        var chipEl = document.createElement('span');
+        chipEl.className = 'authority-html-card-meta-chip';
+        chipEl.textContent = metaTokens[mi];
+        metaEl.appendChild(chipEl);
+      }
+      card.appendChild(metaEl);
+    }
+
     return card;
   }
 
+  // _updateHtmlCardOverlay — convenience wrapper retained as a
+  // public-surface symbol for tests / diagnostics. Runs both tiers
+  // (full sync). The continuous-interaction events (pan/zoom vs
+  // position) bind to `_syncLayer` / `_syncCards` independently for
+  // efficiency.
   function _updateHtmlCardOverlay(cy) {
-    if (!cy || !_htmlOverlayEl) return;
-    var keys = Object.keys(_htmlCardsByKey);
-    for (var i = 0; i < keys.length; i++) {
-      var id = keys[i];
-      var card = _htmlCardsByKey[id];
-      if (!card) continue;
-      var n = cy.$id(id);
-      if (!n || !n.length) {
-        // Node no longer in graph (defensive). Hide the card.
-        card.style.display = 'none';
-        continue;
-      }
-      // renderedPosition returns viewport-relative coords (already
-      // post-projection). Translate so the card centre aligns with
-      // the Cytoscape node centre.
-      var p = n.renderedPosition();
-      var w = n.renderedWidth();
-      var h = n.renderedHeight();
-      var tx = Math.round(p.x - w / 2);
-      var ty = Math.round(p.y - h / 2);
-      card.style.transform = 'translate3d(' + tx + 'px, ' + ty + 'px, 0)';
-      card.style.width  = Math.round(w) + 'px';
-      card.style.height = Math.round(h) + 'px';
-      card.style.display = '';
-    }
+    void cy; // cy is read via module-scope `_cy`; param kept for backward signature.
+    _syncLayer();
+    _syncCards();
   }
 
   function _destroyHtmlCardOverlay() {
-    if (_htmlSyncRaf && typeof window.cancelAnimationFrame === 'function') {
-      try { window.cancelAnimationFrame(_htmlSyncRaf); } catch (_) {}
+    // Cancel both per-tier rAFs so a queued callback can't touch a
+    // half-torn overlay.
+    if (typeof window.cancelAnimationFrame === 'function') {
+      if (_syncLayerRaf) { try { window.cancelAnimationFrame(_syncLayerRaf); } catch (_) {} }
+      if (_syncCardsRaf) { try { window.cancelAnimationFrame(_syncCardsRaf); } catch (_) {} }
     }
-    _htmlSyncRaf = 0;
-    if (_cy && _htmlSyncBound) {
-      try { _cy.off('render pan zoom position', _htmlSyncBound); } catch (_) {}
+    _syncLayerRaf = 0;
+    _syncCardsRaf = 0;
+    if (_cy && _syncLayerBound) {
+      try { _cy.off(LAYER_SYNC_EVENTS, _syncLayerBound); } catch (_) {}
     }
-    _htmlSyncBound = null;
+    if (_cy && _syncCardsBound) {
+      try { _cy.off(CARDS_SYNC_EVENTS, _syncCardsBound); } catch (_) {}
+    }
+    _syncLayerBound = null;
+    _syncCardsBound = null;
     if (_htmlOverlayEl && _htmlOverlayEl.parentNode) {
       _htmlOverlayEl.parentNode.removeChild(_htmlOverlayEl);
     }
     _htmlOverlayEl  = null;
     _htmlCardsByKey = {};
+    // D37k-impl-1 — Tear the edge-label overlay down alongside the
+    // cards overlay. Both are owned by the renderer's cy mount;
+    // both must vanish together so re-renders don't strand orphan
+    // DOM.
+    _destroyEdgeLabelOverlay();
+  }
+
+  // ── D37k-impl-1 — HTML edge-label overlay (single shared chip) ────────
+  //
+  // The overlay sits ABOVE the html-card overlay (z-index 7 vs cards'
+  // z-index 5). The chip is a single shared DOM element re-used
+  // across hovers — never per-edge DOM, never iterated. Positioned
+  // in model coordinates by `_syncEdgeLabelPosition` and projected
+  // through the same layer-tier transform as cards (extended into
+  // `_syncLayer`). Hover-only: `_focusEdge` shows it,
+  // `_clearInteractionState` hides it.
+  //
+  // The overlay is installed alongside the cards overlay (see
+  // `_installHtmlCardOverlay` lifecycle integration) and destroyed
+  // together. No new sync events are bound — the existing
+  // `LAYER_SYNC_EVENTS` and `CARDS_SYNC_EVENTS` cover the chip's
+  // pan/zoom and drag-tracking needs respectively.
+
+  function _installEdgeLabelOverlay(cy, mount) {
+    if (!cy || !mount) return;
+    _destroyEdgeLabelOverlay();
+    _edgeLabelOverlayEl = document.createElement('div');
+    _edgeLabelOverlayEl.className = 'cytoscape-poc-edge-label-overlay';
+    _edgeLabelOverlayEl.setAttribute('aria-hidden', 'true');
+    _edgeLabelChipEl = document.createElement('div');
+    _edgeLabelChipEl.className = 'cytoscape-poc-edge-label-chip';
+    _edgeLabelChipEl.setAttribute('hidden', '');
+    _edgeLabelChipEl.setAttribute('role', 'presentation');
+    _edgeLabelOverlayEl.appendChild(_edgeLabelChipEl);
+    mount.appendChild(_edgeLabelOverlayEl);
+  }
+
+  function _destroyEdgeLabelOverlay() {
+    _edgeLabelFocusedEdgeId = '';
+    if (_edgeLabelOverlayEl && _edgeLabelOverlayEl.parentNode) {
+      try { _edgeLabelOverlayEl.parentNode.removeChild(_edgeLabelOverlayEl); }
+      catch (_) { /* swallow */ }
+    }
+    _edgeLabelOverlayEl = null;
+    _edgeLabelChipEl    = null;
+  }
+
+  // _showEdgeLabel populates the chip with the friendly relationship
+  // text for the hovered edge and positions it at the edge midpoint.
+  // No-op when the overlay is not installed or the edge has no
+  // friendly mapping (defensive — `_displayEdgeLabel` falls back to
+  // the underscore-replaced kind, so an empty return is rare).
+  function _showEdgeLabel(edge) {
+    if (!_edgeLabelChipEl || !edge) return;
+    var text = _displayEdgeLabel(edge);
+    if (typeof text !== 'string' || text === '') {
+      _hideEdgeLabel();
+      return;
+    }
+    var id = '';
+    try {
+      id = typeof edge.id === 'function' ? String(edge.id() || '') :
+           (edge.data && typeof edge.data === 'function' ? String(edge.data('id') || '') : '');
+    } catch (_) { id = ''; }
+    if (!id) { _hideEdgeLabel(); return; }
+    _edgeLabelChipEl.textContent = text;
+    _edgeLabelFocusedEdgeId = id;
+    _syncEdgeLabelPosition();
+    _edgeLabelChipEl.removeAttribute('hidden');
+  }
+
+  function _hideEdgeLabel() {
+    _edgeLabelFocusedEdgeId = '';
+    if (!_edgeLabelChipEl) return;
+    _edgeLabelChipEl.setAttribute('hidden', '');
+    _edgeLabelChipEl.textContent = '';
+  }
+
+  // _syncEdgeLabelPosition re-reads the focused edge's midpoint and
+  // writes a model-space transform on the chip. Called by:
+  //   • `_showEdgeLabel` on initial hover;
+  //   • the cards-tier sync (extended at the end of `_syncCards`)
+  //     so node-drag-induced midpoint changes track the chip;
+  //   • implicitly via the layer-tier transform on pan/zoom.
+  // If the focused edge is gone (re-render, exit context view) or
+  // has been hidden (authority-context view filter), the chip
+  // hides — no stale chip pinned to a dead edge.
+  function _syncEdgeLabelPosition() {
+    if (!_cy || !_edgeLabelChipEl || !_edgeLabelFocusedEdgeId) return;
+    var edge;
+    try { edge = _cy.$id(_edgeLabelFocusedEdgeId); } catch (_) { return; }
+    if (!edge || !edge.length) { _hideEdgeLabel(); return; }
+    if (typeof edge.visible === 'function' && !edge.visible()) {
+      _hideEdgeLabel();
+      return;
+    }
+    var mid = null;
+    try {
+      if (typeof edge.midpoint === 'function') {
+        mid = edge.midpoint();
+      }
+      if (!mid || typeof mid.x !== 'number' || typeof mid.y !== 'number') {
+        // Fallback: compute the midpoint from connected node
+        // positions. `edge.midpoint()` is the canonical source but
+        // we don't assume every Cytoscape build exposes it.
+        var src = (typeof edge.source === 'function') ? edge.source() : null;
+        var tgt = (typeof edge.target === 'function') ? edge.target() : null;
+        if (src && tgt && typeof src.position === 'function' && typeof tgt.position === 'function') {
+          var sp = src.position();
+          var tp = tgt.position();
+          if (sp && tp) {
+            mid = { x: (sp.x + tp.x) / 2, y: (sp.y + tp.y) / 2 };
+          }
+        }
+      }
+    } catch (_) { return; }
+    if (!mid) return;
+    var t = 'translate(' + mid.x + 'px,' + mid.y + 'px) translate(-50%, -50%)';
+    _edgeLabelChipEl.style.webkitTransform = t;
+    _edgeLabelChipEl.style.transform       = t;
   }
 
   // ── Cytoscape style array ────────────────────────────────────────────
@@ -1659,6 +2949,59 @@
           'background-opacity': 0.05,
           'border-opacity': 0.35,
           'border-style': 'dashed',
+        },
+      });
+      // D37k-impl-1 — Canvas-label fallback for the default html-card
+      // theme. The primary edge-label surface for D37k is the new
+      // HTML edge-label overlay (see `_installEdgeLabelOverlay`),
+      // which sits ABOVE the html-card overlay and is therefore
+      // visible when an edge passes behind a card. These canvas
+      // rules remain as a fallback so the relationship name is still
+      // readable if the HTML overlay fails to render (script error,
+      // teardown race), and so the cy-on-root-path emphasis chain
+      // continues to read on the canvas as today.
+      //
+      // Mirrors the `authority-thin-card-v1` edge-label styling:
+      // friendly per-kind text via `_displayEdgeLabel`, 12 px,
+      // weight 500, full-contrast `--on-surface` colour, round-
+      // rectangle chip with 5 px padding, soft outline border.
+      base.push({
+        selector: 'edge.cy-focused',
+        style: {
+          'width':                            2.8,
+          'opacity':                          1,
+          'line-color':                       pal.primary,
+          'target-arrow-color':               pal.primary,
+          'label':                            function (ele) { return _displayEdgeLabel(ele); },
+          'font-size':                        '12px',
+          'font-weight':                      '500',
+          'color':                            pal.onSurface,
+          'text-background-color':            pal.surface,
+          'text-background-opacity':          0.95,
+          'text-background-shape':            'round-rectangle',
+          'text-background-corner-radius':    3,
+          'text-background-padding':          '5px',
+          'text-border-color':                pal.outline,
+          'text-border-width':                1,
+          'text-border-opacity':              0.5,
+        },
+      });
+      base.push({
+        selector: 'edge.cy-on-root-path',
+        style: {
+          'width':                            3.2,
+          'opacity':                          1,
+          'line-color':                       pal.primary,
+          'target-arrow-color':               pal.primary,
+          'label':                            function (ele) { return _displayEdgeLabel(ele); },
+          'font-size':                        '12px',
+          'font-weight':                      '500',
+          'color':                            pal.onSurface,
+          'text-background-color':            pal.surface,
+          'text-background-opacity':          0.95,
+          'text-background-shape':            'round-rectangle',
+          'text-background-corner-radius':    3,
+          'text-background-padding':          '5px',
         },
       });
     }
@@ -2392,6 +3735,12 @@
   function _clearInteractionState() {
     if (!_cy) return;
     _cy.elements().removeClass('cy-dim cy-focused cy-neighbor cy-on-root-path');
+    // D37k-impl-1 — Hover-only chip; every interaction-state reset
+    // (mouseout-with-no-selection, background tap, _focusNode taking
+    // over after a node hover) hides the relationship chip. There
+    // is no "pin" gesture in D37k — losing the hover loses the
+    // chip.
+    _hideEdgeLabel();
   }
 
   function _focusNode(node) {
@@ -2411,6 +3760,13 @@
     _cy.elements().not(edge.union(both)).addClass('cy-dim');
     edge.addClass('cy-focused');
     both.addClass('cy-focused');
+    // D37k-impl-1 — Surface the friendly relationship label in the
+    // HTML overlay chip. The canvas-drawn label (from the html-card
+    // theme rule added in this tranche) remains as a fallback in
+    // case the overlay fails to render. `_clearInteractionState`
+    // above already hid any prior chip — `_showEdgeLabel` then
+    // re-shows for the new edge.
+    _showEdgeLabel(edge);
   }
 
   function _emphasiseRootPath(node) {
@@ -2470,29 +3826,19 @@
       node.select();
       _focusNode(node);
       _emphasiseRootPath(node);
-      _renderInspector(node);
-      // D33a-impl-1 — Auto-expand the inspector on node selection so
-      // the operator sees the metadata they just asked for. Padding
-      // refit happens inside _setInspectorExpanded.
-      if (!_inspectorExpanded) _setInspectorExpanded(true);
-      // D33a-spike-2g-impl-5-precheck — Validate the selection
-      // routing into the MIDAS right-side inspector. The renderer
-      // hooks `selectNode(id)` shim wraps the inline
-      // `selectGovernanceMapNode(id)`, which lens-dispatches into
-      // `authorityInspector.selectNode(nodeId)` when the active lens
-      // is 'authority'. The PoC's mapped node id (kind+':'+id)
-      // already matches production's `_refKey({kind,id})` format, so
-      // the same identifier flows through unchanged.
+      // D33x-list-mode — Floating PoC inspector card retired. The
+      // production right drawer (`#gmap-details`) is the canonical
+      // selected-node surface, fed via the carrier DOM contract
+      // (`_renderInspectorCarriers` paints hidden `.gmap-node`
+      // elements under `#gmap-canvas` with `data-node-details`
+      // JSON) plus the renderer hook below.
       //
-      // Note (impl-5 next tranche): `authorityInspector.selectNode`
-      // currently bails early when it cannot find a
-      // `.gmap-node[data-node-id=…]` element under `#gmap-canvas` —
-      // the PoC does not paint that DOM. This call therefore sets
-      // `state.selectedId` + `gmapSelectedId` correctly, but the
-      // right-side inspector rail formatter does not yet run. The
-      // PoC inspector remains the visible source of truth until the
-      // next tranche either teaches `selectNode` to accept an
-      // in-memory payload or has the PoC emit carrier DOM elements.
+      // The PoC's mapped node id (`kind+':'+id`) matches the
+      // production `_refKey({kind,id})` format unchanged. The
+      // renderer hook lens-dispatches into
+      // `authorityInspector.selectNode(nodeId)`, which then reads
+      // the carrier's `data-node-details` and pushes fields through
+      // the lens-agnostic inspector frame into the right drawer.
       try {
         var hooks = window.MIDASExplorerGraph && window.MIDASExplorerGraph._rendererHooks;
         var nodeId = node.data('id');
@@ -2507,18 +3853,57 @@
         // Background tap
         _cy.elements().unselect();
         _clearInteractionState();
-        _renderInspectorEmpty(_inspectorEl);
-        // D33a-impl-1 — Auto-collapse the inspector when selection
-        // clears so the canvas isn't permanently encroached.
-        if (_inspectorExpanded) _setInspectorExpanded(false);
+        // D33x-list-mode — Floating PoC inspector card retired.
+        // Background tap no longer needs to clear the card; the
+        // right drawer's own empty/cleared state is driven by the
+        // production selection-routing path.
       }
     });
+
+    // D37h — Double-click a node = camera-focus on that node.
+    // Cytoscape `dbltap` is a normalised double-tap event (two
+    // subsequent `click`s or two subsequent `touchstart`s); the
+    // existing single-tap select handler above continues to fire
+    // first, so dbltap arrives after the node is already selected.
+    //
+    // This is a CAMERA operation only — it does not change the
+    // graph contents, filter the projection, or re-query the
+    // backend. HTML cards stay pointer-passive; the event target
+    // is the underlying Cytoscape node, which is what dbltap
+    // delivers.
+    _cy.on('dbltap', 'node', function (evt) {
+      var node = evt && evt.target;
+      if (!node) return;
+      _zoomToNode(_cy, node);
+    });
+
+    // D37j — Auto-exit authority-context view when the operator
+    // selects a different node. Bound to `select` only (not
+    // `unselect`): an empty selection is a valid state inside
+    // context view (the operator may de-select to read the context
+    // without exiting). Re-selecting the focal node is a no-op.
+    _cy.on('select', 'node', function () {
+      _checkAutoExitContext();
+    });
+
+    // D37h — Bind external viewport-change and selection-change
+    // handlers to this fresh cy instance. Subscribers attach via
+    // `cytoscapePoc.onViewportChanged` / `onSelectionChanged`; the
+    // registries survive cy teardown so re-mounts re-attach the
+    // same subscribers (without the subscriber having to know).
+    _attachExternalHandlersToCy(_cy);
   }
 
   // ── Render lifecycle ─────────────────────────────────────────────────
 
   function _renderPayload(payload) {
     var mount = _ensureMount();
+    // D35f — `_ensureMount` returns null when the GraphViewport
+    // host is unavailable (the legacy fallback that previously
+    // inserted into `.governance-map-canvas-scroll` was retired).
+    // Fail safely: skip the render rather than building a parallel
+    // mount surface.
+    if (!mount) return;
     var Cytoscape = window.cytoscape;
     if (typeof Cytoscape !== 'function') {
       _renderUnavailable(mount, 'Cytoscape library not loaded.');
@@ -2614,13 +3999,32 @@
 
     _wireInteractions();
 
-    // D33a-spike-2 — When the html-card theme is active, install the
-    // DOM overlay. The overlay is purely presentational; pointer
-    // events fall through to Cytoscape so drag/hover/select work
-    // unimpeded. _destroyHtmlCardOverlay is wired into _destroyCy and
-    // _uninstallPoc so service refresh / lens unmount leave no DOM.
-    if (_activeTheme === 'html-card') {
-      _installHtmlCardOverlay(_cy, mount, elements, _activeTheme);
+    // D33a-spike-2 + D37f — Install the Authority HTML-card overlay
+    // unconditionally. Pre-D37f this was gated on
+    // `_activeTheme === 'html-card'`; D37f retired the gate so HTML
+    // cards are the production Authority visual regardless of the
+    // underlying cy theme. The overlay is purely presentational
+    // (pointer-events:none); Cytoscape continues to own drag, hover,
+    // select, pan, and zoom. _destroyHtmlCardOverlay is wired into
+    // _destroyCy and _uninstallPoc so service refresh / lens unmount
+    // leave no DOM.
+    _installHtmlCardOverlay(_cy, mount, elements);
+    // D37k-impl-1 — Install the edge-label overlay AFTER the cards
+    // overlay so DOM order matches z-index intent (chip layer sits
+    // above the cards layer). The overlay is owned by the same
+    // mount and torn down by `_destroyHtmlCardOverlay` →
+    // `_destroyEdgeLabelOverlay` (see lifecycle integration).
+    _installEdgeLabelOverlay(_cy, mount);
+    // D34a-cytoscape-html-overlay-spike — When the new spike gate
+    // `?htmlCards=1` is set alongside `?cytoscape=1`, install the
+    // MIDAS-rich HTML overlay. Distinct from the `?cyTheme=html-card`
+    // theme above (which renders thin cards). The spike's overlay
+    // is self-gated via `cytoscapeHtmlOverlay.isActive()` so the
+    // call is a no-op when the flag is absent. Teardown is hooked
+    // into `_destroyCy` below.
+    var _htmlOverlay = window.MIDASExplorerGraph && window.MIDASExplorerGraph.cytoscapeHtmlOverlay;
+    if (_htmlOverlay && typeof _htmlOverlay.install === 'function') {
+      _htmlOverlay.install(_cy, { mount: mount, elements: elements });
     }
 
     // Post-init resize/fit guard. Cytoscape captures container
@@ -2636,11 +4040,24 @@
     // catches the case where a parent grid track sizes only after
     // an additional pass. The setTimeout fallback covers slow
     // browsers / heavy DOM where two frames isn't enough.
+    //
+    // D33x-fit-zoom-root — _settleFit delegates to the asymmetric
+    // `_fitToAvailableCanvas` helper. The original symmetric
+    // `_cy.fit(undefined, _safeAreaPadding())` budget was uniform on
+    // all four sides, which forced the largest overlay's width
+    // (e.g. expanded legend = 260 + buffer = 276 px) onto every
+    // side, leaving the graph with only ~half the viewport. The new
+    // helper uses per-side insets (legend on left only, inspector +
+    // production drawer on right only, camera cluster bottom-right
+    // only) via `cy.viewport({zoom, pan})`, so labels are
+    // materially larger and the graph uses the full vertical
+    // height. `_safeAreaPadding` remains exported so tests +
+    // headless paths that still want a uniform value can reach it.
     function _settleFit() {
       if (!_cy) return;
       try {
         _cy.resize();
-        _cy.fit(undefined, _safeAreaPadding());
+        _fitToAvailableCanvas(_cy);
       } catch (_) { /* swallow */ }
     }
     if (typeof window.requestAnimationFrame === 'function') {
@@ -2651,17 +4068,57 @@
     }
     setTimeout(_settleFit, 120);
 
+    // D37b — Diagnostics-panel / Surface-posture-panel / Workbench bridge.
+    //
+    // Pre-D37b the production Authority view (authority-graph-view.js)
+    // called `authorityDiagnosticsPanel.render(payload)`,
+    // `authoritySurfacePosturePanel.render(payload)`, and
+    // `authorityWorkbench.render()` after every successful paint. The
+    // Cytoscape PoC's `_pocRefresh` routed around the native view, so
+    // those panels never re-rendered when Cytoscape was active.
+    //
+    // The cached `_lastAuthorityProjection` set above lets the
+    // workbench module (which reads from the cache) work, but the
+    // diagnostics + posture panels need to be called explicitly with
+    // the payload. Each call is wrapped defensively so a module
+    // absence (test isolation, early boot, future refactor) cannot
+    // break the Cytoscape render path.
+    //
+    // The integration is intentionally narrow: it preserves the
+    // EXISTING panel modules without duplicating their logic.
+    try {
+      var diagPanel = window.MIDASExplorerGraph && window.MIDASExplorerGraph.authorityDiagnosticsPanel;
+      if (diagPanel && typeof diagPanel.render === 'function') diagPanel.render(payload);
+    } catch (_) { /* swallow */ }
+    try {
+      var posturePanel = window.MIDASExplorerGraph && window.MIDASExplorerGraph.authoritySurfacePosturePanel;
+      if (posturePanel && typeof posturePanel.render === 'function') posturePanel.render(payload);
+    } catch (_) { /* swallow */ }
+    try {
+      var workbenchMod = window.MIDASExplorerGraph && window.MIDASExplorerGraph.authorityWorkbench;
+      if (workbenchMod && typeof workbenchMod.render === 'function') workbenchMod.render();
+    } catch (_) { /* swallow */ }
+
     // D33a-impl-1 — No longer hijack #gmap-status. The PoC indicator
     // moved into the legend chip; the production status pill stays
     // available for the existing Authority workbench.
   }
 
   function _renderUnavailable(mount, message) {
+    // D37d-authority-cytoscape-mount-visibility-fix — Defensive null
+    // guard. `_ensureMount()` returns `null` when the GraphViewport
+    // host is unavailable (documented at L1452-1463); the pre-D37d
+    // code path then called `mount.appendChild(...)` and threw a
+    // `TypeError`, silently killing the render path. This guard makes
+    // the function a safe no-op in that case so the render path
+    // surfaces a clean "no mount" diagnostic upstream instead of an
+    // uncaught exception. See D37c assessment §10 Candidate #2.
+    if (!mount) return;
     _destroyCy();
-    // Re-mount the legend + inspector elements that _destroyCy removed
-    // if Cytoscape had been initialised previously.
-    if (_legendEl && !_legendEl.isConnected) mount.appendChild(_legendEl);
-    if (_inspectorEl && !_inspectorEl.isConnected) mount.appendChild(_inspectorEl);
+    // D33x-list-mode    — Floating PoC inspector aside retired.
+    // D33x-left-poc-panel — Floating legend aside retired. The
+    //                     unavailable overlay now lands on a bare
+    //                     mount with no PoC chrome to re-attach.
     // Remove any prior unavailable overlay before appending — repeated
     // refreshes must not accumulate divs.
     _clearOverlays(mount);
@@ -2671,41 +4128,30 @@
     mount.appendChild(overlay);
   }
 
-  // ── Lens dispatch override ───────────────────────────────────────────
+  // ── Lens dispatch override (RETIRED in D37p-clean-1) ─────────────────
   //
-  // The renderer's register() overwrites prior registrations. Because
-  // index.html loads this PoC AFTER authority-graph-view.js, we win
-  // dispatch for the 'authority' lens whenever ?cytoscape=1 is active.
-  // Removing this script from index.html restores the original.
-
-  var lensImpl = {
-    render: function (payload, mount) {
-      void mount;
-      _renderPayload(payload);
-    },
-    // D33a-impl-1 — `clear` now does a full PoC teardown rather than
-    // just dropping the Cytoscape instance. Removes overlays, the
-    // mount itself, and the body class so production Authority view
-    // can resume cleanly if the PoC is unmounted.
-    clear: function (mount) {
-      void mount;
-      _uninstallPoc();
-    },
-  };
-
-  function _registerWhenReady() {
-    var rendered = window.MIDASExplorerGraph && window.MIDASExplorerGraph.renderer;
-    if (rendered && typeof rendered.register === 'function') {
-      rendered.register('authority', lensImpl);
-      return true;
-    }
-    return false;
-  }
-
-  if (!_registerWhenReady()) {
-    // Renderer not yet attached — defer until DOMContentLoaded.
-    document.addEventListener('DOMContentLoaded', function () { _registerWhenReady(); });
-  }
+  // The pre-D37p-clean-1 module wired a `lensImpl` and a deferred
+  // `_registerWhenReady` IIFE against the dead
+  // `MIDASExplorerGraph.renderer.register('authority', …)` dispatcher.
+  // Diagnostic finding (recorded just below): the dispatcher had zero
+  // call-sites at runtime, so neither the lensImpl's `render` nor its
+  // `clear` ever fired. Both are removed here. The live Authority
+  // dispatch flows are unchanged:
+  //
+  //   • GraphViewport registration — `viewport.register('authority',
+  //     _authorityRendererFactory)` (D35g, see the bottom of this
+  //     file) remains the host-level activation seam.
+  //   • Live refresh — `authorityView.refresh` is patched below to
+  //     route through `_pocRefresh`, which is the production
+  //     Authority data path.
+  //   • Public surface — `cytoscapePoc.{getCy, fit, zoomBy, …}` and
+  //     the bus / bridge / pane delegates that depend on it all
+  //     remain.
+  //
+  // `_uninstallPoc` is preserved (still exported as `_uninstall` for
+  // tests and manual diagnostics, and called by `_uninstallPoc`'s
+  // own routing through the GraphViewport host's deactivate path
+  // — see L1976-2030).
 
   // ── authorityView.refresh override (PoC hotfix) ──────────────────────
   //
@@ -2785,11 +4231,71 @@
   window.MIDASExplorerGraph.cytoscapePoc = {
     isActive:                 _isPocActive,
     mapProjectionToElements:  mapProjectionToElements,
-    _lensImpl:                lensImpl,
     _destroy:                 _destroyCy,
     // D33a-impl-1 — full teardown for tests and manual diagnostics.
     _uninstall:               _uninstallPoc,
     _safeAreaPadding:         _safeAreaPadding,
+    // D33x-fit-zoom-root — public surface used by the toolbar
+    // bridge (`authority-cytoscape-toolbar.js`) to drive +/-, fit,
+    // and centre-on-root from the existing MIDAS camera cluster.
+    // `getCy()` returns null when no PoC graph is mounted; every
+    // helper is a no-op on null inputs, so the toolbar bridge can
+    // call them unconditionally.
+    getCy:                    function () { return _cy; },
+    fit:                      function (opts) { _fitToAvailableCanvas(_cy, opts); },
+    zoomBy:                   function (factor) { _zoomBy(_cy, factor); },
+    centerOnRoot:             function () { _centerOnRoot(_cy); },
+    findRootNode:             function () { return _findRootNode(_cy); },
+    _fitToAvailableCanvas:    _fitToAvailableCanvas,
+    _zoomBy:                  _zoomBy,
+    _centerOnRoot:            _centerOnRoot,
+    _findRootNode:            _findRootNode,
+    ZOOM_STEP_FACTOR:         ZOOM_STEP_FACTOR,
+    // D37h — Camera/navigation surface for the toolbar bridge.
+    // Every helper is camera-only; none mutate the graph contents,
+    // filter the projection, or re-query the backend.
+    isReady:                  function () { return !!_cy; },
+    zoomToSelected:           function () { _zoomToSelected(_cy); },
+    zoomToNode:               function (nodeId) {
+      if (!_cy || !nodeId || typeof _cy.$id !== 'function') return;
+      var node;
+      try { node = _cy.$id(String(nodeId)); } catch (_) { return; }
+      if (!node || (typeof node.length === 'number' && node.length === 0)) return;
+      _zoomToNode(_cy, node);
+    },
+    resetView:                function () { _resetView(_cy); },
+    getZoomPercent:           function () { return _getZoomPercent(_cy); },
+    onViewportChanged:        _onViewportChanged,
+    onSelectionChanged:       _onSelectionChanged,
+    _zoomToSelected:          _zoomToSelected,
+    _zoomToNode:              _zoomToNode,
+    _resetView:               _resetView,
+    _getZoomPercent:          _getZoomPercent,
+    // D37j — Client-side authority-context view (projection-style
+    // filter; not camera). Operator clicks `View authority context`
+    // in the toolbar; the renderer hides every cy element outside
+    // the directed-traversal authority context of the focal node
+    // (predecessors ∪ successors ∪ self + BS-default policy edges).
+    // No backend fetch; no re-rooting; no element removal.
+    viewAuthorityContext:        function () { return _viewAuthorityContext(); },
+    exitAuthorityContext:        function () { return _exitAuthorityContext(); },
+    toggleAuthorityContext:      function () { return _toggleAuthorityContext(); },
+    isAuthorityContextActive:    function () { return _isAuthorityContextActive(); },
+    canViewAuthorityContext:     function () { return _canViewAuthorityContext(); },
+    onAuthorityContextChanged:   _onAuthorityContextChanged,
+    _AUTHORITY_CONTEXT_ELIGIBLE_KINDS: _AUTHORITY_CONTEXT_ELIGIBLE_KINDS,
+    _computeAuthorityContext:    _computeAuthorityContext,
+    // D33x-list-mode — Cytoscape-backed list mode public surface.
+    // Consumed by the lens-aware branch in `index.html`'s
+    // `setWorkbenchMode('form')` handler when the active lens is
+    // `authority` and `body.cytoscape-poc-active` is set.
+    setViewMode:              setViewMode,
+    getViewMode:              getViewMode,
+    applyListLayout:          applyListLayout,
+    applyGraphLayout:         applyGraphLayout,
+    _computeListPositions:    _computeListPositions,
+    LIST_GROUP_ORDER:         LIST_GROUP_ORDER.slice(),
+    LIST_MAX_COLUMNS:         LIST_MAX_COLUMNS,
     // D33a-spike-1 — theme exploration surface.
     themes:                   _THEMES.slice(),
     activeTheme:               _activeTheme,
@@ -2824,5 +4330,266 @@
     _installHtmlCardOverlay:   _installHtmlCardOverlay,
     _updateHtmlCardOverlay:    _updateHtmlCardOverlay,
     _destroyHtmlCardOverlay:   _destroyHtmlCardOverlay,
+    // D37k-impl-1 — Edge-label overlay diagnostic surface.
+    _installEdgeLabelOverlay:  _installEdgeLabelOverlay,
+    _destroyEdgeLabelOverlay:  _destroyEdgeLabelOverlay,
+    _showEdgeLabel:            _showEdgeLabel,
+    _hideEdgeLabel:            _hideEdgeLabel,
+    _syncEdgeLabelPosition:    _syncEdgeLabelPosition,
+    // D35d-port-authority-cytoscape-to-graphviewport (D37b promoted) —
+    // Renderer factory + internal teardown helper exposed for tests
+    // and host-driven activation paths. As of D37b the factory is
+    // registered with the GraphViewport host under the PRODUCTION
+    // renderer id `'authority'` at module init, and `_ensureMount`
+    // activates by id via `viewport.activateById('authority')` rather
+    // than passing the factory inline.
+    _rendererFactory:          _authorityRendererFactory,
+    _teardownPocResources:     _teardownPocResources,
   };
+
+  // D35g-graphviewport-renderer-registry (D37b promoted) — register
+  // the Authority renderer factory with the GraphViewport host so
+  // normal Authority lens activation can reach Cytoscape via
+  // `viewport.activateById('authority')`, and so external callers
+  // (toolbar, lens orchestration, tests) can discover the renderer
+  // via `viewport.listRegistered()`/`hasRenderer('authority')`.
+  // Wrapped defensively because module load must never break the
+  // page if the host script failed to load or exposes an unexpected
+  // shape.
+  (function _registerWithGraphViewport() {
+    try {
+      var vp = window.MIDASExplorerGraph && window.MIDASExplorerGraph.viewport;
+      if (vp && typeof vp.register === 'function') {
+        vp.register('authority', _authorityRendererFactory);
+      }
+    } catch (_) { /* swallow — must not break page load */ }
+  })();
+
+  // D37p-impl-4 — Authority camera bus delegate registration.
+  //
+  // Wraps the existing public camera methods on the cytoscapePoc
+  // surface (`zoomBy`, `fit`, `centerOnRoot`, `zoomToSelected`,
+  // `resetView`, `getZoomPercent`) in the locked bus command
+  // vocabulary. The shared graphCameraToolbarAdapter dispatches
+  // through graphCameraBus, which routes Authority commands here
+  // when the active renderer is `'authority'`. This retires the
+  // per-lens capture-phase camera intercept in
+  // authority-cytoscape-toolbar.js for the six camera-cluster
+  // buttons; non-camera Authority controls (focus-toggle,
+  // authority-context view) continue to use that file.
+  //
+  // Defensive: registration is wrapped in try/catch so a missing or
+  // malformed bus must not break the Authority module's own load.
+  (function _registerAuthorityCameraBusDelegate() {
+    try {
+      var g   = window.MIDASExplorerGraph;
+      var bus = g && g.graphCameraBus;
+      var poc = g && g.cytoscapePoc;
+      if (!bus || typeof bus.registerLens !== 'function') return;
+      if (!poc) return;
+      var step = (typeof poc.ZOOM_STEP_FACTOR === 'number' && poc.ZOOM_STEP_FACTOR > 0)
+        ? poc.ZOOM_STEP_FACTOR
+        : 1.2;
+      bus.registerLens('authority', {
+        zoomIn:        function () { if (typeof poc.zoomBy === 'function') poc.zoomBy(step); },
+        zoomOut:       function () { if (typeof poc.zoomBy === 'function') poc.zoomBy(1 / step); },
+        fit:           function () { if (typeof poc.fit === 'function') poc.fit(); },
+        reset:         function () { if (typeof poc.resetView === 'function') poc.resetView(); },
+        focusRoot:     function () { if (typeof poc.centerOnRoot === 'function') poc.centerOnRoot(); },
+        focusSelected: function () { if (typeof poc.zoomToSelected === 'function') poc.zoomToSelected(); },
+        // D37q-viewport-4-impl — canonical camera-bus `getZoom()` unit
+        // is RATIO (1.0 = 100%). The Authority engine's display helper
+        // `cytoscapePoc.getZoomPercent()` still returns an integer
+        // percent for the toolbar zoom-percent badge; the bus delegate
+        // converts to ratio so cross-lens consumers see consistent
+        // units across `native-context`, `context`, and `authority`.
+        getZoom: function () {
+          if (typeof poc.getZoomPercent !== 'function') return null;
+          var pct;
+          try { pct = poc.getZoomPercent(); }
+          catch (_) { return null; }
+          if (typeof pct !== 'number' || !isFinite(pct) || pct <= 0) return null;
+          return pct / 100;
+        },
+      });
+    } catch (_) { /* swallow — must not break page load */ }
+  })();
+
+  // D37p-authority-1-impl — Authority Selection Bridge Delegate.
+  //
+  // Publishes Cytoscape selection state into the shared
+  // `graphSelectionBridge` so cross-lens consumers can observe
+  // Authority selection through the locked event vocabulary
+  // (`selection_changed` / `selection_cleared`). Authority's
+  // existing local subscribers (canvas-edge tabs, toolbar zoom-
+  // selected button enablement, authority-context eligibility)
+  // stay authoritative for engine-coupled behaviour; the bridge
+  // push is purely additive.
+  //
+  // Delegate methods registered with the bridge are READ / ACTION
+  // only (`getCurrentCard`, `getCurrentNodeRef`, `handleAction`).
+  // There is no `delegate.selectCard` — the recursion-discipline
+  // contract at graph-selection-bridge.js requires that external
+  // `bridge.selectCard(payload)` callers cannot drive a Cytoscape
+  // selection event through the Authority delegate. The one-way
+  // flow this tranche establishes is:
+  //
+  //   Cytoscape select/unselect event
+  //     → existing Authority subscribers (unchanged)
+  //     → graphSelectionBridge.selectCard / clearSelection
+  //     → platform subscribers (pane shell, future consumers)
+  //
+  // Defensive: every reach into the bridge / `_cy` is wrapped so a
+  // missing or malformed peer cannot break module load. The push
+  // helper is registered through the existing `_onSelectionChanged`
+  // registry so it survives cy teardown / re-mount without manual
+  // re-binding — `_attachExternalHandlersToCy` already does that
+  // job for every entry in the registry.
+  (function _registerAuthoritySelectionBridgeDelegate() {
+    function _bridge() {
+      var g = window.MIDASExplorerGraph;
+      return (g && g.graphSelectionBridge) || null;
+    }
+
+    function _selectedCyNode() {
+      if (!_cy || typeof _cy.elements !== 'function') return null;
+      var sel;
+      try { sel = _cy.elements(':selected'); } catch (_) { return null; }
+      if (!sel || typeof sel.length !== 'number' || sel.length !== 1) return null;
+      var n = sel[0];
+      if (!n || typeof n.data !== 'function') return null;
+      return n;
+    }
+
+    function _readCarrierDetails(kind, id) {
+      try {
+        if (typeof document === 'undefined' || !document.querySelector) return null;
+        var key = String(kind) + ':' + String(id);
+        var el = document.querySelector('[data-node-id="' + key + '"][data-node-details]');
+        if (!el) return null;
+        var raw = el.getAttribute('data-node-details');
+        if (!raw) return null;
+        return JSON.parse(raw);
+      } catch (_) { return null; }
+    }
+
+    function _materialiseAuthoritySelection(node) {
+      if (!node || typeof node.data !== 'function') return null;
+      var id    = '';
+      var kind  = '';
+      var label = '';
+      var name  = '';
+      try {
+        id    = String(node.data('id')    || '');
+        kind  = String(node.data('kind')  || '');
+        label = String(node.data('label') || '');
+        name  = String(node.data('name')  || '');
+      } catch (_) { /* swallow */ }
+      if (!id) return null;
+      var sourceNodeRef = { kind: kind, id: id };
+      var card = {
+        id:            id,
+        kind:          kind,
+        label:         label,
+        name:          name || label,
+        sourceNodeRef: sourceNodeRef,
+      };
+      var details = _readCarrierDetails(kind, id);
+      if (details && typeof details === 'object') {
+        card.details = details;
+      }
+      return { id: id, kind: kind, sourceNodeRef: sourceNodeRef, card: card };
+    }
+
+    function getCurrentCard() {
+      var sel = _materialiseAuthoritySelection(_selectedCyNode());
+      return sel ? sel.card : null;
+    }
+
+    function getCurrentNodeRef() {
+      var sel = _materialiseAuthoritySelection(_selectedCyNode());
+      return sel ? sel.sourceNodeRef : null;
+    }
+
+    // handleAction is intentionally narrow in this tranche. Returns
+    // null for unsupported actions; never throws. Future tranches
+    // may route Authority-specific actions (open-record, reframe,
+    // open-workbench-tab) through this hook — out of scope here.
+    function handleAction(action) {
+      if (!action || typeof action !== 'object') return null;
+      void action;
+      return null;
+    }
+
+    function _maybeAssertActiveLens(bridge) {
+      if (!bridge || typeof bridge.setActiveLens !== 'function') return;
+      try {
+        var g = window.MIDASExplorerGraph;
+        var vp = g && g.viewport;
+        if (vp && typeof vp.getActiveRendererId === 'function') {
+          var activeId = vp.getActiveRendererId();
+          if (activeId === 'authority') bridge.setActiveLens('authority');
+        }
+      } catch (_) { /* swallow */ }
+    }
+
+    function _publishAuthoritySelectionToSharedBridge() {
+      var bridge = _bridge();
+      if (!bridge) return;
+      _maybeAssertActiveLens(bridge);
+      var node = _selectedCyNode();
+      if (!node) {
+        try { bridge.clearSelection(); } catch (_) { /* swallow */ }
+        return;
+      }
+      var sel = _materialiseAuthoritySelection(node);
+      if (!sel) {
+        try { bridge.clearSelection(); } catch (_) { /* swallow */ }
+        return;
+      }
+      try {
+        bridge.selectCard({
+          lens:          'authority',
+          id:            sel.id,
+          kind:          sel.kind,
+          sourceNodeRef: sel.sourceNodeRef,
+          card:          sel.card,
+          meta: {
+            source:     'authority-cytoscape',
+            selectedAt: Date.now(),
+          },
+        });
+      } catch (_) { /* swallow */ }
+    }
+
+    function _registerDelegate() {
+      var bridge = _bridge();
+      if (!bridge || typeof bridge.registerLens !== 'function') return false;
+      try {
+        bridge.registerLens('authority', {
+          getCurrentCard:    getCurrentCard,
+          getCurrentNodeRef: getCurrentNodeRef,
+          handleAction:      handleAction,
+        });
+        _maybeAssertActiveLens(bridge);
+        return true;
+      } catch (_) { return false; }
+    }
+
+    // Register the delegate at module init. Idempotent — the
+    // bridge's REPLACE policy makes a duplicate call safe.
+    _registerDelegate();
+
+    // Hook the publish helper into the existing selection-change
+    // registry. `_onSelectionChanged` records the handler in
+    // `_selectionChangeHandlers`; `_attachExternalHandlersToCy`
+    // attaches every registered handler to the live `_cy` on each
+    // fresh mount, so a single registration here survives every
+    // cy teardown / re-mount without re-binding.
+    try {
+      if (typeof _onSelectionChanged === 'function') {
+        _onSelectionChanged(_publishAuthoritySelectionToSharedBridge);
+      }
+    } catch (_) { /* swallow */ }
+  })();
 })();

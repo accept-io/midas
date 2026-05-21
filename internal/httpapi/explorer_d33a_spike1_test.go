@@ -27,20 +27,20 @@ func TestExplorer_D33aSpike1_CytoscapeThemeQuerySupportsClassic(t *testing.T) {
 		// D33a-spike-2 — Theme list expanded with four richer themes
 		// (object-card-v2, glass-card, holo-card, html-card). The three
 		// spike-1 themes remain at the head of the list so existing URLs
-		// and contract pins continue to work. Intent of this pin (classic
-		// is in the array and is the default) is preserved.
-		// D33a-spike-2d — `object-tile-v3` appended to the array. Intent
-		// of the pin (classic is in the array and is the default) is
-		// preserved by the additive change.
-		// D33a-spike-2g-impl-4 — `authority-thin-card-v1` appended. The
-		// intent (classic is in the array and is the default) is again
-		// preserved by the additive change.
+		// and contract pins continue to work.
+		// D33a-spike-2d — `object-tile-v3` appended to the array.
+		// D33a-spike-2g-impl-4 — `authority-thin-card-v1` appended.
+		// D37f — DEFAULT_THEME promoted from `'classic'` to `'html-card'`
+		// so the Cytoscape node footprint (240x96) matches the HTML-card
+		// overlay footprint (the HTML overlay is the production Authority
+		// visual as of D37f). `'classic'` remains in `_THEMES` and the
+		// `case 'classic':` branch is intact; only the default changed.
 		"var _THEMES        = ['classic', 'midas-card', 'object-card', 'object-card-v2', 'glass-card', 'holo-card', 'html-card', 'object-tile-v3', 'authority-thin-card-v1'];",
-		"var DEFAULT_THEME  = 'classic';",
+		"var DEFAULT_THEME  = 'html-card';",
 		"case 'classic':",
 	} {
 		if !strings.Contains(js, want) {
-			t.Errorf("D33a-spike-1: classic theme must be the documented default — missing %q", want)
+			t.Errorf("D33a-spike-1/D37f: theme contract regressed — missing %q", want)
 		}
 	}
 }
@@ -145,36 +145,37 @@ func TestExplorer_D33aSpike1_CytoscapeBuildStyleArrayIsThemeAware(t *testing.T) 
 // ── Production preservation ─────────────────────────────────────────
 
 // TestExplorer_D33aSpike1_CytoscapeThemeDoesNotAffectProductionPath
-// re-pins the existing PoC activation gate: the module exits before
-// any theme code runs when ?cytoscape=1 is absent. Theme resolution
-// itself is also gated behind the same return — _activeTheme is only
-// computed after the gate passes.
+// pinned, pre-D37b, that the Cytoscape theme system was strictly
+// gated behind `?cytoscape=1`. D37b RETIRED that gate because the
+// Cytoscape HTML-card renderer is now the production Authority
+// renderer. The theme system still exists (themes are how the
+// production renderer paints rich cards), and the LEGACY native
+// view (`authority-graph-view.js`) remains free of Cytoscape /
+// `cyTheme` references because Cytoscape lives entirely in the
+// Authority renderer module.
 func TestExplorer_D33aSpike1_CytoscapeThemeDoesNotAffectProductionPath(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
 	js := getExplorerAsset(t, srv, "/explorer/assets/js/graph/authority/authority-cytoscape-poc.js")
 
-	// The order matters: _isPocActive gate runs BEFORE _resolveTheme
-	// and _activeTheme. If the gate fails, the module returns and
-	// nothing about themes affects the page.
-	gateIdx  := strings.Index(js, "if (!_isPocActive()) {")
-	themeIdx := strings.Index(js, "var _activeTheme = _resolveTheme();")
-	if gateIdx < 0 {
-		t.Fatal("D33a-spike-1: _isPocActive gate missing")
+	// D37b — theme system still defined (themes drive the rich-card
+	// rendering of the production Authority renderer).
+	if !strings.Contains(js, "var _activeTheme = _resolveTheme();") {
+		t.Error("D37b: _activeTheme initialisation must remain (theme system drives production renderer)")
 	}
-	if themeIdx < 0 {
-		t.Fatal("D33a-spike-1: _activeTheme initialisation missing")
+	if !strings.Contains(js, "var _THEMES") {
+		t.Error("D37b: _THEMES array must remain (theme system intact)")
 	}
-	if gateIdx >= themeIdx {
-		t.Errorf("D33a-spike-1: activation gate (offset %d) must precede theme resolution (offset %d) so themes never run on the production path", gateIdx, themeIdx)
-	}
-	// Production Authority view + adapter + layout untouched.
+
+	// The legacy native Authority view + adapter + layout remain
+	// Cytoscape-free; Cytoscape lives entirely inside
+	// authority-cytoscape-poc.js.
 	viewJS := getExplorerAsset(t, srv, "/explorer/assets/js/graph/authority/authority-graph-view.js")
 	if strings.Contains(viewJS, "cyTheme") {
-		t.Error("D33a-spike-1: production Authority view must not reference cyTheme")
+		t.Error("D33a-spike-1: legacy native Authority view must not reference cyTheme")
 	}
 	if strings.Contains(viewJS, "cytoscape") {
-		t.Error("D33a-spike-1: production Authority view must not reference cytoscape")
+		t.Error("D33a-spike-1: legacy native Authority view must not reference cytoscape")
 	}
 }
 
@@ -328,21 +329,37 @@ func TestExplorer_D33aSpike1_CytoscapeThemeSurfaceExposed(t *testing.T) {
 	}
 }
 
-// TestExplorer_D33aSpike1_CytoscapeLegendShowsActiveTheme pins that
-// the legend chip surfaces the active theme name unobtrusively.
+// TestExplorer_D33aSpike1_CytoscapeLegendShowsActiveTheme — superseded
+// by D33x-left-poc-panel.
+//
+// The floating "Authority Graph" left PoC panel that hosted the theme-
+// name badge has been retired. The `cytoscape-poc-theme-chip` markup
+// + CSS rule were removed with it. The active-theme selection is
+// still wired through `_activeTheme` and the `?cyTheme=` query-param;
+// only the visible badge is gone. The test now asserts the inverse
+// contract: legend-chip markup and CSS must remain RETIRED.
 func TestExplorer_D33aSpike1_CytoscapeLegendShowsActiveTheme(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
 	js  := getExplorerAsset(t, srv, "/explorer/assets/js/graph/authority/authority-cytoscape-poc.js")
 	css := getExplorerAsset(t, srv, "/explorer/assets/css/authority-cytoscape-poc.css")
 
-	if !strings.Contains(js, "cytoscape-poc-theme-chip") {
-		t.Error("D33a-spike-1: legend chip must include the theme-name badge")
+	// Negative pin (markup gone).
+	if strings.Contains(js, "cytoscape-poc-theme-chip") {
+		t.Error("D33x-left-poc-panel: cytoscape-poc-theme-chip markup must remain retired (left PoC legend panel removed)")
 	}
-	if !strings.Contains(js, "data-poc-theme=\"' + _escHtml(_activeTheme) + '\"") {
-		t.Error("D33a-spike-1: theme chip must carry data-poc-theme attribute for the active theme")
+	if strings.Contains(js, `data-poc-theme="' + _escHtml(_activeTheme) + '"`) {
+		t.Error("D33x-left-poc-panel: data-poc-theme markup must remain retired (left PoC legend panel removed)")
 	}
-	if !strings.Contains(css, ".cytoscape-poc-theme-chip") {
-		t.Error("D33a-spike-1: theme chip CSS rule missing under body.cytoscape-poc-active scope")
+	// CSS rule must be gone too (comments may still mention the
+	// class name; pin against the executable selector shape).
+	cssExec := stripCSSComments(css)
+	if strings.Contains(cssExec, ".cytoscape-poc-theme-chip {") {
+		t.Error("D33x-left-poc-panel: .cytoscape-poc-theme-chip CSS rule must remain retired")
+	}
+	// `_activeTheme` selection plumbing (the underlying capability)
+	// is still in the source — it now feeds the canvas style only.
+	if !strings.Contains(js, "_activeTheme") {
+		t.Error("D33x-left-poc-panel: _activeTheme variable must remain — theme selection is still wired to the canvas")
 	}
 }

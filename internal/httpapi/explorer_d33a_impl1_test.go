@@ -13,8 +13,11 @@ import (
 //   • Cytoscape fit padding reads MIDAS's --gmap-overlay-inset-*
 //     tokens AND reserves space for the PoC's legend / inspector
 //   • Legend and inspector are collapsible (data-expanded toggle)
-//   • lensImpl.clear performs a full PoC teardown (overlays + mount
-//     + legend + inspector + body class)
+//   • _uninstallPoc performs a full PoC teardown (overlays + mount
+//     + legend + inspector + GraphViewport host deactivate);
+//     D37p-clean-1 retired the dead lensImpl.clear delegation, but
+//     _uninstallPoc is still reachable via the public _uninstall
+//     surface and the host's factory destroy path
 //   • The PoC no longer hijacks #gmap-status with "— Cytoscape PoC"
 //   • All CSS rules remain scoped under body.cytoscape-poc-active
 //   • The mount no longer carries the misleading min-height: 720px
@@ -72,25 +75,37 @@ func TestExplorer_D33aImpl1_CytoscapeUsesSafeAreaFitPadding(t *testing.T) {
 		"--gmap-overlay-inset-right",
 		"--gmap-overlay-inset-bottom",
 		"--gmap-overlay-inset-left",
-		// Padding accounts for legend + inspector reserved widths.
-		"LEGEND_W_EXPANDED",
-		"INSPECTOR_W_EXPANDED",
-		// The padding is passed to Cytoscape's layout config and the
-		// rAF re-fit. No more hard-coded 60.
+		// D33x-list-mode — `INSPECTOR_W_*` reservation was retired
+		// along with the floating PoC card.
+		// D33x-left-poc-panel — `LEGEND_W_*` reservation was
+		// retired along with the floating left PoC panel. The
+		// padding pin now only asserts the `--gmap-overlay-inset-*`
+		// token reads + the padding being plumbed into Cytoscape's
+		// layout config below.
+		//
+		// The padding is passed to Cytoscape's layout config; the
+		// rAF re-fit now delegates to the asymmetric helper
+		// (D33x-fit-zoom-root) rather than calling cy.fit directly.
 		"padding: fitPadding",
-		"_cy.fit(undefined, _safeAreaPadding())",
 	} {
 		if !strings.Contains(js, want) {
 			t.Errorf("D33a-impl-1: safe-area fit padding missing %q", want)
 		}
 	}
-	// Negative pin: the pre-tranche hard-coded fit padding is gone.
+	// Negative pins:
+	//   • Pre-D33a-impl-1 hard-coded fit padding stays banned.
+	//   • D33x-list-mode — `INSPECTOR_W_*` constants must NOT come back.
+	//   • D33x-left-poc-panel — `LEGEND_W_*` constants must NOT come back.
 	for _, banned := range []string{
 		"_cy.fit(undefined, 60)",
 		"padding: 60,",
+		"INSPECTOR_W_EXPANDED",
+		"INSPECTOR_W_COMPACT",
+		"LEGEND_W_EXPANDED",
+		"LEGEND_W_COMPACT",
 	} {
 		if strings.Contains(js, banned) {
-			t.Errorf("D33a-impl-1: hard-coded fit padding %q must be replaced by safe-area computation", banned)
+			t.Errorf("D33a-impl-1: %q must not appear — superseded (floating PoC card + left legend panel retired)", banned)
 		}
 	}
 }
@@ -128,48 +143,78 @@ func TestExplorer_D33aImpl1_NoHardcodedMinHeight720(t *testing.T) {
 
 // ── Collapsible legend / inspector ──────────────────────────────────
 
-// TestExplorer_D33aImpl1_LegendInspectorCollapsible pins the new
-// collapse/expand toggle DOM and CSS. Reduces occlusion of graph
-// content while keeping the legend reachable.
+// TestExplorer_D33aImpl1_LegendInspectorCollapsible — superseded.
+//
+// D33x-list-mode — The Inspector half was retired along with the
+// floating PoC card.
+// D33x-left-poc-panel — The Legend half was retired along with the
+// floating left "Authority Graph" PoC panel (NODE KINDS / FUTURE
+// OVERLAYS / AUTHORITY-THIN-CARD-V1). The MIDAS Posture & Help
+// drawer tab owns the equivalent posture + legend information.
+//
+// The test now asserts the inverse contract for both halves: every
+// legend + inspector overlay symbol must remain GONE from the PoC
+// JS, and every related CSS selector must remain GONE from the PoC
+// CSS.
 func TestExplorer_D33aImpl1_LegendInspectorCollapsible(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
 	js := getExplorerAsset(t, srv, "/explorer/assets/js/graph/authority/authority-cytoscape-poc.js")
 	css := getExplorerAsset(t, srv, "/explorer/assets/css/authority-cytoscape-poc.css")
 
-	// JS exposes toggle setters and writes data-expanded.
-	for _, want := range []string{
+	// JS — retired overlay symbols must not return.
+	for _, banned := range []string{
+		// Floating left legend panel (D33x-left-poc-panel).
 		"function _setLegendExpanded(state)",
+		"function _renderLegend(",
+		"function _legendRow(",
+		`data-poc-toggle="legend"`,
+		// Floating right inspector card (D33x-list-mode).
 		"function _setInspectorExpanded(state)",
-		"data-poc-toggle=\"legend\"",
-		"data-poc-toggle=\"inspector\"",
-		"setAttribute('data-expanded'",
-		// Inspector auto-expands on node tap; auto-collapses on bg tap.
-		"if (!_inspectorExpanded) _setInspectorExpanded(true);",
-		"if (_inspectorExpanded) _setInspectorExpanded(false);",
+		"function _renderInspector(",
+		"function _renderInspectorEmpty(",
+		"function _wireInspectorToggle(",
+		`data-poc-toggle="inspector"`,
 	} {
-		if !strings.Contains(js, want) {
-			t.Errorf("D33a-impl-1: collapsible toggle wiring missing %q", want)
+		if strings.Contains(js, banned) {
+			t.Errorf("D33x-left-poc-panel / D33x-list-mode: retired PoC overlay JS symbol %q must NOT come back", banned)
 		}
 	}
-	// CSS declares collapsed state for both panels.
-	for _, want := range []string{
-		".cytoscape-poc-legend[data-expanded=\"false\"]",
-		".cytoscape-poc-inspector[data-expanded=\"false\"]",
-		"transition: width",
+	// CSS — retired overlay selectors must not return. Comments may
+	// still reference the retired class names (in the retirement-
+	// marker block); pin against the executable rule shape `<sel> {`.
+	cssExec := stripCSSComments(css)
+	for _, banned := range []string{
+		// Floating left legend panel (D33x-left-poc-panel).
+		".cytoscape-poc-legend {",
+		".cytoscape-poc-legend[data-expanded",
+		".cytoscape-poc-legend-body",
+		".cytoscape-poc-legend-title",
+		".cytoscape-poc-legend-kinds",
+		".cytoscape-poc-legend-future",
+		".cytoscape-poc-swatch",
+		".cytoscape-poc-placeholder",
+		// Floating right inspector card (D33x-list-mode).
+		".cytoscape-poc-inspector {",
+		".cytoscape-poc-inspector[data-expanded",
+		".cytoscape-poc-inspector-body",
+		".cytoscape-poc-inspector-fields",
 	} {
-		if !strings.Contains(css, want) {
-			t.Errorf("D33a-impl-1: collapsed-state CSS missing %q", want)
+		if strings.Contains(cssExec, banned) {
+			t.Errorf("D33x-left-poc-panel / D33x-list-mode: retired PoC overlay CSS selector %q must NOT come back", banned)
 		}
 	}
 }
 
 // ── Teardown ────────────────────────────────────────────────────────
 
-// TestExplorer_D33aImpl1_CytoscapeTeardownRemovesPocDom pins the new
+// TestExplorer_D33aImpl1_CytoscapeTeardownRemovesPocDom pins the
 // full teardown path. _uninstallPoc removes overlays, the mount, the
-// legend, the inspector, and the body class. Repeated calls are
-// idempotent. lensImpl.clear routes through this teardown.
+// legend, the inspector, and routes through the GraphViewport host's
+// deactivate(). Repeated calls are idempotent. D37p-clean-1 retired
+// the dead `lensImpl.clear` delegation; the public `_uninstall`
+// surface and the GraphViewport factory destroy path are the
+// remaining live callers.
 func TestExplorer_D33aImpl1_CytoscapeTeardownRemovesPocDom(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
@@ -179,9 +224,11 @@ func TestExplorer_D33aImpl1_CytoscapeTeardownRemovesPocDom(t *testing.T) {
 		"function _uninstallPoc()",
 		"_destroyCy();",
 		"_mountEl.parentNode.removeChild(_mountEl);",
-		"document.body.classList.remove('cytoscape-poc-active');",
-		// lensImpl.clear delegates to the full teardown.
-		"_uninstallPoc();",
+		// D35f — body-class removal RETIRED. Renderer identity now
+		// host-owned via data-active-renderer; the host's
+		// `viewport.deactivate()` clears it. _uninstallPoc routes
+		// through that path.
+		"vp.deactivate",
 		// _uninstall surfaced for tests and manual diagnostics.
 		"_uninstall:               _uninstallPoc,",
 	} {
@@ -189,20 +236,33 @@ func TestExplorer_D33aImpl1_CytoscapeTeardownRemovesPocDom(t *testing.T) {
 			t.Errorf("D33a-impl-1: full teardown missing %q", want)
 		}
 	}
+	// D35f — body-class flip retired.
+	if strings.Contains(js, "document.body.classList.remove('cytoscape-poc-active');") {
+		t.Error("D35f: _uninstallPoc must NOT flip body class (host owns renderer identity)")
+	}
 }
 
 // ── Production status surface ───────────────────────────────────────
 
 // TestExplorer_D33aImpl1_CytoscapeDoesNotHijackProductionStatus pins
-// the removal of the `— Cytoscape PoC` text hijack. The PoC indicator
-// moves into the legend chip via .cytoscape-poc-status-chip.
+// the removal of the `— Cytoscape PoC` text hijack on the production
+// status pill.
+//
+// D33x-left-poc-panel — The PoC status badge previously lived inside
+// the floating left legend's header chip (`cytoscape-poc-status-chip`)
+// — that whole panel has been retired. The "no production status
+// hijack" half of the contract still matters; the "indicator lives
+// in the legend chip" half is now stale, because the legend chip is
+// gone. The test now asserts:
+//   • the production status pill is NOT hijacked (unchanged);
+//   • the legend status / theme chip surface is RETIRED, not present.
 func TestExplorer_D33aImpl1_CytoscapeDoesNotHijackProductionStatus(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
 	js := getExplorerAsset(t, srv, "/explorer/assets/js/graph/authority/authority-cytoscape-poc.js")
 	css := getExplorerAsset(t, srv, "/explorer/assets/css/authority-cytoscape-poc.css")
 
-	// Negative pin: status hijack is gone.
+	// Negative pin: production status hijack is gone.
 	for _, banned := range []string{
 		"status.textContent = '— Cytoscape PoC'",
 		"getElementById('gmap-status')",
@@ -211,15 +271,21 @@ func TestExplorer_D33aImpl1_CytoscapeDoesNotHijackProductionStatus(t *testing.T)
 			t.Errorf("D33a-impl-1: production #gmap-status hijack must be removed — found %q", banned)
 		}
 	}
-	// Positive pin: the PoC indicator moved to the legend chip.
-	for _, want := range []string{
+	// D33x-left-poc-panel — the legend-chip status/theme markup is
+	// retired. JS no longer emits the chip; CSS rules for the chip
+	// classes are gone. Comments in the CSS retirement-marker block
+	// may still mention the class names; pin against the executable
+	// rule shape `<sel> {`.
+	cssExec := stripCSSComments(css)
+	for _, banned := range []string{
 		"cytoscape-poc-status-chip",
+		"cytoscape-poc-theme-chip",
 	} {
-		if !strings.Contains(js, want) {
-			t.Errorf("D33a-impl-1: PoC status badge must move into the legend chip — missing %q in JS", want)
+		if strings.Contains(js, banned) {
+			t.Errorf("D33x-left-poc-panel: legend-chip JS markup must remain retired — found %q", banned)
 		}
-		if !strings.Contains(css, ".cytoscape-poc-status-chip") {
-			t.Errorf("D33a-impl-1: PoC status badge CSS missing %q", ".cytoscape-poc-status-chip")
+		if strings.Contains(cssExec, "."+banned+" {") {
+			t.Errorf("D33x-left-poc-panel: legend-chip CSS rule must remain retired — found `.%s {`", banned)
 		}
 	}
 }
@@ -228,16 +294,20 @@ func TestExplorer_D33aImpl1_CytoscapeDoesNotHijackProductionStatus(t *testing.T)
 
 // TestExplorer_D33aImpl1_CytoscapeCssScopedToActiveBodyClass re-pins
 // the CSS-scoping invariant after the chrome containment changes.
-// Every PoC selector remains under body.cytoscape-poc-active so
-// removing the body class fully suppresses every rule. Identical
-// rule to TestExplorer_CytoscapePoc_CSSScopedToActiveBodyClass but
-// re-run here as a regression guard for the D33a-impl-1 CSS edits.
+// Every PoC selector remains under host-owned renderer identity.
+//
+// D35f-retire-transitional-renderer-debt — the gate moved from
+// `body.cytoscape-poc-active` (pre-D35f) to
+// `.midas-graph-viewport[data-active-renderer="authority"]`.
+// The underlying invariant ("disabling the PoC fully suppresses
+// every rule") is preserved; only the activation key changed.
 func TestExplorer_D33aImpl1_CytoscapeCssScopedToActiveBodyClass(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
 	css := getExplorerAsset(t, srv, "/explorer/assets/css/authority-cytoscape-poc.css")
 
 	css = stripCSSComments(css)
+	const expectedPrefix = `.midas-graph-viewport[data-active-renderer="authority"]`
 
 	for i := 0; i < len(css); i++ {
 		if css[i] != '{' {
@@ -253,21 +323,33 @@ func TestExplorer_D33aImpl1_CytoscapeCssScopedToActiveBodyClass(t *testing.T) {
 		if selector == "" {
 			continue
 		}
-		if !strings.HasPrefix(selector, "body.cytoscape-poc-active") {
-			t.Errorf("D33a-impl-1: every CSS rule must be scoped under body.cytoscape-poc-active — rogue selector %q", selector)
+		if !strings.HasPrefix(selector, expectedPrefix) {
+			t.Errorf("D35f: every CSS rule must be scoped under %s — rogue selector %q", expectedPrefix, selector)
 		}
 	}
 }
 
 // ── Production preservation ─────────────────────────────────────────
 
-// TestExplorer_D33aImpl1_ProductionAuthorityPathStillDefault pins
-// that the production Authority Graph pipeline is unchanged: adapter
-// `mapToCardLayout`, layout helper `computeAuthorityLayout`, and the
-// view's `renderAuthorityGraph` retain their signatures. The view
-// must not reference Cytoscape. With ?cytoscape=1 absent, no PoC
-// body class can be set because the PoC's gate short-circuits at
-// init.
+// TestExplorer_D33aImpl1_ProductionAuthorityPathStillDefault was a
+// pre-D37b invariant that pinned the production native renderer as
+// the DEFAULT Authority path AND the PoC as strictly opt-in via
+// `?cytoscape=1`. D37b RETIRED that invariant: the Cytoscape
+// HTML-card renderer is now the production Authority path
+// (registered with GraphViewport under id `'authority'`), and the
+// pre-D37b URL gate is gone.
+//
+// The test is retained (renamed in spirit, not in symbol so other
+// runners keep working) to pin the post-D37b state:
+//   • The legacy native modules (`mapToCardLayout`,
+//     `computeAuthorityLayout`, `renderAuthorityGraph`) still exist
+//     as internal fallback / diagnostic code — removal would have
+//     been too broad for D37b.
+//   • `authority-graph-view.js` still does NOT reference Cytoscape
+//     (Cytoscape lives entirely in `authority-cytoscape-poc.js`).
+//   • The pre-D37b PoC gate (`if (!_isPocActive()) { return; }`,
+//     `sp.get('cytoscape') === '1'`) MUST NOT remain in the
+//     executable code of the Authority renderer module.
 func TestExplorer_D33aImpl1_ProductionAuthorityPathStillDefault(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
@@ -277,26 +359,26 @@ func TestExplorer_D33aImpl1_ProductionAuthorityPathStillDefault(t *testing.T) {
 	pocJS     := getExplorerAsset(t, srv, "/explorer/assets/js/graph/authority/authority-cytoscape-poc.js")
 
 	if !strings.Contains(adapterJS, "function mapToCardLayout(projection, view)") {
-		t.Error("D33a-impl-1: production adapter mapToCardLayout signature must remain intact")
+		t.Error("D33a-impl-1: legacy native adapter mapToCardLayout signature must remain (internal fallback after D37b)")
 	}
 	if !strings.Contains(layoutJS, "function computeAuthorityLayout(spec, GMAP, layerState)") {
-		t.Error("D33a-impl-1: production layout helper signature must remain intact")
+		t.Error("D33a-impl-1: legacy native layout helper signature must remain (internal fallback after D37b)")
 	}
 	if !strings.Contains(viewJS, "function renderAuthorityGraph(payload, ctx)") {
-		t.Error("D33a-impl-1: production view renderAuthorityGraph must remain intact")
+		t.Error("D33a-impl-1: legacy native renderAuthorityGraph must remain (internal fallback after D37b)")
 	}
 	if strings.Contains(viewJS, "cytoscape") {
-		t.Error("D33a-impl-1: production Authority view must NOT reference Cytoscape — PoC remains opt-in")
+		t.Error("D33a-impl-1: legacy native Authority view must NOT reference Cytoscape — Cytoscape lives in authority-cytoscape-poc.js")
 	}
-	// PoC's gate still short-circuits at init when ?cytoscape=1 is
-	// absent, so the body class is never set.
-	for _, want := range []string{
+	// D37b — pre-D37b activation gate MUST be retired from executable
+	// code in the Authority renderer module.
+	pocExec := stripJSComments(pocJS)
+	for _, banned := range []string{
 		"if (!_isPocActive()) {",
-		"return;",
 		"sp.get('cytoscape') === '1'",
 	} {
-		if !strings.Contains(pocJS, want) {
-			t.Errorf("D33a-impl-1: PoC activation gate must remain — missing %q", want)
+		if strings.Contains(pocExec, banned) {
+			t.Errorf("D33a-impl-1/D37b: pre-D37b PoC gate %q must be retired from executable code", banned)
 		}
 	}
 }

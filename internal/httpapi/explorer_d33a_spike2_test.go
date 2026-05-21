@@ -84,29 +84,48 @@ func TestExplorer_D33aSpike2_CytoscapeSupportsHoloCardTheme(t *testing.T) {
 }
 
 // TestExplorer_D33aSpike2_CytoscapeSupportsHtmlCardThemeWhenImplemented
-// pins the html-card theme + the DOM overlay install/teardown helpers.
-// Because html-card IS implemented in this spike, this test asserts
-// the full positive contract. If a future tranche drops html-card,
-// the test can be flipped to assert "not implemented" cleanly.
+// pins the html-card theme + the DOM overlay install/teardown
+// helpers. D37f promoted the HTML-card overlay to the production
+// Authority visual (overlay install is no longer gated by theme;
+// projection migrated to the D34i two-tier model verbatim from
+// the Context spike). The pre-D37f gate + one-tier renderedPosition
+// path is retired. The html-card theme remains registered in
+// `_THEMES` and remains the DEFAULT_THEME so the cy node footprint
+// matches the HTML-card overlay footprint.
 func TestExplorer_D33aSpike2_CytoscapeSupportsHtmlCardThemeWhenImplemented(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
 	js := getExplorerAsset(t, srv, "/explorer/assets/js/graph/authority/authority-cytoscape-poc.js")
 
 	for _, want := range []string{
+		// Theme still registered + descriptor branch intact.
 		"'html-card'",
 		"case 'html-card':",
 		"if (themeName === 'html-card')",
-		// Overlay install gated to html-card.
-		"if (_activeTheme === 'html-card')",
-		"_installHtmlCardOverlay(_cy, mount, elements, _activeTheme);",
-		// Position-mapping via Cytoscape's renderedPosition + the
-		// pan/zoom/render/position event family.
-		"n.renderedPosition()",
-		"cy.on('render pan zoom position', _htmlSyncBound)",
+		// D37f — Overlay install is unconditional (theme-gate retired).
+		"_installHtmlCardOverlay(_cy, mount, elements);",
+		// D37f — Two-tier projection model (lifted from Context spike).
+		"var LAYER_SYNC_EVENTS = 'pan zoom render resize'",
+		"var CARDS_SYNC_EVENTS = 'position bounds layoutstop add select unselect'",
+		"function _syncLayer()",
+		"function _syncCards()",
+		"cy.on(LAYER_SYNC_EVENTS, _syncLayerBound)",
+		"cy.on(CARDS_SYNC_EVENTS, _syncCardsBound)",
 	} {
 		if !strings.Contains(js, want) {
-			t.Errorf("D33a-spike-2: html-card theme + overlay wiring missing %q", want)
+			t.Errorf("D33a-spike-2/D37f: html-card theme + two-tier overlay wiring missing %q", want)
+		}
+	}
+
+	// D37f — Negative pins for the retired one-tier projection path.
+	for _, banned := range []string{
+		// Pre-D37f gate retired.
+		"if (_activeTheme === 'html-card')",
+		// Pre-D37f single-tier event binding.
+		"cy.on('render pan zoom position', _htmlSyncBound)",
+	} {
+		if strings.Contains(js, banned) {
+			t.Errorf("D33a-spike-2/D37f: pre-D37f overlay path %q must be retired", banned)
 		}
 	}
 }
@@ -220,14 +239,17 @@ func TestExplorer_D33aSpike2_CytoscapeRichThemesPreserveInteractions(t *testing.
 
 // TestExplorer_D33aSpike2_CytoscapeThemeCssScopedToPoc pins that
 // every CSS rule (including new rich-theme rules) remains scoped
-// under body.cytoscape-poc-active. Removing the body class disables
-// every rule. Re-pin of the existing scoping invariant after the
-// spike-2 additions.
+// to the renderer's activation gate.
+//
+// D35f-retire-transitional-renderer-debt — the gate moved from
+// `body.cytoscape-poc-active` to host-owned
+// `.midas-graph-viewport[data-active-renderer="authority"]`.
 func TestExplorer_D33aSpike2_CytoscapeThemeCssScopedToPoc(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
 	css := getExplorerAsset(t, srv, "/explorer/assets/css/authority-cytoscape-poc.css")
 	css = stripCSSComments(css)
+	const expectedPrefix = `.midas-graph-viewport[data-active-renderer="authority"]`
 
 	for i := 0; i < len(css); i++ {
 		if css[i] != '{' {
@@ -243,8 +265,8 @@ func TestExplorer_D33aSpike2_CytoscapeThemeCssScopedToPoc(t *testing.T) {
 		if selector == "" {
 			continue
 		}
-		if !strings.HasPrefix(selector, "body.cytoscape-poc-active") {
-			t.Errorf("D33a-spike-2: every CSS rule must be scoped under body.cytoscape-poc-active — rogue selector %q", selector)
+		if !strings.HasPrefix(selector, expectedPrefix) {
+			t.Errorf("D35f: every CSS rule must be scoped under %s — rogue selector %q", expectedPrefix, selector)
 		}
 	}
 }
@@ -261,7 +283,10 @@ func TestExplorer_D33aSpike2_CytoscapeHtmlOverlayHasLifecycleCleanup(t *testing.
 	js := getExplorerAsset(t, srv, "/explorer/assets/js/graph/authority/authority-cytoscape-poc.js")
 
 	for _, want := range []string{
-		"function _installHtmlCardOverlay(cy, mount, elements, themeName)",
+		// D37f — `_installHtmlCardOverlay` signature simplified
+		// (themeName param retired). All three lifecycle helpers
+		// remain defined as part of the public-surface.
+		"function _installHtmlCardOverlay(cy, mount, elements)",
 		"function _updateHtmlCardOverlay(cy)",
 		"function _destroyHtmlCardOverlay()",
 		// install reuses destroy first so re-renders never accumulate
@@ -269,7 +294,7 @@ func TestExplorer_D33aSpike2_CytoscapeHtmlOverlayHasLifecycleCleanup(t *testing.
 		"_destroyHtmlCardOverlay();",
 	} {
 		if !strings.Contains(js, want) {
-			t.Errorf("D33a-spike-2: HTML overlay lifecycle helper missing %q", want)
+			t.Errorf("D33a-spike-2/D37f: HTML overlay lifecycle helper missing %q", want)
 		}
 	}
 	// Wired into BOTH per-render teardown (_destroyCy) and full
@@ -282,33 +307,35 @@ func TestExplorer_D33aSpike2_CytoscapeHtmlOverlayHasLifecycleCleanup(t *testing.
 }
 
 // TestExplorer_D33aSpike2_CytoscapeHtmlOverlayDoesNotAffectProductionPath
-// pins that the production Authority view is never affected by the
-// html-card theme: the PoC's activation gate short-circuits before
-// any html-card code runs, and the production view does not
-// reference any html-card identifier.
+// pinned, pre-D37b, that the html-card overlay was strictly gated
+// behind the `?cytoscape=1` activation flag. D37b RETIRED that
+// gate (Cytoscape is now the production Authority renderer).
+// The html-card overlay implementation remains; the test now pins
+// the post-D37b residual invariant: the LEGACY native Authority
+// view (`authority-graph-view.js`) still does NOT reference any
+// html-card identifier (Cytoscape + html-card overlay live entirely
+// inside `authority-cytoscape-poc.js`).
 func TestExplorer_D33aSpike2_CytoscapeHtmlOverlayDoesNotAffectProductionPath(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
 	pocJS  := getExplorerAsset(t, srv, "/explorer/assets/js/graph/authority/authority-cytoscape-poc.js")
 	viewJS := getExplorerAsset(t, srv, "/explorer/assets/js/graph/authority/authority-graph-view.js")
 
-	// PoC gate runs before any theme/overlay code.
-	gateIdx     := strings.Index(pocJS, "if (!_isPocActive()) {")
-	overlayIdx  := strings.Index(pocJS, "function _installHtmlCardOverlay(")
-	if gateIdx < 0 || overlayIdx < 0 {
-		t.Fatal("D33a-spike-2: could not locate gate or overlay function for production-path check")
+	// D37b — html-card overlay implementation remains in the Authority
+	// renderer module (it drives one of the production theme paths).
+	if !strings.Contains(pocJS, "function _installHtmlCardOverlay(") {
+		t.Error("D37b: _installHtmlCardOverlay must remain (theme system intact)")
 	}
-	if gateIdx >= overlayIdx {
-		t.Errorf("D33a-spike-2: activation gate (offset %d) must precede _installHtmlCardOverlay (offset %d)", gateIdx, overlayIdx)
-	}
-	// Production view contains no html-card references.
+
+	// Legacy native view contains no html-card references; Cytoscape +
+	// html-card overlay live entirely inside authority-cytoscape-poc.js.
 	for _, banned := range []string{
 		"html-card",
 		"htmlCardOverlay",
 		"cytoscape-poc-html",
 	} {
 		if strings.Contains(viewJS, banned) {
-			t.Errorf("D33a-spike-2: production Authority view must not reference html-card identifier %q", banned)
+			t.Errorf("D33a-spike-2: legacy native Authority view must not reference html-card identifier %q", banned)
 		}
 	}
 }
@@ -419,11 +446,15 @@ func TestExplorer_D33aSpike2_ExistingThemesPreserved(t *testing.T) {
 		"case 'midas-card':",
 		"case 'object-card':",
 		"case 'classic':",
-		// classic remains DEFAULT_THEME.
-		"var DEFAULT_THEME  = 'classic';",
+		// D37f — DEFAULT_THEME promoted from 'classic' to 'html-card'
+		// so the cy node footprint (240x96) matches the HTML-card
+		// overlay (the production Authority visual as of D37f).
+		// 'classic' is still in the theme list + still has its
+		// _themeTokens branch — only the default changed.
+		"var DEFAULT_THEME  = 'html-card';",
 	} {
 		if !strings.Contains(js, want) {
-			t.Errorf("D33a-spike-2: existing theme contract regressed — missing %q", want)
+			t.Errorf("D33a-spike-2/D37f: existing theme contract regressed — missing %q", want)
 		}
 	}
 }

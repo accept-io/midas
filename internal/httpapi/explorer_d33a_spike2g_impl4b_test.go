@@ -418,8 +418,9 @@ func TestExplorer_D33aSpike2gImpl4b_ExistingThemesPreserved(t *testing.T) {
 			t.Errorf("D33a-spike-2g-impl-4b: theme %q dropped from _THEMES", theme)
 		}
 	}
-	if !strings.Contains(js, "var DEFAULT_THEME  = 'classic';") {
-		t.Error("D33a-spike-2g-impl-4b: DEFAULT_THEME must remain 'classic'")
+	// D37f — DEFAULT_THEME promoted to 'html-card'; 'classic' remains in _THEMES.
+	if !strings.Contains(js, "var DEFAULT_THEME  = 'html-card';") {
+		t.Error("D33a-spike-2g-impl-4b/D37f: DEFAULT_THEME must be 'html-card' (D37f promotion)")
 	}
 }
 

@@ -1,0 +1,502 @@
+/* /explorer/assets/css/authority-canvas-edge-tabs.css
+ *
+ * D37m-impl-1 — Authority Canvas-Edge Context Tabs.
+ *
+ * Scoped under `.midas-graph-viewport[data-active-renderer="authority"]`
+ * so the rules are completely inert on Context / Knowledge / native
+ * renderers. Matches the renderer-identity-attribute scoping pattern
+ * established by D35f (see authority-cytoscape-poc.css).
+ *
+ * Architectural choices (locked in D37m-design-1):
+ *   • Screen-space, viewport-pinned (no model-coordinate transform).
+ *   • Strip = 40 px persistent on the right edge.
+ *   • Pane = 300 px overlay; does NOT participate in safe-area.
+ *   • Pane stacks above HTML cards (z-index 8 > 5 / 7).
+ *   • Wrapper is pointer-events: none; children opt in.
+ *   • Pane open/close does NOT trigger a refit.
+ *   • Right drawer + bottom workbench are untouched.
+ */
+
+/* ── Wrapper ─────────────────────────────────────────────────────── */
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs {
+  position: absolute;
+  top: 8px;
+  right: 0;
+  bottom: 64px;
+  pointer-events: none;
+  /* Children opt in via pointer-events: auto. */
+}
+
+/* Hide the whole wrapper for non-Authority lenses via the absence of
+ * the renderer-identity attribute (no rules match outside the
+ * `[data-active-renderer="authority"]` scope). The aria-hidden
+ * attribute mirrors the visible state for assistive tech and is
+ * managed by the module's JS. */
+
+/* ── Strip ───────────────────────────────────────────────────────── */
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-strip {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 4px;
+  background: var(--surface-container-high, #1f2533);
+  border: 1px solid var(--outline-variant, #475569);
+  border-right: none;
+  border-radius: 6px 0 0 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.30);
+  z-index: 6;
+  pointer-events: auto;
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-button {
+  width: 32px;
+  height: 32px;
+  min-width: 0;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--slate-300, #cbd5e1);
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  line-height: 1;
+  position: relative;
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-button:hover:not(:disabled) {
+  background: var(--surface-container, #222838);
+  color: var(--on-surface, #e2e8f0);
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-button:disabled {
+  opacity: 0.40;
+  cursor: not-allowed;
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-button:focus-visible {
+  outline: 2px solid var(--primary, #4ea1ff);
+  outline-offset: 1px;
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-button[aria-selected="true"] {
+  background: var(--surface-container, #222838);
+  color: var(--primary, #7aa2ff);
+}
+
+/* ── Pane ────────────────────────────────────────────────────────── */
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-pane {
+  position: absolute;
+  top: 0;
+  right: 40px;
+  width: 300px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-container-low, #1a1f2e);
+  border: 1px solid var(--outline-variant, #475569);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.40);
+  z-index: 8;
+  pointer-events: auto;
+  overflow: hidden;
+  font-family: var(--font-display, Inter, 'Segoe UI', system-ui, sans-serif);
+  color: var(--on-surface, #e2e8f0);
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-pane[hidden] {
+  display: none;
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-pane:focus {
+  outline: none;
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-pane-header {
+  position: sticky;
+  top: 0;
+  flex: 0 0 auto;
+  padding: 10px 12px;
+  background: var(--surface-container-low, #1a1f2e);
+  border-bottom: 1px solid var(--outline-variant, #475569);
+  z-index: 1;
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-pane-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 10px 12px;
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-pane-footer {
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  border-top: 1px solid var(--outline-variant, #475569);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* ── Identity strip (in pane header) ─────────────────────────────── */
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-identity-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--on-surface, #e2e8f0);
+  word-break: break-word;
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-identity-id {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 10px;
+  color: var(--on-surface-variant, #94a3b8);
+  word-break: break-all;
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-identity-edges {
+  font-size: 10px;
+  color: var(--on-surface-variant, #94a3b8);
+}
+
+/* ── Kind chip (icon + label) ────────────────────────────────────── */
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-kind-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--on-surface-variant, #94a3b8);
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-kind-chip-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  color: var(--on-surface-variant, #94a3b8);
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-kind-chip-icon svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+}
+
+/* ── Details renderer ────────────────────────────────────────────── */
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-details-list {
+  margin: 0;
+  display: grid;
+  grid-template-columns: minmax(96px, 120px) minmax(0, 1fr);
+  gap: 4px 10px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-details-list dt {
+  color: var(--on-surface-variant, #94a3b8);
+  font-weight: 500;
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-details-list dd {
+  margin: 0;
+  color: var(--on-surface, #e2e8f0);
+  word-break: break-word;
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-details-disclosure {
+  margin-top: 12px;
+  font-size: 12px;
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-details-disclosure summary {
+  cursor: pointer;
+  color: var(--on-surface-variant, #94a3b8);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  margin-bottom: 6px;
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-details-disclosure summary:focus-visible {
+  outline: 2px solid var(--primary, #4ea1ff);
+  outline-offset: 1px;
+}
+
+/* Value chip strip (e.g. authority_grant.capabilities). */
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-chip-strip {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-value-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(122, 162, 255, 0.10);
+  border: 1px solid rgba(122, 162, 255, 0.30);
+  color: var(--on-surface, #e2e8f0);
+  line-height: 1.3;
+}
+
+/* ── Authority chain renderer ────────────────────────────────────── */
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-chain {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-chain-step {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.02);
+  border-left: 2px solid transparent;
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-chain-step.is-focal {
+  border-left-color: var(--primary, #7aa2ff);
+  background: rgba(122, 162, 255, 0.06);
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-chain-step-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-chain-step-body {
+  font-size: 12px;
+  color: var(--on-surface, #e2e8f0);
+  word-break: break-word;
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-chain-step-button {
+  appearance: none;
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: var(--primary, #7aa2ff);
+  cursor: pointer;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-style: dotted;
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-chain-step-button:hover {
+  color: var(--primary, #4ea1ff);
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-chain-step-button:focus-visible {
+  outline: 2px solid var(--primary, #4ea1ff);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-chain-step-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--on-surface, #e2e8f0);
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-chain-step-sev {
+  display: inline-flex;
+  gap: 3px;
+  margin-left: auto;
+}
+
+/* ── Caveat banner ──────────────────────────────────────────────── */
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-caveat {
+  margin: 0 0 10px 0;
+  padding: 6px 8px;
+  background: rgba(138, 96, 31, 0.18);
+  border: 1px solid rgba(138, 96, 31, 0.45);
+  border-radius: 4px;
+  color: var(--on-surface, #e2e8f0);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+/* ── Severity dots ───────────────────────────────────────────────── */
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-sev-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--on-surface-variant, #94a3b8);
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-sev-dot--critical {
+  background: var(--badge-bad, #b3262f);
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-sev-dot--warning {
+  background: var(--badge-warn, #8a601f);
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-sev-dot--info {
+  background: var(--badge-info, #1f4f8a);
+}
+
+/* ── Evidence renderer ───────────────────────────────────────────── */
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-evidence-rollup {
+  margin: 0 0 6px 0;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--on-surface-variant, #94a3b8);
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-evidence-list {
+  list-style: none;
+  margin: 0 0 12px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-evidence-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 8px;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 3px;
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-evidence-kind {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 10px;
+  color: var(--on-surface, #e2e8f0);
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-evidence-msg {
+  flex: 1 1 auto;
+  color: var(--on-surface-variant, #94a3b8);
+  word-break: break-word;
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-evidence-extra {
+  font-size: 10px;
+  color: var(--on-surface-variant, #94a3b8);
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-evidence-runtime-note {
+  margin: 12px 0 0 0;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px dashed var(--outline-variant, #475569);
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--on-surface-variant, #94a3b8);
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-posture {
+  margin: 12px 0 0 0;
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-posture h3 {
+  margin: 0 0 6px 0;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--on-surface-variant, #94a3b8);
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-posture-list {
+  margin: 0;
+  display: grid;
+  grid-template-columns: minmax(80px, 100px) minmax(0, 1fr);
+  gap: 3px 10px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-posture-list dt {
+  color: var(--on-surface-variant, #94a3b8);
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-posture-list dd {
+  margin: 0;
+  color: var(--on-surface, #e2e8f0);
+}
+
+/* ── Empty states ────────────────────────────────────────────────── */
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-empty {
+  margin: 0;
+  padding: 12px 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--on-surface-variant, #94a3b8);
+}
+
+/* ── Footer actions ──────────────────────────────────────────────── */
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-action {
+  appearance: none;
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--surface-container, #222838);
+  border: 1px solid var(--outline-variant, #475569);
+  border-radius: 4px;
+  color: var(--on-surface, #e2e8f0);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-action:hover {
+  background: var(--surface-container-high, #2a3245);
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-action:focus-visible {
+  outline: 2px solid var(--primary, #4ea1ff);
+  outline-offset: 1px;
+}
+
+.midas-graph-viewport[data-active-renderer="authority"] .gmap-canvas-edge-tabs-action--ctx[aria-pressed="true"] {
+  background: var(--surface-container-high, #2a3245);
+  color: var(--primary, #7aa2ff);
+  border-color: rgba(122, 162, 255, 0.55);
+}

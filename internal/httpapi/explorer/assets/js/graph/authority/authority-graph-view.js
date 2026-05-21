@@ -3,8 +3,6 @@
 // Authority Graph lens view. Sibling to context-graph-view.js;
 // production owner of the Authority lens render lifecycle:
 //
-//   - registers an implementation against the lens-agnostic renderer
-//     dispatch table (window.MIDASExplorerGraph.renderer.register)
 //   - drives fetch + render via the shared graph shell
 //     (window.MIDASExplorerGraph.shell.refresh)
 //   - paints nodes / edges with the same lens-agnostic primitives the
@@ -12,6 +10,13 @@
 //     there is no parallel renderer
 //   - provides loading / empty / error overlays consistent with the
 //     Context lens visual treatment
+//
+// D37p-clean-1 — The pre-D37p-clean-1 module also registered an
+// implementation against the dead `MIDASExplorerGraph.renderer.register`
+// dispatcher; that registration is retired. Live Authority activation
+// flows through the GraphViewport host's `viewport.register('authority',
+// factory)` (the Authority PoC module owns that call site) and the
+// `authorityView.refresh` patch.
 //
 // Layout policy: a deterministic column layout grouped by node-kind
 // category. Each kind occupies a row; nodes are distributed across
@@ -725,55 +730,19 @@
   }
 
   // ── Lens registration ─────────────────────────────────────────────────
-  // The renderer dispatch table holds the per-lens impl. shell.render
-  // (removed in D32a-impl-7) and direct callers both resolve through
-  // renderer.render(lens, payload, mount).
-  var lensImpl = {
-    render: function (payload, mount) {
-      if (payload && payload.__status === 404) {
-        renderAuthorityGraphEmpty('No Authority Graph for this service yet.', '');
-        return;
-      }
-      if (payload && payload.__status === 501) {
-        renderAuthorityGraphEmpty('Authority Graph is not configured on this server.', '');
-        return;
-      }
-      if (payload && payload.__status) {
-        renderAuthorityGraphError('Authority Graph fetch failed (HTTP ' + payload.__status + ').');
-        return;
-      }
-      // D32h-impl-1 — Surface the shared render-context hook bag for
-      // the dispatch-table render path too. Same six hooks as the
-      // refresh() path; falls back to defaults when index.html has
-      // not yet attached _renderCtx (very early boot, test isolation).
-      var sharedCtx2 = _renderCtx() || {};
-      renderAuthorityGraph(payload, {
-        view: 'service',
-        setStatus:           sharedCtx2.setStatus,
-        setCurrentRoot:      sharedCtx2.setCurrentRoot,
-        setSummary:          sharedCtx2.setSummary,
-        setDetailsName:      sharedCtx2.setDetailsName,
-        setDetailsFields:    sharedCtx2.setDetailsFields,
-        selectNode:          sharedCtx2.selectNode,
-        applyZoom:           sharedCtx2.applyZoom,
-        focusOnRoot:         sharedCtx2.focusOnRoot,
-        applyFitMode:        sharedCtx2.applyFitMode,
-        scheduleFitToView:   sharedCtx2.scheduleFitToView,
-        applyMultiSelection: sharedCtx2.applyMultiSelection,
-      });
-      void mount; // mount resolution handled by the renderer dispatch
-    },
-    clear: function (mount) {
-      var renderer = _renderer();
-      if (renderer && typeof renderer.clearCanvas === 'function') renderer.clearCanvas();
-      void mount;
-    },
-  };
-
-  if (window.MIDASExplorerGraph.renderer && typeof window.MIDASExplorerGraph.renderer.register === 'function') {
-    window.MIDASExplorerGraph.renderer.register('authority', lensImpl);
-  }
-
+  //
+  // D37p-clean-1 — Dead Renderer Dispatcher Retirement.
+  //
+  // The pre-D37p-clean-1 module wired a `lensImpl` against the dead
+  // `MIDASExplorerGraph.renderer.register('authority', …)` dispatcher.
+  // The dispatcher had zero call-sites at runtime — Authority renders
+  // flow through `ExplorerGraph.authorityView.refresh({rootId})` →
+  // `renderAuthorityGraph`, which the Authority PoC module patches
+  // so the live refresh routes through the production renderer inside
+  // the GraphViewport renderer slot. Both the lensImpl and its
+  // dispatcher registration are removed here. The live
+  // `renderAuthorityGraph` / `refresh` exports below stay untouched.
+  //
   // ── Drawer registration (D32b-impl-3) ─────────────────────────────────
   //
   // Authority renders inside the unified right-side graph drawer. The
@@ -882,8 +851,6 @@
     // and the inspector. Computes per-node diagnostic + posture
     // overlay indexes from a projection envelope.
     computeNodeOverlays:         _computeNodeOverlays,
-    // Exposed for tests; not part of the documented surface.
-    _lensImpl:                   lensImpl,
   };
   void _store; // store reads are deferred to a future filter tranche.
 })();

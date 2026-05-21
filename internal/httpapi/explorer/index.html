@@ -53,6 +53,20 @@
      Removing this link plus the PoC <script> at the bottom of the
      file fully removes the PoC with zero residue. -->
 <link rel="stylesheet" href="/explorer/assets/css/authority-cytoscape-poc.css">
+<!-- D37m-impl-1 — Authority canvas-edge context tabs (Details / Authority / Evidence). Scoped to `.midas-graph-viewport[data-active-renderer="authority"]`; inert on other lenses. -->
+<link rel="stylesheet" href="/explorer/assets/css/authority-canvas-edge-tabs.css">
+<!-- D34a-cytoscape-html-overlay-spike — Stylesheet for the MIDAS-rich HTML overlay over Cytoscape. All rules scoped to body.cytoscape-poc-active; inert when the PoC isn't active. -->
+<link rel="stylesheet" href="/explorer/assets/css/cytoscape-html-overlay.css">
+<!-- D34b-context-cytoscape-html-overlay-card-parity-spike — Stylesheet for the Context-Graph HTML-overlay spike. All rules scoped under body.context-cy-spike-active; inert when the spike's gate is closed. -->
+<link rel="stylesheet" href="/explorer/assets/css/context-cytoscape-overlay-spike.css">
+<!-- D37o-impl-2 — Context strategic renderer skeleton. Scoped to `.midas-graph-viewport[data-active-renderer="context"]`. Opt-in via `?contextRenderer=strategic`; legacy native Context renderer remains the default. -->
+<link rel="stylesheet" href="/explorer/assets/css/context-cytoscape-renderer.css">
+<!-- D37p-pane-1 — Shared Selected-Object Pane Shell styles. Generic, lens-agnostic wrapper / header / body / footer / section scaffolding scoped to a generic `[data-selected-object-pane]` attribute that future lens wrappers (Authority, Knowledge) can opt into. Loaded before the Context pane stylesheet so lens-specific identity rules cascade over the shared shell. -->
+<link rel="stylesheet" href="/explorer/assets/css/graph-selected-object-pane.css">
+<!-- D37o-impl-6 — Context Selected-Object Pane. Scoped to the strategic Context renderer's active scope. Coexists with the right drawer. -->
+<link rel="stylesheet" href="/explorer/assets/css/context-selected-object-pane.css">
+<!-- D36a-knowledge-graph-renderer-shell — Token-aligned placeholder styling for the Knowledge Graph renderer shell. Rules scoped under .midas-graph-viewport[data-active-renderer="knowledge-graph"] so they apply only when the shell is the active renderer. -->
+<link rel="stylesheet" href="/explorer/assets/css/knowledge-graph.css">
 <link rel="stylesheet" href="/explorer/assets/css/drift.css">
 <link rel="stylesheet" href="/explorer/assets/css/drift-analytics.css">
 <link rel="stylesheet" href="/explorer/assets/css/graph-view-menu.css">
@@ -432,19 +446,39 @@
              grow past the visible area — outer page scroll never
              engages on the map sub-view. -->
         <div class="governance-map-body">
-          <div class="governance-map-canvas-scroll">
-            <div id="gmap-canvas" class="governance-map-canvas" data-governance-map="canvas">
-              <!-- The scene wrapper is the zoom target. Both the SVG
-                   connector layer and the HTML node cards live INSIDE
-                   #gmap-scene so transform: scale() applies to them
-                   together; their relative coordinates never drift. -->
-              <div id="gmap-scene" class="governance-map-scene">
-                <svg id="gmap-svg" class="governance-map-svg" data-governance-map="svg-layer"
-                     viewBox="0 0 1180 720" preserveAspectRatio="none" aria-hidden="true"></svg>
-                <!-- node cards injected here by renderGovernanceMap() -->
+          <!-- D35a-midas-graph-viewport-foundation — Additive structural
+               wrapper introduced for the future shared graph-viewport
+               abstraction. `.midas-graph-viewport` fills the body's
+               single-column grid cell. Its role is to be the long-term
+               sole graph clip boundary and the anchor for graph chrome
+               (mode rail, camera cluster, legend, tooltip).
+               D35a is structural only: no overflow/clip change yet,
+               no renderer-activation API yet. Existing renderer-
+               specific overflow rules (canvas-scroll overflow:auto,
+               mount overflow:hidden, overlay overflow:hidden) are
+               preserved so this tranche is visually invariant. -->
+          <div class="midas-graph-viewport">
+            <!-- D35a — `.midas-graph-renderer-slot` is the future
+                 single home for whichever renderer is active (native
+                 Context, Authority Cytoscape, Context Cytoscape spike,
+                 etc). In D35a it simply wraps the existing graph DOM
+                 so the structure is in place; renderer activation
+                 logic remains unchanged. -->
+            <div class="midas-graph-renderer-slot">
+              <div class="governance-map-canvas-scroll">
+                <div id="gmap-canvas" class="governance-map-canvas" data-governance-map="canvas">
+                  <!-- The scene wrapper is the zoom target. Both the SVG
+                       connector layer and the HTML node cards live INSIDE
+                       #gmap-scene so transform: scale() applies to them
+                       together; their relative coordinates never drift. -->
+                  <div id="gmap-scene" class="governance-map-scene">
+                    <svg id="gmap-svg" class="governance-map-svg" data-governance-map="svg-layer"
+                         viewBox="0 0 1180 720" preserveAspectRatio="none" aria-hidden="true"></svg>
+                    <!-- node cards injected here by renderGovernanceMap() -->
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
           <!-- Phase 2B Step 31 (D24e) — inspector rail (#gmap-details)
                relocated from this position (right grid cell of
                .governance-map-body) to a top-level pane fixed to the
@@ -495,8 +529,13 @@
           <div class="gmap-camera-cluster" role="group" aria-label="Graph camera controls">
             <button type="button" id="gmap-zoom-in" aria-label="Zoom in" title="Zoom in"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg></button>
             <button type="button" id="gmap-zoom-out" aria-label="Zoom out" title="Zoom out"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="3" y1="8" x2="13" y2="8"/></svg></button>
+            <!-- D37h — Camera/navigation additions: zoom%, zoom-to-selected, reset-view. Action-metaphor icons; never reuse Authority node-kind glyphs. -->
+            <span id="gmap-zoom-percent" class="gmap-zoom-percent" role="status" aria-live="polite" aria-label="Current zoom" title="Current zoom">--%</span>
             <button type="button" id="gmap-fit-button" class="gmap-fit-button" aria-label="Fit graph to view" title="Fit graph to view"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 3 3 6 3"/><polyline points="10 3 13 3 13 6"/><polyline points="13 10 13 13 10 13"/><polyline points="6 13 3 13 3 10"/></svg></button>
+            <button type="button" id="gmap-zoom-selected-button" class="gmap-zoom-selected-button" aria-label="Zoom to selected" title="Zoom to selected" aria-disabled="true" disabled><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="5"/><circle cx="8" cy="8" r="1.5" fill="currentColor" stroke="none"/></svg></button>
             <button type="button" id="gmap-centre-button" class="gmap-centre-button" aria-label="Centre on root" title="Centre on root"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="5"/><line x1="8" y1="1" x2="8" y2="3"/><line x1="8" y1="13" x2="8" y2="15"/><line x1="1" y1="8" x2="3" y2="8"/><line x1="13" y1="8" x2="15" y2="8"/></svg></button>
+            <button type="button" id="gmap-reset-view-button" class="gmap-reset-view-button" aria-label="Reset view" title="Reset view"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 8a5 5 0 1 1 -1.5 -3.5"/><polyline points="13 3 13 6 10 6"/></svg></button>
+            <button type="button" id="gmap-authority-context-button" class="gmap-authority-context-button" aria-pressed="false" aria-label="View authority context" title="View authority context" aria-disabled="true" disabled><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2" fill="currentColor" stroke="none"/><circle cx="3" cy="3" r="1.25"/><circle cx="13" cy="3" r="1.25"/><circle cx="3" cy="13" r="1.25"/><circle cx="13" cy="13" r="1.25"/><line x1="6.5" y1="6.5" x2="4" y2="4"/><line x1="9.5" y1="6.5" x2="12" y2="4"/><line x1="6.5" y1="9.5" x2="4" y2="12"/><line x1="9.5" y1="9.5" x2="12" y2="12"/></svg></button>
             <button type="button" id="gmap-focus-toggle" class="gmap-focus-toggle" aria-pressed="false" aria-label="Toggle focus mode" title="Toggle focus mode"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 3 3 3 3 6"/><polyline points="10 3 13 3 13 6"/><polyline points="13 10 13 13 10 13"/><polyline points="6 13 3 13 3 10"/></svg></button>
           </div>
           <!-- Phase 2B Step 27 (D24c) — connection key relocated from
@@ -541,6 +580,26 @@
                purpose) and passive connector reference content;
                informational and global-graph controls live in the
                toolbar above the canvas. -->
+          <!-- D37m-impl-1 — Authority canvas-edge context tabs (Details/Authority/Evidence). Static skeleton; logic lives in authority-canvas-edge-tabs.js. aria-hidden flips to "false" when Authority is the active renderer; tabs disable until a single Authority node is selected. -->
+          <div class="gmap-canvas-edge-tabs" data-authority-canvas-edge-tabs aria-hidden="true" hidden>
+            <nav class="gmap-canvas-edge-tabs-strip" role="tablist" aria-label="Authority selected-object context tabs" aria-orientation="vertical">
+              <button type="button" id="gmap-canvas-edge-tab-details" class="gmap-canvas-edge-tabs-button" data-canvas-edge-tab="details" role="tab" aria-selected="false" aria-controls="gmap-canvas-edge-pane" aria-disabled="true" disabled tabindex="-1" title="Details" aria-label="Details"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="4" x2="13" y2="4"/><line x1="3" y1="8" x2="13" y2="8"/><line x1="3" y1="12" x2="9" y2="12"/></svg></button>
+              <button type="button" id="gmap-canvas-edge-tab-authority" class="gmap-canvas-edge-tabs-button" data-canvas-edge-tab="authority" role="tab" aria-selected="false" aria-controls="gmap-canvas-edge-pane" aria-disabled="true" disabled tabindex="-1" title="Authority" aria-label="Authority"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="3" r="1.5"/><circle cx="3" cy="8" r="1.5"/><circle cx="13" cy="8" r="1.5"/><circle cx="8" cy="13" r="1.5"/><line x1="8" y1="4.5" x2="8" y2="11.5"/><line x1="4.5" y1="8" x2="11.5" y2="8"/></svg></button>
+              <button type="button" id="gmap-canvas-edge-tab-evidence" class="gmap-canvas-edge-tabs-button" data-canvas-edge-tab="evidence" role="tab" aria-selected="false" aria-controls="gmap-canvas-edge-pane" aria-disabled="true" disabled tabindex="-1" title="Evidence" aria-label="Evidence"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="2" width="10" height="12" rx="1"/><line x1="5" y1="6" x2="11" y2="6"/><polyline points="5 10 7 12 11 8"/></svg></button>
+            </nav>
+            <aside class="gmap-canvas-edge-tabs-pane" id="gmap-canvas-edge-pane" role="tabpanel" aria-labelledby="gmap-canvas-edge-tab-details" tabindex="-1" hidden>
+              <header class="gmap-canvas-edge-tabs-pane-header" data-canvas-edge-tabs-header></header>
+              <div class="gmap-canvas-edge-tabs-pane-body" data-canvas-edge-tabs-body></div>
+              <footer class="gmap-canvas-edge-tabs-pane-footer" data-canvas-edge-tabs-footer></footer>
+            </aside>
+          </div>
+          <!-- D37o-impl-6 — Context Selected-Object Pane. Scoped to `.midas-graph-viewport[data-active-renderer="context"]`. Opt-in via `?contextRenderer=strategic`; legacy native Context renderer remains the default. The pane coexists with the right drawer (which continues to populate via the existing selection bridge). -->
+          <aside class="gmap-context-selected-object-pane" data-context-selected-object-pane data-pane-mode="auto" role="complementary" aria-label="Selected object" aria-hidden="true" hidden>
+            <header class="gmap-context-selected-object-pane-header" data-context-selected-object-pane-header></header>
+            <div class="gmap-context-selected-object-pane-body" data-context-selected-object-pane-body tabindex="-1"></div>
+            <footer class="gmap-context-selected-object-pane-footer" data-context-selected-object-pane-footer></footer>
+          </aside>
+          </div><!-- /.midas-graph-viewport -->
         </div>
         <!-- Phase 2B Step 36 (D25b) — Bottom evidence and governance
              drift tray. Sibling of .governance-map-body inside the
@@ -1596,6 +1655,12 @@
      the authority/* modules loaded below); both lenses are active in
      the lens switcher. Diagnostics + surface_posture panels are
      deferred to D32b-impl-2. -->
+<!-- D35b — MIDASGraphViewport JS host. Loads BEFORE the other graph
+     modules so future renderers can rely on `MIDASExplorerGraph.viewport`
+     being available at module init. D35b is structural only:
+     production renderers still activate via their existing mechanics
+     (gate flags, body classes, `#gmap-canvas` overrides). -->
+<script src="/explorer/assets/js/graph/graph-viewport.js"></script>
 <script src="/explorer/assets/js/graph/graph-types.js"></script>
 <script src="/explorer/assets/js/graph/graph-layout.js"></script>
 <script src="/explorer/assets/js/graph/graph-renderer.js"></script>
@@ -1614,12 +1679,49 @@
 <script src="/explorer/assets/js/graph/context/context-graph-adapter.js"></script>
 <script src="/explorer/assets/js/graph/context/context-graph-inspector.js"></script>
 <script src="/explorer/assets/js/graph/context/context-graph-view.js"></script>
+<!-- D34b-context-cytoscape-html-overlay-card-parity-spike — Self-gated on ?cytoscape=1&contextHtmlCards=1; module's IIFE early-returns when the gate is closed. Loads after context-graph-view.js so it can observe Context's rendered `.gmap-node` cards. NO third-party dependency. -->
+<script src="/explorer/assets/js/graph/context/context-cytoscape-overlay-spike.js"></script>
 <!-- D32a-impl-9 — Context Graph evidence/drift tray. Module owns the
      14 tray functions + 6 tray state variables that were previously
      inline (~990 lines moved out). Loaded after context-graph-view.js
      so the MIDASExplorerGraph namespace exists for the module to
      attach to. -->
 <script src="/explorer/assets/js/graph/context/context-evidence-tray.js"></script>
+<!-- D37o-impl-1 — Context model modules (pure-data, renderer-independent). Consumed by the strategic Context renderer; the legacy Context renderer is unaffected. -->
+<script src="/explorer/assets/js/graph/context/context-card-model.js"></script>
+<script src="/explorer/assets/js/graph/context/context-connector-model.js"></script>
+<script src="/explorer/assets/js/graph/context/context-layout-model.js"></script>
+<!-- D37o-impl-3 — Context projection handoff boundary + HTML card painter. The handoff is the seam at which a future service-backed projection provider replaces the legacy publish path; the painter is a pure DOM transformation of ContextCard model objects. -->
+<script src="/explorer/assets/js/graph/context/context-projection-handoff.js"></script>
+<script src="/explorer/assets/js/graph/context/context-html-card-painter.js"></script>
+<!-- D37o-impl-4 — Context connector painter (foundation). Renders ContextConnector specs into a renderer-owned SVG layer. Knows nothing about projection acquisition or edge classification. -->
+<script src="/explorer/assets/js/graph/context/context-connector-painter.js"></script>
+<!-- D37p-selection-1 — Shared Graph Selection Bridge Contract. Lens-aware platform bridge that owns the locked selection event vocabulary + normalised selection payload. Per-lens facades (Context first; Authority, Knowledge later) push state up via the shared selectCard. No DOM / drawer / pane / engine coupling — lens-specific side effects stay in lens facades. Loaded BEFORE context-selection-bridge.js so the Context facade can register itself as the 'context' delegate at module init. -->
+<script src="/explorer/assets/js/graph/graph-platform/graph-selection-bridge.js"></script>
+<!-- D37o-impl-5 — Context selection / action / reframe bridge. Adapts strategic-renderer card events to the existing right drawer (inspector frame), bottom evidence tray, and action dispatcher (reframe + view-record). The ONLY module that calls drawer setters directly; renderer + painters remain free of drawer coupling. D37p-selection-1 added a thin platform-bridge push: after Context's local side effects fire, the facade calls graphSelectionBridge.selectCard so the platform owns the cross-lens selection truth. -->
+<script src="/explorer/assets/js/graph/context/context-selection-bridge.js"></script>
+<!-- D37o-fix-1 — Context projection provider. Acquires the current Context projection via the existing context-graph-adapter and publishes the raw envelope through contextProjection. Renderer-independent producer; replaces the dead lensImpl.render publish hook. Loaded before the strategic renderer so a first publish can fire as soon as state is resolvable. -->
+<script src="/explorer/assets/js/graph/context/context-projection-provider.js"></script>
+<!-- D37p-impl-1 / D37p-impl-2 — Shared Graph Stage and Coordinate Contract. Pure-data, renderer-agnostic, lens-agnostic platform module. Composes a generic LayoutSpec + card footprints + safe area into a StageModel (per-card coordinates, anchors, fit bounds, locked diagnostics). Loaded before the strategic Context renderer so spatial mode (?contextLayout=spatial) can consume it. Never wires itself into any lens; opt-in per consumer. -->
+<script src="/explorer/assets/js/graph/graph-platform/graph-stage.js"></script>
+<!-- D37p-impl-3 — Shared Graph Camera Controller. Pure transform/fit/focus controller. Consumes a renderer-supplied target (viewportEl, stageEl, getStageModel, getSafeArea, applyTransform). Used by the strategic Context spatial path; reusable by future lenses. Loaded after graph-stage.js so cameras can read StageModels at create time, and before context-cytoscape-renderer.js so the renderer can instantiate one. -->
+<script src="/explorer/assets/js/graph/graph-platform/graph-camera-controller.js"></script>
+<!-- D37p-platform-3 — Active Graph Camera Command Bus. Lens-aware dispatcher that routes locked toolbar commands (zoomIn / zoomOut / fit / reset / focusRoot / focusSelected / setZoom / getZoom) to the currently-active lens's delegate. Pure platform module: registers no delegates and wires no toolbar buttons in this tranche. Loaded after graph-camera-controller.js so delegates can wrap controller instances, and before lens renderers so they may opt into registration in later tranches. -->
+<script src="/explorer/assets/js/graph/graph-platform/graph-camera-bus.js"></script>
+<!-- D37p-impl-4 — Camera Toolbar Adapter. Wires the existing gmap-camera-cluster buttons to graphCameraBus.<command>() and registers the native-context (legacy Context) delegate that wraps the existing graph-camera.js surface. Lens renderers (Authority, strategic Context) register their own delegates from their own modules. -->
+<script src="/explorer/assets/js/graph/graph-platform/graph-camera-toolbar-adapter.js"></script>
+<!-- D37r-tranche-B'' — Cytoscape vendor library moved earlier in the load order so `window.cytoscape` is defined before the engine module's IIFE evaluates. The pre-tranche-B'' position (after Authority's PoC) created a script-load race that Context's renderer worked around with a rAF retry; the engine's lifecycle assumes synchronous availability and the retry is deleted. Vendor library is the MIT-licensed Cytoscape 3.30.2 distribution. -->
+<script src="/explorer/assets/js/vendor/cytoscape.min.js"></script>
+<!-- D37r-tranche-B' — Shared Cytoscape HTML overlay module. One lens-agnostic implementation of the Cytoscape overlay mechanism (position sync, viewport-event subscription, selected/hover class application, teardown). Used by the graph engine module as its overlay component; Authority's still-direct consumption remains (whitelisted by the engine's strategic-rule test pending tranche B''-Authority). Loaded BEFORE the engine module and BEFORE Context renderer / Authority overlay so all consumers find `graphCytoscapeOverlay` already initialised at their IIFE eval time. -->
+<script src="/explorer/assets/js/graph/graph-platform/graph-cytoscape-overlay.js"></script>
+<!-- D37r-tranche-B'' — Shared Graph Engine platform module. One Cytoscape instantiation, one mount lifecycle, one coordinate frame, one overlay alignment mechanism. Lenses supply data, templates, and adapters; the engine owns the engine. Loaded AFTER the vendor script (so `window.cytoscape` is defined at IIFE eval) and AFTER the overlay module (used internally), and BEFORE every lens consumer (Context renderer in this tranche; Authority migration in tranche B''-Authority). The strategic rule "no graph lens may instantiate Cytoscape directly" is encoded as a source-contract test with Authority whitelisted pending migration. -->
+<script src="/explorer/assets/js/graph/graph-platform/graph-cytoscape-engine.js"></script>
+<!-- D37o-impl-2 — Strategic Context renderer skeleton. Registers with GraphViewport as `context`; activates only under `?contextRenderer=strategic`. Legacy native Context renderer remains the default. -->
+<script src="/explorer/assets/js/graph/context/context-cytoscape-renderer.js"></script>
+<!-- D37p-pane-1 — Shared Selected-Object Pane Shell. Lens-aware coordination layer: provider registry, locked PANE_MODES (auto / pinned / hidden), locked event vocabulary, subscription to graphSelectionBridge. Context registers itself as the 'context' provider; Authority / Knowledge providers register from their own modules in later tranches. Loaded after graph-selection-bridge.js and before context-selected-object-pane.js so the Context provider can register against an already-initialised shell. -->
+<script src="/explorer/assets/js/graph/graph-platform/graph-selected-object-pane.js"></script>
+<!-- D37o-impl-6 — Context Selected-Object Pane. Consumes contextSelectionBridge + contextProjection; renders Summary / Details / Actions / Relationships / Evidence sections. Drawer + tray + Authority canvas-edge tabs remain unchanged. D37p-pane-1 added a one-time provider registration: after the Context pane finishes its existing init, it calls graphSelectedObjectPane.registerLensProvider('context', provider) so cross-lens UI can read pane state from one platform surface. -->
+<script src="/explorer/assets/js/graph/context/context-selected-object-pane.js"></script>
 <!-- D32b-impl-1 — Authority Graph lens modules. Adapter owns lens-
      specific shape decisions (node-kind labels, edge connector
      classes, typed-data lookup); view owns fetch+render through the
@@ -1661,13 +1763,24 @@
      fetches; never modifies the Context Drift Analytics tray. -->
 <script src="/explorer/assets/js/graph/authority/authority-graph-workbench.js"></script>
 <!-- Cytoscape.js PoC (proof of concept; toggle with ?cytoscape=1).
-     Loaded last so it can opt-in to override the Authority lens
-     registration when the toggle is active. With the toggle off the
-     PoC module returns immediately at load time and leaves the
-     production Authority view in place. Vendor library is the MIT-
-     licensed Cytoscape 3.30.2 distribution. -->
-<script src="/explorer/assets/js/vendor/cytoscape.min.js"></script>
+     The vendor script tag moved earlier (immediately before the
+     overlay module + engine module) in tranche B'' to eliminate the
+     script-load race. Authority's PoC is whitelisted by the engine's
+     strategic-rule test pending tranche B''-Authority; it continues
+     to call `window.cytoscape({...})` directly until then. With the
+     toggle off the PoC module returns immediately at load time and
+     leaves the production Authority view in place. -->
 <script src="/explorer/assets/js/graph/authority/authority-cytoscape-poc.js"></script>
+<!-- D34a-cytoscape-html-overlay-spike — MIDAS-owned HTML overlay layer for Cytoscape. Self-gated on ?cytoscape=1&htmlCards=1; the install call inside the PoC is a no-op when the gate is closed. NO third-party dependency. -->
+<script src="/explorer/assets/js/graph/authority/cytoscape-html-overlay.js"></script>
+<!-- D33x-fit-zoom-root — Bridge between the existing MIDAS camera cluster (#gmap-zoom-in/-out/-fit-button/-centre-button/-focus-toggle) and Cytoscape PoC zoom/pan when body.cytoscape-poc-active is set. Capture-phase listeners stopImmediatePropagation so the legacy SVG handlers don't double-run. -->
+<script src="/explorer/assets/js/graph/authority/authority-cytoscape-toolbar.js"></script>
+<!-- D37m-impl-1 — Authority canvas-edge context tabs module. Consumes cytoscapePoc + authorityGraphWorkbench public surfaces; no new dependency. -->
+<script src="/explorer/assets/js/graph/authority/authority-canvas-edge-tabs.js"></script>
+<!-- D36b-knowledge-graph-frontend-projection-contract — Declarative constants module. Exposes window.MIDASExplorerGraph.knowledgeGraphContract with the renderer id, canonical node-kind and edge-kind taxonomies, and the projection-envelope view literal. No runtime, no DOM, no fetch, no Cytoscape. Loaded BEFORE the D36a shell so the shell can consume KNOWLEDGE_GRAPH_RENDERER_ID. -->
+<script src="/explorer/assets/js/graph/knowledge/knowledge-graph-contract.js"></script>
+<!-- D36a-knowledge-graph-renderer-shell — First controlled reuse of the GraphViewport platform module (D35a–D35i). Registers a thin Knowledge Graph renderer shell with the GraphViewport host; activates via window.MIDASExplorerGraph.knowledgeGraphShell.activate(). NO graph data, NO layout, NO backend, NO Cytoscape. Loads AFTER graph-viewport.js so `vp.register` is available at module init. -->
+<script src="/explorer/assets/js/graph/knowledge/knowledge-graph-renderer.js"></script>
 <!-- D32a-impl-5 — Explorer Services + Capabilities view modules.
      Each owns the production view orchestration formerly inline in
      index.html. Loaded after the graph modules so the services view's
@@ -2581,20 +2694,14 @@
     _syncCameraFromState();
   }
 
-  // Wire zoom controls once at script load (idempotent — same pattern as
-  // wireServicesModeTabs). Multiplicative step keeps each click feeling
-  // proportional regardless of current zoom level.
-  (function wireGmapZoomControls() {
-    const inBtn = document.getElementById('gmap-zoom-in');
-    const outBtn = document.getElementById('gmap-zoom-out');
-    const resetBtn = document.getElementById('gmap-zoom-reset');
-    // Phase 2B Step 35 (D24i) — manual zoom exits transient fit-mode
-    // so the operator's subsequent free-zoom interactions can scroll
-    // the canvas normally.
-    if (inBtn)    inBtn.addEventListener('click',    () => { applyGmapFitMode(false); setGmapZoom(gmapZoom * GMAP_ZOOM.STEP); });
-    if (outBtn)   outBtn.addEventListener('click',   () => { applyGmapFitMode(false); setGmapZoom(gmapZoom / GMAP_ZOOM.STEP); });
-    if (resetBtn) resetBtn.addEventListener('click', () => { applyGmapFitMode(false); setGmapZoom(GMAP_ZOOM.DEFAULT); });
-  })();
+  // D37p-impl-4 — zoom-in / zoom-out toolbar wiring retired. The
+  // shared graphCameraToolbarAdapter binds these buttons to the
+  // graphCameraBus, which dispatches via the registered
+  // native-context delegate (wraps the same legacy camera functions
+  // this IIFE used to call inline). Legacy operator behaviour is
+  // unchanged. The `gmap-zoom-reset` lookup here never matched a real
+  // DOM element (the actual reset button is `gmap-reset-view-button`,
+  // wired by the adapter as `reset`).
 
   // Phase 2B Step 18 — Centre on root.
   //
@@ -2612,17 +2719,12 @@
   // uses ('ai:' / 'surf:' / 'bs:'). No new state variable; no
   // separate camera root. If currentGraphRootId is empty (no graph
   // loaded yet) the click is a no-op.
-  (function wireGmapCentreButton() {
-    const btn = document.getElementById('gmap-centre-button');
-    if (!btn) return;
-    btn.addEventListener('click', () => {
-      if (!currentGraphRootId) return;
-      const prefix = currentGraphView === 'ai_system'        ? 'ai:'
-                   : currentGraphView === 'decision_surface' ? 'surf:'
-                   : 'bs:';
-      focusGmapOnRoot(prefix + currentGraphRootId);
-    });
-  })();
+  // D37p-impl-4 — centre-button toolbar wiring retired. The shared
+  // graphCameraToolbarAdapter binds gmap-centre-button to
+  // graphCameraBus.focusRoot(), which dispatches through the
+  // native-context delegate's focusRoot — that delegate reads the
+  // same view + rootId from MIDASExplorerGraph._renderCtx and calls
+  // the same MIDASExplorerGraph.camera.focusRoot helper.
 
   // Phase 2B Step 32 (D24g) — Authority Graph safe-area camera model.
   //
@@ -2726,13 +2828,12 @@
     _syncCameraFromState();
   }
 
-  // Wire the Fit button. Same IIFE pattern as wireGmapCentreButton.
-  // Click is a thin invocation of fitGmapToBounds; no extra logic.
-  (function wireGmapFitButton() {
-    const btn = document.getElementById('gmap-fit-button');
-    if (!btn) return;
-    btn.addEventListener('click', () => fitGmapToBounds());
-  })();
+  // D37p-impl-4 — fit-button toolbar wiring retired. The shared
+  // graphCameraToolbarAdapter binds gmap-fit-button to
+  // graphCameraBus.fit(), which dispatches through the
+  // native-context delegate's fit (calls
+  // MIDASExplorerGraph.camera.fitToBounds — the same helper this
+  // IIFE used to invoke directly).
 
   // Phase 2B Step 39 (D24i-fix3) — wire the Pan / Select mode toggle.
   // Each button calls setGmapInteractionMode with its target mode;
@@ -3214,6 +3315,24 @@
       return;
     }
     if (mode === 'form') {
+      // D33x-list-mode — When PoC is active + lens is Authority, the
+      // Form / Records selector toggles Cytoscape-backed List Mode
+      // (edges hidden, nodes laid out columnarly by kind, root first)
+      // INSTEAD of navigating to the record view. Outside that combo
+      // the legacy showRecord path runs (Context Graph + non-PoC).
+      // D37h-fix-1 — Gated on GraphViewport renderer identity (viewport.getActiveRendererId() === 'authority' with data-active-renderer DOM fallback); the pre-D35f body.cytoscape-poc-active gate is retired.
+      var pocActive = (function () { var g = window.MIDASExplorerGraph || null; if (g && g.viewport && typeof g.viewport.getActiveRendererId === 'function') { try { return g.viewport.getActiveRendererId() === 'authority'; } catch (_) {} } return !!(document.querySelector && document.querySelector('.midas-graph-viewport[data-active-renderer="authority"]')); })();
+      var _ls = null;
+      if (window.MIDASExplorerStore && typeof MIDASExplorerStore.getState === 'function') {
+        try { _ls = MIDASExplorerStore.getState() || null; } catch (_) { _ls = null; }
+      }
+      var lens = (_ls && _ls.selectedGraphLens) || '';
+      var poc  = (window.MIDASExplorerGraph && window.MIDASExplorerGraph.cytoscapePoc) || null;
+      if (pocActive && lens === 'authority' && poc && typeof poc.setViewMode === 'function') {
+        _setWorkbenchModeActiveButton('form');
+        poc.setViewMode('list');
+        return;
+      }
       _showAuthorityPanels(false);
       _setWorkbenchModeActiveButton('form');
       if (window.MIDASExplorerServices && typeof MIDASExplorerServices.showRecord === 'function') {
@@ -3224,6 +3343,26 @@
     if (mode === 'context') {
       _showAuthorityPanels(false);
       _setWorkbenchModeActiveButton('context');
+      // D37o-toolbar-1 — Restore the GraphViewport baseline when
+      // returning from Authority. The Authority Cytoscape module
+      // activates the host transitively from its mount flow; the
+      // Context branch previously updated store/body/drawer/button
+      // state but never asked the host to deactivate. Without this
+      // call the viewport stayed at data-active-renderer="authority",
+      // the Authority Cytoscape mount stayed visible, and the
+      // legacy #gmap-canvas stayed hidden by the
+      // [data-active-renderer="authority"] CSS rule. Under the
+      // strategic opt-in mode, the strategic renderer's body-lens
+      // MutationObserver promotes the canonical Context renderer
+      // identity on its own, so this branch does not duplicate that
+      // activation.
+      if (window.MIDASExplorerGraph && window.MIDASExplorerGraph.viewport &&
+          typeof window.MIDASExplorerGraph.viewport.deactivate === 'function' &&
+          typeof window.MIDASExplorerGraph.viewport.getActiveRendererId === 'function' &&
+          window.MIDASExplorerGraph.viewport.getActiveRendererId() === 'authority') {
+        try { window.MIDASExplorerGraph.viewport.deactivate(); }
+        catch (_) { /* swallow: lens switching must not break if viewport restore fails */ }
+      }
       if (ExplorerGraph && ExplorerGraph.shell && typeof ExplorerGraph.shell.setActiveLens === 'function') {
         ExplorerGraph.shell.setActiveLens('context');
       }
@@ -3256,6 +3395,13 @@
       if (ExplorerGraph && ExplorerGraph.authorityView && typeof ExplorerGraph.authorityView.refresh === 'function') {
         ExplorerGraph.authorityView.refresh({ rootId: serviceId });
       }
+      // D33x-list-mode — Clicking Authority exits Cytoscape List Mode (safe no-op if already in graph mode).
+      try {
+        var _pocOnAuthority = window.MIDASExplorerGraph && window.MIDASExplorerGraph.cytoscapePoc;
+        if (_pocOnAuthority && typeof _pocOnAuthority.setViewMode === 'function') {
+          _pocOnAuthority.setViewMode('graph');
+        }
+      } catch (_) { /* swallow */ }
       ensureFocusModeEnabledOnGraphEntry();
       return;
     }
@@ -4436,7 +4582,9 @@
   }
 
   // Wire the Back button click once at script load (idempotent —
-  // matches the existing wireGmapZoomControls pattern).
+  // same per-button IIFE pattern legacy camera buttons used before
+  // D37p-impl-4 routed their bindings through the shared toolbar
+  // adapter + graphCameraBus).
   (function wireGmapBackButton() {
     const btn = document.getElementById('gmap-back-button');
     if (btn) btn.addEventListener('click', () => goBackOrToOwningService());

@@ -1,0 +1,200 @@
+/* /explorer/assets/css/context-cytoscape-overlay-spike.css
+ *
+ * D34b-context-cytoscape-html-overlay-card-parity-spike
+ *
+ * Every selector is scoped under host-owned renderer identity —
+ * `.midas-graph-viewport[data-active-renderer="context-cytoscape"]`.
+ * The GraphViewport host (graph-viewport.js) sets this attribute
+ * when `viewport.activate('context-cytoscape', factory)` succeeds,
+ * and clears it (or restores the baseline) on deactivation. The
+ * D35f cleanup tranche retired `body.context-cy-spike-active` as
+ * the activation flag; no CSS rule here keys off body classes any
+ * more. Removing the spike means deleting this stylesheet, the
+ * `<link>` tag in `index.html`, and the spike's `<script>` + module
+ * file.
+ *
+ * Card visual parity is achieved entirely by REUSING the existing
+ * MIDAS `.gmap-node*` CSS rules from `governance-map.css`. The
+ * cloned cards inside `.context-cy-spike-overlay` carry the same
+ * `.gmap-node` + per-kind class (`capability-node`, `process-node`,
+ * `decision-surface-node`, etc.) as the originals, so card width,
+ * height, padding, border-radius, accent strip, font family /
+ * sizes / weights, eyebrow / primary / meta typography, badge
+ * styling, hover, focus, and `.selected` state all apply unchanged.
+ * No card-styling values are duplicated here.
+ *
+ * The rules below only handle:
+ *   • removing the native MIDAS canvas from layout entirely while
+ *     the spike is active;
+ *   • mounting the spike inside `.governance-map-canvas-scroll` as
+ *     a sibling of `#gmap-canvas`, using Authority Cytoscape's
+ *     in-flow mount pattern;
+ *   • re-establishing the absolutely-positioned + transform-driven
+ *     placement of the cloned cards.
+ */
+
+/* D34k-context-cytoscape-authority-mount-pattern — Hide the native
+ * MIDAS canvas entirely while the Context Cytoscape spike is active.
+ *
+ * Replaces D34b's `display: block !important; width: 100% !important;
+ * height: 100% !important; min-width: 0 !important` override. The
+ * earlier rule kept `#gmap-canvas` in layout (forced to viewport
+ * size) so the spike's mount could live INSIDE `#gmap-canvas`. That
+ * arrangement carried two latent failures:
+ *
+ *   • `#gmap-scene` was kept visible-in-layout via `visibility:
+ *     hidden`. Its absolutely-positioned `.gmap-node` children sat
+ *     at MIDAS model coordinates (up to x ≈ 1500), extending past
+ *     `#gmap-canvas`'s `overflow: visible` box and bubbling up to
+ *     `.governance-map-canvas-scroll`'s `overflow: auto`. Result:
+ *     scrollbars appeared from the hidden production scene.
+ *
+ *   • The mount sat at z-index 10 with an opaque background and
+ *     covered the body-level MIDAS chrome (`.gmap-legend-overlay`,
+ *     `.gmap-mode-rail`, `.gmap-camera-cluster`) that lives at
+ *     z-index 5 against `.governance-map-body`.
+ *
+ * Mirroring Authority Cytoscape's pattern (`body.cytoscape-poc-active
+ * #gmap-canvas { display: none !important }` in
+ * authority-cytoscape-poc.css), `display: none` removes the entire
+ * production scene + svg + cards from layout — no more phantom
+ * scroll contribution and no more competing chrome. The spike's
+ * mount is appended directly to `.governance-map-canvas-scroll`
+ * (the production scroll wrapper) as a sibling of `#gmap-canvas`,
+ * mirroring `.cytoscape-poc-mount`'s parent.
+ *
+ * Source order matters: this stylesheet is linked AFTER
+ * authority-cytoscape-poc.css in index.html so when both spike
+ * body classes are present (`?cytoscape=1&contextHtmlCards=1`),
+ * THIS rule wins for the Context lens. Removing the body class on
+ * destroy() reverts to Authority's hide (which produces the same
+ * end state for Authority lens, since Authority also hides
+ * `#gmap-canvas`). */
+.midas-graph-viewport[data-active-renderer="context-cytoscape"] #gmap-canvas {
+  display: none !important;
+}
+
+/* D34k — Mount geometry. Mirrors Authority Cytoscape's
+ * `.cytoscape-poc-mount`: in-flow `position: relative` filling the
+ * scroll wrapper. The Authority comment about `min-height: 480px`
+ * applies verbatim here:
+ *
+ *   "The parent `.governance-map-canvas-scroll` is `height: 100%`
+ *    inside the workbench grid cell; `height: 100%` here propagates
+ *    that height to Cytoscape so fit() sees the real viewport. A
+ *    small fallback keeps the canvas usable on very short heights."
+ *
+ * `overflow: hidden` keeps cy's internal canvases clipped to the
+ * mount. `isolation: isolate` creates a stacking context so the
+ * overlay's `z-index: 100` (below) is LOCAL — the mount as a whole
+ * stacks against `.governance-map-body` at the in-flow position
+ * (below the body-level z-index:5 overlays). Without isolation,
+ * the overlay's z-index 100 would escape and paint above the
+ * legend / mode-rail / camera-cluster.
+ *
+ * `visibility: visible !important` defends against any future CSS
+ * rule that might cascade `hidden` down.
+ *
+ * No `contain: layout paint`: with `#gmap-canvas` `display: none`
+ * the hidden production scene no longer contributes to ancestor
+ * scroll extent, so the containment that D34h added to defend
+ * against scroll bubbling is no longer necessary. */
+.midas-graph-viewport[data-active-renderer="context-cytoscape"] .context-cy-spike-mount {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 480px;
+  overflow: hidden;
+  background: var(--surface-container-lowest, #0c111c);
+  isolation: isolate;
+  visibility: visible !important;
+}
+
+/* D35e-port-context-cytoscape-to-graphviewport — Overlay is a
+ * projection layer, NOT a clip authority.
+ *
+ * STRATEGIC CLIP CONTRACT (D35e):
+ *   The .midas-graph-viewport (D35a) is the intended strategic
+ *   clip authority for graph content. Today, `.context-cy-spike-
+ *   mount` already declares `overflow: hidden` for Cytoscape's own
+ *   internal canvas-discipline reasons (cy renders raster layers
+ *   that must stay clipped to the mount); that mount-level clip
+ *   serves as the effective clip boundary for the spike until
+ *   D35f promotes overflow:hidden to .midas-graph-viewport.
+ *
+ * REMOVED IN D35e:
+ *   `overflow: hidden` on the overlay. Pre-D35e, the overlay's own
+ *   `overflow: hidden` clipped cards in the overlay's UNTRANSFORMED
+ *   coordinate space (cy mount size, e.g. 800x600). Cards whose
+ *   model-space x-coord exceeded that pre-transform extent were
+ *   clipped BEFORE the overlay's `scale(cy.zoom)` projected them
+ *   into rendered space — producing the user-reported disappearing-
+ *   card symptom where cards vanished halfway across the visible
+ *   canvas at zoom < 1.
+ *
+ *   With the overlay no longer clipping, cards paint at their
+ *   untransformed model positions, the overlay's transform
+ *   projects them into rendered space, and the mount (or
+ *   eventually the viewport) clips at the visible viewport
+ *   boundary — strictly more accurate.
+ *
+ * z-index 100 is INSIDE the mount's stacking context (mount has
+ * `isolation: isolate`), so it stacks above cy's internal canvas
+ * layers (z-index 0..3) without competing with `.governance-map-
+ * body`-level chrome. */
+.midas-graph-viewport[data-active-renderer="context-cytoscape"] .context-cy-spike-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 100;
+  visibility: visible !important;
+
+  /* D34i-context-cytoscape-overlay-two-tier-transform —
+   * `transform-origin: top left` is REQUIRED by the projection
+   * model. The overlay's runtime transform (written by `_syncLayer`)
+   * is `translate(cy.pan.x, cy.pan.y) scale(cy.zoom)` — exactly the
+   * formula Cytoscape uses to project its own canvas. For the
+   * translate component to land at the same screen pixel as cy's
+   * internal projection, the transform origin MUST match cy's
+   * (top-left of the cy container). The default `50% 50%` would
+   * place cy.pan(0,0) at the centre of the overlay box instead of
+   * its top-left and visually offset every card by half the
+   * container size scaled by `(1 - cy.zoom)`. */
+  transform-origin: top left;
+}
+
+/* D34h-context-cytoscape-native-graph-management — Cards are
+ * pointer-event transparent.
+ *
+ * The previous architecture set `pointer-events: auto` on each card
+ * so a custom DOM drag handler could observe pointerdown and write
+ * cy.position(...) from CSS-pixel deltas. That mixed coordinate
+ * spaces (viewport pixels vs cy model) and produced the symptoms
+ * documented in the D34g investigation report (cards shifting on
+ * drag, scrollbars, etc.).
+ *
+ * Cytoscape now owns ALL pointer interaction: tap to select,
+ * grab to drag, group-drag of selected nodes, shift+drag for box
+ * selection, pan, zoom. The cy hit-testable canvas sits directly
+ * beneath each card at the same screen origin (because the overlay
+ * is a child of the cy mount). Pointer-events: none on the card
+ * lets the click pass through to cy's canvas; cy maps it to the
+ * underlying node by the node's bounding box (= card footprint via
+ * `data(cardWidth/cardHeight)`).
+ *
+ * Keyboard activation still works because pointer-events: none does
+ * not block keyboard focus or the native button keyboard activation
+ * path — a focused card's Enter/Space still fires a click event,
+ * which `_wireCardKeyboardActivation` routes to the cy selection +
+ * MIDAS right-drawer hook.
+ *
+ * `visibility: visible !important` defends against any future CSS
+ * rule that might cascade `hidden` down. */
+.midas-graph-viewport[data-active-renderer="context-cytoscape"] .context-cy-spike-overlay .gmap-node {
+  position: absolute !important;
+  left: 0 !important;
+  top: 0 !important;
+  margin: 0;
+  pointer-events: none;
+  visibility: visible !important;
+}

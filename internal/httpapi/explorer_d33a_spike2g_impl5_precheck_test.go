@@ -126,22 +126,34 @@ func TestExplorer_D33aSpike2gImpl5Precheck_CytoscapeTapRoutesSelectionToMidasIns
 
 // ── 3. PoC inspector still present ───────────────────────────────────
 
-// TestExplorer_D33aSpike2gImpl5Precheck_PocInspectorStillPresent pins
-// that this tranche has NOT removed the Cytoscape PoC's own
-// inspector aside. The PoC inspector remains the visible source of
-// truth for selected-node data while the right-side inspector wiring
-// is validated. Removal is reserved for a later tranche.
+// TestExplorer_D33aSpike2gImpl5Precheck_PocInspectorStillPresent — the
+// "removal deferred to a later tranche" pin originally asserted the
+// floating PoC inspector aside still rendered. D33x-list-mode is that
+// later tranche: the aside has been retired, leaving the production
+// right drawer (fed by the carrier DOM contract) as the canonical
+// selected-node surface. The test now asserts the inverse: the
+// floating-card render path is GONE and the carrier contract REMAINS.
 func TestExplorer_D33aSpike2gImpl5Precheck_PocInspectorStillPresent(t *testing.T) {
 	js := d33aSpike2gImpl5PrecheckReadPoc(t)
-	for _, want := range []string{
+	for _, gone := range []string{
 		"function _renderInspector(node)",
 		"function _renderInspectorEmpty(",
-		"_inspectorEl",
-		"cytoscape-poc-inspector",
-		"_renderInspector(node)",
+		"function _wireInspectorToggle(",
+		"function _setInspectorExpanded(",
+	} {
+		if strings.Contains(js, gone) {
+			t.Errorf("D33x-list-mode: floating PoC inspector aside must remain retired — found %q", gone)
+		}
+	}
+	// The carrier-DOM contract that feeds the PRODUCTION right
+	// drawer is unrelated to the floating card and must survive.
+	for _, want := range []string{
+		"_renderInspectorCarriers",
+		"cytoscape-poc-inspector-carrier",
+		"hooks.selectNode(nodeId)",
 	} {
 		if !strings.Contains(js, want) {
-			t.Errorf("D33a-spike-2g-impl-5-precheck: PoC inspector surface element %q must remain (removal deferred to a later tranche)", want)
+			t.Errorf("D33x-list-mode: production right-drawer wiring must remain — missing %q", want)
 		}
 	}
 }

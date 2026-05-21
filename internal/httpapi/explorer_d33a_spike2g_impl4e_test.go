@@ -100,8 +100,9 @@ func TestExplorer_D33aSpike2gImpl4e_AuthorityThinCardThemeStillRegistered(t *tes
 	if !strings.Contains(js, "'"+d33aSpike2gImpl4eThemeName+"'") {
 		t.Errorf("D33a-spike-2g-impl-4e: _THEMES must still contain %q", d33aSpike2gImpl4eThemeName)
 	}
-	if !strings.Contains(js, "var DEFAULT_THEME  = 'classic';") {
-		t.Error("D33a-spike-2g-impl-4e: DEFAULT_THEME must remain 'classic'")
+	// D37f — DEFAULT_THEME promoted to 'html-card'; 'classic' remains in _THEMES.
+	if !strings.Contains(js, "var DEFAULT_THEME  = 'html-card';") {
+		t.Error("D33a-spike-2g-impl-4e/D37f: DEFAULT_THEME must be 'html-card' (D37f promotion)")
 	}
 }
 
@@ -523,11 +524,14 @@ func TestExplorer_D33aSpike2gImpl4e_HoverAndClickBehaviourPreserved(t *testing.T
 		t.Error("D33a-spike-2g-impl-4e: rest-state edge rule must still clear the label")
 	}
 
+	// D33x-list-mode — Inspector destination moved from the floating
+	// PoC card to the production right drawer via the renderer-hook
+	// dispatch (`hooks.selectNode(nodeId)`).
 	for _, want := range []string{
 		"_cy.on('tap', 'node', function (evt)",
 		"_focusNode(node)",
 		"_emphasiseRootPath(node)",
-		"_renderInspector(node)",
+		"hooks.selectNode(nodeId)",
 	} {
 		if !strings.Contains(js, want) {
 			t.Errorf("D33a-spike-2g-impl-4e: click→inspector handoff missing — %q", want)

@@ -1,0 +1,729 @@
+/* /explorer/assets/css/context-cytoscape-renderer.css
+ *
+ * D37o-impl-2 — Context Strategic Renderer Skeleton.
+ *
+ * Every rule is scoped under
+ *
+ *   .midas-graph-viewport[data-active-renderer="context"]
+ *
+ * The strategic renderer activates only when the GraphViewport host
+ * publishes the canonical `context` renderer identity (i.e. only
+ * under the opt-in `?contextRenderer=strategic` activation mode).
+ * When the host is on its `native-context` baseline, none of these
+ * rules apply, so the legacy Context renderer is visually unaffected.
+ *
+ * This stylesheet is intentionally a SKELETON. It carries enough
+ * styling to make the proof-of-life skeleton legible. Full visual
+ * parity (per-kind cards, connector taxonomy, FMP / coverage badges,
+ * five-band geometry) is delivered by later tranches.
+ *
+ * Naming policy: this stylesheet uses only the canonical `context`
+ * renderer identity. No durable temporary identities.
+ */
+
+/* ── Mount root ───────────────────────────────────────────────────── */
+
+/* D37s-context-raw-cytoscape-1-impl — Mount layout per paint mode.
+ *
+ * Base layout: fills the renderer slot, transparent for chrome
+ * surfaces underneath, no flex-column gymnastics that would force
+ * a graph canvas into a residual flex slot. The mount carries a
+ * `data-mount-mode` attribute set by the production paint function:
+ *
+ *   data-mount-mode="document" — empty-state diagnostic text + non-
+ *                                spatial flow-layout DOM cards.
+ *                                Document layout is appropriate
+ *                                (flex column, padding, gap).
+ *   data-mount-mode="graph"    — strategic spatial Cytoscape graph.
+ *                                The canvas fills the mount; NO
+ *                                flex-column chrome above it.
+ */
+.midas-graph-viewport[data-active-renderer="context"] .context-renderer-mount {
+  position: absolute;
+  inset: 0;
+  background: var(--surface-container-low, #1a1f2e);
+  color: var(--on-surface, #e2e8f0);
+  font-family: var(--font-display, Inter, 'Segoe UI', system-ui, sans-serif);
+  z-index: 3;
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-renderer-mount[data-mount-mode="document"] {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 24px;
+  overflow-y: auto;
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-renderer-mount[data-mount-mode="graph"] {
+  /* No flex, no padding, no gap. The canvas is the sole child and
+   * fills the mount entirely (see spatial-canvas rule below). */
+  overflow: hidden;
+}
+
+/* ── Skeleton header ──────────────────────────────────────────────── */
+
+.midas-graph-viewport[data-active-renderer="context"] .context-renderer-skeleton-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-renderer-skeleton-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--on-surface, #e2e8f0);
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-renderer-skeleton-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--on-surface-variant, #94a3b8);
+  max-width: 64ch;
+}
+
+/* ── Summary row ──────────────────────────────────────────────────── */
+
+.midas-graph-viewport[data-active-renderer="context"] .context-renderer-skeleton-summary {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--on-surface-variant, #94a3b8);
+}
+
+/* ── Band list ────────────────────────────────────────────────────── */
+
+.midas-graph-viewport[data-active-renderer="context"] .context-renderer-skeleton-bands {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-renderer-skeleton-band {
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 4px 8px;
+  border-left: 2px solid var(--outline-variant, #475569);
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 0 3px 3px 0;
+  color: var(--on-surface, #e2e8f0);
+}
+
+/* ── Empty state ──────────────────────────────────────────────────── */
+
+.midas-graph-viewport[data-active-renderer="context"] .context-renderer-skeleton-empty {
+  margin: 0;
+  padding: 12px 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--on-surface-variant, #94a3b8);
+}
+
+/* ── Visual foundation (D37o-impl-4) ─────────────────────────────── */
+/*
+ * Structural visual foundation. Five bands stack vertically inside
+ * a `.context-renderer-canvas` grid; a right governance column sits
+ * to the right of the main stack. A renderer-owned SVG connector
+ * layer paints behind cards.
+ *
+ * The layout model owns slot semantics; this CSS owns the visual
+ * arrangement. Full pixel-perfect parity with the legacy five-layer
+ * hierarchy is a later tranche. The vocabulary established here
+ * (canvas / main / governance / band / cap-proc split / connector
+ * layer / sentinel) is the visual seam future tranches can refine
+ * without re-architecting the renderer.
+ */
+
+/* Canvas wraps the SVG layer + the main band stack + the governance
+ * column. position: relative so the absolute-positioned SVG layer
+ * can fill it. CSS grid keeps governance to the right of main when
+ * space allows; below a width threshold the governance column wraps. */
+.midas-graph-viewport[data-active-renderer="context"] .context-renderer-canvas {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 220px);
+  gap: 16px;
+  margin-top: 6px;
+  align-items: start;
+}
+
+/* Main band stack lives in grid column 1. position: relative so it
+ * forms its own stacking context above the SVG layer. */
+.midas-graph-viewport[data-active-renderer="context"] .context-renderer-main {
+  position: relative;
+  grid-column: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  z-index: 1;
+}
+
+/* Per-band section. */
+.midas-graph-viewport[data-active-renderer="context"] .context-renderer-band {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 0;
+  border-top: 1px solid var(--outline-variant, #475569);
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-renderer-band:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-renderer-band-title {
+  margin: 0;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--on-surface-variant, #94a3b8);
+}
+
+/* Flat slot row for non-split bands (related / root / surface / ai). */
+.midas-graph-viewport[data-active-renderer="context"] .context-renderer-band-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Root band emphasises its single root card by centring it. */
+.midas-graph-viewport[data-active-renderer="context"] .context-renderer-band[data-band-id="root"] .context-renderer-band-cards {
+  justify-content: center;
+}
+
+/* ── cap-proc split column ───────────────────────────────────────── */
+/* The cap-proc band visually splits into two columns: capability
+ * cards on the left, process cards on the right. Driven by the
+ * layout model's splitColumns spec. */
+.midas-graph-viewport[data-active-renderer="context"] .context-renderer-cap-proc-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-renderer-cap-proc-left,
+.midas-graph-viewport[data-active-renderer="context"] .context-renderer-cap-proc-right {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-content: flex-start;
+  min-width: 0;
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-renderer-cap-proc-right {
+  justify-content: flex-end;
+}
+
+/* ── Governance column ───────────────────────────────────────────── */
+/* Sits to the right of main in grid column 2. position: relative so
+ * its cards stack above the SVG layer. */
+.midas-graph-viewport[data-active-renderer="context"] .context-renderer-governance {
+  position: relative;
+  grid-column: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  z-index: 1;
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-renderer-governance-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px dashed var(--outline-variant, #475569);
+  border-radius: 4px;
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-renderer-governance-slot[data-governance-position="top"] {
+  align-self: start;
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-renderer-governance-slot[data-governance-position="bottom"] {
+  align-self: end;
+}
+
+/* ── Overflow sentinel tile ──────────────────────────────────────── */
+/* "+N more" tiles emitted by the renderer when the layout model
+ * produces a sentinel for an overfull band. Sentinels are
+ * renderer-only constructs — kind = '_overflow_sentinel'; they
+ * are NOT real Context cards. */
+.midas-graph-viewport[data-active-renderer="context"] .context-renderer-sentinel {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 120px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px dashed var(--outline-variant, #475569);
+  border-radius: 6px;
+  color: var(--on-surface-variant, #94a3b8);
+  align-self: center;
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-renderer-sentinel-more {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--on-surface, #e2e8f0);
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-renderer-sentinel-label {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--on-surface-variant, #94a3b8);
+}
+
+/* ── Connector layer (D37o-impl-4) ───────────────────────────────── */
+/* Renderer-owned SVG layer painted behind cards. Pointer-events:
+ * none so card interactions are unaffected. z-index 0 so the main
+ * band stack (z-index 1) and the governance column (z-index 1)
+ * paint over connectors. */
+.midas-graph-viewport[data-active-renderer="context"] .context-renderer-connectors {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 0;
+  overflow: visible;
+}
+
+/* Base connector line. Per-class overrides set stroke + width. */
+.midas-graph-viewport[data-active-renderer="context"] .context-connector {
+  stroke: var(--outline-variant, #475569);
+  stroke-width: 1.2;
+  fill: none;
+  opacity: 0.78;
+}
+
+/* Service (structural decomposition): neutral, solid. */
+.midas-graph-viewport[data-active-renderer="context"] .context-connector--service {
+  stroke: var(--outline-variant, #475569);
+  stroke-width: 1.4;
+  opacity: 0.72;
+}
+
+/* AI binding (functional binding): AI accent, solid. */
+.midas-graph-viewport[data-active-renderer="context"] .context-connector--ai_binding {
+  stroke: var(--primary, #7aa2ff);
+  stroke-width: 1.6;
+  opacity: 0.88;
+}
+
+/* Authority (synthesis): authority accent, dashed (model emits
+ * stroke-dasharray="6 4"). */
+.midas-graph-viewport[data-active-renderer="context"] .context-connector--authority {
+  stroke: var(--primary, #7aa2ff);
+  stroke-width: 1.5;
+  opacity: 0.82;
+}
+
+/* Evidence (reserved for future runtime evidence edges). */
+.midas-graph-viewport[data-active-renderer="context"] .context-connector--evidence {
+  stroke: var(--on-surface-variant, #94a3b8);
+  stroke-width: 1.4;
+  opacity: 0.78;
+}
+
+/* Gap (coverage risk): risk accent, dashed (model emits
+ * stroke-dasharray="5 5"). */
+.midas-graph-viewport[data-active-renderer="context"] .context-connector--gap {
+  stroke: var(--badge-bad, #ff6b6b);
+  stroke-width: 1.6;
+  opacity: 0.92;
+}
+
+/* ── Cards (D37o-impl-3) ─────────────────────────────────────────── */
+/*
+ * Non-final per-kind card shells. The painter emits the same DOM
+ * vocabulary as future visual-parity tranches; this stylesheet
+ * gives each slot a recognisable presence without attempting pixel
+ * parity with the legacy Context cards.
+ */
+
+.midas-graph-viewport[data-active-renderer="context"] .context-card {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 200px;
+  max-width: 280px;
+  padding: 10px 12px;
+  background: var(--surface-container, #222838);
+  border: 1px solid var(--outline-variant, #475569);
+  border-radius: 6px;
+  box-sizing: border-box;
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-card--role-root {
+  border-color: var(--primary, #4ea1ff);
+  background: var(--surface-container-high, #2a3245);
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-card--role-governance {
+  border-style: dashed;
+}
+
+/* ── Interactive state (D37o-impl-5) ─────────────────────────────── */
+/*
+ * Cards are interactive (click + keyboard) when the renderer's
+ * selection bridge is active. The painter sets role="button" and
+ * tabindex="0" on every card. These rules give cards the basic
+ * affordance + selected / focus visuals; full pixel parity with the
+ * legacy selected card is deferred to a later tranche.
+ */
+
+.midas-graph-viewport[data-active-renderer="context"] .context-card {
+  cursor: pointer;
+  transition: border-color 0.12s ease-out, background 0.12s ease-out, box-shadow 0.12s ease-out;
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-card:hover {
+  border-color: var(--primary, #4ea1ff);
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-card:focus-visible {
+  outline: 2px solid var(--primary, #4ea1ff);
+  outline-offset: 1px;
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-card.is-selected {
+  border-color: var(--primary, #7aa2ff);
+  box-shadow: 0 0 0 1px var(--primary, #7aa2ff) inset;
+  background: var(--surface-container-high, #2a3245);
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-card.is-selected[data-role="root"] {
+  box-shadow: 0 0 0 2px var(--primary, #7aa2ff) inset;
+}
+
+/* Card action affordance — actions are inline `<li>` elements with
+ * role="button" set by the painter. They get a pointer cursor and a
+ * keyboard-focus outline. */
+.midas-graph-viewport[data-active-renderer="context"] .context-card-action {
+  cursor: pointer;
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-card-action:hover {
+  border-style: solid;
+  color: var(--on-surface, #e2e8f0);
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-card-action:focus-visible {
+  outline: 2px solid var(--primary, #4ea1ff);
+  outline-offset: 1px;
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-card-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-card-eyebrow {
+  margin: 0;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--on-surface-variant, #94a3b8);
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-card-name {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--on-surface, #e2e8f0);
+  word-break: break-word;
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-card-subtitle {
+  margin: 0;
+  font-size: 11px;
+  color: var(--on-surface-variant, #94a3b8);
+  word-break: break-word;
+}
+
+/* ── Card meta rows ──────────────────────────────────────────────── */
+
+.midas-graph-viewport[data-active-renderer="context"] .context-card-meta {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--on-surface-variant, #94a3b8);
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-card-meta-row[data-emphasis="strong"] {
+  color: var(--on-surface, #e2e8f0);
+  font-weight: 500;
+}
+
+/* ── Badges ──────────────────────────────────────────────────────── */
+
+.midas-graph-viewport[data-active-renderer="context"] .context-card-badges {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-card-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--on-surface, #e2e8f0);
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-card-badge--fmp-default {
+  background: rgba(122, 162, 255, 0.12);
+  color: var(--primary, #7aa2ff);
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-card-badge--fmp-inherited {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-card-badge--fmp-override {
+  background: rgba(138, 96, 31, 0.22);
+  color: var(--badge-warn, #d4a44d);
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-card-badge--ai-bind {
+  background: rgba(122, 162, 255, 0.16);
+  color: var(--primary, #7aa2ff);
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-card-badge--ai-warn {
+  background: rgba(138, 96, 31, 0.22);
+  color: var(--badge-warn, #d4a44d);
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-card-badge--coverage-ok {
+  background: rgba(46, 160, 67, 0.16);
+  color: var(--badge-ok, #5cb85c);
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-card-badge--coverage-warn {
+  background: rgba(179, 38, 47, 0.18);
+  color: var(--badge-bad, #ff6b6b);
+}
+
+/* ── Metrics ─────────────────────────────────────────────────────── */
+
+.midas-graph-viewport[data-active-renderer="context"] .context-card-metrics {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-card-metric {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 10px;
+  color: var(--on-surface, #e2e8f0);
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-card-metric-value {
+  font-weight: 600;
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-card-metric-label {
+  color: var(--on-surface-variant, #94a3b8);
+}
+
+/* ── Actions (display-only in this tranche) ──────────────────────── */
+
+.midas-graph-viewport[data-active-renderer="context"] .context-card-actions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--on-surface-variant, #94a3b8);
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-card-action {
+  padding: 1px 6px;
+  border: 1px dashed var(--outline-variant, #475569);
+  border-radius: 3px;
+}
+
+/* ── Spatial layout mode (D37p-impl-2) ─────────────────────────────── */
+/*
+ * Opt-in spatial canvas. The strategic Context renderer adds
+ * `data-spatial="true"` to its `.context-renderer-canvas` when
+ * `?contextLayout=spatial` is active and the shared
+ * `MIDASExplorerGraph.graphStage` module is loaded. Cards are
+ * absolutely positioned within a fixed-dimension stage element
+ * driven by the StageModel emitted by graph-stage.js.
+ *
+ * The existing flow-layout rules (above) remain the default and
+ * apply when `data-spatial` is absent. None of those rules are
+ * removed by this tranche.
+ */
+
+.midas-graph-viewport[data-active-renderer="context"] .context-renderer-canvas[data-spatial="true"] {
+  /* Override the grid + flex layout used by the flow path. The
+   * spatial path uses a relative block that contains the SVG
+   * connector layer and the absolutely-sized stage element.
+   * `overflow: hidden` lets the shared camera controller own
+   * pan / zoom navigation (D37p-impl-3); the stage's CSS transform
+   * is the sole navigation mechanism.
+   *
+   * D37s-context-geometry-1-impl — Slot-sized envelope.
+   *
+   * `_mountEl` (.context-renderer-mount) is `display: flex;
+   * flex-direction: column;` with a skeleton header + summary as
+   * flex siblings above this canvas. Pre-D37s the lens wrote an
+   * inline `style.width = stageWidth + 'px'; style.height =
+   * stageHeight + 'px'` (typically 1180 x 720) which caused
+   * horizontal overflow when the viewport was narrower than the
+   * stage's logical width.
+   *
+   * The lens now appends the canvas without those inline dimensions.
+   * `flex: 1 1 0` makes the canvas a growing flex item that
+   * consumes the remaining vertical space in the mount column;
+   * `min-height: 0` allows it to shrink below its content size
+   * (default flex `min-height: auto` would prevent the canvas
+   * shrinking when the mount is short). The engine's internal
+   * container is `width: 100%; height: 100%` and resolves against
+   * this canvas's actual slot dimensions; cy then reads
+   * `clientWidth` / `clientHeight` from that container. The graph
+   * is scaled to fit the available slot via the engine's
+   * safe-area-aware `_fitWithSafeArea` (cy.viewport({zoom, pan})),
+   * so a wide stage no longer overflows — it zooms down. */
+  /* D37s-context-raw-cytoscape-1-impl — Canvas fills the mount.
+   *
+   * The production graph paint sets `data-mount-mode="graph"` on
+   * `_mountEl`. That mode removes the flex column / padding / gap
+   * layout. This rule pairs with that mode: the canvas is the sole
+   * child of the mount, position: absolute; inset: 0, so it fills
+   * the renderer slot identically to Authority's mount shape.
+   *
+   * Pre-D37s-raw-cytoscape-1 the canvas was a `flex: 1 1 0` child
+   * of a flex-column mount with a skeleton banner above it
+   * (consuming ~80 px of vertical space). The mount is now positioned
+   * (no flex column) in graph mode and the canvas absolute-positions
+   * to fill it. */
+  display: block;
+  position: absolute;
+  inset: 0;
+  grid-template-columns: none;
+  gap: 0;
+  margin: 0;
+  overflow: hidden;
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-renderer-canvas[data-spatial="true"] .context-renderer-stage {
+  /* Stage dimensions are set inline from stage.dimensions. The
+   * camera controller writes `transform: translate(panX,panY)
+   * scale(zoom)` inline so the renderer must NOT set transform here.
+   * `transform-origin: top left` keeps the controller's pan math
+   * simple (anchor-at-origin); `will-change: transform` hints the
+   * browser to prepare a compositor layer for smoother camera
+   * updates. */
+  position: relative;
+  display: block;
+  z-index: 1;
+  transform-origin: top left;
+  will-change: transform;
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-renderer-canvas[data-spatial="true"] .context-renderer-connectors {
+  /* Connector SVG sits at the stage origin so DOMRect-derived
+   * centroids (computed by context-connector-painter against the
+   * canvas container) render in the same coordinate system as the
+   * absolutely-positioned cards. */
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: visible;
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-renderer-canvas[data-spatial="true"] .context-card {
+  /* Spatial cards consume the inline left / top / width / height
+   * written by the renderer. Override the inline-flex display the
+   * flow path uses so cards behave as positioned blocks. */
+  position: absolute;
+  display: flex;
+  z-index: 1;
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-renderer-canvas[data-spatial="true"] .context-renderer-sentinel {
+  /* Sentinels reuse the standard sentinel chrome but are positioned
+   * absolutely like cards. align-self/inline-flex from the flow
+   * path is reset so inline positioning takes effect. */
+  position: absolute;
+  align-self: auto;
+  z-index: 1;
+}
+
+/* ── D37r-context-cytoscape-3-impl (tranche B) ─────────────────────
+ * Cytoscape-overlay hover parity.
+ *
+ * The strategic spatial Cytoscape path overlays MIDAS cards
+ * (`.context-card`) above the Cytoscape canvas. Overlay cards are
+ * `pointer-events: none` so Cytoscape captures every mouse / tap —
+ * which means the `.context-card:hover` rule above (line 371)
+ * cannot fire for the overlay, and the visible hover affordance
+ * would otherwise be missing only on this path. To restore parity
+ * the renderer toggles `.is-hover` on the overlay card in response
+ * to Cytoscape's `mouseover` / `mouseout` events; this rule mirrors
+ * the existing `.context-card:hover` border treatment for that
+ * class. Strictly scoped to the Cytoscape canvas (via
+ * `data-engine="cytoscape"` which the renderer sets on the spatial
+ * canvas wrapper) — the non-spatial / DOM-fallback paths never
+ * carry the class, so this rule is dead-code-equivalent there.
+ *
+ * Selected-state, root-emphasis, and focus visuals continue to use
+ * the existing `.is-selected`, `.context-card--role-root`, and
+ * `:focus-visible` rules — no Cytoscape-specific overrides needed.
+ */
+.midas-graph-viewport[data-active-renderer="context"]
+.context-renderer-canvas[data-spatial="true"][data-engine="cytoscape"]
+.context-card.is-hover {
+  border-color: var(--primary, #4ea1ff);
+}

@@ -672,62 +672,42 @@
   }
 
   // ────────────────────────────────────────────────────────────────────
-  // Lens registration. The shell calls renderer.render('context', …)
-  // which routes through impl.render(payload, mount). Our render
-  // dispatches on __status sentinels to the appropriate empty/error
-  // helpers, otherwise renders the card-layout payload.
+  // D37p-clean-1 — Dead Renderer Dispatcher Retirement.
   //
-  // ctxRef lazily resolves to the inline IIFE's `_gmapRenderCtx` so a
-  // shell-driven render still has access to the still-inline
-  // orchestration hooks.
+  // The pre-D37p-clean-1 module wired a `lensImpl` against the dead
+  // `MIDASExplorerGraph.renderer.register('context', …)` dispatcher
+  // and an internal `_publishToProjectionHandoff` that fired from
+  // inside that lensImpl's `render`. Diagnostic finding (recorded in
+  // context-projection-provider.js header): the dispatcher had zero
+  // call-sites at runtime, so neither the dispatch nor the publish
+  // hook ever fired. Both are removed here. The live Context paths
+  // are unchanged:
+  //
+  //   • `renderContextGraph` / `renderContextGraphEmpty` /
+  //     `renderContextGraphError` remain the production legacy
+  //     renderer, invoked through `ExplorerGraph.contextView.refresh`
+  //     and `refreshGovernanceMap` in index.html.
+  //   • `contextProjectionProvider` (D37o-fix-1) is the live
+  //     projection producer for the strategic renderer / pane
+  //     consumers; it acquires via the contextAdapter and publishes
+  //     through `contextProjection.publishProjection`.
+  //   • The Context Selected-Object Pane provider (D37p-pane-1) and
+  //     Context Selection Bridge (D37p-selection-1) continue to
+  //     dispatch through their own shared-platform surfaces.
+  //
+  // D37p-clean-2 — Inspector dispatcher retirement. The pre-D37p-clean-2
+  // module additionally wired a Context `inspectorImpl` against the
+  // dead `MIDASExplorerGraph.inspector.register('context', …)`
+  // dispatcher. The dispatcher had zero call-sites at runtime AND
+  // its `renderNode` / `clear` callbacks read `ctx.renderInspector` /
+  // `ctx.clearInspector` from `_renderCtx`, which the inline IIFE
+  // never defined — so the callbacks would silently no-op even if
+  // the dispatcher had fired. Both the `inspectorImpl` literal and
+  // the `inspector.register('context', …)` call are removed here.
+  // Live Context inspector content is rendered via the inline
+  // `renderGovernanceMapInspector` hook + the lens-agnostic frame
+  // setters on `MIDASExplorerGraph.inspector.set*`.
   // ────────────────────────────────────────────────────────────────────
-  function _resolveCtx() {
-    return (window.MIDASExplorerGraph && window.MIDASExplorerGraph._renderCtx) || {};
-  }
-
-  var lensImpl = {
-    render: function (payload, mount) {
-      var ctx = _resolveCtx();
-      if (payload && payload.__status === 404) {
-        renderContextGraphEmpty('No Context Graph for this service yet.', ctx.rootId || '', ctx);
-        return;
-      }
-      if (payload && payload.__status === 501) {
-        renderContextGraphEmpty('Governance map is not configured on this server.', ctx.rootId || '', ctx);
-        return;
-      }
-      if (payload && payload.__status) {
-        renderContextGraphError('Governance map fetch failed (HTTP ' + payload.__status + ').', ctx);
-        return;
-      }
-      renderContextGraph(payload, ctx);
-    },
-    clear: function (mount) {
-      var renderer = _renderer();
-      if (renderer) renderer.clearCanvas();
-    },
-  };
-
-  var inspectorImpl = {
-    // Inspector field rendering remains in the inline IIFE for now;
-    // the Context view registers a placeholder that defers to the
-    // inline `renderGovernanceMapInspector` hook when present.
-    renderNode: function (node, mount) {
-      var ctx = _resolveCtx();
-      if (typeof ctx.renderInspector === 'function') ctx.renderInspector(node, mount);
-    },
-    clear: function (mount) {
-      var ctx = _resolveCtx();
-      if (typeof ctx.clearInspector === 'function') ctx.clearInspector(mount);
-    },
-  };
-
-  if (window.MIDASExplorerGraph.renderer && typeof window.MIDASExplorerGraph.renderer.register === 'function') {
-    window.MIDASExplorerGraph.renderer.register('context', lensImpl);
-  }
-  if (window.MIDASExplorerGraph.inspector && typeof window.MIDASExplorerGraph.inspector.register === 'function') {
-    window.MIDASExplorerGraph.inspector.register('context', inspectorImpl);
-  }
 
   window.MIDASExplorerGraph.contextView = {
     renderContextGraph:      renderContextGraph,

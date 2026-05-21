@@ -241,8 +241,11 @@ func TestExplorer_D33aSpike2gImpl3_ExistingThemesPreserved(t *testing.T) {
 	if !strings.Contains(js, wantThemes) {
 		t.Errorf("D33a-spike-2g-impl-3: theme catalogue must remain unchanged — expected %q", wantThemes)
 	}
-	if !strings.Contains(js, "var DEFAULT_THEME  = 'classic';") {
-		t.Error("D33a-spike-2g-impl-3: DEFAULT_THEME must remain 'classic'")
+	// D37f — DEFAULT_THEME promoted from `'classic'` to `'html-card'`
+	// so the cy node footprint matches the HTML-card overlay. The
+	// `'classic'` theme remains in the theme list.
+	if !strings.Contains(js, "var DEFAULT_THEME  = 'html-card';") {
+		t.Error("D33a-spike-2g-impl-3/D37f: DEFAULT_THEME must be 'html-card' (D37f promotion)")
 	}
 	for _, theme := range []string{
 		"classic",

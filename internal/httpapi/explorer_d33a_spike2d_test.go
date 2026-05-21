@@ -29,13 +29,15 @@ func TestExplorer_D33aSpike2d_ObjectTileV3ThemeRegistered(t *testing.T) {
 		"'object-tile-v3'",
 		"case 'object-tile-v3':",
 		"if (themeName === 'object-tile-v3')",
-		// Fallback path unchanged.
-		"var DEFAULT_THEME  = 'classic';",
+		// D37f — DEFAULT_THEME promoted from 'classic' to 'html-card';
+		// the theme-resolution path itself (indexOf + fallback) is
+		// unchanged.
+		"var DEFAULT_THEME  = 'html-card';",
 		"if (_THEMES.indexOf(raw) >= 0) return raw;",
 		"return DEFAULT_THEME;",
 	} {
 		if !strings.Contains(js, want) {
-			t.Errorf("D33a-spike-2d: object-tile-v3 theme registration missing %q", want)
+			t.Errorf("D33a-spike-2d/D37f: object-tile-v3 theme registration missing %q", want)
 		}
 	}
 }
@@ -488,22 +490,38 @@ func TestExplorer_D33aSpike2d_NoHtmlOverlayChanges(t *testing.T) {
 	js := getExplorerAsset(t, srv, "/explorer/assets/js/graph/authority/authority-cytoscape-poc.js")
 
 	for _, want := range []string{
-		"function _installHtmlCardOverlay(cy, mount, elements, themeName)",
+		// D37f — Lifecycle helpers are still defined; install signature
+		// simplified (themeName param retired); install is now
+		// unconditional in the call site (no theme gate).
+		"function _installHtmlCardOverlay(cy, mount, elements)",
 		"function _updateHtmlCardOverlay(cy)",
 		"function _destroyHtmlCardOverlay()",
+		"_installHtmlCardOverlay(_cy, mount, elements);",
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("D33a-spike-2d/D37f: html-card overlay must remain — missing %q", want)
+		}
+	}
+	// D37f — Pre-D37f gate + old call shape must be retired.
+	exec := stripJSComments(js)
+	for _, banned := range []string{
 		"if (_activeTheme === 'html-card')",
 		"_installHtmlCardOverlay(_cy, mount, elements, _activeTheme);",
 	} {
-		if !strings.Contains(js, want) {
-			t.Errorf("D33a-spike-2d: html-card overlay must remain unchanged — missing %q", want)
+		if strings.Contains(exec, banned) {
+			t.Errorf("D33a-spike-2d/D37f: pre-D37f overlay path %q must be retired from executable code", banned)
 		}
 	}
 }
 
-// TestExplorer_D33aSpike2d_ProductionPathUnaffected pins that the
-// production Authority Graph view contains no Cytoscape or
-// object-tile-v3 references. The PoC activation gate runs before
-// any theme code so the production path never sees v3.
+// TestExplorer_D33aSpike2d_ProductionPathUnaffected pinned, pre-D37b,
+// that the legacy native Authority view contains no Cytoscape or
+// object-tile-v3 references AND that the PoC activation gate
+// preceded theme resolution. D37b RETIRED the activation gate
+// (Cytoscape is now the production Authority renderer). The test
+// now pins the post-D37b residual invariant: the LEGACY native
+// view stays free of Cytoscape / theme references (Cytoscape +
+// theme system live entirely in `authority-cytoscape-poc.js`).
 func TestExplorer_D33aSpike2d_ProductionPathUnaffected(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
@@ -516,14 +534,15 @@ func TestExplorer_D33aSpike2d_ProductionPathUnaffected(t *testing.T) {
 		"cyTheme",
 	} {
 		if strings.Contains(viewJS, banned) {
-			t.Errorf("D33a-spike-2d: production view must not reference %q", banned)
+			t.Errorf("D33a-spike-2d: legacy native view must not reference %q (Cytoscape + themes live in authority-cytoscape-poc.js)", banned)
 		}
 	}
-	// PoC activation gate still precedes theme resolution.
-	gateIdx  := strings.Index(pocJS, "if (!_isPocActive()) {")
-	themeIdx := strings.Index(pocJS, "var _activeTheme = _resolveTheme();")
-	if gateIdx < 0 || themeIdx < 0 || gateIdx >= themeIdx {
-		t.Errorf("D33a-spike-2d: activation gate must precede theme resolution (gate=%d, theme=%d)", gateIdx, themeIdx)
+
+	// D37b — theme resolution still happens (themes drive the
+	// production rich-card rendering); the pre-D37b activation gate
+	// that preceded it has been retired.
+	if !strings.Contains(pocJS, "var _activeTheme = _resolveTheme();") {
+		t.Error("D37b: theme resolution must remain (theme system intact for production Authority renderer)")
 	}
 }
 
