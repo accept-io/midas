@@ -91,7 +91,7 @@ components:
       properties:
         outcome:
           type: string
-          enum: [execute, escalate, reject, request_clarification]
+          enum: [accept, escalate, reject, request_clarification]
         reason:
           type: string
           description: Typed reason code (e.g. WITHIN_AUTHORITY, CONFIDENCE_BELOW_THRESHOLD).
@@ -535,8 +535,7 @@ components:
         name:
           type: string
         status:
-          type: string
-          enum: [draft, review, active, deprecated, retired]
+          $ref: "#/components/schemas/LifecycleStatus"
         version:
           type: integer
         domain:
@@ -572,8 +571,7 @@ components:
         description:
           type: string
         status:
-          type: string
-          enum: [draft, review, active, deprecated, retired]
+          $ref: "#/components/schemas/LifecycleStatus"
         effective_date:
           type: string
           format: date-time
@@ -803,8 +801,7 @@ components:
         description:
           type: string
         status:
-          type: string
-          enum: [draft, review, active, deprecated, retired]
+          $ref: "#/components/schemas/LifecycleStatus"
         effective_date:
           type: string
           format: date-time
@@ -893,6 +890,24 @@ components:
             $ref: "#/components/schemas/FailModePolicy"
 
     # ---------------------------------------------------------------
+    # Canonical lifecycle posture
+    # ---------------------------------------------------------------
+    LifecycleStatus:
+      type: string
+      description: >
+        Canonical lifecycle posture for versioned governance resources
+        (Surface, Profile, FailModePolicy, EscalationTarget). Every
+        governed configuration entity in MIDAS follows the same
+        draft -> review -> active -> deprecated -> retired progression.
+        Only `active` versions participate in runtime resolution.
+      enum:
+        - draft
+        - review
+        - active
+        - deprecated
+        - retired
+
+    # ---------------------------------------------------------------
     # EscalationTarget read API (D31k-impl-1)
     # ---------------------------------------------------------------
     EscalationTargetKind:
@@ -906,13 +921,12 @@ components:
       enum: [role, agent, surface, external]
 
     EscalationTargetStatus:
-      type: string
       description: >
-        Lifecycle state of an EscalationTarget version. Mirrors
-        AuthorityProfile / DecisionSurface / FailModePolicy status
-        values. Only `active` versions participate in runtime
-        escalation resolution.
-      enum: [draft, review, active, deprecated, retired]
+        Lifecycle state of an EscalationTarget version. Delegates to
+        the canonical LifecycleStatus posture. Only `active` versions
+        participate in runtime escalation resolution.
+      allOf:
+        - $ref: "#/components/schemas/LifecycleStatus"
 
     EscalationTarget:
       type: object
@@ -3269,8 +3283,7 @@ components:
         version:
           type: integer
         status:
-          type: string
-          enum: [draft, review, active, deprecated, retired]
+          $ref: "#/components/schemas/LifecycleStatus"
         effective_from:
           type: string
           format: date-time
@@ -3511,13 +3524,11 @@ components:
         - process_path
 
     DriftDefinitionStatus:
-      type: string
-      enum:
-        - draft
-        - review
-        - active
-        - deprecated
-        - retired
+      description: >
+        Lifecycle state of a DriftDefinition. Delegates to the
+        canonical LifecycleStatus posture.
+      allOf:
+        - $ref: "#/components/schemas/LifecycleStatus"
 
     DriftStatusBand:
       type: string

@@ -5,6 +5,7 @@ package httpapi
 // present, and exact enum values for Kind + Status.
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -74,10 +75,13 @@ func TestOpenAPIContract_EscalationTargetStatus_Enum(t *testing.T) {
 	if !ok {
 		t.Fatal("EscalationTargetStatus schema not a map")
 	}
-	enum, ok := s["enum"].([]any)
-	if !ok {
-		t.Fatal("EscalationTargetStatus.enum missing")
-	}
+	// After D37x-followup-3, EscalationTargetStatus delegates to the
+	// canonical LifecycleStatus component via `allOf: [$ref: ...]`.
+	// Resolve the enum through the alias chain so this pin keeps its
+	// original intent — "EscalationTargetStatus yields the 5-value
+	// lifecycle posture" — independent of which schema actually
+	// carries the enum array.
+	enum := resolveLifecycleEnum(t, "EscalationTargetStatus", s, schemas)
 	want := map[string]bool{
 		"draft": true, "review": true, "active": true,
 		"deprecated": true, "retired": true,
@@ -96,6 +100,43 @@ func TestOpenAPIContract_EscalationTargetStatus_Enum(t *testing.T) {
 			t.Errorf("EscalationTargetStatus enum missing %q", w)
 		}
 	}
+}
+
+// resolveLifecycleEnum returns the enum array for a schema that either
+// (a) declares enum inline, or (b) delegates to another schema via
+// `allOf: [{$ref: "#/components/schemas/<Name>"}]`. The single-hop
+// indirection introduced by D37x-followup-3's LifecycleStatus
+// canonicalisation is the only shape this resolver needs to handle.
+func resolveLifecycleEnum(t *testing.T, schemaName string, s, schemas map[string]any) []any {
+	t.Helper()
+	if enum, ok := s["enum"].([]any); ok {
+		return enum
+	}
+	allOf, ok := s["allOf"].([]any)
+	if !ok {
+		t.Fatalf("%s: schema carries neither enum nor allOf", schemaName)
+	}
+	const refPrefix = "#/components/schemas/"
+	for _, item := range allOf {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		ref, ok := entry["$ref"].(string)
+		if !ok || !strings.HasPrefix(ref, refPrefix) {
+			continue
+		}
+		target := strings.TrimPrefix(ref, refPrefix)
+		ts, ok := schemas[target].(map[string]any)
+		if !ok {
+			t.Fatalf("%s: allOf $ref target %q not found under components.schemas", schemaName, target)
+		}
+		if enum, ok := ts["enum"].([]any); ok {
+			return enum
+		}
+	}
+	t.Fatalf("%s: allOf entries did not resolve to a schema with an enum", schemaName)
+	return nil
 }
 
 func TestOpenAPIContract_Profile_HasEscalationTargetID(t *testing.T) {
