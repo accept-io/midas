@@ -196,6 +196,19 @@
   // card objects. Reset on every spatial paint.
   var _engineByCardId  = {};
 
+  // D37o-overlap-14 — Explicit Context HTML-overlay scaffold state.
+  //
+  // This is deliberately inert unless the operator passes
+  // `contextOverlay=html-cards`. The protected raw route
+  // (`contextRenderer=strategic&contextLayout=spatial`) does not create
+  // an adapter session and continues to mount the engine with
+  // `overlayEnabled: false`.
+  var _contextOverlayAdapter = null;
+  var _contextOverlayRenderGeneration = 0;
+  var _contextOverlayFootprintCandidates = {};
+  var _contextOverlayDiagnostics = [];
+  var _contextOverlayRecomposeRequested = false;
+
   // ── Activation mode read ───────────────────────────────────────────
   //
   // The activation mode is parsed from the URL query string. It is
@@ -256,6 +269,39 @@
 
   function _isSpatialMode() {
     return _readLayoutMode() === LAYOUT_MODE_SPATIAL;
+  }
+
+  // ── Context overlay presentation mode (D37o-overlap-14) ───────────
+  //
+  // Layout and presentation are separate axes. `contextLayout=spatial`
+  // selects graph-stage placement; `contextOverlay=html-cards` is the
+  // future HTML-card presentation opt-in. Absence of `contextOverlay`
+  // means protected raw Cytoscape mode.
+
+  var OVERLAY_QUERY_PARAM = 'contextOverlay';
+  var OVERLAY_MODE_HTML_CARDS = 'html-cards';
+
+  function _readContextOverlayMode() {
+    try {
+      var search = (window.location && window.location.search) || '';
+      var pairs = search.replace(/^\?/, '').split('&');
+      for (var i = 0; i < pairs.length; i++) {
+        var p = pairs[i].split('=');
+        if (decodeURIComponent(p[0]) === OVERLAY_QUERY_PARAM) {
+          return decodeURIComponent(p[1] || '');
+        }
+      }
+    } catch (_) { /* fall through */ }
+    return '';
+  }
+
+  function _isContextHtmlOverlayMode() {
+    return _readContextOverlayMode() === OVERLAY_MODE_HTML_CARDS;
+  }
+
+  function _isUnsupportedContextOverlayMode() {
+    var mode = _readContextOverlayMode();
+    return !!(mode && mode !== OVERLAY_MODE_HTML_CARDS);
   }
 
   function _hasGraphStage() {
@@ -566,17 +612,36 @@
   // through the shared graph-platform footprint policy module. The
   // numeric values are unchanged from the previous kind-aware
   // estimator; only the source of truth moved out of the renderer.
-  function _resolveContextRawFootprint(card) {
+  function _resolveContextRawFootprintPolicy(card) {
     var policy = window.MIDASExplorerGraph && window.MIDASExplorerGraph.footprintPolicy;
     if (!policy || typeof policy.resolve !== 'function') {
-      return { width: 220, height: 104, gapX: 32, gapY: 72 };
+      return {
+        policyId: 'context.raw-cytoscape.fallback.declared-v1',
+        graphSurfaceId: 'context',
+        rendererMode: 'raw-cytoscape',
+        cardKind: card && card.kind ? String(card.kind) : '',
+        cardVariant: card && card.role ? String(card.role) : null,
+        sizingMode: 'raw-cytoscape-node-body-fixed',
+        reservedWidth: 220,
+        reservedHeight: 104,
+        gapX: 32,
+        gapY: 72,
+        tolerance: 0,
+        source: 'context-renderer-fallback',
+        rawCytoscapeCompatible: true,
+        htmlOverlayCompatible: false,
+      };
     }
-    var resolved = policy.resolve({
+    return policy.resolve({
       graphSurfaceId: 'context',
       rendererMode: 'raw-cytoscape',
       cardKind: card && card.kind ? String(card.kind) : '',
       cardVariant: card && card.role ? String(card.role) : null
     });
+  }
+
+  function _resolveContextRawFootprint(card) {
+    var resolved = _resolveContextRawFootprintPolicy(card);
     return {
       width: resolved.reservedWidth,
       height: resolved.reservedHeight,
@@ -586,6 +651,122 @@
       sizingMode: resolved.sizingMode,
       source: resolved.source
     };
+  }
+
+  function _contextOverlayResolvedFootprint(card) {
+    var resolved = _resolveContextRawFootprintPolicy(card);
+    var id = card && card.id != null ? String(card.id) : '';
+    var candidate = id ? _contextOverlayFootprintCandidates[id] : null;
+    if (candidate && candidate.reservedWidth > 0 && candidate.reservedHeight > 0) {
+      resolved = {
+        policyId: resolved.policyId,
+        graphSurfaceId: resolved.graphSurfaceId,
+        rendererMode: 'html-overlay-scaffold',
+        cardKind: resolved.cardKind,
+        cardVariant: resolved.cardVariant,
+        sizingMode: resolved.sizingMode,
+        reservedWidth: candidate.reservedWidth,
+        reservedHeight: candidate.reservedHeight,
+        gapX: resolved.gapX,
+        gapY: resolved.gapY,
+        tolerance: resolved.tolerance,
+        source: 'context-overlay-candidate',
+        rawCytoscapeCompatible: resolved.rawCytoscapeCompatible,
+        htmlOverlayCompatible: false,
+      };
+    }
+    return resolved;
+  }
+
+  function _destroyContextOverlayAdapter() {
+    if (_contextOverlayAdapter && typeof _contextOverlayAdapter.destroy === 'function') {
+      try { _contextOverlayAdapter.destroy(); } catch (_) { /* swallow */ }
+    }
+    _contextOverlayAdapter = null;
+    _contextOverlayRecomposeRequested = false;
+  }
+
+  function _handleContextOverlayDiagnostic(payload) {
+    _contextOverlayDiagnostics.push({
+      code: 'context_overlay_measurement_diagnostic',
+      rendererId: RENDERER_ID,
+      overlayMode: OVERLAY_MODE_HTML_CARDS,
+      renderGeneration: _contextOverlayRenderGeneration,
+      payload: payload || null,
+    });
+  }
+
+  function _handleContextOverlayRecomposeRequested(request) {
+    if (!_isContextHtmlOverlayMode()) return;
+    var candidates = request && request.updatedFootprintCandidates;
+    if (candidates && typeof candidates === 'object') {
+      for (var id in candidates) {
+        if (!Object.prototype.hasOwnProperty.call(candidates, id)) continue;
+        var c = candidates[id];
+        if (!c || !(c.reservedWidth > 0) || !(c.reservedHeight > 0)) continue;
+        _contextOverlayFootprintCandidates[String(id)] = {
+          reservedWidth: c.reservedWidth,
+          reservedHeight: c.reservedHeight,
+          source: c.source || 'measured-dom',
+          policyId: c.policyId || '',
+        };
+      }
+    }
+    _contextOverlayRenderGeneration += 1;
+    _contextOverlayRecomposeRequested = true;
+    if (_contextOverlayAdapter && typeof _contextOverlayAdapter.resetForGeneration === 'function') {
+      try { _contextOverlayAdapter.resetForGeneration(_contextOverlayRenderGeneration); } catch (_) { /* swallow */ }
+    }
+    // D37o-overlap-14 scaffold only: the live re-render trigger is
+    // intentionally not wired in this tranche. A later tranche must
+    // dispatch through the normal `_paintStrategicContext` path.
+  }
+
+  function _ensureContextOverlayAdapter(cards) {
+    if (!_isContextHtmlOverlayMode()) {
+      _destroyContextOverlayAdapter();
+      return null;
+    }
+    var g = window.MIDASExplorerGraph || {};
+    var factory = g['footprint' + 'MeasurementAdapter'];
+    if (!factory || typeof factory.createAdapter !== 'function') {
+      _contextOverlayDiagnostics.push({
+        code: 'context_overlay_adapter_unavailable',
+        rendererId: RENDERER_ID,
+        overlayMode: OVERLAY_MODE_HTML_CARDS,
+        renderGeneration: _contextOverlayRenderGeneration,
+      });
+      return null;
+    }
+    if (!_contextOverlayAdapter) {
+      _contextOverlayAdapter = factory.createAdapter({
+        graphSurfaceId: 'context',
+        rendererId: RENDERER_ID,
+        rendererMode: 'html-overlay-scaffold',
+        renderGeneration: _contextOverlayRenderGeneration,
+        onDiagnostic: _handleContextOverlayDiagnostic,
+        onRecomposeRequested: _handleContextOverlayRecomposeRequested,
+      });
+    }
+    if (_contextOverlayAdapter && Array.isArray(cards)) {
+      for (var i = 0; i < cards.length; i++) {
+        var card = cards[i];
+        if (!card || card.id == null) continue;
+        try {
+          _contextOverlayAdapter.registerResolvedFootprint(
+            String(card.id),
+            _contextOverlayResolvedFootprint(card)
+          );
+        } catch (_) { /* swallow; diagnostics stay adapter-owned later */ }
+      }
+    }
+    return _contextOverlayAdapter;
+  }
+
+  function _recordContextOverlayMeasurement(key, w, h) {
+    if (!_isContextHtmlOverlayMode() || !_contextOverlayAdapter) return null;
+    if (typeof _contextOverlayAdapter.recordOverlayMeasurement !== 'function') return null;
+    return _contextOverlayAdapter.recordOverlayMeasurement(key, w, h, 'overlay-measure');
   }
 
   // _measuredFootprints — per-card-id measured dimensions, populated
@@ -623,7 +804,13 @@
       if (!c || c.id == null) continue;
       var id = String(c.id);
       var measured = _measuredFootprints[id];
-      if (measured && measured.width > 0 && measured.height > 0) {
+      var overlayCandidate = _isContextHtmlOverlayMode() ? _contextOverlayFootprintCandidates[id] : null;
+      if (overlayCandidate && overlayCandidate.reservedWidth > 0 && overlayCandidate.reservedHeight > 0) {
+        out[id] = {
+          width: overlayCandidate.reservedWidth,
+          height: overlayCandidate.reservedHeight,
+        };
+      } else if (measured && measured.width > 0 && measured.height > 0) {
         out[id] = { width: measured.width, height: measured.height };
       } else {
         out[id] = _resolveContextRawFootprint(c);
@@ -704,6 +891,17 @@
     var graphStage = window.MIDASExplorerGraph && window.MIDASExplorerGraph.graphStage;
     if (!graphStage || typeof graphStage.compose !== 'function') return;
 
+    if (_isUnsupportedContextOverlayMode()) {
+      _destroyContextOverlayAdapter();
+      _paintEmptyState('Unsupported contextOverlay mode: ' + _readContextOverlayMode());
+      _contextOverlayDiagnostics.push({
+        code: 'unsupported_context_overlay_mode',
+        rendererId: RENDERER_ID,
+        overlayMode: _readContextOverlayMode(),
+      });
+      return;
+    }
+
     var byId = _indexCardsById(cards);
     var stageConsts = graphStage._constants || {};
     var footprints  = _buildCardFootprints(cards, stageConsts);
@@ -735,6 +933,7 @@
     // failed to load.
     var _engineMod = window.MIDASExplorerGraph && window.MIDASExplorerGraph.graphCytoscapeEngine;
     if (_engineMod && typeof _engineMod.mount === 'function') {
+      _ensureContextOverlayAdapter(cards);
       _renderSpatialCytoscape(layout, cards, connectors, stage, byId, painter);
       return;
     }
@@ -2022,6 +2221,7 @@
   }
 
   function _destroyCytoscape() {
+    _destroyContextOverlayAdapter();
     // D37r-tranche-B'' — release the engine handle. The engine's
     // `destroy()` tears down overlay + cy + ResizeObserver + camera-
     // bus registration + container DOM in the correct order; Context
@@ -2490,6 +2690,10 @@
     // across renderer lifetimes).
     _measuredFootprints = {};
     _reflowScheduled    = false;
+    _contextOverlayFootprintCandidates = {};
+    _contextOverlayDiagnostics = [];
+    _contextOverlayRenderGeneration = 0;
+    _contextOverlayRecomposeRequested = false;
   }
 
   // ── Selection bridge subscription ─────────────────────────────────

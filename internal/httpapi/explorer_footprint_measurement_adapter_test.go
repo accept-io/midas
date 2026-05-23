@@ -227,13 +227,26 @@ func TestExplorer_FootprintMeasurementAdapter_NotWiredToActiveConsumers(t *testi
 		"/explorer/assets/js/graph/graph-platform/graph-cytoscape-engine.js":  "engine",
 		"/explorer/assets/js/graph/graph-platform/graph-stage.js":             "stage",
 		"/explorer/assets/js/graph/graph-platform/graph-geometry-sentinel.js": "sentinel",
-		"/explorer/assets/js/graph/context/context-cytoscape-renderer.js":     "context",
 	}
 	for asset, label := range consumers {
 		body := readD37o12(t, strings.TrimPrefix(asset, "/explorer/"))
 		if strings.Contains(body, "footprintMeasurementAdapter") ||
 			strings.Contains(body, "graph-footprint-measurement-adapter") {
 			t.Errorf("D37o-overlap-12: %s must not consume dormant adapter", label)
+		}
+	}
+
+	context := readD37o12(t, "assets/js/graph/context/context-cytoscape-renderer.js")
+	if strings.Contains(context, "footprintMeasurementAdapter") {
+		for _, want := range []string{
+			"contextOverlay",
+			"html-cards",
+			"_isContextHtmlOverlayMode()",
+			"_ensureContextOverlayAdapter(cards)",
+		} {
+			if !strings.Contains(context, want) {
+				t.Errorf("D37o-overlap-14: Context adapter references must be gated by explicit overlay scaffold marker %q", want)
+			}
 		}
 	}
 }
@@ -245,7 +258,6 @@ func TestExplorer_FootprintMeasurementAdapter_PreservationSourcesUntouched(t *te
 	}{
 		{"graph-footprint-policy", readD37o12(t, "assets/js/graph/graph-platform/graph-footprint-policy.js")},
 		{"graph-footprint-measurement-sink", readD37o12(t, "assets/js/graph/graph-platform/graph-footprint-measurement-sink.js")},
-		{"context-cytoscape-renderer", readD37o12(t, "assets/js/graph/context/context-cytoscape-renderer.js")},
 		{"authority-cytoscape-poc", readD37o12(t, "assets/js/graph/authority/authority-cytoscape-poc.js")},
 		{"authority-cytoscape-toolbar", readD37o12(t, "assets/js/graph/authority/authority-cytoscape-toolbar.js")},
 		{"authority-cytoscape-poc-css", readD37o12(t, "assets/css/authority-cytoscape-poc.css")},
@@ -258,7 +270,12 @@ func TestExplorer_FootprintMeasurementAdapter_PreservationSourcesUntouched(t *te
 			t.Errorf("D37o-overlap-12: %s must remain independent of dormant adapter", src.name)
 		}
 	}
-	if !strings.Contains(protected[2].body, "overlayEnabled: false") {
+	context := readD37o12(t, "assets/js/graph/context/context-cytoscape-renderer.js")
+	if !strings.Contains(context, "overlayEnabled: false") {
 		t.Fatalf("D37o-overlap-12: Context raw strategic path must keep overlayEnabled:false")
+	}
+	if strings.Contains(context, "footprintMeasurementAdapter") &&
+		!(strings.Contains(context, "contextOverlay") && strings.Contains(context, "html-cards")) {
+		t.Fatalf("D37o-overlap-14: Context adapter references must remain explicit-overlay scaffold only")
 	}
 }
