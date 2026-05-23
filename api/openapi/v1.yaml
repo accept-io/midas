@@ -661,7 +661,7 @@ components:
           type: string
         status:
           type: string
-          enum: [active, suspended, revoked, expired]
+          enum: [active, suspended, revoked]
         granted_by:
           type: string
         effective_from:

@@ -212,11 +212,22 @@ var openapiEnumPinCases = []openapiEnumDriftCase{
 
 	// ----- authority (grant / escalation / fail-mode) -----
 	//
-	// Note: authority.GrantStatus is pinned against GrantLifecycleResponse.status
-	// (the operational response shape), NOT against Grant.status (which adds a
-	// spec-only "expired" value). The mismatch on Grant.status is an
-	// INCONSISTENT finding documented in the D37x-followup-3 report; fixing it
-	// is deferred to a separate tranche.
+	// authority.GrantStatus is pinned against BOTH OpenAPI sites that
+	// declare it — the declarative shape (Grant.status) and the
+	// operational response shape (GrantLifecycleResponse.status). The
+	// followup-3 audit found the two sites had drifted (Grant.status
+	// carried a spec-only "expired" value); followup-4 removed the
+	// drift and added the sibling pin below to prevent regression.
+	{
+		name:         "authority.GrantStatus (vs Grant)",
+		schemaName:   "Grant",
+		propertyPath: []string{"status"},
+		runtime: []string{
+			string(authority.GrantStatusActive),
+			string(authority.GrantStatusSuspended),
+			string(authority.GrantStatusRevoked),
+		},
+	},
 	{
 		name:         "authority.GrantStatus (vs GrantLifecycleResponse)",
 		schemaName:   "GrantLifecycleResponse",
