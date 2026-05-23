@@ -1712,6 +1712,8 @@
 <script src="/explorer/assets/js/graph/graph-platform/graph-stage.js"></script>
 <!-- D37o-overlap-8 — Shared graph footprint policy resolver. Pure data, no DOM/measurement/Cytoscape access. Loaded before strategic Context so raw spatial Context can resolve declared node-body footprints before graph-stage composition. -->
 <script src="/explorer/assets/js/graph/graph-platform/graph-footprint-policy.js"></script>
+<!-- D37o-overlap-10 — Shared footprint measurement sink. Pure source-testable classification/state-machine module for future overlay measurements; loaded after footprint policy but not wired to any active renderer in this tranche. -->
+<script src="/explorer/assets/js/graph/graph-platform/graph-footprint-measurement-sink.js"></script>
 <!-- D37p-impl-3 — Shared Graph Camera Controller. Pure transform/fit/focus controller. Consumes a renderer-supplied target (viewportEl, stageEl, getStageModel, getSafeArea, applyTransform). Used by the strategic Context spatial path; reusable by future lenses. Loaded after graph-stage.js so cameras can read StageModels at create time, and before context-cytoscape-renderer.js so the renderer can instantiate one. -->
 <script src="/explorer/assets/js/graph/graph-platform/graph-camera-controller.js"></script>
 <!-- D37p-platform-3 — Active Graph Camera Command Bus. Lens-aware dispatcher that routes locked toolbar commands (zoomIn / zoomOut / fit / reset / focusRoot / focusSelected / setZoom / getZoom) to the currently-active lens's delegate. Pure platform module: registers no delegates and wires no toolbar buttons in this tranche. Loaded after graph-camera-controller.js so delegates can wrap controller instances, and before lens renderers so they may opt into registration in later tranches. -->
