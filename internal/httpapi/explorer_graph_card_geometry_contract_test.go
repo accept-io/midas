@@ -31,9 +31,9 @@ import (
 // user-side runtime gate.
 
 const (
-	d37s2StageAsset    = "/explorer/assets/js/graph/graph-platform/graph-stage.js"
-	d37s2EngineAsset   = "/explorer/assets/js/graph/graph-platform/graph-cytoscape-engine.js"
-	d37s2ContextAsset  = "/explorer/assets/js/graph/context/context-cytoscape-renderer.js"
+	d37s2StageAsset   = "/explorer/assets/js/graph/graph-platform/graph-stage.js"
+	d37s2EngineAsset  = "/explorer/assets/js/graph/graph-platform/graph-cytoscape-engine.js"
+	d37s2ContextAsset = "/explorer/assets/js/graph/context/context-cytoscape-renderer.js"
 )
 
 // ── 1. graphStage exposes validateNoOverlap helper ────────────────
@@ -110,29 +110,22 @@ func TestExplorer_GraphStage_DiagnosticCodesIncludeOverlapCodes(t *testing.T) {
 
 // TestExplorer_ContextFootprints_AreKindAware pins that
 // `_buildCardFootprints` no longer returns the uniform 220×64
-// footprint for every card. A kind-aware estimator must drive
-// per-card heights.
+// footprint for every card. The shared footprint-policy resolver must
+// drive per-card heights.
 func TestExplorer_ContextFootprints_AreKindAware(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
 	js := getExplorerAsset(t, srv, d37s2ContextAsset)
 
-	// The kind-aware estimator function must exist.
-	if !strings.Contains(js, "function _estimatedContextCardFootprint(card)") {
-		t.Errorf("D37s-2: Context must declare _estimatedContextCardFootprint(card) kind-aware estimator")
+	// The kind-aware footprint resolver bridge must exist.
+	if !strings.Contains(js, "function _resolveContextRawFootprint(card)") {
+		t.Errorf("D37s-2/D37o-overlap-8: Context must resolve raw footprints through _resolveContextRawFootprint(card)")
 	}
 
-	// The estimator must branch on card.kind for at least the four
-	// canonical kinds with distinct height treatments.
-	for _, want := range []string{
-		"case 'business_service':",
-		"case 'related_business_service':",
-		"case 'decision_surface':",
-		"case 'ai_system':",
-	} {
-		if !strings.Contains(js, want) {
-			t.Errorf("D37s-2: _estimatedContextCardFootprint must handle %q", want)
-		}
+	if !strings.Contains(js, "window.MIDASExplorerGraph.footprintPolicy") ||
+		!strings.Contains(js, "policy.resolve({") ||
+		!strings.Contains(js, "rendererMode: 'raw-cytoscape'") {
+		t.Errorf("D37o-overlap-8: Context must use the graph-platform footprint policy resolver for raw Cytoscape footprints")
 	}
 
 	// _buildCardFootprints must consult the estimator (or measured
@@ -148,8 +141,11 @@ func TestExplorer_ContextFootprints_AreKindAware(t *testing.T) {
 	}
 	bBody := bTail[:bEndRel+1]
 
-	if !strings.Contains(bBody, "_estimatedContextCardFootprint(c)") {
-		t.Errorf("D37s-2: _buildCardFootprints must call _estimatedContextCardFootprint(c) for kind-aware first-paint sizing")
+	if !strings.Contains(bBody, "_resolveContextRawFootprint(c)") {
+		t.Errorf("D37o-overlap-8: _buildCardFootprints must call _resolveContextRawFootprint(c) for declared first-paint sizing")
+	}
+	if strings.Contains(bBody, "_estimatedContextCardFootprint(c)") {
+		t.Errorf("D37o-overlap-8: _buildCardFootprints must no longer actively call _estimatedContextCardFootprint(c)")
 	}
 
 	// Negative pin: the uniform-defaults shape MUST be gone from
@@ -425,7 +421,7 @@ func TestExplorer_Engine_OverlapDiagnosticsDeduplicated(t *testing.T) {
 
 // TestExplorer_AuthorityUnchanged_NonOverlapBuild pins that Authority
 // is structurally untouched by this build. Authority remains outside
-// the engine (pending B''-Authority migration) and is whitelisted in
+// the engine (pending B”-Authority migration) and is whitelisted in
 // the strategic-rule test. No source references to the new geometry
 // callbacks appear in Authority modules.
 func TestExplorer_AuthorityUnchanged_NonOverlapBuild(t *testing.T) {

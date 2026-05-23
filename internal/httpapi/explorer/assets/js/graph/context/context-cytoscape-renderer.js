@@ -562,42 +562,30 @@
     return { top: 0, right: 0, bottom: 0, left: 0 };
   }
 
-  // D37s-context-geometry-2-impl — Kind-aware Context card footprints.
-  //
-  // The strategic Context renderer's gmap-node button has CSS
-  // `width: 220px; min-height: 64px` (governance-map.css:697-714).
-  // Width is fixed; height is a LOWER bound that grows with content
-  // (badges, multiple meta rows, two-line names). Pre-tranche the
-  // lens passed `{width: 220, height: 64}` for every card kind to
-  // graphStage, which advanced bands by `64 + gapY = 136 px` per row.
-  // Tall cards (business_service with badges + 2-3 meta rows;
-  // decision_surface with status + badges) overflowed the 64-px row
-  // height, causing visible overlap with the band below.
-  //
-  // First-paint footprint estimates per Context node kind (9 kinds
-  // declared at context-card-model.js:41-51). Heights are
-  // intentionally CONSERVATIVE — over-estimating leaves visible gaps
-  // (acceptable); under-estimating causes overlap (not acceptable).
-  // The measurement-driven feedback path (`_storeMeasuredFootprint`
-  // below) replaces these estimates with actual rendered dimensions
-  // on the next projection-publish reflow.
-  //
-  // Width remains 220 (CSS-fixed). Heights derived from observed
-  // rendering of the strategic Context card grammar.
-  function _estimatedContextCardFootprint(card) {
-    var kind = card && card.kind ? String(card.kind) : '';
-    switch (kind) {
-      case 'business_service':         return { width: 220, height: 132 };
-      case 'related_business_service': return { width: 220, height: 76  };
-      case 'capability':               return { width: 220, height: 84  };
-      case 'process':                  return { width: 220, height: 84  };
-      case 'decision_surface':         return { width: 220, height: 104 };
-      case 'ai_system':                return { width: 220, height: 96  };
-      case 'ai_system_binding':        return { width: 220, height: 84  };
-      case 'coverage':                 return { width: 220, height: 96  };
-      case 'authority_summary':        return { width: 220, height: 96  };
-      default:                         return { width: 220, height: 104 };
+  // D37o-overlap-8 — Context raw spatial footprints now resolve
+  // through the shared graph-platform footprint policy module. The
+  // numeric values are unchanged from the previous kind-aware
+  // estimator; only the source of truth moved out of the renderer.
+  function _resolveContextRawFootprint(card) {
+    var policy = window.MIDASExplorerGraph && window.MIDASExplorerGraph.footprintPolicy;
+    if (!policy || typeof policy.resolve !== 'function') {
+      return { width: 220, height: 104, gapX: 32, gapY: 72 };
     }
+    var resolved = policy.resolve({
+      graphSurfaceId: 'context',
+      rendererMode: 'raw-cytoscape',
+      cardKind: card && card.kind ? String(card.kind) : '',
+      cardVariant: card && card.role ? String(card.role) : null
+    });
+    return {
+      width: resolved.reservedWidth,
+      height: resolved.reservedHeight,
+      gapX: resolved.gapX,
+      gapY: resolved.gapY,
+      policyId: resolved.policyId,
+      sizingMode: resolved.sizingMode,
+      source: resolved.source
+    };
   }
 
   // _measuredFootprints — per-card-id measured dimensions, populated
@@ -616,13 +604,14 @@
   var _reflowScheduled = false;
 
   function _buildCardFootprints(cards, stageConsts) {
-    // D37s-context-geometry-2-impl — kind-aware first-paint estimates
-    // with measurement-preference. For each card:
+    // D37o-overlap-8 — declared first-paint footprints now come from
+    // the graph-platform footprint policy resolver, with measurement
+    // preference preserved for the future overlay path. For each card:
     //   1. If `_measuredFootprints[id]` exists (overlay has reported
     //      a real rendered size during the current renderer
     //      lifetime), use that measured value.
-    //   2. Otherwise fall back to `_estimatedContextCardFootprint(card)`
-    //      — the conservative kind-aware estimate.
+    //   2. Otherwise fall back to `_resolveContextRawFootprint(card)`
+    //      — the declared raw Cytoscape policy for Context.
     //
     // `stageConsts` is retained as a signature compatibility surface;
     // the parameter is unused now that footprints are kind-aware.
@@ -637,7 +626,7 @@
       if (measured && measured.width > 0 && measured.height > 0) {
         out[id] = { width: measured.width, height: measured.height };
       } else {
-        out[id] = _estimatedContextCardFootprint(c);
+        out[id] = _resolveContextRawFootprint(c);
       }
     }
     return out;
