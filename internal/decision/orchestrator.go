@@ -22,6 +22,7 @@ import (
 	"github.com/accept-io/midas/internal/governancecoverage"
 	"github.com/accept-io/midas/internal/outbox"
 	"github.com/accept-io/midas/internal/policy"
+	"github.com/accept-io/midas/internal/runtimeattr"
 	"github.com/accept-io/midas/internal/store"
 	"github.com/accept-io/midas/internal/surface"
 	"github.com/accept-io/midas/internal/value"
@@ -194,6 +195,7 @@ type Orchestrator struct {
 	store      RepositoryStore
 	policies   policy.PolicyEvaluator
 	metrics    EvaluationRecorder
+	attr       runtimeattr.Recorder
 	clock      Clock
 	policyMode string // detected once at construction via PolicyModer interface
 
@@ -256,9 +258,17 @@ func NewOrchestratorWithClock(
 		store:      store,
 		policies:   policies,
 		metrics:    metrics,
+		attr:       runtimeattr.NoOpRecorder{},
 		clock:      clock,
 		policyMode: policyMode,
 	}, nil
+}
+
+// WithAttributionRecorder wires optional low-cardinality runtime attribution.
+// Passing nil restores the no-op recorder.
+func (o *Orchestrator) WithAttributionRecorder(rec runtimeattr.Recorder) *Orchestrator {
+	o.attr = runtimeattr.RecorderOrNoOp(rec)
+	return o
 }
 
 // WithCoverageService injects the GovernanceExpectation matching
@@ -300,7 +310,11 @@ func (o *Orchestrator) WithFailModeDeploymentDefaultPolicyID(id string) *Orchest
 // or roll back together.
 func (o *Orchestrator) Evaluate(ctx context.Context, req eval.DecisionRequest, raw json.RawMessage) (EvaluationResult, error) {
 	startedAt := o.clock()
+	attrStart := time.Now()
 	var result EvaluationResult
+	defer func() {
+		runtimeattr.Observe(o.attr, runtimeattr.StageOrchestratorTotal, attrStart)
+	}()
 
 	slog.Info("evaluation_started",
 		"request_source", req.RequestSource,
@@ -573,7 +587,9 @@ func (o *Orchestrator) evaluate(
 	//   2. Hash mismatch: the caller is reusing a scoped identity with a mutated
 	//      body. This is always a caller error; return ErrScopedRequestConflict.
 	// ---------------------------------------------------------------------------
+	lookupStart := time.Now()
 	existing, err := repos.Envelopes.GetByRequestScope(ctx, req.RequestSource, req.RequestID)
+	runtimeattr.Observe(o.attr, runtimeattr.StageIdempotencyLookup, lookupStart)
 	if err != nil {
 		return EvaluationResult{}, fmt.Errorf("idempotency lookup: %w", err)
 	}
@@ -655,7 +671,9 @@ func (o *Orchestrator) evaluate(
 	// (the structural FKs in schema make these states impossible under
 	// healthy data) — wrap as authority-resolution failures so they surface
 	// as system errors, not request-clarification outcomes.
+	structureStart := time.Now()
 	procSnap, bsSnap, bs, capSnaps, err := o.resolveStructure(ctx, repos, s.ProcessID)
+	runtimeattr.Observe(o.attr, runtimeattr.StageStructureResolution, structureStart)
 	if err != nil {
 		return EvaluationResult{}, wrapFailure(FailureCategoryAuthorityResolution, err)
 	}
@@ -706,7 +724,9 @@ func (o *Orchestrator) evaluate(
 	// pointer is nil when no policy resolves or when resolution errors.
 	var resolvedFailModePolicy *failmode.FailModePolicy
 	if repos.FailModePolicies != nil {
+		failModeStart := time.Now()
 		resolveResult, resolveErr := failmode.ResolveWithPath(ctx, repos.FailModePolicies, s, bs, now, o.failModeDeploymentDefaultPolicyID)
+		runtimeattr.Observe(o.attr, runtimeattr.StageFailModeResolution, failModeStart)
 		failModePolicyResolutionPath = resolveResult.Path
 		if resolveErr != nil {
 			slog.Warn("fail_mode_policy_resolution_failed",
@@ -781,7 +801,9 @@ func (o *Orchestrator) evaluate(
 	}
 
 	// Step 3: Authority chain
+	authorityStart := time.Now()
 	g, p, outcome, reason, err := o.resolveAuthorityChain(ctx, repos.Grants, repos.Profiles, req.AgentID, req.SurfaceID, now)
+	runtimeattr.Observe(o.attr, runtimeattr.StageAuthorityResolution, authorityStart)
 	if err != nil {
 		return EvaluationResult{}, err
 	}
@@ -1343,9 +1365,12 @@ func (o *Orchestrator) finish(
 			}
 		}
 
-		if err := acc.persistNew(ctx, repos); err != nil {
+		persistStart := time.Now()
+		if err := acc.persistNew(ctx, repos, o.attr); err != nil {
+			runtimeattr.Observe(o.attr, runtimeattr.StagePersistence, persistStart)
 			return EvaluationResult{}, categorizePersistErr(fmt.Errorf("persist evaluation: %w", err))
 		}
+		runtimeattr.Observe(o.attr, runtimeattr.StagePersistence, persistStart)
 
 		return EvaluationResult{
 			Outcome:     outcome,
@@ -1423,9 +1448,12 @@ func (o *Orchestrator) finish(
 		}
 	}
 
-	if err := acc.persistNew(ctx, repos); err != nil {
+	persistStart := time.Now()
+	if err := acc.persistNew(ctx, repos, o.attr); err != nil {
+		runtimeattr.Observe(o.attr, runtimeattr.StagePersistence, persistStart)
 		return EvaluationResult{}, categorizePersistErr(fmt.Errorf("persist evaluation: %w", err))
 	}
+	runtimeattr.Observe(o.attr, runtimeattr.StagePersistence, persistStart)
 
 	return EvaluationResult{
 		Outcome:     outcome,
@@ -2266,7 +2294,9 @@ func (o *Orchestrator) resolveSurface(
 ) (*surface.DecisionSurface, eval.Outcome, eval.ReasonCode, error) {
 	// First check if the surface exists at all using GetByID
 	// (FindActiveAt would return nil for both non-existent and inactive surfaces)
+	lookupStart := time.Now()
 	s, err := surfaces.FindLatestByID(ctx, surfaceID)
+	runtimeattr.Observe(o.attr, runtimeattr.StageSurfaceLookup, lookupStart)
 	if err != nil {
 		return nil, "", "", err
 	}
@@ -2284,7 +2314,9 @@ func (o *Orchestrator) resolveAgent(
 	agents agent.AgentRepository,
 	agentID string,
 ) (*agent.Agent, eval.Outcome, eval.ReasonCode, error) {
+	lookupStart := time.Now()
 	a, err := agents.GetByID(ctx, agentID)
+	runtimeattr.Observe(o.attr, runtimeattr.StageAgentLookup, lookupStart)
 	if err != nil {
 		return nil, "", "", err
 	}
@@ -2323,7 +2355,9 @@ func (o *Orchestrator) resolveStructure(
 	repos *store.Repositories,
 	processID string,
 ) (envelope.ProcessSnapshot, envelope.BusinessServiceSnapshot, *businessservice.BusinessService, []envelope.CapabilitySnapshot, error) {
+	processStart := time.Now()
 	proc, err := repos.Processes.GetByID(ctx, processID)
+	runtimeattr.Observe(o.attr, runtimeattr.StageProcessLookup, processStart)
 	if err != nil {
 		return envelope.ProcessSnapshot{}, envelope.BusinessServiceSnapshot{}, nil, nil,
 			fmt.Errorf("resolve process %q: %w", processID, err)
@@ -2333,7 +2367,9 @@ func (o *Orchestrator) resolveStructure(
 			fmt.Errorf("resolve process %q: not found (referential integrity drift)", processID)
 	}
 
+	bsStart := time.Now()
 	bs, err := repos.BusinessServices.GetByID(ctx, proc.BusinessServiceID)
+	runtimeattr.Observe(o.attr, runtimeattr.StageBusinessServiceLookup, bsStart)
 	if err != nil {
 		return envelope.ProcessSnapshot{}, envelope.BusinessServiceSnapshot{}, nil, nil,
 			fmt.Errorf("resolve business service %q: %w", proc.BusinessServiceID, err)
@@ -2343,7 +2379,9 @@ func (o *Orchestrator) resolveStructure(
 			fmt.Errorf("resolve business service %q: not found (referential integrity drift)", proc.BusinessServiceID)
 	}
 
+	bscStart := time.Now()
 	links, err := repos.BusinessServiceCapabilities.ListByBusinessServiceID(ctx, bs.ID)
+	runtimeattr.Observe(o.attr, runtimeattr.StageBusinessCapabilities, bscStart)
 	if err != nil {
 		return envelope.ProcessSnapshot{}, envelope.BusinessServiceSnapshot{}, nil, nil,
 			fmt.Errorf("list enabling capabilities for business service %q: %w", bs.ID, err)
@@ -2351,7 +2389,9 @@ func (o *Orchestrator) resolveStructure(
 
 	caps := make([]envelope.CapabilitySnapshot, 0, len(links))
 	for _, link := range links {
+		capStart := time.Now()
 		c, err := repos.Capabilities.GetByID(ctx, link.CapabilityID)
+		runtimeattr.Observe(o.attr, runtimeattr.StageCapabilityLookup, capStart)
 		if err != nil {
 			return envelope.ProcessSnapshot{}, envelope.BusinessServiceSnapshot{}, nil, nil,
 				fmt.Errorf("resolve capability %q for business service %q: %w", link.CapabilityID, bs.ID, err)
@@ -2412,7 +2452,9 @@ func (o *Orchestrator) resolveAuthorityChain(
 	surfaceID string,
 	at time.Time,
 ) (*authority.AuthorityGrant, *authority.AuthorityProfile, eval.Outcome, eval.ReasonCode, error) {
+	grantStart := time.Now()
 	agentGrants, err := grants.ListByAgent(ctx, agentID)
+	runtimeattr.Observe(o.attr, runtimeattr.StageGrantLookup, grantStart)
 	if err != nil {
 		return nil, nil, "", "", err
 	}
@@ -2425,7 +2467,9 @@ func (o *Orchestrator) resolveAuthorityChain(
 		if g == nil || g.Status != authority.GrantStatusActive {
 			continue
 		}
+		profileStart := time.Now()
 		p, err := profiles.FindActiveAt(ctx, g.ProfileID, at)
+		runtimeattr.Observe(o.attr, runtimeattr.StageProfileLookup, profileStart)
 		if err != nil {
 			return nil, nil, "", "", err
 		}
@@ -2466,6 +2510,10 @@ func (o *Orchestrator) evaluatePolicy(
 	req eval.DecisionRequest,
 	p *authority.AuthorityProfile,
 ) (eval.Outcome, eval.ReasonCode, bool, error) {
+	attrStart := time.Now()
+	defer func() {
+		runtimeattr.Observe(o.attr, runtimeattr.StagePolicyEvaluation, attrStart)
+	}()
 	if p.PolicyReference == "" {
 		return "", "", false, nil
 	}

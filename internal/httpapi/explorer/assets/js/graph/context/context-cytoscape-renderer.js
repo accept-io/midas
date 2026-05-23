@@ -943,14 +943,25 @@
     for (var i = 0; i < cyNodes.length; i++) {
       var cn = cyNodes[i];
       if (!cn || !cn.data) continue;
+      // D37x-engine-node-geometry-contract — propagate `label`,
+      // `fullLabel`, and `technicalId` through to the engine's
+      // canonical data shape so the cy node receives the display-
+      // safe label produced by `graphNativeLabels.makeNativeNodeLabel`.
+      // The engine's `_toCyElements` merges this `data` block into
+      // the per-node cy `data` map; the Context override style
+      // (`_buildContextRawNodeVisibilityOverride`) binds the cy
+      // native label to `data(label)`.
       nodes.push({
         id:       cn.data.id,
         position: cn.position,
         kind:     cn.data.kind,
         data:     {
-          emphasis: cn.data.emphasis,
-          width:    cn.data.width,
-          height:   cn.data.height,
+          emphasis:    cn.data.emphasis,
+          width:       cn.data.width,
+          height:      cn.data.height,
+          technicalId: cn.data.technicalId,
+          fullLabel:   cn.data.fullLabel,
+          label:       cn.data.label,
         },
         classes:  cn.classes,
       });
@@ -1081,7 +1092,14 @@
           'background-opacity': 0.78,
           'border-color':       '#0b1220',
           'border-width':       1.5,
-          'label':              'data(id)',
+          // D37x-engine-node-geometry-contract — Visible label binds
+          // to `data(label)` (the lens's display-safe, pre-truncated
+          // value produced by `graphNativeLabels.makeNativeNodeLabel`),
+          // NOT `data(id)` (the raw `kind:id` technical identifier).
+          // The previous `data(id)` binding caused wrapped technical
+          // strings to overflow the declared body and visually collide
+          // with neighbouring rows.
+          'label':              'data(label)',
           'color':              '#0b1220',
           'font-size':          10,
           'text-valign':        'center',
@@ -1105,12 +1123,29 @@
   // model into Cytoscape node elements. The Cytoscape node carries
   // only what Cytoscape needs to draw and route: stable id, kind,
   // emphasis (root marker for `focusRoot`), and preset position from
-  // `stage.cards[id]`. Rich card content (titles, badges, evidence
-  // chips, action descriptors) is rendered by the HTML overlay; it
-  // does NOT live on the Cytoscape node's `data`.
+  // `stage.cards[id]`.
+  //
+  // D37x-engine-node-geometry-contract — Cytoscape node `data.label`
+  // is a DISPLAY-SAFE pre-truncated string produced by the platform-
+  // shared `graphNativeLabels.makeNativeNodeLabel(...)` helper. The
+  // helper takes the card's human-readable `name` (built by
+  // context-card-model from the projection's `node.label || node.id`)
+  // and truncates it to fit inside the declared `data.width` /
+  // `data.height` body at the engine's native-label font / line /
+  // padding constants. The cy node's STABLE TECHNICAL ID remains
+  // `data.id` (`"<kind>:<id>"`); the visible label is `data.label`.
+  // Selection plumbing, bridge handlers, and tests that key on the
+  // technical id are unaffected. When the platform overlay layer
+  // (currently disabled for the raw-cy diagnostic mode) is re-
+  // enabled in a future tranche, the overlay can paint its own card
+  // chrome and ignore `data.label` — the engine's `label: ''` default
+  // would apply if the lens dropped `data.label` from the data.
   function _buildContextCytoscapeNodes(cards, stage) {
     var out = [];
     if (!Array.isArray(cards) || !stage || !stage.cards) return out;
+    var labelHelper = window.MIDASExplorerGraph
+      && window.MIDASExplorerGraph.graphNativeLabels
+      && window.MIDASExplorerGraph.graphNativeLabels.makeNativeNodeLabel;
     for (var i = 0; i < cards.length; i++) {
       var c = cards[i];
       if (!c || c.id == null) continue;
@@ -1118,14 +1153,33 @@
       if (!entry || entry.isSentinel) continue;
       var w = (typeof entry.width  === 'number' && entry.width  > 0) ? entry.width  : 220;
       var h = (typeof entry.height === 'number' && entry.height > 0) ? entry.height : 64;
+      // Prefer the card's human-readable `name` (the projection
+      // node's `label` or `id`-fallback as composed by
+      // context-card-model._composeCard). Fall back to the `label`
+      // (kind-eyebrow) when `name` is empty so the cy node always
+      // carries SOMETHING readable for the operator. Final safety:
+      // if the helper module hasn't loaded, the cy node falls back
+      // to an empty string — the engine's `label: ''` base style
+      // then suppresses native rendering, which is preferable to
+      // accidentally exposing a raw technical id.
+      var rawName = (c.name != null && String(c.name).length > 0) ? String(c.name)
+                  : (c.label != null ? String(c.label) : '');
+      var displayLabel = '';
+      if (typeof labelHelper === 'function') {
+        try { displayLabel = labelHelper(rawName, w, h); }
+        catch (_) { displayLabel = ''; }
+      }
       out.push({
         group: 'nodes',
         data: {
-          id:       String(c.id),
-          kind:     String(c.kind || ''),
-          emphasis: String(c.emphasis || c.role || ''),
-          width:    w,
-          height:   h,
+          id:          String(c.id),
+          technicalId: String(c.id),
+          kind:        String(c.kind || ''),
+          emphasis:    String(c.emphasis || c.role || ''),
+          width:       w,
+          height:      h,
+          fullLabel:   rawName,
+          label:       displayLabel,
         },
         position: {
           x: ((typeof entry.x === 'number') ? entry.x : 0) + w / 2,

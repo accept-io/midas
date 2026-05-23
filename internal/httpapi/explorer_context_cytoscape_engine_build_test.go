@@ -163,11 +163,13 @@ func TestExplorer_ContextCardsMapToCytoscapeNodes(t *testing.T) {
 		t.Errorf("D37r: strategic Context renderer must declare _buildContextCytoscapeNodes(cards, stage)")
 	}
 
-	// Node group + data shape.
+	// Node group + data shape. Column alignment widened in
+	// D37x-engine-node-geometry-contract to fit the new
+	// `technicalId:` / `fullLabel:` / `label:` keys.
 	for _, want := range []string{
 		"group: 'nodes',",
-		"id:       String(c.id),",
-		"kind:     String(c.kind || ''),",
+		"id:          String(c.id),",
+		"kind:        String(c.kind || ''),",
 	} {
 		if !strings.Contains(js, want) {
 			t.Errorf("D37r: Cytoscape node mapper must emit %q", want)

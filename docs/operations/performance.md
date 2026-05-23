@@ -201,6 +201,59 @@ The HTTP benchmark's `p50` minus the direct benchmark's `p50` is the per-request
 
 `p99` deltas are noisier than `p50` deltas: the safety middleware's buffering writer involves an extra goroutine per request, which means the GC interaction differs. Compare medians first.
 
+## Sustained local load with telemetry
+
+`cmd/midas-loadtest` is a local-only harness for correlating real HTTP
+`/v1/evaluate` latency with MIDAS Prometheus metrics and Postgres-native
+telemetry while load is running. It is intentionally separate from the runtime
+server and does not change production semantics.
+
+The harness:
+
+- refuses to run without a Postgres DSN, so it cannot silently benchmark memory mode;
+- seeds a minimal active BusinessService to Capability to Process to Surface to
+  Agent to Profile to Grant fixture through repository APIs by default;
+- sends unique governed `/v1/evaluate` requests through the configured HTTP base URL;
+- scrapes `/metrics` for evaluation, transaction-stage, pool, and outbox backlog signals;
+- samples safe Postgres views such as `pg_stat_activity`, `pg_stat_database`,
+  `pg_locks`, `pg_stat_bgwriter`, and `pg_stat_wal` when available;
+- emits newline-delimited JSON interval reports plus a final summary.
+
+Example local run:
+
+```bash
+docker compose up -d postgres
+
+MIDAS_STORE_BACKEND=postgres \
+MIDAS_DATABASE_URL="postgresql://midas:midas@localhost:5432/midas?sslmode=disable" \
+MIDAS_METRICS_ENABLED=true \
+MIDAS_AUTH_MODE=open \
+go run ./cmd/midas
+
+go run ./cmd/midas-loadtest \
+  -database-url "postgresql://midas:midas@localhost:5432/midas?sslmode=disable" \
+  -base-url http://localhost:8080 \
+  -duration 60s \
+  -concurrency 16 \
+  -interval 5s
+```
+
+Use `-token` when the target server runs with `MIDAS_AUTH_MODE=required`.
+Use `-rate` to impose a client-side request-rate cap. The JSON output keeps
+request latency, MIDAS metrics, and Postgres telemetry in separate fields so
+operators can avoid blending client observations with database-native signals.
+
+Interpretation guide:
+
+- rising `midas_database_pool_wait_count_total` or wait duration with a rising
+  transaction `begin` stage points at pool acquisition or database accept pressure;
+- rising transaction `commit` stage with flat pool wait points toward durable
+  write, WAL/fsync, or index maintenance pressure;
+- rising `midas_outbox_unpublished_total` or oldest unpublished age points at
+  dispatcher/downstream lag, not `/v1/evaluate` response latency by itself;
+- Redis/read-model caching does not reduce governed transaction commits,
+  audit rows, outbox rows, envelope writes, or WAL pressure.
+
 ## Important caveats
 
 > **These are local numbers, not production guarantees.** Latency on a developer laptop with a containerised Postgres on the same machine is fundamentally different from latency in a deployed environment with network round-trips, real disk I/O, real concurrent workloads, and real Postgres tuning.

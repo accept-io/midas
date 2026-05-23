@@ -73,7 +73,9 @@ func TestExplorer_ContextCytoscapeStyle_NodeKindsCoverAllNativeKinds(t *testing.
 	// the overlay card-by-id map sees the same identity as the cy
 	// node — preserving kind class application.
 	js := getExplorerAsset(t, srv, d37rB_RendererAsset)
-	if !strings.Contains(js, "kind:     String(c.kind || ''),") {
+	// D37x-engine-node-geometry-contract widened the column alignment
+	// to fit the new `technicalId:` / `fullLabel:` / `label:` keys.
+	if !strings.Contains(js, "kind:        String(c.kind || ''),") {
 		t.Errorf("D37r tranche B: Cytoscape node data must carry `kind` so kind classes can be reconciled with overlay cards")
 	}
 }

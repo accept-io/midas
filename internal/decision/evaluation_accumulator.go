@@ -9,6 +9,7 @@ import (
 	"github.com/accept-io/midas/internal/audit"
 	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/outbox"
+	"github.com/accept-io/midas/internal/runtimeattr"
 	"github.com/accept-io/midas/internal/store"
 )
 
@@ -55,12 +56,12 @@ var (
 //
 // Two persistence modes cover the two orchestrator flows:
 //
-//   - persistNew (Evaluate): Create → N×Audit.Append → N×Outbox.Append → Update
+//   - persistNew (Evaluate): Create → N×Audit.Append → Outbox.AppendBatch → Update
 //     Creates a new envelope row, satisfying the FK constraint before any
 //     audit rows are appended. Outbox rows are flushed after audit rows and
 //     before the final Envelopes.Update.
 //
-//   - persistExisting (ResolveEscalation): N×Audit.Append → N×Outbox.Append → Update
+//   - persistExisting (ResolveEscalation): N×Audit.Append → Outbox.AppendBatch → Update
 //     The envelope row already exists; only audit events, outbox events, and
 //     the updated state are written.
 //
@@ -104,10 +105,10 @@ var (
 //	acc.recordOutbox(ev) // optional
 //	return acc.persistExisting(ctx, repos)
 type evaluationAccumulator struct {
-	env            *envelope.Envelope
-	pendingEvents  []*audit.AuditEvent
-	pendingOutbox  []*outbox.OutboxEvent
-	persisted      bool // true after a successful persist call; guards against reuse
+	env           *envelope.Envelope
+	pendingEvents []*audit.AuditEvent
+	pendingOutbox []*outbox.OutboxEvent
+	persisted     bool // true after a successful persist call; guards against reuse
 }
 
 // newEvaluationAccumulator creates an accumulator for a new evaluation.
@@ -280,31 +281,43 @@ func (a *evaluationAccumulator) absorbPersistedEvent(ev *audit.AuditEvent) {
 // pre-flight checks.
 //
 // Write ordering:
-//  1. N×Audit.Append (in declaration order)
-//  2. N×Outbox.Append (in declaration order) — skipped when repos.Outbox is nil
+//  1. Audit.AppendBatch (in declaration order)
+//  2. Outbox.AppendBatch (in declaration order) — skipped when repos.Outbox is nil
 //  3. Envelopes.Update
-func (a *evaluationAccumulator) flushEventsAndUpdate(ctx context.Context, repos *store.Repositories) error {
+func (a *evaluationAccumulator) flushEventsAndUpdate(ctx context.Context, repos *store.Repositories, rec runtimeattr.Recorder) error {
+	rec = runtimeattr.RecorderOrNoOp(rec)
 	// 1. Flush audit events and update integrity anchors.
-	for _, ev := range a.pendingEvents {
-		if err := repos.Audit.Append(ctx, ev); err != nil {
-			return fmt.Errorf("audit append %s [envelope %s]: %w", ev.EventType, a.env.ID(), err)
+	if len(a.pendingEvents) > 0 {
+		start := time.Now()
+		if err := repos.Audit.AppendBatch(ctx, a.pendingEvents); err != nil {
+			runtimeattr.Observe(rec, runtimeattr.StageAuditAppend, start)
+			return fmt.Errorf("audit append batch [envelope %s]: %w", a.env.ID(), err)
 		}
-		a.absorbPersistedEvent(ev)
+		runtimeattr.Observe(rec, runtimeattr.StageAuditAppend, start)
+		rec.AddCount(runtimeattr.CountAuditAppend, int64(len(a.pendingEvents)))
+		for _, ev := range a.pendingEvents {
+			a.absorbPersistedEvent(ev)
+		}
 	}
 
 	// 2. Flush outbox events. Skip silently when the outbox repo is not configured.
-	if repos.Outbox != nil {
-		for _, ev := range a.pendingOutbox {
-			if err := repos.Outbox.Append(ctx, ev); err != nil {
-				return fmt.Errorf("outbox append %s [envelope %s]: %w", ev.EventType, a.env.ID(), err)
-			}
+	if repos.Outbox != nil && len(a.pendingOutbox) > 0 {
+		start := time.Now()
+		if err := repos.Outbox.AppendBatch(ctx, a.pendingOutbox); err != nil {
+			runtimeattr.Observe(rec, runtimeattr.StageOutboxAppend, start)
+			return fmt.Errorf("outbox append batch [envelope %s]: %w", a.env.ID(), err)
 		}
+		runtimeattr.Observe(rec, runtimeattr.StageOutboxAppend, start)
+		rec.AddCount(runtimeattr.CountOutboxAppend, int64(len(a.pendingOutbox)))
 	}
 
 	// 3. Write final envelope state.
+	updateStart := time.Now()
 	if err := repos.Envelopes.Update(ctx, a.env); err != nil {
+		runtimeattr.Observe(rec, runtimeattr.StageEnvelopeUpdate, updateStart)
 		return fmt.Errorf("persist final envelope state [%s]: %w", a.env.ID(), err)
 	}
+	runtimeattr.Observe(rec, runtimeattr.StageEnvelopeUpdate, updateStart)
 	return nil
 }
 
@@ -315,7 +328,7 @@ func (a *evaluationAccumulator) flushEventsAndUpdate(ctx context.Context, repos 
 //
 //  2. N×Audit.Append — in declaration order, absorbPersistedEvent after each.
 //
-//  3. N×Outbox.Append — in declaration order; skipped if repos.Outbox is nil.
+//  3. Outbox.AppendBatch — in declaration order; skipped if repos.Outbox is nil.
 //
 //  4. Envelopes.Update — single final write with the complete updated state.
 //
@@ -329,7 +342,12 @@ func (a *evaluationAccumulator) flushEventsAndUpdate(ctx context.Context, repos 
 func (a *evaluationAccumulator) persistNew(
 	ctx context.Context,
 	repos *store.Repositories,
+	recorders ...runtimeattr.Recorder,
 ) error {
+	var rec runtimeattr.Recorder = runtimeattr.NoOpRecorder{}
+	if len(recorders) > 0 {
+		rec = runtimeattr.RecorderOrNoOp(recorders[0])
+	}
 	if a.persisted {
 		return fmt.Errorf("persistNew [%s]: %w", a.env.ID(), errAccumulatorAlreadyPersisted)
 	}
@@ -347,11 +365,14 @@ func (a *evaluationAccumulator) persistNew(
 		return fmt.Errorf("persistNew [%s]: no audit events queued — evaluation incomplete", a.env.ID())
 	}
 
+	createStart := time.Now()
 	if err := repos.Envelopes.Create(ctx, a.env); err != nil {
+		runtimeattr.Observe(rec, runtimeattr.StageEnvelopeCreate, createStart)
 		return fmt.Errorf("create envelope [%s]: %w", a.env.ID(), err)
 	}
+	runtimeattr.Observe(rec, runtimeattr.StageEnvelopeCreate, createStart)
 
-	if err := a.flushEventsAndUpdate(ctx, repos); err != nil {
+	if err := a.flushEventsAndUpdate(ctx, repos, rec); err != nil {
 		return err
 	}
 
@@ -364,7 +385,7 @@ func (a *evaluationAccumulator) persistNew(
 //
 // Steps (via flushEventsAndUpdate):
 //  1. N×Audit.Append — in declaration order, absorbPersistedEvent after each.
-//  2. N×Outbox.Append — in declaration order; skipped if repos.Outbox is nil.
+//  2. Outbox.AppendBatch — in declaration order; skipped if repos.Outbox is nil.
 //  3. Envelopes.Update — single final write with the complete updated state.
 //
 // Pre-flight checks:
@@ -375,7 +396,12 @@ func (a *evaluationAccumulator) persistNew(
 func (a *evaluationAccumulator) persistExisting(
 	ctx context.Context,
 	repos *store.Repositories,
+	recorders ...runtimeattr.Recorder,
 ) error {
+	var rec runtimeattr.Recorder = runtimeattr.NoOpRecorder{}
+	if len(recorders) > 0 {
+		rec = runtimeattr.RecorderOrNoOp(recorders[0])
+	}
 	if a.persisted {
 		return fmt.Errorf("persistExisting [%s]: %w", a.env.ID(), errAccumulatorAlreadyPersisted)
 	}
@@ -384,7 +410,7 @@ func (a *evaluationAccumulator) persistExisting(
 		return fmt.Errorf("persistExisting [%s]: no audit events queued", a.env.ID())
 	}
 
-	if err := a.flushEventsAndUpdate(ctx, repos); err != nil {
+	if err := a.flushEventsAndUpdate(ctx, repos, rec); err != nil {
 		return err
 	}
 

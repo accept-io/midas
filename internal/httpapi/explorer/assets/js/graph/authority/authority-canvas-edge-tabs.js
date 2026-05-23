@@ -32,7 +32,7 @@
 //   window.MIDASExplorerGraph.cytoscapePoc.isAuthorityContextActive
 //   window.MIDASExplorerGraph.cytoscapePoc._computeAuthorityContext
 //   window.MIDASExplorerGraph.cytoscapePoc._displayEdgeLabel
-//   window.MIDASExplorerGraph.cytoscapePoc._nodeTypeLabel
+//   window.MIDASExplorerGraph.authorityAdapter.nodeKindLabel
 //   window.MIDASExplorerGraph.cytoscapePoc._AUTHORITY_KIND_ICON_KEYS
 //   window.MIDASExplorerIcons.inlineSvg
 //   window.MIDASExplorerGraph._lastAuthorityProjection (read-only)
@@ -188,6 +188,66 @@
   // Severity rank (canonical from projection).
   var SEVERITY_RANK = { critical: 0, warning: 1, info: 2 };
 
+  // ── D37av2 — Authority right-rail gate (visibility-only fallback) ──
+  //
+  // The Authority right rail #gmap-details is hidden by default when
+  // the Authority renderer is active. The legacy rail remains
+  // physically present in the DOM and Authority's drawer Inspector
+  // slot registration is unchanged; the gate is a CSS-only override
+  // driven by a body attribute.
+  //
+  //   • `body[data-strategic-authority-rail="hidden"]` —
+  //     Authority is the active renderer AND the fallback flag is
+  //     absent. shell.css drops the right-rail width reservation and
+  //     hides the rail entirely so the Authority graph canvas
+  //     reclaims the width the rail used to consume.
+  //
+  //   • absent — Context lens, non-graph views, or Authority with
+  //     `?legacyAuthorityRail=1`. The existing default right-rail
+  //     display + width reservation apply unchanged. The fallback
+  //     flag is a visibility-only escape hatch for engineering /
+  //     regression triage; it does NOT re-register or re-hydrate any
+  //     of the content the D37av2-prereq tranche decommissioned
+  //     (Diagnostics, Posture & Help, Summary pills, Layer chips,
+  //     Legend, Help framing). Surface Posture remains in the
+  //     Workbench Posture tab regardless of flag state.
+  //
+  // The attribute lifecycle is co-located with the existing
+  // renderer-activation observer below — both observers call
+  // `_applyStrategicAuthorityRailAttribute()` after their state
+  // refresh so any lens flip synchronously updates the gate without
+  // a render-frame delay.
+
+  var STRATEGIC_AUTHORITY_RAIL_BODY_ATTR    = 'data-strategic-authority-rail';
+  var STRATEGIC_AUTHORITY_RAIL_HIDDEN_VALUE = 'hidden';
+  var LEGACY_AUTHORITY_RAIL_QUERY_PARAM     = 'legacyAuthorityRail';
+
+  function _hasLegacyAuthorityRailFlag() {
+    try {
+      var search = (window.location && window.location.search) || '';
+      var pairs = search.replace(/^\?/, '').split('&');
+      for (var i = 0; i < pairs.length; i++) {
+        var pair = pairs[i].split('=');
+        if (decodeURIComponent(pair[0]) === LEGACY_AUTHORITY_RAIL_QUERY_PARAM &&
+            decodeURIComponent(pair[1] || '') === '1') {
+          return true;
+        }
+      }
+    } catch (_) { /* fall through */ }
+    return false;
+  }
+
+  function _applyStrategicAuthorityRailAttribute() {
+    if (typeof document === 'undefined' || !document.body) return;
+    if (_isAuthorityLensActive() && !_hasLegacyAuthorityRailFlag()) {
+      document.body.setAttribute(
+        STRATEGIC_AUTHORITY_RAIL_BODY_ATTR,
+        STRATEGIC_AUTHORITY_RAIL_HIDDEN_VALUE);
+    } else {
+      document.body.removeAttribute(STRATEGIC_AUTHORITY_RAIL_BODY_ATTR);
+    }
+  }
+
   // ── Section A — Shell controller ─────────────────────────────────────
   //
   // Owns shell DOM, tab state, ARIA, keyboard, focus, and lifecycle.
@@ -251,6 +311,12 @@
 
     _inited = true;
 
+    // D37av2 — Apply the Authority right-rail gate body attribute on
+    // first init so the CSS override is in place before the user's
+    // first interaction. The viewport + body observers below keep it
+    // in sync with subsequent lens / flag-state changes.
+    _applyStrategicAuthorityRailAttribute();
+
     // D37p-authority-2-impl — Register the canvas-edge tabs as the
     // 'authority' provider on the shared selected-object pane shell
     // once the wrapper DOM is wired. Idempotent — the shell's
@@ -278,6 +344,13 @@
     if (_bodyObserver) {
       try { _bodyObserver.disconnect(); } catch (_) {}
       _bodyObserver = null;
+    }
+    // D37av2 — Clear the Authority right-rail gate body attribute on
+    // module teardown so a hot-reload / lens-rewire leaves the body
+    // in a neutral state (no stale `data-strategic-authority-rail`
+    // hanging around when Authority is no longer the active lens).
+    if (typeof document !== 'undefined' && document.body) {
+      document.body.removeAttribute(STRATEGIC_AUTHORITY_RAIL_BODY_ATTR);
     }
     _inited = false;
   }
@@ -363,6 +436,11 @@
     render();
     // Move focus into the pane so Esc + Tab work as designed.
     try { _paneEl.focus(); } catch (_) {}
+    // D37ak-graph-native-tabs-contract-impl — keep the shared shell's
+    // active-tab shadow aligned with the canvas-edge's authoritative
+    // state. Idempotent: shell.setActiveTab no-ops when the value is
+    // unchanged.
+    _syncShellActiveTab(tabId);
   }
 
   function closePane() {
@@ -381,6 +459,22 @@
     // Return focus to the (formerly) active tab — keyboard ergonomics.
     // The caller (Esc / click-active) hits this path; focus is now on
     // the active tab button after we left it focusable above.
+    // D37ak-graph-native-tabs-contract-impl — clear the shell's
+    // active-tab shadow for the Authority lens.
+    _syncShellActiveTab(null);
+  }
+
+  // D37ak-graph-native-tabs-contract-impl — forward the canvas-edge
+  // tabs' authoritative active-tab state into the shared shell. The
+  // shell's shadow is observational (events + dev tools); the
+  // canvas-edge's local _activeTabId remains source of truth for
+  // its DOM. Defensive: if the shell is unavailable (very early
+  // boot, or the shell module failed to load) the call is a no-op.
+  function _syncShellActiveTab(tabId) {
+    var shell = _shell();
+    if (!shell || typeof shell.setActiveTab !== 'function') return;
+    try { shell.setActiveTab(tabId, 'authority'); }
+    catch (_) { /* swallow */ }
   }
 
   function _resetRovingTabindex() {
@@ -533,6 +627,14 @@
       // Any body class / data-graph-lens flip may have implications
       // for the wrapper's lens-gated visibility.
       _refreshState();
+      // D37av2 — Re-apply the Authority right-rail gate body
+      // attribute on every body class / data-graph-lens change. The
+      // body attribute often flips BEFORE the viewport attribute on
+      // lens switch (store subscription mirrors `selectedGraphLens`
+      // synchronously while viewport activation lags one render
+      // frame), so this observer is the earliest signal the gate
+      // can react to.
+      _applyStrategicAuthorityRailAttribute();
     });
     _bodyObserver.observe(document.body, {
       attributes:       true,
@@ -554,6 +656,14 @@
       _ensureSubscriptions();
       if (!_isAuthorityLensActive() && _activeTabId) closePane();
       _refreshState();
+      // D37av2 — Re-apply the Authority right-rail gate body
+      // attribute synchronously on every renderer-identity flip.
+      // When the active renderer changes from 'authority' to any
+      // other renderer, this clears the attribute in the same
+      // MutationObserver callback (no render-frame delay, no
+      // flicker). When Authority becomes active and the fallback
+      // flag is absent, the attribute is set immediately.
+      _applyStrategicAuthorityRailAttribute();
       // D37p-authority-2-impl — Keep the shared selected-object pane
       // shell's active lens aligned with renderer-identity flips so
       // `graphSelectedObjectPane.open/close/render` routes to the
@@ -963,9 +1073,12 @@
   }
 
   function _kindLabel(kind) {
-    var poc = _poc();
-    if (poc && typeof poc._nodeTypeLabel === 'function') {
-      try { return poc._nodeTypeLabel(kind); } catch (_) {}
+    var adapter = window.MIDASExplorerGraph && window.MIDASExplorerGraph.authorityAdapter;
+    if (adapter && typeof adapter.nodeKindLabel === 'function') {
+      try {
+        var label = adapter.nodeKindLabel(kind);
+        if (label && label !== String(kind || '')) return label;
+      } catch (_) {}
     }
     return String(kind || '').replace(/_/g, ' ');
   }
@@ -1336,6 +1449,68 @@
     return (g && g.graphSelectedObjectPane) || null;
   }
 
+  // D37ak-graph-native-tabs-contract-impl — declarative tab config.
+  //
+  // The Authority provider now declares its tab vocabulary through
+  // the formal GraphTabConfig contract surfaced by
+  // graphSelectedObjectPane. The shell exposes
+  // getTabConfig/getTabs/getDefaultTab/getActiveTab/setActiveTab/
+  // tabSupportsKind via the provider's `tabs` field; the existing
+  // canvas-edge tab strip (DOM-owned by this module) remains the
+  // authoritative render surface. The two layers stay aligned by
+  // having openTab(id) / closePane() forward into setActiveTab on
+  // the shell.
+  //
+  // `provider` strings (e.g. 'authority.details') are opaque
+  // identifiers reserved for a future per-section render dispatch.
+  // The shell does not interpret them today; tests pin their
+  // presence so a future tranche can wire renderTab(ctx) lookup.
+  //
+  // `supports` lists are also opaque to the shell — it does string
+  // membership only, plus `['*']` as a wildcard. The Authority-
+  // specific kind vocabulary stays Authority-owned (ELIGIBLE_KINDS
+  // above) and is mirrored here so each tab can declare which
+  // kinds it can meaningfully render.
+  var AUTHORITY_TAB_CONFIG = {
+    enabled:    true,
+    defaultTab: 'details',
+    items: [
+      {
+        id:       'details',
+        label:    'Details',
+        provider: 'authority.details',
+        supports: [
+          'business_service',
+          'decision_surface',
+          'authority_profile',
+          'authority_grant',
+          'agent',
+          'fail_mode_policy',
+          'escalation_target',
+        ],
+      },
+      {
+        id:       'authority',
+        label:    'Authority',
+        provider: 'authority.authority',
+        supports: [
+          'decision_surface',
+          'authority_profile',
+          'authority_grant',
+          'business_service',
+          'fail_mode_policy',
+          'escalation_target',
+        ],
+      },
+      {
+        id:       'evidence',
+        label:    'Evidence',
+        provider: 'authority.evidence',
+        supports: ['*'],
+      },
+    ],
+  };
+
   // Provider built once and registered against the shared shell at
   // init() time. Each method delegates to the existing canvas-edge
   // closure-local controller — there is no parallel implementation.
@@ -1347,6 +1522,11 @@
       { id: 'authority', label: 'Authority' },
       { id: 'evidence',  label: 'Evidence'  },
     ],
+    // D37ak-graph-native-tabs-contract-impl — formal tab config.
+    // `sections` (above) is preserved for diagnostic / introspection
+    // tools that don't yet read `tabs`; new platform code should
+    // prefer `tabs`.
+    tabs: AUTHORITY_TAB_CONFIG,
     copy: COPY,
 
     open: function (sectionId) {
@@ -1460,6 +1640,9 @@
     // D37p-authority-2-impl — Shared pane provider (diagnostic only).
     _paneProvider:         _paneProvider,
     _PANE_MODES:           PANE_MODES.slice(),
+    // D37ak-graph-native-tabs-contract-impl — formal tab config
+    // exposed for tests + dev tools.
+    _AUTHORITY_TAB_CONFIG: AUTHORITY_TAB_CONFIG,
   };
 
   // ── Section F — Lazy lifecycle bootstrap ─────────────────────────────

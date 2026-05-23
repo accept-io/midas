@@ -132,10 +132,20 @@ func TestExplorer_D32gFix1_LegendInDrawerNotToolbar(t *testing.T) {
 		t.Error("D32g-fix-1: renderLegendInto must still iterate adapter.EDGE_KINDS")
 	}
 
-	// The Authority view's drawer registration mounts the legend +
-	// summary + chips into the Posture & Help tab.
+	// D37av2-prereq — these positive pins were flipped to negative
+	// pins after the Posture & Help drawer tab was decommissioned.
+	// The overlays.renderLegendInto / renderSummaryInto /
+	// renderLayerChipsInto functions still exist in the overlays
+	// module (pinned above) but are no longer wired into the Authority
+	// drawer view. The drawer's Posture & Help tab registration was
+	// dropped; the only remaining Authority drawer slot is
+	// `inspector`. Surface Posture moved to the Workbench Posture
+	// tab; the legend is owned by OSS Help (/help/static/graphs/
+	// authority-graph/); summary pills are duplicated by the
+	// Workbench Overview tab; layer chips are not migrated as live
+	// runtime UI in this tranche.
 	viewJS := getExplorerAsset(t, srv, "/explorer/assets/js/graph/authority/authority-graph-view.js")
-	for _, want := range []string{
+	for _, banned := range []string{
 		`overlays.renderLegendInto`,
 		`overlays.renderSummaryInto`,
 		`overlays.renderLayerChipsInto`,
@@ -144,8 +154,8 @@ func TestExplorer_D32gFix1_LegendInDrawerNotToolbar(t *testing.T) {
 		`data-authority-summary-mount`,
 		`data-authority-layer-chips`,
 	} {
-		if !strings.Contains(viewJS, want) {
-			t.Errorf("D32g-fix-1: drawer Posture & Help tab must wire %q", want)
+		if strings.Contains(viewJS, banned) {
+			t.Errorf("D37av2-prereq: Authority drawer view must not wire %q — Posture & Help drawer tab decommissioned", banned)
 		}
 	}
 }

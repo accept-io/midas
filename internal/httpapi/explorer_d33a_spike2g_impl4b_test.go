@@ -263,8 +263,13 @@ func TestExplorer_D33aSpike2gImpl4b_LabelSourceUnchanged(t *testing.T) {
 			t.Errorf("D33a-spike-2g-impl-4b: helper %q must remain", helper)
 		}
 	}
-	if !strings.Contains(js, "var _NODE_SUBTITLES = {") {
-		t.Error("D33a-spike-2g-impl-4b: _NODE_SUBTITLES vocabulary must remain")
+	// D37at2-followup-t1 removed the local _NODE_SUBTITLES table
+	// under Option A — the subtitle vocabulary now resolves through
+	// the canonical authority-graph-adapter NODE_KIND_LABELS table.
+	// The composer + subtitle helpers above remain in source; the
+	// data source moved to the adapter.
+	if strings.Contains(js, "var _NODE_SUBTITLES = {") {
+		t.Error("D33a-spike-2g-impl-4b / D37at2-followup-t1: local _NODE_SUBTITLES table must not return; _nodeSubtitle resolves through the canonical adapter")
 	}
 }
 

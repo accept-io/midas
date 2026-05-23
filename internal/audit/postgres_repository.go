@@ -5,26 +5,169 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/lib/pq"
 
+	"github.com/accept-io/midas/internal/runtimeattr"
 	"github.com/accept-io/midas/internal/store/sqltx"
 )
 
 type PostgresRepository struct {
-	db sqltx.DBTX
+	db   sqltx.DBTX
+	attr runtimeattr.Recorder
 }
 
 func NewPostgresRepository(db sqltx.DBTX) *PostgresRepository {
-	return &PostgresRepository{db: db}
+	return &PostgresRepository{db: db, attr: runtimeattr.NoOpRecorder{}}
+}
+
+// WithAttribution wires optional benchmark/runtime attribution. Passing nil
+// restores the no-op recorder.
+func (r *PostgresRepository) WithAttribution(rec runtimeattr.Recorder) *PostgresRepository {
+	if r == nil {
+		return r
+	}
+	r.attr = runtimeattr.RecorderOrNoOp(rec)
+	return r
 }
 
 func (r *PostgresRepository) Append(ctx context.Context, ev *AuditEvent) error {
+	return r.AppendBatch(ctx, []*AuditEvent{ev})
+}
+
+func (r *PostgresRepository) AppendBatch(ctx context.Context, events []*AuditEvent) error {
+	if len(events) == 0 {
+		return nil
+	}
+	attr := runtimeattr.RecorderOrNoOp(r.attr)
+
+	envelopeID := ""
+	for i, ev := range events {
+		if ev == nil {
+			return fmt.Errorf("audit: AppendBatch called with nil event at index %d", i)
+		}
+		if i == 0 {
+			envelopeID = ev.EnvelopeID
+			continue
+		}
+		if ev.EnvelopeID != envelopeID {
+			return fmt.Errorf("audit: AppendBatch mixed envelope IDs %q and %q", envelopeID, ev.EnvelopeID)
+		}
+	}
+
 	var (
 		prevHash string
 		maxSeq   int
 	)
 
+	tailStart := time.Now()
+	err := r.db.QueryRowContext(ctx,
+		`SELECT sequence_no, event_hash
+		 FROM audit_events
+		 WHERE envelope_id = $1
+		 ORDER BY sequence_no DESC
+		 LIMIT 1`,
+		envelopeID,
+	).Scan(&maxSeq, &prevHash)
+	runtimeattr.Observe(attr, runtimeattr.StageAuditTailLookup, tailStart)
+	attr.AddCount(runtimeattr.CountAuditSelect, 1)
+	attr.AddCount(runtimeattr.CountSQLOperation, 1)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			maxSeq = 0
+			prevHash = ""
+		} else {
+			return err
+		}
+	}
+
+	type preparedAuditEvent struct {
+		event        *AuditEvent
+		payloadBytes []byte
+	}
+	prepared := make([]preparedAuditEvent, 0, len(events))
+	nextSequence := maxSeq + 1
+
+	for _, ev := range events {
+		ev.SequenceNo = nextSequence
+		ev.PrevHash = prevHash
+		ev.OccurredAt = normalizeOccurredAt(ev.OccurredAt)
+
+		hashStart := time.Now()
+		hash, err := ComputeEventHash(ev)
+		runtimeattr.Observe(attr, runtimeattr.StageAuditHashCompute, hashStart)
+		if err != nil {
+			return err
+		}
+		ev.setHash(hash)
+
+		marshalStart := time.Now()
+		payloadBytes, err := json.Marshal(ev.Payload)
+		runtimeattr.Observe(attr, runtimeattr.StageAuditPayloadMarshal, marshalStart)
+		if err != nil {
+			return err
+		}
+		runtimeattr.ObserveValue(attr, runtimeattr.ValueAuditPayloadBytes, int64(len(payloadBytes)))
+		runtimeattr.ObserveValue(attr, runtimeattr.AuditPayloadBytesByTypeValue(string(ev.EventType)), int64(len(payloadBytes)))
+
+		prepared = append(prepared, preparedAuditEvent{event: ev, payloadBytes: payloadBytes})
+		nextSequence++
+		prevHash = ev.EventHash
+	}
+
+	const colsPerRow = 12
+	values := make([]string, 0, len(prepared))
+	args := make([]any, 0, len(prepared)*colsPerRow)
+	for i, item := range prepared {
+		base := i*colsPerRow + 1
+		values = append(values, fmt.Sprintf(
+			"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
+			base, base+1, base+2, base+3, base+4, base+5,
+			base+6, base+7, base+8, base+9, base+10, base+11,
+		))
+		ev := item.event
+		args = append(args,
+			ev.ID,
+			ev.EnvelopeID,
+			ev.RequestSource,
+			ev.RequestID,
+			ev.SequenceNo,
+			ev.EventType,
+			nullableString(string(ev.PerformedByType)),
+			nullableString(ev.PerformedByID),
+			item.payloadBytes,
+			nullableString(ev.PrevHash),
+			ev.EventHash,
+			ev.OccurredAt,
+		)
+	}
+
+	insertStart := time.Now()
+	_, err = r.db.ExecContext(ctx,
+		`INSERT INTO audit_events (
+			id, envelope_id, request_source, request_id, sequence_no, event_type,
+			performed_by_type, performed_by_id, payload_json,
+			prev_hash, event_hash, occurred_at
+		) VALUES `+strings.Join(values, ","),
+		args...,
+	)
+	runtimeattr.Observe(attr, runtimeattr.StageAuditInsert, insertStart)
+	attr.AddCount(runtimeattr.CountAuditInsert, 1)
+	attr.AddCount(runtimeattr.CountSQLOperation, 1)
+	return err
+}
+
+func (r *PostgresRepository) appendOne(ctx context.Context, ev *AuditEvent) error {
+	attr := runtimeattr.RecorderOrNoOp(r.attr)
+	var (
+		prevHash string
+		maxSeq   int
+	)
+
+	tailStart := time.Now()
 	err := r.db.QueryRowContext(ctx,
 		`SELECT sequence_no, event_hash
 		 FROM audit_events
@@ -33,6 +176,9 @@ func (r *PostgresRepository) Append(ctx context.Context, ev *AuditEvent) error {
 		 LIMIT 1`,
 		ev.EnvelopeID,
 	).Scan(&maxSeq, &prevHash)
+	runtimeattr.Observe(attr, runtimeattr.StageAuditTailLookup, tailStart)
+	attr.AddCount(runtimeattr.CountAuditSelect, 1)
+	attr.AddCount(runtimeattr.CountSQLOperation, 1)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -46,18 +192,25 @@ func (r *PostgresRepository) Append(ctx context.Context, ev *AuditEvent) error {
 	ev.SequenceNo = maxSeq + 1
 	ev.PrevHash = prevHash
 
+	hashStart := time.Now()
 	hash, err := ComputeEventHash(ev)
+	runtimeattr.Observe(attr, runtimeattr.StageAuditHashCompute, hashStart)
 	if err != nil {
 		return err
 	}
 	ev.setHash(hash)
 
+	marshalStart := time.Now()
 	payloadBytes, err := json.Marshal(ev.Payload)
+	runtimeattr.Observe(attr, runtimeattr.StageAuditPayloadMarshal, marshalStart)
 	if err != nil {
 		return err
 	}
+	runtimeattr.ObserveValue(attr, runtimeattr.ValueAuditPayloadBytes, int64(len(payloadBytes)))
+	runtimeattr.ObserveValue(attr, runtimeattr.AuditPayloadBytesByTypeValue(string(ev.EventType)), int64(len(payloadBytes)))
 
 	// ✅ FIXED: Added request_source to the INSERT statement
+	insertStart := time.Now()
 	_, err = r.db.ExecContext(ctx,
 		`INSERT INTO audit_events (
 			id, envelope_id, request_source, request_id, sequence_no, event_type,
@@ -77,6 +230,9 @@ func (r *PostgresRepository) Append(ctx context.Context, ev *AuditEvent) error {
 		ev.EventHash,
 		ev.OccurredAt,
 	)
+	runtimeattr.Observe(attr, runtimeattr.StageAuditInsert, insertStart)
+	attr.AddCount(runtimeattr.CountAuditInsert, 1)
+	attr.AddCount(runtimeattr.CountSQLOperation, 1)
 	return err
 }
 

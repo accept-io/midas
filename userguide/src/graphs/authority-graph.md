@@ -27,8 +27,8 @@ mutates governance records.
 
 ## Diagnostics {#diagnostics}
 
-The **Diagnostics** tab in the right drawer lists the projection's diagnostic
-records. Each entry has:
+The **Evidence** tab of the Authority Workbench (bottom slide-out drawer)
+lists the projection's diagnostic records. Each entry has:
 
 - A severity (`info`, `warning`, `critical`).
 - A diagnostic kind (e.g. `surface_missing_profile`, `grant_without_agent`,
@@ -36,14 +36,17 @@ records. Each entry has:
 - A human-readable message.
 - One or more node refs (kind + id) the diagnostic applies to.
 
+The Authority Workbench **Overview** tab shows the per-severity rollup
+(critical / warning / info counts) alongside the projection summary.
+
 Critical and warning diagnostics typically point to gaps in authority
 coverage. Info diagnostics are advisory.
 
 ## Posture {#posture}
 
-The **Posture & Help** tab in the right drawer shows the *surface posture*
-for any decision surface in the projection. Each row of the posture table
-summarises one surface across six axes:
+The **Posture** tab of the Authority Workbench (bottom slide-out drawer)
+shows the *surface posture* for every decision surface in the projection.
+Each row of the posture table summarises one surface across six axes:
 
 - **authority_status** — `complete`, `incomplete`, `degraded`, `uncovered`.
 - **profile_status** — does the surface have an active authority profile?
@@ -52,8 +55,50 @@ summarises one surface across six axes:
 - **fail_mode_policy_status** — is an effective fail-mode policy in place?
 - **escalation_status** — is the profile's escalation target wired up?
 
+Click a posture row to focus the corresponding decision surface on the
+Authority graph canvas.
+
 A surface in `complete` posture has all six axes resolved. Anything else is
 worth investigating.
+
+## Legend {#legend}
+
+The Authority graph uses a fixed visual vocabulary:
+
+**Node kinds.** Seven node kinds are emitted by the Authority projection,
+each with a distinct glyph and colour band:
+
+- Business Service — root container; one per projection.
+- Decision Surface — a named decision boundary on a business service.
+- Authority Profile — thresholds + fail-mode for one decision surface.
+- Authority Grant — attaches an agent to an authority profile.
+- Agent — runtime actor (model deployment, service account, named system).
+- Fail-Mode Policy — rules applied when authority is unavailable.
+- Escalation Target — recipient of escalation when a profile fails.
+
+**Edge kinds.** Edges encode the configuration spine:
+
+- `business_service_has_surface` — business service hosts a decision surface.
+- `surface_uses_profile` — decision surface uses an authority profile.
+- `profile_has_grant` — authority profile is bound to a grant.
+- `grant_authorises_agent` — grant authorises an agent to act.
+- `surface_has_fail_mode_policy` — surface-specific fail-mode override.
+- `business_service_has_fail_mode_policy` — business-service default fail-mode.
+- `profile_escalates_to` — profile escalates to a named target.
+
+**Diagnostic severity.** Three severity levels mark every diagnostic and
+the per-surface posture rollup:
+
+- Critical (red) — operator action required; coverage broken.
+- Warning (amber) — coverage incomplete or degraded; investigate.
+- Info (neutral) — advisory; no action implied.
+
+**Fail-mode posture.** Per-surface fail-mode status uses four values:
+
+- Override — the surface specifies its own fail-mode policy.
+- Inherited — the surface inherits the business-service default policy.
+- Missing — no effective fail-mode policy applies to the surface.
+- Dangling — the surface references a fail-mode policy that no longer resolves.
 
 ## Business service {#business-service}
 

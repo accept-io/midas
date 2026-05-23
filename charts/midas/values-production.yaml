@@ -17,6 +17,13 @@ image:
 midas:
   server:
     shutdownTimeout: "30s"
+  store:
+    # Keep the default pool explicit in the production reference. Scale only
+    # after measuring with MIDAS pool and transaction-stage metrics.
+    maxOpenConns: 25
+    maxIdleConns: 5
+    connMaxLifetime: "30m"
+    connMaxIdleTime: "5m"
 
 secret:
   # Reference a pre-existing Secret containing DATABASE_URL and AUTH_TOKENS.

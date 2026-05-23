@@ -192,24 +192,27 @@ func TestExplorer_D37s_EngineFitConsumesSafeArea(t *testing.T) {
 		t.Errorf("D37s-context-geometry-1-impl: handle.fit must call _resolveFitPadding(padInput, opts.getSafeArea) so mount-supplied safe-area drives the fit when no explicit padding is passed")
 	}
 
-	// _settle (initial-fit path) also consumes safe-area.
-	sIdx := strings.Index(js, "function _settle()")
+	// _runFitPipeline (the shared helper called by both _settle and
+	// _runResizeRefit per D37s-strategic-fit-resize-lifecycle-impl)
+	// composes initial-fit padding from the lens-supplied safe area
+	// and applies it via _fitWithSafeArea. _settle is a one-liner
+	// wrapper over _runFitPipeline; asserting on the helper covers
+	// both the initial-fit path and the resize-driven refit path.
+	sIdx := strings.Index(js, "function _runFitPipeline(source, phase)")
 	if sIdx < 0 {
-		t.Fatal("D37s-context-geometry-1-impl: _settle must exist")
+		t.Fatal("D37s-context-geometry-1-impl: _runFitPipeline(source, phase) must exist (post-D37ad-initial-fit-stable-cadence source-tagged shared helper)")
 	}
 	sTail := js[sIdx:]
-	sEndRel := strings.Index(sTail[1:], "\n    ")
-	// _settle is short; find its closing brace differently.
 	endBrace := strings.Index(sTail, "\n    }\n")
 	if endBrace < 0 {
-		endBrace = sEndRel
+		t.Fatalf("D37s-context-geometry-1-impl: _runFitPipeline body must be well-formed")
 	}
 	sBody := sTail[:endBrace+1]
 	if !strings.Contains(sBody, "_resolveFitPadding(undefined, opts.getSafeArea)") {
-		t.Errorf("D37s-context-geometry-1-impl: _settle must call _resolveFitPadding(undefined, opts.getSafeArea) to compose initial-fit padding from the lens-supplied safe-area")
+		t.Errorf("D37s-context-geometry-1-impl: _runFitPipeline must call _resolveFitPadding(undefined, opts.getSafeArea) to compose initial-fit padding from the lens-supplied safe-area")
 	}
 	if !strings.Contains(sBody, "_fitWithSafeArea(cy, padding)") {
-		t.Errorf("D37s-context-geometry-1-impl: _settle must call _fitWithSafeArea(cy, padding) instead of the pre-tranche cy.fit(undefined, 24)")
+		t.Errorf("D37s-context-geometry-1-impl: _runFitPipeline must call _fitWithSafeArea(cy, padding) instead of the pre-tranche cy.fit(undefined, 24)")
 	}
 
 	// Negative pin: the pre-tranche `cy.fit(undefined, 24)` shape MUST

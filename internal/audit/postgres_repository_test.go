@@ -8,6 +8,8 @@ import (
 	"time"
 
 	_ "github.com/lib/pq"
+
+	"github.com/accept-io/midas/internal/runtimeattr"
 )
 
 func openTestDB(t *testing.T) *sql.DB {
@@ -130,6 +132,173 @@ func TestPostgresRepository_Append_AssignsSequenceAndHashChain(t *testing.T) {
 
 	if ev2.EventHash == "" {
 		t.Fatal("expected second EventHash to be set")
+	}
+}
+
+func TestPostgresRepository_AppendBatch_AssignsSequenceAndHashChain(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	resetAuditEventsTable(t, db)
+	insertTestEnvelope(t, db, "env-batch-1", "actor-batch", "req-batch-1")
+
+	attr := runtimeattr.NewCollector()
+	repo := NewPostgresRepository(db).WithAttribution(attr)
+	ctx := context.Background()
+	baseTime := time.Now().UTC()
+
+	events := make([]*AuditEvent, 0, 10)
+	for i := 0; i < 10; i++ {
+		ev := NewEvent(
+			"env-batch-1",
+			"actor-batch",
+			"req-batch-1",
+			AuditEventEnvelopeCreated,
+			EventPerformerSystem,
+			"midas-orchestrator",
+			map[string]any{"index": i},
+		)
+		ev.ID = "audit-batch-1-" + string(rune('a'+i))
+		ev.OccurredAt = baseTime.Add(time.Duration(i) * time.Millisecond)
+		events = append(events, ev)
+	}
+
+	if err := repo.AppendBatch(ctx, events); err != nil {
+		t.Fatalf("AppendBatch: %v", err)
+	}
+
+	persisted, err := repo.ListByEnvelopeID(ctx, "env-batch-1")
+	if err != nil {
+		t.Fatalf("ListByEnvelopeID: %v", err)
+	}
+	if len(persisted) != 10 {
+		t.Fatalf("persisted events: got %d, want 10", len(persisted))
+	}
+	for i, ev := range persisted {
+		if ev.ID != events[i].ID {
+			t.Fatalf("event %d ID: got %q, want %q", i, ev.ID, events[i].ID)
+		}
+		if ev.SequenceNo != i+1 {
+			t.Fatalf("event %d sequence: got %d, want %d", i, ev.SequenceNo, i+1)
+		}
+		if i == 0 && ev.PrevHash != "" {
+			t.Fatalf("first PrevHash: got %q, want empty", ev.PrevHash)
+		}
+		if i > 0 && ev.PrevHash != persisted[i-1].EventHash {
+			t.Fatalf("event %d PrevHash: got %q, want %q", i, ev.PrevHash, persisted[i-1].EventHash)
+		}
+		expectedHash, err := ComputeEventHash(ev)
+		if err != nil {
+			t.Fatalf("ComputeEventHash event %d: %v", i, err)
+		}
+		if ev.EventHash != expectedHash {
+			t.Fatalf("event %d hash: got %q, want %q", i, ev.EventHash, expectedHash)
+		}
+		if events[i].SequenceNo != ev.SequenceNo || events[i].PrevHash != ev.PrevHash || events[i].EventHash != ev.EventHash {
+			t.Fatalf("event %d was not populated with persisted chain fields", i)
+		}
+	}
+
+	snap := attr.Snapshot()
+	if got := snap.Counts[runtimeattr.CountAuditSelect]; got != 1 {
+		t.Fatalf("audit select attribution: got %d, want 1", got)
+	}
+	if got := snap.Counts[runtimeattr.CountAuditInsert]; got != 1 {
+		t.Fatalf("audit insert attribution: got %d, want 1", got)
+	}
+	if got := snap.Values[runtimeattr.ValueAuditPayloadBytes].Count; got != 10 {
+		t.Fatalf("payload size count: got %d, want 10", got)
+	}
+}
+
+func TestPostgresRepository_AppendBatch_ContinuesAfterExistingTail(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	resetAuditEventsTable(t, db)
+	insertTestEnvelope(t, db, "env-batch-tail", "actor-tail", "req-batch-tail")
+
+	repo := NewPostgresRepository(db)
+	ctx := context.Background()
+	first := NewEvent("env-batch-tail", "actor-tail", "req-batch-tail", AuditEventEnvelopeCreated, EventPerformerSystem, "midas", nil)
+	first.ID = "audit-batch-tail-1"
+	if err := repo.Append(ctx, first); err != nil {
+		t.Fatalf("Append first: %v", err)
+	}
+
+	second := NewEvent("env-batch-tail", "actor-tail", "req-batch-tail", AuditEventEvaluationStarted, EventPerformerSystem, "midas", nil)
+	second.ID = "audit-batch-tail-2"
+	third := NewEvent("env-batch-tail", "actor-tail", "req-batch-tail", AuditEventOutcomeRecorded, EventPerformerSystem, "midas", nil)
+	third.ID = "audit-batch-tail-3"
+	if err := repo.AppendBatch(ctx, []*AuditEvent{second, third}); err != nil {
+		t.Fatalf("AppendBatch tail: %v", err)
+	}
+
+	if second.SequenceNo != 2 || third.SequenceNo != 3 {
+		t.Fatalf("sequence after tail: got %d,%d want 2,3", second.SequenceNo, third.SequenceNo)
+	}
+	if second.PrevHash != first.EventHash {
+		t.Fatalf("second PrevHash: got %q, want %q", second.PrevHash, first.EventHash)
+	}
+	if third.PrevHash != second.EventHash {
+		t.Fatalf("third PrevHash: got %q, want %q", third.PrevHash, second.EventHash)
+	}
+}
+
+func TestPostgresRepository_AppendBatch_Validation(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	repo := NewPostgresRepository(db)
+	ctx := context.Background()
+
+	if err := repo.AppendBatch(ctx, nil); err != nil {
+		t.Fatalf("nil batch should no-op: %v", err)
+	}
+	if err := repo.AppendBatch(ctx, []*AuditEvent{}); err != nil {
+		t.Fatalf("empty batch should no-op: %v", err)
+	}
+	if err := repo.AppendBatch(ctx, []*AuditEvent{nil}); err == nil {
+		t.Fatal("expected nil event error")
+	}
+	ev1 := NewEvent("env-a", "src", "req", AuditEventEnvelopeCreated, EventPerformerSystem, "midas", nil)
+	ev2 := NewEvent("env-b", "src", "req", AuditEventEnvelopeCreated, EventPerformerSystem, "midas", nil)
+	if err := repo.AppendBatch(ctx, []*AuditEvent{ev1, ev2}); err == nil {
+		t.Fatal("expected mixed-envelope error")
+	}
+}
+
+func TestPostgresRepository_AppendBatch_RollbackRemovesRows(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	resetAuditEventsTable(t, db)
+	insertTestEnvelope(t, db, "env-batch-rollback", "actor-rollback", "req-batch-rollback")
+
+	ctx := context.Background()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+	txRepo := NewPostgresRepository(tx)
+	ev1 := NewEvent("env-batch-rollback", "actor-rollback", "req-batch-rollback", AuditEventEnvelopeCreated, EventPerformerSystem, "midas", nil)
+	ev1.ID = "audit-batch-rollback-1"
+	ev2 := NewEvent("env-batch-rollback", "actor-rollback", "req-batch-rollback", AuditEventEvaluationStarted, EventPerformerSystem, "midas", nil)
+	ev2.ID = "audit-batch-rollback-2"
+	if err := txRepo.AppendBatch(ctx, []*AuditEvent{ev1, ev2}); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("AppendBatch in tx: %v", err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+
+	events, err := NewPostgresRepository(db).ListByEnvelopeID(ctx, "env-batch-rollback")
+	if err != nil {
+		t.Fatalf("ListByEnvelopeID: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("expected rollback to remove audit rows, got %d", len(events))
 	}
 }
 

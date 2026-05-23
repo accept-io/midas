@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/accept-io/midas/internal/outbox"
+	"github.com/accept-io/midas/internal/runtimeattr"
 	"github.com/accept-io/midas/internal/store/sqltx"
 )
 
@@ -23,7 +25,8 @@ type txStarter interface {
 // current database transaction. The outbox row and the domain row must commit
 // together; rolling back the transaction removes both.
 type OutboxRepo struct {
-	db sqltx.DBTX
+	db   sqltx.DBTX
+	attr runtimeattr.Recorder
 }
 
 // NewOutboxRepo constructs an OutboxRepo using the supplied DBTX, which may
@@ -32,39 +35,77 @@ func NewOutboxRepo(db sqltx.DBTX) (*OutboxRepo, error) {
 	if db == nil {
 		return nil, ErrNilDB
 	}
-	return &OutboxRepo{db: db}, nil
+	return &OutboxRepo{db: db, attr: runtimeattr.NoOpRecorder{}}, nil
+}
+
+// WithAttribution wires optional benchmark/runtime attribution. Passing nil
+// restores the no-op recorder.
+func (r *OutboxRepo) WithAttribution(rec runtimeattr.Recorder) *OutboxRepo {
+	if r == nil {
+		return r
+	}
+	r.attr = runtimeattr.RecorderOrNoOp(rec)
+	return r
 }
 
 // Append inserts a single outbox event row. The row inherits the surrounding
 // transaction: if the transaction is rolled back, the row is removed.
 func (r *OutboxRepo) Append(ctx context.Context, ev *outbox.OutboxEvent) error {
-	if ev == nil {
-		return fmt.Errorf("outbox: Append called with nil event")
+	return r.AppendBatch(ctx, []*outbox.OutboxEvent{ev})
+}
+
+// AppendBatch inserts multiple outbox event rows with one SQL statement. The
+// rows inherit the surrounding transaction exactly like Append: if the
+// transaction rolls back, all inserted outbox rows are removed.
+func (r *OutboxRepo) AppendBatch(ctx context.Context, events []*outbox.OutboxEvent) error {
+	if len(events) == 0 {
+		return nil
 	}
 
-	payloadBytes, err := json.Marshal(ev.Payload)
-	if err != nil {
-		return fmt.Errorf("outbox: marshal payload: %w", err)
+	const colsPerRow = 9
+	var (
+		values = make([]string, 0, len(events))
+		args   = make([]any, 0, len(events)*colsPerRow)
+	)
+
+	for i, ev := range events {
+		if ev == nil {
+			return fmt.Errorf("outbox: AppendBatch called with nil event at index %d", i)
+		}
+		payloadBytes, err := json.Marshal(ev.Payload)
+		if err != nil {
+			return fmt.Errorf("outbox: marshal payload: %w", err)
+		}
+
+		base := i*colsPerRow + 1
+		values = append(values, fmt.Sprintf(
+			"($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
+			base, base+1, base+2, base+3, base+4, base+5, base+6, base+7, base+8,
+		))
+		args = append(args,
+			ev.ID,
+			string(ev.EventType),
+			ev.AggregateType,
+			ev.AggregateID,
+			ev.Topic,
+			nullableString(ev.EventKey),
+			payloadBytes,
+			ev.CreatedAt,
+			nullableTime(ev.PublishedAt),
+		)
 	}
 
-	_, err = r.db.ExecContext(ctx, `
-		INSERT INTO outbox_events (
+	q := `INSERT INTO outbox_events (
 			id, event_type, aggregate_type, aggregate_id,
 			topic, event_key, payload, created_at, published_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-		ev.ID,
-		string(ev.EventType),
-		ev.AggregateType,
-		ev.AggregateID,
-		ev.Topic,
-		nullableString(ev.EventKey),
-		payloadBytes,
-		ev.CreatedAt,
-		nullableTime(ev.PublishedAt),
-	)
-	if err != nil {
-		return fmt.Errorf("outbox: insert: %w", err)
+		) VALUES ` + strings.Join(values, ",")
+
+	if _, err := r.db.ExecContext(ctx, q, args...); err != nil {
+		return fmt.Errorf("outbox: insert batch: %w", err)
 	}
+	attr := runtimeattr.RecorderOrNoOp(r.attr)
+	attr.AddCount(runtimeattr.CountOutboxInsertStatement, 1)
+	attr.AddCount(runtimeattr.CountSQLOperation, 1)
 	return nil
 }
 
@@ -86,6 +127,32 @@ func (r *OutboxRepo) ListUnpublished(ctx context.Context) ([]*outbox.OutboxEvent
 	defer rows.Close()
 
 	return scanOutboxRows(rows)
+}
+
+// BacklogStats returns aggregate unpublished-row metrics without mutating the
+// outbox. It uses the partial unpublished index on published_at IS NULL.
+func (r *OutboxRepo) BacklogStats(ctx context.Context) (outbox.BacklogStats, error) {
+	const q = `
+		SELECT COUNT(*), MIN(created_at)
+		FROM outbox_events
+		WHERE published_at IS NULL`
+
+	var (
+		count     int64
+		oldestSQL sql.NullTime
+	)
+	if err := r.db.QueryRowContext(ctx, q).Scan(&count, &oldestSQL); err != nil {
+		return outbox.BacklogStats{}, fmt.Errorf("outbox: backlog stats: %w", err)
+	}
+
+	stats := outbox.BacklogStats{UnpublishedCount: count}
+	if oldestSQL.Valid {
+		stats.OldestUnpublishedAge = time.Since(oldestSQL.Time)
+		if stats.OldestUnpublishedAge < 0 {
+			stats.OldestUnpublishedAge = 0
+		}
+	}
+	return stats, nil
 }
 
 // ClaimUnpublished returns up to limit unpublished rows using

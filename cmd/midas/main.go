@@ -132,6 +132,13 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	if runtimeMetrics != nil {
+		if pgStore, ok := repoStore.(*postgres.Store); ok {
+			pgStore.WithAttribution(runtimeMetrics.Attribution)
+			runtimeMetrics.RegisterPostgresPoolStats(pgStore.DBStats)
+			runtimeMetrics.RegisterOutboxBacklogStats(pgStore.OutboxBacklogStats)
+		}
+	}
 	if cleanup != nil {
 		defer cleanup()
 	}
@@ -197,6 +204,9 @@ func main() {
 	orchestrator, err := decision.NewOrchestrator(repoStore, policyEval, evalRecorder)
 	if err != nil {
 		log.Fatal(err)
+	}
+	if runtimeMetrics != nil {
+		orchestrator.WithAttributionRecorder(runtimeMetrics.Attribution)
 	}
 
 	// Governance Coverage Assurance (#54): wire the matching service so
@@ -395,6 +405,7 @@ func main() {
 	srv.WithHandlerTimeout(cfg.Server.HandlerTimeout.D())
 
 	if runtimeMetrics != nil {
+		srv.WithAttributionRecorder(runtimeMetrics.Attribution)
 		srv.WithMetrics(runtimeMetrics.Handler, cfg.Observability.MetricsPath)
 	}
 

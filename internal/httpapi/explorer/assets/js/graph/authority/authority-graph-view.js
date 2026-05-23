@@ -743,80 +743,32 @@
   // dispatcher registration are removed here. The live
   // `renderAuthorityGraph` / `refresh` exports below stay untouched.
   //
-  // ── Drawer registration (D32b-impl-3) ─────────────────────────────────
+  // ── Drawer registration (D32b-impl-3 / D37av2-prereq) ──────────────
   //
-  // Authority renders inside the unified right-side graph drawer. The
-  // three drawer slots map to Authority semantics:
+  // Authority registers ONLY the inspector slot in the unified right-
+  // rail drawer. The legacy `evidence` (Diagnostics) and `config`
+  // (Posture & Help) slot registrations were dropped by
+  // D37av2-prereq-authority-rail-decommission-content-impl after the
+  // corrective right-rail retirement assessment confirmed:
   //
-  //   • inspector   — selected-node fields (Authority inspector writes
-  //                   into the existing #gmap-details-{name,fields,
-  //                   summary} DOM ids; tab renderer here is a no-op).
-  //   • evidence    — relabelled "Diagnostics". Injects the data-*
-  //                   containers the diagnostics panel module looks
-  //                   up, then dispatches to
-  //                   MIDASExplorerGraph.authorityDiagnosticsPanel.
-  //   • config      — relabelled "Posture". Injects the surface
-  //                   posture container and dispatches to
-  //                   MIDASExplorerGraph.authoritySurfacePosturePanel.
+  //   • Diagnostics is duplicated by the Authority Workbench Overview
+  //     (diagnostic summary counts) + Evidence (projection-wide
+  //     diagnostics list) tabs;
+  //   • The Posture & Help tab's authoritative content — Surface
+  //     Posture clickable list — moved to the Authority Workbench
+  //     Posture tab (graph-native projection-wide operational
+  //     surface);
+  //   • Summary pills are duplicated by the Workbench Overview;
+  //   • Layer chips and Graph legend are no longer mounted as live
+  //     runtime UI in this tranche;
+  //   • Help framing is owned by the OSS Help module (toolbar Help
+  //     button → /help/static/graphs/authority-graph/).
   //
-  // The lens labels are passed as the `label` field per tab; the
-  // drawer module syncs button text and the rail header.
-  function _authorityRenderDiagnosticsIntoDrawer(ctx, mount) {
-    if (!mount) return;
-    mount.innerHTML =
-      '<div class="authority-drawer-section authority-diagnostics-summary"' +
-        ' data-authority-diagnostic-summary aria-label="Diagnostic summary"></div>' +
-      '<div class="authority-drawer-section authority-diagnostics-list"' +
-        ' data-authority-diagnostics aria-label="Diagnostics"></div>';
-    var panel = window.MIDASExplorerGraph && window.MIDASExplorerGraph.authorityDiagnosticsPanel;
-    if (panel && typeof panel.render === 'function') {
-      try { panel.render(ctx && ctx.projection); } catch (_) { /* swallow */ }
-    }
-  }
-
-  // D32g-fix-1 — The Posture & Help tab consolidates four reference-
-  // grade sections that previously occupied the canvas overlay:
-  //   • Surface posture list (existing posture panel)
-  //   • Full summary counts (moved from above-canvas pills)
-  //   • Layer toggles (moved from above-canvas chip row)
-  //   • Full legend (moved from above-canvas <details> block)
-  //
-  // Each section delegates its content to the existing module that
-  // owns it (authoritySurfacePosturePanel + authorityOverlays). The
-  // drawer module owns tab activation / focus / panel scroll; this
-  // function only stamps mount points.
-  function _authorityRenderPostureAndHelpIntoDrawer(ctx, mount) {
-    if (!mount) return;
-    mount.innerHTML =
-      '<section class="authority-drawer-section authority-drawer-section-posture"' +
-        ' aria-label="Surface posture">' +
-        '<h4 class="authority-drawer-section-title">Surface posture</h4>' +
-        '<div class="authority-surface-posture" data-authority-surface-posture></div>' +
-      '</section>' +
-      '<section class="authority-drawer-section authority-drawer-section-summary"' +
-        ' data-authority-summary-mount aria-label="Authority summary"></section>' +
-      '<section class="authority-drawer-section authority-drawer-section-layers"' +
-        ' data-authority-layer-chips aria-label="Authority Graph layers"></section>' +
-      '<section class="authority-drawer-section authority-drawer-section-legend"' +
-        ' data-authority-legend aria-label="Authority Graph legend"></section>';
-
-    var posturePanel = window.MIDASExplorerGraph && window.MIDASExplorerGraph.authoritySurfacePosturePanel;
-    if (posturePanel && typeof posturePanel.render === 'function') {
-      try { posturePanel.render(ctx && ctx.projection); } catch (_) { /* swallow */ }
-    }
-    var overlays = window.MIDASExplorerGraph && window.MIDASExplorerGraph.authorityOverlays;
-    if (overlays) {
-      if (typeof overlays.renderSummaryInto === 'function') {
-        try { overlays.renderSummaryInto(mount.querySelector('[data-authority-summary-mount]'), ctx && ctx.projection); } catch (_) { /* swallow */ }
-      }
-      if (typeof overlays.renderLayerChipsInto === 'function') {
-        try { overlays.renderLayerChipsInto(mount.querySelector('[data-authority-layer-chips]')); } catch (_) { /* swallow */ }
-      }
-      if (typeof overlays.renderLegendInto === 'function') {
-        try { overlays.renderLegendInto(mount.querySelector('[data-authority-legend]')); } catch (_) { /* swallow */ }
-      }
-    }
-  }
+  // Only the `inspector` slot remains registered. The slot is
+  // operator-visible but no longer strategic; the next tranche
+  // (D37av2-authority-right-rail-gate-impl) gates it off entirely
+  // behind a fallback flag. The physical #gmap-details DOM is left
+  // in place for that tranche to manage.
 
   if (window.MIDASExplorerGraph.drawer && typeof window.MIDASExplorerGraph.drawer.registerLens === 'function') {
     window.MIDASExplorerGraph.drawer.registerLens('authority', {
@@ -835,8 +787,6 @@
             void ctx; void mount;
           },
         },
-        { id: 'evidence', label: 'Diagnostics',     render: _authorityRenderDiagnosticsIntoDrawer       },
-        { id: 'config',   label: 'Posture & Help',  render: _authorityRenderPostureAndHelpIntoDrawer    },
       ],
     });
   }

@@ -34,13 +34,14 @@ import (
 	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/eval"
 	"github.com/accept-io/midas/internal/externalref"
-	"github.com/accept-io/midas/internal/governancecoverage"
 	"github.com/accept-io/midas/internal/failmode"
+	"github.com/accept-io/midas/internal/governancecoverage"
 	"github.com/accept-io/midas/internal/governanceexpectation"
 	"github.com/accept-io/midas/internal/identity"
 	"github.com/accept-io/midas/internal/localiam"
 	"github.com/accept-io/midas/internal/oidc"
 	"github.com/accept-io/midas/internal/process"
+	"github.com/accept-io/midas/internal/runtimeattr"
 	"github.com/accept-io/midas/internal/surface"
 	"github.com/accept-io/midas/internal/value"
 )
@@ -255,6 +256,7 @@ type Server struct {
 	evidenceRead         evidenceReadService         // nil when the D30b runtime evidence read service is not wired
 	metricsHandler       http.Handler                // nil when metrics are disabled; registered at metricsPath when set
 	metricsPath          string                      // configured path for the metrics endpoint (e.g. "/metrics")
+	attribution          runtimeattr.Recorder        // optional low-cardinality runtime attribution
 	handlerTimeout       time.Duration               // per-handler wall-clock deadline; 0 disables (D27d)
 }
 
@@ -649,11 +651,11 @@ type grantResponse struct {
 // ConstraintData shape but kept local so the httpapi grant
 // endpoints remain self-contained.
 type grantConstraintWire struct {
-	Kind           string                     `json:"kind"`
-	MinConfidence  *float64                   `json:"min_confidence,omitempty"`
-	MaxConsequence *grantConsequenceWire      `json:"max_consequence,omitempty"`
-	StartTime      *time.Time                 `json:"start_time,omitempty"`
-	EndTime        *time.Time                 `json:"end_time,omitempty"`
+	Kind           string                `json:"kind"`
+	MinConfidence  *float64              `json:"min_confidence,omitempty"`
+	MaxConsequence *grantConsequenceWire `json:"max_consequence,omitempty"`
+	StartTime      *time.Time            `json:"start_time,omitempty"`
+	EndTime        *time.Time            `json:"end_time,omitempty"`
 }
 
 type grantConsequenceWire struct {
@@ -1422,6 +1424,7 @@ func NewServerFull(
 		controlAudit:   controlAuditSvc,
 		grantLifecycle: grantSvc,
 		authMode:       config.AuthModeOpen, // default matches config default; override with WithAuthMode
+		attribution:    runtimeattr.NoOpRecorder{},
 	}
 	s.routes()
 
@@ -1519,6 +1522,13 @@ func (s *Server) WithHandlerTimeout(d time.Duration) *Server {
 		d = 0
 	}
 	s.handlerTimeout = d
+	return s
+}
+
+// WithAttributionRecorder wires optional low-cardinality runtime attribution.
+// Passing nil restores the no-op recorder.
+func (s *Server) WithAttributionRecorder(rec runtimeattr.Recorder) *Server {
+	s.attribution = runtimeattr.RecorderOrNoOp(rec)
 	return s
 }
 
@@ -1908,6 +1918,12 @@ func (s *Server) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 // driven, never derived from the orchestrator type. The cross-path drift
 // pin in evaluate_test.go defends against future consolidation.
 func (s *Server) handleEvaluateWith(w http.ResponseWriter, r *http.Request, orch orchestrator, requireRequestID bool, auditStatus string) {
+	handlerStart := time.Now()
+	defer func() {
+		runtimeattr.Observe(s.attribution, runtimeattr.StageHTTPHandlerTotal, handlerStart)
+	}()
+	validationStart := time.Now()
+
 	rawBody, err := readRequestBody(w, r, maxRequestBodyBytes)
 	if err != nil {
 		status := http.StatusBadRequest
@@ -1993,13 +2009,19 @@ func (s *Server) handleEvaluateWith(w http.ResponseWriter, r *http.Request, orch
 		return
 	}
 
+	runtimeattr.Observe(s.attribution, runtimeattr.StageHTTPRequestValidation, validationStart)
+	orchStart := time.Now()
 	result, err := orch.Evaluate(r.Context(), toEvalRequest(req), json.RawMessage(rawBody))
+	runtimeattr.Observe(s.attribution, runtimeattr.StageHTTPOrchestratorCall, orchStart)
 	if err != nil {
 		statusCode, errResp := mapDomainError(err, entityEvaluation, true)
+		responseStart := time.Now()
 		writeJSON(w, statusCode, errResp)
+		runtimeattr.Observe(s.attribution, runtimeattr.StageHTTPResponseEncoding, responseStart)
 		return
 	}
 
+	responseStart := time.Now()
 	writeJSON(w, http.StatusOK, evaluateSuccessResponse{
 		evaluateResponse: evaluateResponse{
 			Outcome:         string(result.Outcome),
@@ -2012,6 +2034,7 @@ func (s *Server) handleEvaluateWith(w http.ResponseWriter, r *http.Request, orch
 		},
 		AuditStatus: auditStatus,
 	})
+	runtimeattr.Observe(s.attribution, runtimeattr.StageHTTPResponseEncoding, responseStart)
 }
 
 // handleSimulateWith runs the same request parsing as handleEvaluateWith but

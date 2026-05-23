@@ -91,6 +91,81 @@
   // the legacy dispatcher would reject anyway.
   var ALLOWED_ACTION_KINDS = ['reframe-around-this', 'view-business-service-record', 'view-capability-record'];
 
+  // D37am-context-tabs-config-impl — Formal graph-native tab config.
+  //
+  // Context becomes the second formal consumer of the global tab
+  // contract commissioned by D37ak on graph-selected-object-pane.js
+  // (Authority was the first). This is a declarative-only enablement:
+  // the existing `sections` array, render flow, copy, selection
+  // bridge, pane mode, ESC handling, and focus-mode behaviour are
+  // unchanged. Adding this config lets the shared shell introspect
+  // Context as a formal tab consumer (getTabConfig / getTabs /
+  // getDefaultTab / tabSupportsKind) using the same vocabulary
+  // Authority uses.
+  //
+  // GraphTabConfig shape (per D37ak):
+  //   { enabled, defaultTab, items: [{ id, label, provider,
+  //                                    supports, ... }] }
+  //
+  // Support filtering:
+  //   • Generic tabs (summary / relationships / actions / evidence)
+  //     use the `'*'` wildcard so they render for every selected
+  //     kind.
+  //   • The `details` tab enumerates the authoritative Context
+  //     card-kind list owned by `context-card-model.js` (NODE_KINDS).
+  //     A test enforces lockstep alignment so the two lists cannot
+  //     drift.
+  //
+  // `provider` strings (e.g. `'context.summary'`) are opaque
+  // identifiers the shared shell does not interpret today; they
+  // reserve namespace for a future per-section render dispatch.
+  var CONTEXT_TAB_CONFIG = {
+    enabled:    true,
+    defaultTab: 'summary',
+    items: [
+      {
+        id:       'summary',
+        label:    'Summary',
+        provider: 'context.summary',
+        supports: ['*'],
+      },
+      {
+        id:       'details',
+        label:    'Details',
+        provider: 'context.details',
+        supports: [
+          'business_service',
+          'related_business_service',
+          'capability',
+          'process',
+          'decision_surface',
+          'ai_system',
+          'ai_system_binding',
+          'authority_summary',
+          'coverage',
+        ],
+      },
+      {
+        id:       'relationships',
+        label:    'Relationships',
+        provider: 'context.relationships',
+        supports: ['*'],
+      },
+      {
+        id:       'actions',
+        label:    'Actions',
+        provider: 'context.actions',
+        supports: ['*'],
+      },
+      {
+        id:       'evidence',
+        label:    'Evidence',
+        provider: 'context.evidence',
+        supports: ['*'],
+      },
+    ],
+  };
+
   // ── Module state (UI only) ───────────────────────────────────────
 
   var _inited                  = false;
@@ -133,6 +208,55 @@
   function _isFocusMode() {
     if (typeof document === 'undefined' || !document.body) return false;
     return document.body.classList.contains('gmap-focus-mode');
+  }
+
+  // ── D37aq-strategic-context-drawer-gate ──────────────────────────
+  //
+  // The strategic Context renderer now defaults to the graph-native
+  // pane and stops reserving the legacy right-side drawer's width.
+  // The pane owns the body attribute that toggles the CSS override:
+  //
+  //   • `body[data-strategic-context-inspector="graph-pane"]` —
+  //     strategic Context is active AND the fallback flag is absent.
+  //     The shell.css scoped rule drops the right-rail margin /
+  //     header / footer insets to zero so the graph canvas reclaims
+  //     the width the legacy drawer used to reserve.
+  //   • absent — legacy / native Context, Authority, non-graph views,
+  //     or strategic Context with `?legacyContextInspector=1`. The
+  //     existing right-rail width reservation applies unchanged.
+  //
+  // The attribute is updated whenever the lens / active renderer
+  // flips so a runtime lens switch reaches the correct CSS state
+  // without a reload.
+
+  var STRATEGIC_CONTEXT_INSPECTOR_BODY_ATTR  = 'data-strategic-context-inspector';
+  var STRATEGIC_CONTEXT_INSPECTOR_PANE_VALUE = 'graph-pane';
+  var LEGACY_CONTEXT_INSPECTOR_QUERY_PARAM   = 'legacyContextInspector';
+
+  function _hasLegacyContextInspectorFlag() {
+    try {
+      var search = (window.location && window.location.search) || '';
+      var pairs = search.replace(/^\?/, '').split('&');
+      for (var i = 0; i < pairs.length; i++) {
+        var pair = pairs[i].split('=');
+        if (decodeURIComponent(pair[0]) === LEGACY_CONTEXT_INSPECTOR_QUERY_PARAM &&
+            decodeURIComponent(pair[1] || '') === '1') {
+          return true;
+        }
+      }
+    } catch (_) { /* fall through */ }
+    return false;
+  }
+
+  function _applyStrategicContextInspectorAttribute() {
+    if (typeof document === 'undefined' || !document.body) return;
+    if (_isStrategicContextActive() && !_hasLegacyContextInspectorFlag()) {
+      document.body.setAttribute(
+        STRATEGIC_CONTEXT_INSPECTOR_BODY_ATTR,
+        STRATEGIC_CONTEXT_INSPECTOR_PANE_VALUE);
+    } else {
+      document.body.removeAttribute(STRATEGIC_CONTEXT_INSPECTOR_BODY_ATTR);
+    }
   }
 
   // The pane should act on selection only when Context is the
@@ -183,6 +307,9 @@
     _wirePaneKeydown();
 
     _inited = true;
+    // D37aq — apply the body attribute on first init so the CSS
+    // override is in place before the user's first selection.
+    _applyStrategicContextInspectorAttribute();
     _refreshAfterMaybeMissedEvents();
 
     // D37p-pane-1 — register as the 'context' provider on the
@@ -203,6 +330,12 @@
     if (_viewportObserver) { try { _viewportObserver.disconnect(); } catch (_) {} _viewportObserver = null; }
     _unwireBodyClickDelegation();
     _unwirePaneKeydown();
+    // D37aq — clear the strategic-context-inspector body attribute
+    // on teardown so the CSS override does not outlive the module.
+    if (typeof document !== 'undefined' && document.body) {
+      try { document.body.removeAttribute(STRATEGIC_CONTEXT_INSPECTOR_BODY_ATTR); }
+      catch (_) { /* swallow */ }
+    }
     _inited = false;
     // wrapper markup intact, per D37o-ux-2 §22 rollback discipline.
   }
@@ -380,6 +513,11 @@
   }
 
   function _onBodyAttributesChanged() {
+    // D37aq — keep the strategic-context-inspector body attribute
+    // in sync with the live lens / active-renderer / fallback-flag
+    // state on every observed change.
+    _applyStrategicContextInspectorAttribute();
+
     var paneActive = _isPaneActive();
     var focusOn    = _isFocusMode();
 
@@ -599,7 +737,185 @@
     }
 
     section.appendChild(inner);
+
+    // D37an-context-tabs-summary-rollup — append the map-level summary
+    // rollup that previously lived only in the legacy right-side
+    // letterbox (inspector.setSummary path in context-graph-view.js).
+    // The rollup data comes from `contextProjection`, which is
+    // already published by `context-projection-provider.js` and
+    // mirrors the legacy `gmapData` payload (same object reference,
+    // same shape). View / rootId come from
+    // `contextProjection.getLastMeta()` so no new injection point
+    // into the inline IIFE is required.
+    var rollupRows = _buildSummaryRollupRows(_getCurrentProjection(), _getLastProjectionMeta());
+    if (rollupRows.length > 0) {
+      section.appendChild(_renderSummaryRollupBlock(rollupRows));
+    }
+
     _bodyEl.appendChild(section);
+  }
+
+  // ── D37an-context-tabs-summary-rollup ──────────────────────────────
+  //
+  // Map-level summary rollup helper. Returns a neutral row shape
+  // (`[[label, value], ...]`) suitable for either DOM rendering or
+  // a future shared helper. Reads from the published projection +
+  // last-meta; never fetches or mutates state.
+  //
+  // The row vocabulary is byte-identical to the legacy
+  // `inspector.setSummary(...)` call site in
+  // `context-graph-view.js:597-627`, so the pane displays the same
+  // rollup the right-side letterbox shows today. A future tranche
+  // may extract this helper into a shared module so both consumers
+  // share one implementation.
+
+  function _buildSummaryRollupRows(projection, meta) {
+    if (!projection || typeof projection !== 'object') return [];
+    var view = (meta && typeof meta.view === 'string' && meta.view.length > 0)
+      ? meta.view : 'service';
+    var rootId = (meta && typeof meta.rootId === 'string' && meta.rootId.length > 0)
+      ? meta.rootId : '';
+
+    if (view === 'ai_system') {
+      var aiSystems = Array.isArray(projection.ai_systems) ? projection.ai_systems : [];
+      var rootAI = null;
+      for (var i = 0; i < aiSystems.length; i++) {
+        var s = aiSystems[i];
+        if (s && s.id === rootId) { rootAI = s; break; }
+      }
+      if (!rootAI) return [];
+      return [
+        ['Root AI system',  String(rootAI.name || rootAI.id || '')],
+        ['Capabilities',    String((projection.capabilities || []).length)],
+        ['Processes',       String((projection.processes  || []).length)],
+        ['Surfaces',        String((projection.surfaces   || []).length)],
+        ['Bindings',        String((rootAI.bindings       || []).length)],
+      ];
+    }
+
+    if (view === 'decision_surface') {
+      var surfaces = Array.isArray(projection.surfaces) ? projection.surfaces : [];
+      var rootSurf = null;
+      for (var j = 0; j < surfaces.length; j++) {
+        var ds = surfaces[j];
+        if (ds && ds.id === rootId) { rootSurf = ds; break; }
+      }
+      if (!rootSurf) return [];
+      var surfBindings = (rootSurf.ai_bindings || []).length;
+      return [
+        ['Root decision surface', String(rootSurf.name || rootSurf.id || '')],
+        ['Parent process',        String(rootSurf.process_id || '—')],
+        ['Surface version',       String(rootSurf.version || '—')],
+        ['AI bindings (direct)',  String(surfBindings)],
+        ['AI systems',            String((projection.ai_systems || []).length)],
+      ];
+    }
+
+    // Default: 'service' view — Business Service is the root.
+    var bs = projection.business_service;
+    if (!bs || typeof bs !== 'object') return [];
+    var rels = (projection.relationships && projection.relationships.outgoing) || [];
+    var auth = projection.authority_summary || {};
+    var cov  = projection.coverage || {};
+    return [
+      ['Business service',       String(bs.name || bs.id || '')],
+      ['Outgoing relationships', String(rels.length)],
+      ['Capabilities',           String((projection.capabilities || []).length)],
+      ['Processes',              String((projection.processes  || []).length)],
+      ['Surfaces (active)',      String((projection.surfaces   || []).length)],
+      ['AI systems',             String((projection.ai_systems || []).length)],
+      ['Authority profiles',     String(auth.active_profile_count || 0)],
+      ['Coverage gaps',          String(cov.surfaces_with_no_ai_binding || 0)],
+    ];
+  }
+
+  function _renderSummaryRollupBlock(rows) {
+    var rollup = document.createElement('section');
+    rollup.className = 'gmap-context-selected-object-pane-summary-rollup';
+    rollup.setAttribute('data-pane-summary-rollup', '');
+    var heading = document.createElement('h4');
+    heading.className = 'gmap-context-selected-object-pane-summary-rollup-heading';
+    heading.textContent = 'Map summary';
+    rollup.appendChild(heading);
+    var dl = document.createElement('dl');
+    dl.className = 'gmap-context-selected-object-pane-summary-rollup-list';
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i];
+      if (!row || row.length < 2) continue;
+      var dt = document.createElement('dt');
+      dt.textContent = String(row[0]);
+      var dd = document.createElement('dd');
+      dd.textContent = String(row[1]);
+      dl.appendChild(dt);
+      dl.appendChild(dd);
+    }
+    rollup.appendChild(dl);
+    return rollup;
+  }
+
+  function _getLastProjectionMeta() {
+    var g = window.MIDASExplorerGraph;
+    if (!g || !g.contextProjection || typeof g.contextProjection.getLastMeta !== 'function') return null;
+    try { return g.contextProjection.getLastMeta(); }
+    catch (_) { return null; }
+  }
+
+  // ── D37ao-context-tabs-governance-section ──────────────────────────
+  //
+  // Fail-Mode Policy governance helper. Reuses the legacy renderer
+  // `contextInspector.buildFailModePolicySection(nodeKind, details,
+  // data)` so the HTML output is byte-identical to the legacy drawer
+  // (same labels, classes, escapement). The pane only does:
+  //
+  //   • kind mapping — ContextCard.kind ('business_service' /
+  //     'decision_surface') must be translated to the legacy renderer's
+  //     short form ('business' / 'surface'). For any other kind the
+  //     helper returns '' so the pane shows no Fail-Mode Policy
+  //     section.
+  //   • data sourcing — the legacy renderer reads
+  //     `data.business_service.fail_mode_policy_id`. The pane sources
+  //     `data` from `contextProjection.getCurrentProjection()` (same
+  //     payload reference the legacy `gmapData` carries).
+  //
+  // The helper is pure: no DOM, no fetch, no state mutation. It is
+  // exposed on the diagnostic surface (`_mapCardKindToLegacyNodeKind`,
+  // `_buildGovernanceHtml`) so tests can validate kind mapping and
+  // output parity without spinning up a DOM.
+
+  function _mapCardKindToLegacyNodeKind(kind) {
+    if (kind === 'business_service') return 'business';
+    if (kind === 'decision_surface') return 'surface';
+    return '';
+  }
+
+  function _buildGovernanceHtml(card) {
+    if (!card || typeof card !== 'object') return '';
+    var legacyKind = _mapCardKindToLegacyNodeKind(card.kind);
+    if (!legacyKind) return '';
+    var g = window.MIDASExplorerGraph;
+    var ctxIns = g && g.contextInspector;
+    if (!ctxIns || typeof ctxIns.buildFailModePolicySection !== 'function') return '';
+    var details = (card && card.details) || {};
+    var data = _getCurrentProjection();
+    try {
+      return ctxIns.buildFailModePolicySection(legacyKind, details, data) || '';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  function _renderGovernanceBlock(html) {
+    var wrap = document.createElement('div');
+    wrap.className = 'gmap-context-selected-object-pane-details-governance';
+    wrap.setAttribute('data-pane-details-governance', '');
+    // The legacy renderer already escapes user content via
+    // `_escHtml` (see contextInspector.buildFailModePolicySection).
+    // Mirror the legacy drawer's governance frame-setter injection
+    // pattern (see graph-inspector.js #gmap-details-governance
+    // innerHTML write) so the pane and drawer produce byte-identical
+    // HTML for the FMP block.
+    wrap.innerHTML = html;
+    return wrap;
   }
 
   // ── Details section ─────────────────────────────────────────────
@@ -672,6 +988,15 @@
       section.appendChild(mul);
     }
 
+    // D37ao-context-tabs-governance-section — append Fail-Mode Policy
+    // governance for business_service / decision_surface cards. The
+    // helper returns '' for every other kind, so no extra DOM is
+    // emitted in those cases.
+    var governanceHtml = _buildGovernanceHtml(card);
+    if (governanceHtml) {
+      section.appendChild(_renderGovernanceBlock(governanceHtml));
+    }
+
     _bodyEl.appendChild(section);
   }
 
@@ -696,6 +1021,12 @@
       var a = card.actions[i];
       if (!a || !a.kind || !a.targetId) continue;
       if (ALLOWED_ACTION_KINDS.indexOf(a.kind) < 0) continue;
+      // D37ap-context-actions-parity-tests — match the legacy drawer's
+      // stricter reframe-around-this filter (graph-inspector.js:140):
+      // a reframe action without a targetView is silently dropped at
+      // render time so the pane never emits a button that would
+      // dispatch an incomplete reframe wire payload.
+      if (a.kind === 'reframe-around-this' && !a.targetView) continue;
       visible.push(a);
     }
     if (visible.length === 0) return;
@@ -988,6 +1319,11 @@
         { id: 'relationships', label: 'Relationships' },
         { id: 'evidence',      label: 'Evidence'      },
       ],
+      // D37am-context-tabs-config-impl — formal graph-native tab
+      // config. `sections` (above) is preserved for backwards
+      // compatibility with introspection tools that don't yet read
+      // `tabs`; new platform code should prefer `tabs`.
+      tabs: CONTEXT_TAB_CONFIG,
       copy: COPY,
       getSelection: function () { return _getCurrentCard(); },
     };
@@ -1016,6 +1352,20 @@
       COPY:        COPY,
       STORAGE_KEY: STORAGE_KEY,
     },
+    // D37am-context-tabs-config-impl — formal tab config exposed
+    // for tests + dev tools (mirrors Authority's _AUTHORITY_TAB_CONFIG
+    // diagnostic export from D37ak).
+    _CONTEXT_TAB_CONFIG: CONTEXT_TAB_CONFIG,
+    // D37an-context-tabs-summary-rollup — pure rollup helper exposed
+    // for tests + dev tools. Same view vocabulary as the legacy
+    // setSummary call site in context-graph-view.js.
+    _buildSummaryRollupRows: _buildSummaryRollupRows,
+    // D37ao-context-tabs-governance-section — kind-mapping +
+    // governance HTML helpers exposed for tests + dev tools. The
+    // legacy renderer lives on `contextInspector.buildFailModePolicySection`
+    // and is reused unchanged.
+    _mapCardKindToLegacyNodeKind: _mapCardKindToLegacyNodeKind,
+    _buildGovernanceHtml:         _buildGovernanceHtml,
   };
 
   // ── Bootstrap (DOMContentLoaded + window.load safety net) ────────

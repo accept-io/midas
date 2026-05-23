@@ -246,19 +246,55 @@ func TestExplorer_D33aSpike2gImpl4a_ThinCardUsesTitleAndSubtitleLabel(t *testing
 // ── 5. Subtitle vocabulary covers all 7 kinds ────────────────────────
 
 // TestExplorer_D33aSpike2gImpl4a_NodeSubtitleCoversAuthorityKinds
-// pins the seven kind → subtitle mappings.
+// originally pinned the seven kind → subtitle mappings against a
+// local _NODE_SUBTITLES table in authority-cytoscape-poc.js.
+//
+// D37at2-followup-t1 removed _NODE_SUBTITLES under Option A: the
+// subtitle vocabulary is now sourced from the canonical
+// authority-graph-adapter NODE_KIND_LABELS table, so the legacy
+// table no longer exists. This test now pins:
+//
+//   1. _nodeSubtitle() in poc.js resolves the subtitle through
+//      window.MIDASExplorerGraph.authorityAdapter.nodeKindLabel.
+//   2. The canonical NODE_KIND_LABELS table in the adapter still
+//      contains the seven Authority kinds and carries the
+//      canonical fail_mode_policy label ('Fail Mode Policy').
 func TestExplorer_D33aSpike2gImpl4a_NodeSubtitleCoversAuthorityKinds(t *testing.T) {
 	js := d33aSpike2gImpl4aReadPoc(t)
 
-	if !strings.Contains(js, "var _NODE_SUBTITLES = {") {
-		t.Fatal("D33a-spike-2g-impl-4a: _NODE_SUBTITLES declaration missing")
+	// Negative pin — the legacy local subtitle table must not return.
+	if strings.Contains(js, "var _NODE_SUBTITLES = {") {
+		t.Error("D33a-spike-2g-impl-4a / D37at2-followup-t1: local _NODE_SUBTITLES table must not return; subtitle vocabulary resolves through the canonical adapter")
 	}
-	start := strings.Index(js, "var _NODE_SUBTITLES = {")
-	end := strings.Index(js[start:], "\n  };")
-	if end < 0 {
-		t.Fatal("D33a-spike-2g-impl-4a: could not bound _NODE_SUBTITLES map")
+
+	// _nodeSubtitle still exists and now sources its vocabulary
+	// through the canonical authority-graph-adapter table.
+	helperStart := strings.Index(js, "function _nodeSubtitle(")
+	if helperStart < 0 {
+		t.Fatal("D33a-spike-2g-impl-4a / D37at2-followup-t1: _nodeSubtitle helper missing")
 	}
-	body := js[start : start+end]
+	helperEnd := strings.Index(js[helperStart:], "\n  }")
+	if helperEnd < 0 {
+		t.Fatal("D33a-spike-2g-impl-4a / D37at2-followup-t1: could not bound _nodeSubtitle body")
+	}
+	body := js[helperStart : helperStart+helperEnd]
+	if !strings.Contains(body, "authorityAdapter") || !strings.Contains(body, "nodeKindLabel") {
+		t.Error("D33a-spike-2g-impl-4a / D37at2-followup-t1: _nodeSubtitle must resolve its vocabulary through window.MIDASExplorerGraph.authorityAdapter.nodeKindLabel")
+	}
+
+	// The canonical adapter table must still carry the seven kinds,
+	// with fail_mode_policy converged on the canonical 'Fail Mode
+	// Policy' (no hyphen).
+	adapterJS := d37at2FollowupT1ReadAdapter(t)
+	tableStart := strings.Index(adapterJS, "var NODE_KIND_LABELS = Object.freeze({")
+	if tableStart < 0 {
+		t.Fatal("D33a-spike-2g-impl-4a / D37at2-followup-t1: canonical NODE_KIND_LABELS table missing from authority-graph-adapter.js")
+	}
+	tableEnd := strings.Index(adapterJS[tableStart:], "});")
+	if tableEnd < 0 {
+		t.Fatal("D33a-spike-2g-impl-4a / D37at2-followup-t1: could not bound NODE_KIND_LABELS table")
+	}
+	tableBody := adapterJS[tableStart : tableStart+tableEnd]
 
 	pairs := map[string]string{
 		"business_service":  "'Business Service'",
@@ -266,16 +302,16 @@ func TestExplorer_D33aSpike2gImpl4a_NodeSubtitleCoversAuthorityKinds(t *testing.
 		"authority_profile": "'Authority Profile'",
 		"authority_grant":   "'Authority Grant'",
 		"agent":             "'Agent'",
-		"fail_mode_policy":  "'Fail-Mode Policy'",
+		"fail_mode_policy":  "'Fail Mode Policy'",
 		"escalation_target": "'Escalation Target'",
 	}
-	for kind, subtitle := range pairs {
-		if !strings.Contains(body, kind+":") {
-			t.Errorf("D33a-spike-2g-impl-4a: _NODE_SUBTITLES missing kind %q", kind)
+	for kind, label := range pairs {
+		if !strings.Contains(tableBody, kind+":") {
+			t.Errorf("D33a-spike-2g-impl-4a / D37at2-followup-t1: NODE_KIND_LABELS missing kind %q", kind)
 			continue
 		}
-		if !strings.Contains(body, subtitle) {
-			t.Errorf("D33a-spike-2g-impl-4a: _NODE_SUBTITLES missing subtitle %q (for %q)", subtitle, kind)
+		if !strings.Contains(tableBody, label) {
+			t.Errorf("D33a-spike-2g-impl-4a / D37at2-followup-t1: NODE_KIND_LABELS missing canonical label %q (for %q)", label, kind)
 		}
 	}
 }
@@ -292,9 +328,12 @@ func TestExplorer_D33aSpike2gImpl4a_NodeSubtitleCoversAuthorityKinds(t *testing.
 func TestExplorer_D33aSpike2gImpl4a_NoFakePostureOrMetricBadgesIntroduced(t *testing.T) {
 	js := d33aSpike2gImpl4aReadPoc(t)
 
-	sectionStart := strings.Index(js, "var _NODE_SUBTITLES = {")
+	// D37at2-followup-t1 removed the var _NODE_SUBTITLES anchor; the
+	// impl-4a helper section now begins at function _nodeSubtitle(
+	// (the surviving subtitle helper, now adapter-backed).
+	sectionStart := strings.Index(js, "function _nodeSubtitle(")
 	if sectionStart < 0 {
-		t.Fatal("D33a-spike-2g-impl-4a: _NODE_SUBTITLES section missing")
+		t.Fatal("D33a-spike-2g-impl-4a / D37at2-followup-t1: _nodeSubtitle anchor missing")
 	}
 	// End the section at the start of the existing edge-hover
 	// vocabulary, so we scan only the impl-4a additions.

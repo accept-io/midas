@@ -382,6 +382,81 @@
     return maxH;
   }
 
+  // ── Required-width calculation ─────────────────────────────────────
+  //
+  // D37aa-graphstage-model-space-expansion — Platform model-space
+  // expansion. The stage's main strip width must be sufficient to
+  // contain the widest required row's declared card rectangles.
+  //
+  // Mechanism: model-space width is a FLOOR (DEFAULT_STAGE_MIN_WIDTH)
+  // but expands to fit declared content. Downstream consumers
+  // verbatim-render the expanded positions and zoom-to-fit via their
+  // own pipelines; graph-stage is rendering-technology-agnostic and
+  // lens-agnostic. The model matches the well-established legacy
+  // pattern of computing per-row required width and taking the max
+  // across rows.
+  //
+  // For non-split bands:
+  //   bandReq = sum(footprint.width across cards) + (n-1) * gapX
+  //
+  // For split-column bands (a banded layout with two column groups
+  // sharing a single y-band):
+  //   leftReq   = sum(left footprints) + (leftCount-1) * gapX
+  //   rightReq  = sum(right footprints) + (rightCount-1) * gapX
+  //   bandReq   = leftReq + gapX + rightReq            (both present)
+  //             = max(leftReq, rightReq)                (one empty)
+  //
+  // `_rowRequiredWidth` is the per-slot-set helper; it deduplicates
+  // slot ids so repeated cardIds don't double-count.
+
+  function _rowRequiredWidth(slots, cardFootprints, defaults) {
+    if (!Array.isArray(slots) || slots.length === 0) return 0;
+    var seen = {};
+    var totalW = 0;
+    var n = 0;
+    for (var i = 0; i < slots.length; i++) {
+      var s = slots[i];
+      if (!_isPlainObject(s) || !s.cardId) continue;
+      var id = _str(s.cardId);
+      if (seen[id]) continue;
+      seen[id] = true;
+      var fp = cardFootprints && cardFootprints[id];
+      var w  = (fp && typeof fp.width === 'number' && isFinite(fp.width) && fp.width > 0)
+        ? fp.width : defaults.defaultCardWidth;
+      totalW += w;
+      n++;
+    }
+    if (n > 1) totalW += (n - 1) * defaults.gapX;
+    return totalW;
+  }
+
+  function _computeRequiredMainStripWidth(layoutSpec, cardFootprints, defaults) {
+    if (!_isPlainObject(layoutSpec)) return 0;
+    var bands = Array.isArray(layoutSpec.bands) ? layoutSpec.bands : [];
+    var max = 0;
+    for (var b = 0; b < bands.length; b++) {
+      var band = bands[b];
+      if (!_isPlainObject(band)) continue;
+      var bandReq = 0;
+      if (_isPlainObject(band.splitColumns)) {
+        var leftSlots  = Array.isArray(band.splitColumns.left)  ? band.splitColumns.left  : [];
+        var rightSlots = Array.isArray(band.splitColumns.right) ? band.splitColumns.right : [];
+        var leftReq  = _rowRequiredWidth(leftSlots,  cardFootprints, defaults);
+        var rightReq = _rowRequiredWidth(rightSlots, cardFootprints, defaults);
+        if (leftReq > 0 && rightReq > 0) {
+          bandReq = leftReq + defaults.gapX + rightReq;
+        } else {
+          bandReq = (leftReq > rightReq) ? leftReq : rightReq;
+        }
+      } else {
+        var flat = Array.isArray(band.cards) ? band.cards : [];
+        bandReq = _rowRequiredWidth(flat, cardFootprints, defaults);
+      }
+      if (bandReq > max) max = bandReq;
+    }
+    return max;
+  }
+
   // ── Banded layout composition ──────────────────────────────────────
 
   function _composeBanded(stage, layoutSpec, cardFootprints, defaults, diagnostics) {
@@ -394,13 +469,25 @@
     var govWidth    = hasGov ? defaults.governanceWidth : 0;
 
     var padding   = stage.padding;
-    var stageWidth = defaults.minWidth;
+
+    // D37aa — Compute required main-strip width from declared card
+    // footprints across all bands. The strip then grows to fit the
+    // widest band; stage width = padding + strip + governance.
+    // DEFAULT_STAGE_MIN_WIDTH remains a FLOOR — the stage never
+    // shrinks below the minimum.
+    var requiredMainStripW = _computeRequiredMainStripWidth(
+      layoutSpec, cardFootprints, defaults);
+    var paddedFloor   = defaults.minWidth - padding.left - padding.right - govGap - govWidth;
+    if (paddedFloor < defaults.defaultCardWidth) paddedFloor = defaults.defaultCardWidth;
+    var mainStripW    = (requiredMainStripW > paddedFloor) ? requiredMainStripW : paddedFloor;
+    var stageWidth    = padding.left + mainStripW + govGap + govWidth + padding.right;
 
     var mainStripLeft  = padding.left;
-    var mainStripRight = stageWidth - padding.right - govGap - govWidth;
+    var mainStripRight = mainStripLeft + mainStripW;
     if (mainStripRight < mainStripLeft + defaults.defaultCardWidth) {
-      // Stage too narrow for one card + governance — expand stage.
+      // Defensive — should not fire after the floor guard above.
       mainStripRight = mainStripLeft + defaults.defaultCardWidth;
+      mainStripW     = mainStripRight - mainStripLeft;
       stageWidth     = mainStripRight + govGap + govWidth + padding.right;
     }
     var mainStripMidX = (mainStripLeft + mainStripRight) / 2;
@@ -425,12 +512,44 @@
         var leftSlots  = Array.isArray(band.splitColumns.left)  ? band.splitColumns.left  : [];
         var rightSlots = Array.isArray(band.splitColumns.right) ? band.splitColumns.right : [];
 
+        // D37aa — Per-band asymmetric split-column allocation.
+        //
+        // The pre-tranche placement bisected the main strip 50/50 at
+        // `mainStripMidX` and gave each column rowSpan ~= mainStripW/2.
+        // When the required left or right width exceeded that half,
+        // _placeRow walked monotonically past `ctx.x1` and cards
+        // overflowed into the adjacent column's space.
+        //
+        // The corrected placement allocates each column EXACTLY its
+        // required width, with a `gapX` separator, and centres the
+        // combined union within the (already-expanded) main strip.
+        // mainStripW is sized by the required-width pass to contain
+        // `leftReq + gapX + rightReq` for the widest band, so the
+        // asymmetric allocation always fits.
+        var leftReqW  = _rowRequiredWidth(leftSlots,  cardFootprints, defaults);
+        var rightReqW = _rowRequiredWidth(rightSlots, cardFootprints, defaults);
+        var splitTotalW, splitGap;
+        if (leftReqW > 0 && rightReqW > 0) {
+          splitGap    = defaults.gapX;
+          splitTotalW = leftReqW + splitGap + rightReqW;
+        } else {
+          splitGap    = 0;
+          splitTotalW = (leftReqW > rightReqW) ? leftReqW : rightReqW;
+        }
+        var splitSlack = (mainStripW - splitTotalW) / 2;
+        if (splitSlack < 0) splitSlack = 0;
+        var leftX0  = mainStripLeft + splitSlack;
+        var leftX1  = leftX0 + leftReqW;
+        var rightX0 = (leftReqW > 0 && rightReqW > 0) ? (leftX1 + splitGap) : leftX0;
+        var rightX1 = rightX0 + rightReqW;
+        void mainStripMidX; // legacy variable retained for downstream consumers
+
         var leftH = _placeRow(stage, leftSlots, cardFootprints, defaults, diagnostics, seen, {
-          x0: mainStripLeft, x1: mainStripMidX - defaults.gapX / 2,
+          x0: leftX0, x1: leftX1,
           y: y, bandId: bandId, column: 'left',
         });
         var rightH = _placeRow(stage, rightSlots, cardFootprints, defaults, diagnostics, seen, {
-          x0: mainStripMidX + defaults.gapX / 2, x1: mainStripRight,
+          x0: rightX0, x1: rightX1,
           y: y, bandId: bandId, column: 'right',
         });
         rowHeight = Math.max(leftH, rightH);
@@ -750,6 +869,22 @@
     }
 
     stage.fitBounds = _computeFitBounds(stage);
+
+    // D37aa-graphstage-model-space-expansion — Hard no-overlap
+    // invariant. After model-space expansion + asymmetric split-
+    // column placement, no two non-sentinel card rectangles may
+    // intersect. `validateNoOverlap` pushes
+    // `CARD_OVERLAP_DETECTED` diagnostics into `stage.diagnostics`
+    // for any pair that does. The result is also surfaced on the
+    // StageModel via `stage.overlapReport` so consumers (engine,
+    // tests, dev tools) can read the post-compose verdict directly
+    // without re-running the validator.
+    var report = validateNoOverlap(stage);
+    stage.overlapReport = {
+      overlaps:    report.overlaps,
+      overlapCount: report.overlaps.length,
+    };
+
     return stage;
   }
 

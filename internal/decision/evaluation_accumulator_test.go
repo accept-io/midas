@@ -171,21 +171,46 @@ func newAccFakeAuditRepo(log *accCallLog) *accFakeAuditRepo {
 }
 
 func (r *accFakeAuditRepo) Append(_ context.Context, ev *audit.AuditEvent) error {
-	if r.appendErr != nil && r.appended >= r.failAfter {
+	return r.AppendBatch(context.Background(), []*audit.AuditEvent{ev})
+}
+
+func (r *accFakeAuditRepo) AppendBatch(_ context.Context, events []*audit.AuditEvent) error {
+	if len(events) == 0 {
+		return nil
+	}
+	for i, ev := range events {
+		if ev == nil {
+			return fmt.Errorf("audit: AppendBatch called with nil event at index %d", i)
+		}
+		if i > 0 && ev.EnvelopeID != events[0].EnvelopeID {
+			return fmt.Errorf("audit: AppendBatch mixed envelope IDs %q and %q", events[0].EnvelopeID, ev.EnvelopeID)
+		}
+	}
+	if r.appendErr != nil && r.appended+len(events) > r.failAfter {
 		return r.appendErr
 	}
-	// Assign hash chain like the real repository.
-	ev.SequenceNo = len(r.events) + 1
+	prepared := make([]*audit.AuditEvent, 0, len(events))
+	nextSequence := len(r.events) + 1
+	prevHash := ""
 	if len(r.events) > 0 {
-		ev.PrevHash = r.events[len(r.events)-1].Hash
+		prevHash = r.events[len(r.events)-1].Hash
 	}
-	h := fmt.Sprintf("hash_%d_%s_%s", ev.SequenceNo, ev.EnvelopeID, ev.EventType)
-	ev.Hash = h
-	ev.EventHash = h
+	for _, ev := range events {
+		ev.SequenceNo = nextSequence
+		ev.PrevHash = prevHash
+		h := fmt.Sprintf("hash_%d_%s_%s", ev.SequenceNo, ev.EnvelopeID, ev.EventType)
+		ev.Hash = h
+		ev.EventHash = h
+		prepared = append(prepared, ev)
+		nextSequence++
+		prevHash = ev.EventHash
+	}
 
-	r.log.record(fmt.Sprintf("append:%s", ev.EventType))
-	r.events = append(r.events, ev)
-	r.appended++
+	for _, ev := range prepared {
+		r.log.record(fmt.Sprintf("append:%s", ev.EventType))
+		r.events = append(r.events, ev)
+		r.appended++
+	}
 	return nil
 }
 
@@ -831,19 +856,19 @@ func TestAccumulatorPersist_AppendFailure(t *testing.T) {
 	}
 }
 
-func TestAccumulatorPersist_PartialAppendFailure(t *testing.T) {
-	// persistNew: Create succeeds; first 2 Appends succeed; 3rd fails. Verify partial absorb and no Update.
+func TestAccumulatorPersist_BatchAppendFailure(t *testing.T) {
+	// persistNew: Create succeeds; Audit.AppendBatch fails atomically. Verify no absorb and no Update.
 	log := &accCallLog{}
 	envRepo := newAccFakeEnvRepo(log)
 	auditRepo := newAccFakeAuditRepo(log)
 
 	sentinelErr := errors.New("audit: backend unavailable")
 	auditRepo.appendErr = sentinelErr
-	auditRepo.failAfter = 2 // first 2 succeed; 3rd fails
+	auditRepo.failAfter = 2 // batch of 4 exceeds the allowed successful append budget
 
 	env := accMakeEnv(t)
 	acc := accMakeAcc(t, env)
-	accDriveToAccept(t, acc) // queues 4 events; 3rd will fail
+	accDriveToAccept(t, acc) // queues 4 events; batch will fail
 	repos := makeAccTestRepos(envRepo, auditRepo)
 
 	err := acc.persistNew(context.Background(), repos)
@@ -851,13 +876,13 @@ func TestAccumulatorPersist_PartialAppendFailure(t *testing.T) {
 		t.Errorf("expected sentinel error, got: %v", err)
 	}
 
-	// The 2 successful Appends were absorbed into Integrity.
-	if len(env.Integrity.AuditEventIDs) != 2 {
-		t.Errorf("AuditEventIDs after 2 successful appends: got %d, want 2",
+	// Failed batch appends are not absorbed into Integrity.
+	if len(env.Integrity.AuditEventIDs) != 0 {
+		t.Errorf("AuditEventIDs after failed batch append: got %d, want 0",
 			len(env.Integrity.AuditEventIDs))
 	}
-	if env.Integrity.FirstEventHash == "" {
-		t.Error("FirstEventHash should be set after 1st successful Append")
+	if env.Integrity.FirstEventHash != "" {
+		t.Errorf("FirstEventHash after failed batch append: got %q, want empty", env.Integrity.FirstEventHash)
 	}
 
 	// Update not attempted.
@@ -1226,16 +1251,26 @@ func newAccFakeOutboxRepo(log *accCallLog) *accFakeOutboxRepo {
 }
 
 func (r *accFakeOutboxRepo) Append(_ context.Context, ev *outbox.OutboxEvent) error {
+	return r.AppendBatch(context.Background(), []*outbox.OutboxEvent{ev})
+}
+
+func (r *accFakeOutboxRepo) AppendBatch(_ context.Context, events []*outbox.OutboxEvent) error {
 	if r.appendErr != nil {
 		return r.appendErr
 	}
-	r.log.record(fmt.Sprintf("outbox:%s", ev.EventType))
-	r.events = append(r.events, ev)
+	for _, ev := range events {
+		r.log.record(fmt.Sprintf("outbox:%s", ev.EventType))
+		r.events = append(r.events, ev)
+	}
 	return nil
 }
 
 func (r *accFakeOutboxRepo) ListUnpublished(_ context.Context) ([]*outbox.OutboxEvent, error) {
 	return r.events, nil
+}
+
+func (r *accFakeOutboxRepo) BacklogStats(_ context.Context) (outbox.BacklogStats, error) {
+	return outbox.BacklogStats{UnpublishedCount: int64(len(r.events))}, nil
 }
 
 func (r *accFakeOutboxRepo) ClaimUnpublished(_ context.Context, limit int) ([]*outbox.OutboxEvent, error) {

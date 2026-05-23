@@ -125,13 +125,21 @@ func TestExplorer_D33aSpike2gImpl5f_InspectorPreservesSelectedNodeFields(t *test
 	}
 }
 
-// ── 3. Diagnostics tab untouched ─────────────────────────────────────
+// ── 3. Diagnostics panel module preserved (impl-5f ownership) ────────
 
-// TestExplorer_D33aSpike2gImpl5f_DiagnosticsTabUntouched pins that
-// the Diagnostics tab module still renders the diagnostics list
-// with severity / kind / message / node_refs. impl-5f is an
-// ownership cleanup; the Diagnostics tab is explicitly out of
-// scope and must not regress.
+// TestExplorer_D33aSpike2gImpl5f_DiagnosticsTabUntouched originally
+// pinned that the right-drawer Diagnostics tab registration in
+// authority-graph-view.js bound the diagnostics renderer to the
+// `evidence` slot.
+//
+// D37av2-prereq-authority-rail-decommission-content-impl decommissioned
+// the right-rail Diagnostics tab; the registration was dropped from
+// view.js. Workbench Overview (diagnostic summary counts) + Workbench
+// Evidence (projection-wide diagnostics list) are the strategic
+// duplicates. The Authority diagnostics panel MODULE remains intact
+// (preserved for potential future reuse and for the panel's own
+// public-surface contract); this test now pins the module survives
+// and flips the view.js drawer-tab pin to a negative pin.
 func TestExplorer_D33aSpike2gImpl5f_DiagnosticsTabUntouched(t *testing.T) {
 	js := d33aSpike2gImpl5fRead(t, d33aSpike2gImpl5fDiagPanelPath)
 	for _, want := range []string{
@@ -141,46 +149,55 @@ func TestExplorer_D33aSpike2gImpl5f_DiagnosticsTabUntouched(t *testing.T) {
 		"node_refs",
 	} {
 		if !strings.Contains(js, want) {
-			t.Errorf("D33a-spike-2g-impl-5f: diagnostics panel must still reference %q (impl-5f did not redesign Diagnostics)", want)
+			t.Errorf("D33a-spike-2g-impl-5f: diagnostics panel module must still reference %q (the panel module is preserved post-D37av2-prereq even though the right-rail Diagnostics tab is decommissioned)", want)
 		}
 	}
-	// The tab registration must still bind the diagnostics renderer
-	// to the right-drawer `evidence` slot with label "Diagnostics".
+	// Negative pin — view.js must no longer register the Diagnostics
+	// tab in Authority's drawer registration.
 	view := d33aSpike2gImpl5fRead(t, d33aSpike2gImpl5fViewJsPath)
-	for _, want := range []string{
+	for _, banned := range []string{
 		"id: 'evidence'",
 		"label: 'Diagnostics'",
 		"_authorityRenderDiagnosticsIntoDrawer",
 	} {
-		if !strings.Contains(view, want) {
-			t.Errorf("D33a-spike-2g-impl-5f: view must still register the Diagnostics tab (looking for %q)", want)
+		if strings.Contains(view, banned) {
+			t.Errorf("D37av2-prereq: Authority drawer registration must not declare %q — Diagnostics tab decommissioned (Workbench Overview + Evidence are the strategic duplicates)", banned)
 		}
 	}
 }
 
-// ── 4. Posture & Help tab untouched ──────────────────────────────────
+// ── 4. Posture panel + overlays modules preserved (impl-5f scope) ────
 
-// TestExplorer_D33aSpike2gImpl5f_PostureHelpTabUntouched pins that
-// the Posture & Help tab still mounts the surface posture panel +
-// summary / layer chips / legend overlays. Future tranches may
-// redesign this tab; impl-5f must not.
+// TestExplorer_D33aSpike2gImpl5f_PostureHelpTabUntouched originally
+// pinned that the right-drawer Posture & Help tab registered the
+// surface posture panel + summary / layer chips / legend overlays.
+//
+// D37av2-prereq-authority-rail-decommission-content-impl decommissioned
+// the right-rail Posture & Help tab; the registration was dropped
+// from view.js. Surface Posture moved to the Workbench Posture tab
+// (the strategic graph-native home); summary pills are duplicated by
+// Workbench Overview; layer chips and graph legend are no longer
+// mounted as live runtime UI; help framing is owned by the OSS Help
+// module. The panel + overlays MODULES remain intact (preserved for
+// potential future reuse and for their own public-surface contracts).
 func TestExplorer_D33aSpike2gImpl5f_PostureHelpTabUntouched(t *testing.T) {
+	// Negative pin — view.js must no longer register the Posture &
+	// Help tab in Authority's drawer registration, and must not wire
+	// the four content mounts it used to host.
 	view := d33aSpike2gImpl5fRead(t, d33aSpike2gImpl5fViewJsPath)
-	for _, want := range []string{
+	for _, banned := range []string{
 		"id: 'config'",
 		"label: 'Posture & Help'",
 		"_authorityRenderPostureAndHelpIntoDrawer",
-		"authoritySurfacePosturePanel",
-		"renderSummaryInto",
-		"renderLayerChipsInto",
-		"renderLegendInto",
 	} {
-		if !strings.Contains(view, want) {
-			t.Errorf("D33a-spike-2g-impl-5f: view must still register the Posture & Help tab (looking for %q)", want)
+		if strings.Contains(view, banned) {
+			t.Errorf("D37av2-prereq: Authority drawer registration must not declare %q — Posture & Help tab decommissioned; Surface Posture moved to Workbench Posture tab", banned)
 		}
 	}
 	// The posture panel module must still exist and surface all six
-	// posture axes.
+	// posture axes (the module is now driven by the Workbench Posture
+	// tab via window.MIDASExplorerGraph.authoritySurfacePosturePanel
+	// .render(...)).
 	panel := d33aSpike2gImpl5fRead(t, d33aSpike2gImpl5fPosturePath)
 	for _, axis := range []string{
 		"authority_status",
@@ -191,13 +208,25 @@ func TestExplorer_D33aSpike2gImpl5f_PostureHelpTabUntouched(t *testing.T) {
 		"escalation_status",
 	} {
 		if !strings.Contains(panel, axis) {
-			t.Errorf("D33a-spike-2g-impl-5f: posture panel must still surface axis %q", axis)
+			t.Errorf("D33a-spike-2g-impl-5f: posture panel must still surface axis %q (panel module preserved; Workbench Posture tab consumes it)", axis)
 		}
 	}
-	// Overlays module must still exist.
+	// Overlays module is preserved (renderSummaryInto /
+	// renderLayerChipsInto / renderLegendInto remain on the module's
+	// public surface for potential future reuse, even though their
+	// drawer call sites were removed).
 	overlays := d33aSpike2gImpl5fRead(t, d33aSpike2gImpl5fOverlaysPath)
 	if !strings.Contains(overlays, "authorityOverlays") {
 		t.Error("D33a-spike-2g-impl-5f: authority overlays module must still register window.MIDASExplorerGraph.authorityOverlays")
+	}
+	for _, want := range []string{
+		"renderSummaryInto",
+		"renderLayerChipsInto",
+		"renderLegendInto",
+	} {
+		if !strings.Contains(overlays, want) {
+			t.Errorf("D33a-spike-2g-impl-5f: authority overlays module must still expose %q on its public surface (preserved even though drawer call sites were removed)", want)
+		}
 	}
 }
 

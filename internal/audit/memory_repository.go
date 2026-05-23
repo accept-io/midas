@@ -2,6 +2,7 @@ package audit
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"sort"
 	"sync"
@@ -28,31 +29,60 @@ func NewMemoryRepository() *MemoryRepository {
 }
 
 func (r *MemoryRepository) Append(ctx context.Context, ev *AuditEvent) error {
+	return r.AppendBatch(ctx, []*AuditEvent{ev})
+}
+
+func (r *MemoryRepository) AppendBatch(ctx context.Context, events []*AuditEvent) error {
 	_ = ctx
+	if len(events) == 0 {
+		return nil
+	}
+
+	envelopeID := ""
+	for i, ev := range events {
+		if ev == nil {
+			return fmt.Errorf("audit: AppendBatch called with nil event at index %d", i)
+		}
+		if i == 0 {
+			envelopeID = ev.EnvelopeID
+			continue
+		}
+		if ev.EnvelopeID != envelopeID {
+			return fmt.Errorf("audit: AppendBatch mixed envelope IDs %q and %q", envelopeID, ev.EnvelopeID)
+		}
+	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	envelopeEvents := r.eventsByEnvelope[ev.EnvelopeID]
-
-	ev.SequenceNo = len(envelopeEvents) + 1
-
+	envelopeEvents := r.eventsByEnvelope[envelopeID]
+	nextSequence := len(envelopeEvents) + 1
+	prevHash := ""
 	if len(envelopeEvents) > 0 {
-		ev.PrevHash = envelopeEvents[len(envelopeEvents)-1].EventHash
-	} else {
-		ev.PrevHash = ""
+		prevHash = envelopeEvents[len(envelopeEvents)-1].EventHash
 	}
 
-	hash, err := ComputeEventHash(ev)
-	if err != nil {
-		return err
+	for _, ev := range events {
+		ev.SequenceNo = nextSequence
+		ev.PrevHash = prevHash
+		ev.OccurredAt = normalizeOccurredAt(ev.OccurredAt)
+
+		hash, err := ComputeEventHash(ev)
+		if err != nil {
+			return err
+		}
+
+		ev.setHash(hash)
+
+		nextSequence++
+		prevHash = ev.EventHash
 	}
 
-	ev.setHash(hash)
-
-	r.eventsByEnvelope[ev.EnvelopeID] = append(r.eventsByEnvelope[ev.EnvelopeID], ev)
-	r.eventsByRequest[ev.RequestID] = append(r.eventsByRequest[ev.RequestID], ev)
-	r.all = append(r.all, ev)
+	for _, ev := range events {
+		r.eventsByEnvelope[ev.EnvelopeID] = append(r.eventsByEnvelope[ev.EnvelopeID], ev)
+		r.eventsByRequest[ev.RequestID] = append(r.eventsByRequest[ev.RequestID], ev)
+		r.all = append(r.all, ev)
+	}
 
 	return nil
 }

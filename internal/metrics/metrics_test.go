@@ -1,6 +1,8 @@
 package metrics
 
 import (
+	"context"
+	"database/sql"
 	"io"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +12,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/accept-io/midas/internal/decision"
+	"github.com/accept-io/midas/internal/outbox"
+	"github.com/accept-io/midas/internal/runtimeattr"
 )
 
 // concreteRecorders extracts the package-internal struct types from a
@@ -39,6 +43,9 @@ func TestNewRuntimeMetrics_BundleIsComplete(t *testing.T) {
 	if m.Transactions == nil {
 		t.Fatal("Transactions: want non-nil")
 	}
+	if m.Attribution == nil {
+		t.Fatal("Attribution: want non-nil")
+	}
 	if m.Handler == nil {
 		t.Fatal("Handler: want non-nil")
 	}
@@ -60,18 +67,24 @@ func TestScrape_ContainsAllMetricNames(t *testing.T) {
 	m.Evaluation.IncrementEvaluationOutcome("accept", "WITHIN_AUTHORITY")
 	m.Evaluation.IncrementEvaluationFailure("envelope_persistence", "governance_integrity")
 	m.Transactions.RecordTransactionDuration("evaluation", "commit", 8*time.Millisecond)
+	m.Transactions.RecordTransactionStageDuration("evaluation", "begin", "success", 2*time.Millisecond)
 	m.Transactions.IncrementTransactionCommit("evaluation")
 	m.Transactions.IncrementTransactionRollback("evaluation")
 	m.Transactions.IncrementTransactionError("evaluation", "begin")
+	m.Attribution.RecordDuration(runtimeattr.StageAuditAppend, 3*time.Millisecond)
+	m.Attribution.AddCount(runtimeattr.CountAuditAppend, 2)
 
 	expectedNames := []string{
 		"midas_evaluation_duration_seconds",
 		"midas_evaluation_outcomes_total",
 		"midas_evaluation_failures_total",
 		"midas_store_transaction_duration_seconds",
+		"midas_store_transaction_stage_duration_seconds",
 		"midas_store_transaction_commits_total",
 		"midas_store_transaction_rollbacks_total",
 		"midas_store_transaction_errors_total",
+		"midas_evaluation_stage_duration_seconds",
+		"midas_evaluation_stage_events_total",
 	}
 
 	rr := httptest.NewRecorder()
@@ -83,6 +96,30 @@ func TestScrape_ContainsAllMetricNames(t *testing.T) {
 	for _, name := range expectedNames {
 		if !strings.Contains(scrape, name) {
 			t.Errorf("scrape output missing metric %q", name)
+		}
+	}
+}
+
+func TestAttributionRecorder_LabelSetIsBounded(t *testing.T) {
+	m := NewRuntimeMetrics()
+	m.Attribution.RecordDuration(runtimeattr.StagePolicyEvaluation, 2*time.Millisecond)
+	m.Attribution.AddCount(runtimeattr.CountOutboxAppend, 1)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	m.Handler.ServeHTTP(rr, req)
+	body, _ := io.ReadAll(rr.Body)
+	scrape := string(body)
+
+	if !strings.Contains(scrape, `attr_stage="orchestrator.policy_evaluation"`) {
+		t.Errorf("stage attribution label missing or changed:\n%s", scrape)
+	}
+	if !strings.Contains(scrape, `midas_evaluation_stage_events_total{attr_count="outbox_append"} 1`) {
+		t.Errorf("count attribution label missing or changed:\n%s", scrape)
+	}
+	for _, forbidden := range []string{"request_id", "envelope_id", "surface_id", "agent_id"} {
+		if strings.Contains(scrape, forbidden) {
+			t.Errorf("attribution scrape contains forbidden high-cardinality label %q:\n%s", forbidden, scrape)
 		}
 	}
 }
@@ -271,5 +308,108 @@ func TestTransactionRecorder_DurationHistogram(t *testing.T) {
 	}
 	if !strings.Contains(scrape, `midas_store_transaction_duration_seconds_count{operation="evaluation",result="rollback"} 1`) {
 		t.Errorf("expected evaluation/rollback count=1 in scrape, got:\n%s", scrape)
+	}
+}
+
+func TestTransactionRecorder_StageDurationHistogram(t *testing.T) {
+	m := NewRuntimeMetrics()
+
+	m.Transactions.RecordTransactionStageDuration("evaluation", "begin", "success", 2*time.Millisecond)
+	m.Transactions.RecordTransactionStageDuration("evaluation", "commit", "success", 4*time.Millisecond)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	m.Handler.ServeHTTP(rr, req)
+	body, _ := io.ReadAll(rr.Body)
+	scrape := string(body)
+
+	if !strings.Contains(scrape, `midas_store_transaction_stage_duration_seconds_count{operation="evaluation",result="success",stage="begin"} 1`) {
+		t.Errorf("expected begin stage count=1 in scrape, got:\n%s", scrape)
+	}
+	if !strings.Contains(scrape, `midas_store_transaction_stage_duration_seconds_count{operation="evaluation",result="success",stage="commit"} 1`) {
+		t.Errorf("expected commit stage count=1 in scrape, got:\n%s", scrape)
+	}
+}
+
+func TestPostgresPoolStatsCollector_ScrapesBoundedLabels(t *testing.T) {
+	m := NewRuntimeMetrics()
+	m.RegisterPostgresPoolStats(func() sql.DBStats {
+		return sql.DBStats{
+			MaxOpenConnections: 25,
+			OpenConnections:    7,
+			InUse:              3,
+			Idle:               4,
+			WaitCount:          11,
+			WaitDuration:       120 * time.Millisecond,
+			MaxIdleClosed:      2,
+			MaxIdleTimeClosed:  3,
+			MaxLifetimeClosed:  5,
+		}
+	})
+	m.RegisterPostgresPoolStats(func() sql.DBStats {
+		t.Fatal("duplicate pool registration should be ignored")
+		return sql.DBStats{}
+	})
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	m.Handler.ServeHTTP(rr, req)
+	body, _ := io.ReadAll(rr.Body)
+	scrape := string(body)
+
+	for _, want := range []string{
+		`midas_database_pool_open_connections{database="postgres"} 7`,
+		`midas_database_pool_in_use_connections{database="postgres"} 3`,
+		`midas_database_pool_idle_connections{database="postgres"} 4`,
+		`midas_database_pool_wait_count_total{database="postgres"} 11`,
+		`midas_database_pool_wait_duration_seconds_total{database="postgres"} 0.12`,
+		`midas_database_pool_max_open_connections{database="postgres"} 25`,
+		`midas_database_pool_max_idle_closed_total{database="postgres"} 2`,
+		`midas_database_pool_max_idle_time_closed_total{database="postgres"} 3`,
+		`midas_database_pool_max_lifetime_closed_total{database="postgres"} 5`,
+	} {
+		if !strings.Contains(scrape, want) {
+			t.Errorf("scrape missing %q:\n%s", want, scrape)
+		}
+	}
+	for _, forbidden := range []string{"DATABASE_URL", "postgresql://", "request_id", "envelope_id", "surface_id", "agent_id", "sql"} {
+		if strings.Contains(scrape, forbidden) {
+			t.Errorf("pool scrape contains forbidden content %q:\n%s", forbidden, scrape)
+		}
+	}
+}
+
+func TestOutboxBacklogCollector_ScrapesAggregateOnly(t *testing.T) {
+	m := NewRuntimeMetrics()
+	m.RegisterOutboxBacklogStats(func(context.Context) (outbox.BacklogStats, error) {
+		return outbox.BacklogStats{
+			UnpublishedCount:     3,
+			OldestUnpublishedAge: 45 * time.Second,
+		}, nil
+	})
+	m.RegisterOutboxBacklogStats(func(context.Context) (outbox.BacklogStats, error) {
+		t.Fatal("duplicate outbox registration should be ignored")
+		return outbox.BacklogStats{}, nil
+	})
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	m.Handler.ServeHTTP(rr, req)
+	body, _ := io.ReadAll(rr.Body)
+	scrape := string(body)
+
+	for _, want := range []string{
+		`midas_outbox_unpublished_total 3`,
+		`midas_outbox_oldest_unpublished_age_seconds 45`,
+		`midas_outbox_stats_collection_errors_total 0`,
+	} {
+		if !strings.Contains(scrape, want) {
+			t.Errorf("scrape missing %q:\n%s", want, scrape)
+		}
+	}
+	for _, forbidden := range []string{"request_id", "envelope_id", "surface_id", "agent_id", "payload", "sql"} {
+		if strings.Contains(scrape, forbidden) {
+			t.Errorf("outbox scrape contains forbidden content %q:\n%s", forbidden, scrape)
+		}
 	}
 }

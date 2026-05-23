@@ -105,8 +105,13 @@ func TestExplorer_D37sOverlayDisable_ContextOptsOut(t *testing.T) {
 	if !strings.Contains(rBody, "selector: 'node',") {
 		t.Errorf("D37s-overlay-disable: visible-node override must target the `node` selector")
 	}
-	if !strings.Contains(rBody, "'label':              'data(id)',") {
-		t.Errorf("D37s-overlay-disable: visible-node override must set a label so each cy node is identifiable")
+	// D37x-engine-node-geometry-contract — Visible-node override now
+	// binds to `data(label)` (the display-safe pre-truncated value
+	// produced by graphNativeLabels.makeNativeNodeLabel), NOT
+	// `data(id)` (raw `kind:id` technical identifier). The override
+	// must still set SOME label so cards are identifiable.
+	if !strings.Contains(rBody, "'label':              'data(label)',") {
+		t.Errorf("D37s-overlay-disable: visible-node override must bind cy label to data(label) (display-safe, not the raw technical id)")
 	}
 	if regexp.MustCompile(`'background-opacity':\s*0[,\s\}]`).MatchString(rBody) {
 		t.Errorf("D37s-overlay-disable: visible-node override must NOT keep background-opacity at 0 — that would defeat the purpose of disabling the overlay")

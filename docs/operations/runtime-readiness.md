@@ -117,6 +117,12 @@ replicas × max_open_conns ≤ Postgres max_connections − reserved_headroom
 
 Worked example: with Postgres `max_connections=100` and 20 connections reserved for the rest of the platform, the budget is 80. At `max_open_conns=25` per replica, this supports **at most 3 MIDAS replicas**. To run more, raise `max_connections`, lower `max_open_conns` per replica, introduce a connection pooler (PgBouncer in transaction-pooling mode), or accept a smaller per-replica concurrency ceiling.
 
+For Helm deployments, the same controls are exposed as
+`midas.store.maxOpenConns`, `midas.store.maxIdleConns`,
+`midas.store.connMaxLifetime`, and `midas.store.connMaxIdleTime`. These render
+into `store.max_open_conns`, `store.max_idle_conns`,
+`store.conn_max_lifetime`, and `store.conn_max_idle_time` in `midas.yaml`.
+
 ### HTTP safety (D27d)
 
 | Variable | Default | Purpose |
@@ -148,9 +154,22 @@ Production / pilot deployments **must** run with `MIDAS_AUTH_MODE=required` and 
 | `midas_evaluation_outcomes_total` | counter | `outcome` | Successful evaluations, by outcome (`accept`, `escalate`, `reject`, `request_clarification`). | A sudden shift in the outcome mix usually indicates a control-plane change (new profile, surface, or grant). |
 | `midas_evaluation_failures_total` | counter | `failure_kind`, `correctness_class` | Failed evaluations by typed category and by chunk-1 correctness class. `correctness_class` is bounded to 5 values (`governance_integrity`, `persistence`, `input`, `resource`, `consistency`) and is deterministically derived from `failure_kind` per the F1 mapping. | Any non-zero rate where `correctness_class="governance_integrity"` (`envelope_persistence`, `audit_append`) is a system issue and should page. `correctness_class="resource"` indicates degradation-eligible failures (today only `policy_evaluation`). `correctness_class="input"` (`idempotency_conflict`) indicates client retry misbehaviour. Group on `correctness_class` for a tier-aware view of system-vs-application health. |
 | `midas_store_transaction_duration_seconds` | histogram | `operation`, `result` | Transaction lifecycle latency (begin → callback → commit/rollback). `result` is one of `commit`, `rollback`, `commit_error`, `rollback_error`, `panic`. | p99 rising at `commit` indicates Postgres write pressure. |
+| `midas_store_transaction_stage_duration_seconds` | histogram | `operation`, `stage`, `result` | Transaction stage latency. `stage` is one of `begin`, `callback`, `commit`, `rollback`, `total`. | `begin` rising while callback/commit stay flat indicates pool acquisition, DB accept, or network pressure. `commit` rising indicates durable write/WAL/fsync pressure. |
 | `midas_store_transaction_commits_total` | counter | `operation` | Successful commits. | Falling rate without corresponding traffic drop → the inline path is failing earlier (validation, auth). |
 | `midas_store_transaction_rollbacks_total` | counter | `operation` | Rollbacks (handled errors). | Should track the failure-kind counter. Sustained divergence (rollback without a matching failure) indicates a missed wrap. |
 | `midas_store_transaction_errors_total` | counter | `operation`, `stage` | Hard transaction errors. `stage` ∈ `begin`, `repository_factory`, `callback_returned_error`, `commit`, `panic`, etc. | `commit` errors are the most operationally serious. `begin` errors usually mean DB / pool / network. |
+| `midas_database_pool_open_connections` | gauge | `database` | Current database/sql open connections for the Postgres pool. | Compare with configured max to see whether the pool is saturated. |
+| `midas_database_pool_in_use_connections` | gauge | `database` | Current database/sql connections checked out by handlers/dispatchers. | Sustained values near max open indicate pool pressure. |
+| `midas_database_pool_idle_connections` | gauge | `database` | Current idle database/sql connections. | Zero idle with rising wait count suggests requests are queuing for connections. |
+| `midas_database_pool_wait_count_total` | counter | `database` | Cumulative waits for a database connection. | Any sustained increase during steady traffic means pool acquisition is on the latency path. |
+| `midas_database_pool_wait_duration_seconds_total` | counter | `database` | Cumulative time spent waiting for database connections. | Rising wait duration with flat commit duration points to pool sizing rather than WAL/fsync. |
+| `midas_database_pool_max_open_connections` | gauge | `database` | Configured per-replica max open connections. | Use with replica count and Postgres `max_connections` budget. |
+| `midas_database_pool_max_idle_closed_total` | counter | `database` | Connections closed because the idle pool was full. | High churn can indicate idle pool too small for burst shape. |
+| `midas_database_pool_max_lifetime_closed_total` | counter | `database` | Connections closed after max lifetime. | Expected to rise slowly when lifetime is configured. |
+| `midas_database_pool_max_idle_time_closed_total` | counter | `database` | Connections closed after max idle time. | Expected to rise when idle periods exceed the configured timeout. |
+| `midas_outbox_unpublished_total` | gauge | none | Current count of unpublished transactional outbox rows. | Rising count indicates publisher/downstream lag or dispatcher failure. |
+| `midas_outbox_oldest_unpublished_age_seconds` | gauge | none | Age of the oldest unpublished outbox row; zero when empty. | Rising age is often a better paging signal than backlog count alone. |
+| `midas_outbox_stats_collection_errors_total` | counter | none | Errors while collecting outbox backlog metrics. | Non-zero increments mean the metrics scrape could not read outbox aggregate state. |
 
 **Cardinality**: labels are bounded enumerations. Request IDs, surface IDs, agent IDs, payloads, DSNs, and tokens are never used as labels. The `correctness_class` label on `midas_evaluation_failures_total` is bounded to exactly 5 values per the F1 chunk-1 mapping; pairwise `(failure_kind, correctness_class)` cardinality is bounded by the number of `FailureCategory` values (currently 8).
 
@@ -246,6 +265,25 @@ What they do **not** tell operators:
 
 These are not Tier 1 evidence. Treat them as a relative regression baseline on the same hardware and as a credible floor for "is the runtime path obviously broken?", nothing more.
 
+### D38i sustained-load findings
+
+D38i-load-2 added `cmd/midas-loadtest`, a local sustained-load harness that
+drives real HTTP `/v1/evaluate`, scrapes MIDAS `/metrics`, and samples safe
+Postgres telemetry during load. The post-batching local Docker results are
+directional evidence only, not production SLOs:
+
+| Scenario | Local result | Interpretation |
+|---|---|---|
+| Default pool, concurrency 8 | ~350 successful eval/sec, p50 ~17 ms, p95 ~47 ms, p99 ~65 ms, no pool waits in the sample | Acceptable local posture for this machine; write path still dominates. |
+| Default pool, concurrency 16 | ~242 successful eval/sec, p50 ~56 ms, p95 ~126 ms, p99 ~239 ms, small non-zero pool wait | Tail-latency concern; transaction callback and commit/WAL cost rise. |
+| Constrained pool, concurrency 16 (`max_open_conns=5`) | severe timeout behavior, pool in-use at max, idle zero, ~958 s cumulative pool wait | Pool saturation failure mode; tune pool and replica budget before adding read caching. |
+
+Use these findings as a diagnostic pattern: when p95/p99 rise, first compare
+`midas_store_transaction_stage_duration_seconds{stage="begin"}`,
+`{stage="callback"}`, and `{stage="commit"}`, then check pool wait metrics and
+Postgres-native telemetry. Redis/read-model caching does not reduce governed
+transaction commits, audit rows, outbox rows, envelope writes, or WAL pressure.
+
 ---
 
 ## 9. Common incident runbook
@@ -271,9 +309,12 @@ Each entry: **symptom** → **likely causes** → **immediate checks** → **mit
 - **Likely causes**: Postgres CPU/I/O pressure; pool saturation; control-plane apply-path competing with runtime.
 - **Immediate checks**:
   - Compare `midas_evaluation_duration_seconds` p99 vs `midas_store_transaction_duration_seconds` p99. If both rise together → DB; if only evaluation rises → application.
+  - Compare `midas_store_transaction_stage_duration_seconds{stage="begin"}` and `{stage="commit"}`. Begin-only movement points to pool acquisition / DB accept / network. Commit movement points to durable write pressure (WAL/fsync/index maintenance).
+  - Check `midas_database_pool_wait_count_total` and `midas_database_pool_wait_duration_seconds_total`; sustained growth means requests waited for a connection.
   - Check Postgres CPU, disk, and waiting-connection counts.
   - Check the open-connection ceiling on each replica vs `max_connections`.
 - **Mitigation**: scale Postgres, raise `MAX_OPEN_CONNS` (within the capacity rule), reduce concurrent replicas, or apply backpressure upstream. Do not raise the handler timeout as a primary fix.
+- **Redis note**: Redis/read-model caching does not reduce transaction commits, WAL/fsync, audit rows, outbox rows, or envelope writes. Use the stage and pool metrics above to prove the bottleneck before introducing cache infrastructure.
 - **Signals**: `midas_evaluation_duration_seconds`, `midas_store_transaction_duration_seconds`, Postgres `pg_stat_activity`.
 
 ### C. Transaction rollbacks / errors rising
@@ -335,8 +376,11 @@ Each entry: **symptom** → **likely causes** → **immediate checks** → **mit
 ### H. Outbox backlog suspected
 
 - **Symptom**: downstream consumers reporting stale or missing events; `outbox_events` row count growing.
-- **Limitation**: as of this guide, MIDAS does **not** expose Prometheus metrics for outbox depth or oldest-unpublished-age. This is tracked as future work.
+- **Signals**: `midas_outbox_unpublished_total`, `midas_outbox_oldest_unpublished_age_seconds`, dispatcher logs, downstream publisher errors.
 - **Immediate checks**:
+  - If backlog count and oldest age both rise, the dispatcher or downstream broker is falling behind.
+  - If count is bursty but oldest age stays low, the dispatcher is probably draining normally.
+  - These metrics do not change governed success semantics: outbox rows are still written in the same transaction as the envelope and audit evidence.
   - `SELECT COUNT(*) FROM outbox_events WHERE published_at IS NULL` from a DB session.
   - `SELECT MIN(created_at) FROM outbox_events WHERE published_at IS NULL` for backlog age.
   - Inspect dispatcher logs (`outbox_dispatcher_started`, `outbox_dispatcher_poll_error`, `outbox_dispatcher_stopped`).

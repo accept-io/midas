@@ -215,26 +215,48 @@ func (r *fakeAuditRepo) restore(events []*audit.AuditEvent, appended int) {
 }
 
 func (r *fakeAuditRepo) Append(_ context.Context, ev *audit.AuditEvent) error {
-	if r.failErr != nil && r.appended >= r.failAfter {
+	return r.AppendBatch(context.Background(), []*audit.AuditEvent{ev})
+}
+
+func (r *fakeAuditRepo) AppendBatch(_ context.Context, events []*audit.AuditEvent) error {
+	if len(events) == 0 {
+		return nil
+	}
+	for i, ev := range events {
+		if ev == nil {
+			return fmt.Errorf("audit: AppendBatch called with nil event at index %d", i)
+		}
+		if i > 0 && ev.EnvelopeID != events[0].EnvelopeID {
+			return fmt.Errorf("audit: AppendBatch mixed envelope IDs %q and %q", events[0].EnvelopeID, ev.EnvelopeID)
+		}
+	}
+	if r.failErr != nil && r.appended+len(events) > r.failAfter {
 		return r.failErr
 	}
 
-	// Compute hash chain: sequence number, prev hash, and event hash.
-	// This mirrors the real Postgres repository's hash computation logic.
-	ev.SequenceNo = len(r.events) + 1
-
+	nextSequence := len(r.events) + 1
+	prevHash := ""
 	if len(r.events) > 0 {
-		ev.PrevHash = r.events[len(r.events)-1].EventHash
+		prevHash = r.events[len(r.events)-1].EventHash
+	}
+	for _, ev := range events {
+		// Compute hash chain: sequence number, prev hash, and event hash.
+		// This mirrors the real Postgres repository's hash computation logic.
+		ev.SequenceNo = nextSequence
+		ev.PrevHash = prevHash
+
+		// Compute event hash from envelope ID, sequence, type, payload, and prev hash.
+		// Use the same pattern as the real audit repository.
+		hashInput := computeAuditEventHashInput(ev)
+		ev.EventHash = hashInput
+		ev.Hash = hashInput // Keep both fields in sync
+
+		nextSequence++
+		prevHash = ev.EventHash
 	}
 
-	// Compute event hash from envelope ID, sequence, type, payload, and prev hash.
-	// Use the same pattern as the real audit repository.
-	hashInput := computeAuditEventHashInput(ev)
-	ev.EventHash = hashInput
-	ev.Hash = hashInput // Keep both fields in sync
-
-	r.events = append(r.events, ev)
-	r.appended++
+	r.events = append(r.events, events...)
+	r.appended += len(events)
 	return nil
 }
 

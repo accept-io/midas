@@ -185,6 +185,11 @@ func TestExplorer_D33aSpike2_CytoscapeRichThemesUseReadableFontSizes(t *testing.
 // that _displayLabel exists and is referenced from the rich-theme
 // style array (via the label function expression). This is what
 // keeps long ids from overflowing the card.
+//
+// D37at2-followup-t1 migrated the kind-label source from the local
+// _nodeTypeLabel switch to the canonical authority-graph-adapter
+// (NODE_KIND_LABELS) via the local nodeKindLabel(kind) wrapper. The
+// rich-theme label composition is otherwise unchanged.
 func TestExplorer_D33aSpike2_CytoscapeRichThemesUseDisplayLabels(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
@@ -192,14 +197,18 @@ func TestExplorer_D33aSpike2_CytoscapeRichThemesUseDisplayLabels(t *testing.T) {
 
 	for _, want := range []string{
 		"function _displayLabel(ele, maxLen)",
-		"function _nodeTypeLabel(kind)",
+		"function nodeKindLabel(kind)",
 		// Rich-theme label function composes the title via _displayLabel
-		// + the type label.
-		"return _displayLabel(ele) + '\\n' + _nodeTypeLabel(ele.data('kind')).toUpperCase();",
+		// + the adapter-backed kind label.
+		"return _displayLabel(ele) + '\\n' + nodeKindLabel(ele.data('kind')).toUpperCase();",
 	} {
 		if !strings.Contains(js, want) {
 			t.Errorf("D33a-spike-2: display-label helper / usage missing %q", want)
 		}
+	}
+	// Negative pin — the legacy local switch must not return.
+	if strings.Contains(js, "function _nodeTypeLabel(kind)") {
+		t.Error("D33a-spike-2 / D37at2-followup-t1: local _nodeTypeLabel(kind) switch must not return; rich themes resolve via the adapter-backed nodeKindLabel wrapper")
 	}
 }
 

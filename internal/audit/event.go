@@ -54,7 +54,7 @@ func NewEvent(
 		PerformedByType: performerType,
 		PerformedByID:   performerID,
 		Payload:         payload,
-		OccurredAt:      time.Now().UTC(),
+		OccurredAt:      normalizeOccurredAt(time.Now()),
 	}
 }
 
@@ -63,4 +63,8 @@ func NewEvent(
 func (e *AuditEvent) setHash(h string) {
 	e.Hash = h
 	e.EventHash = h
+}
+
+func normalizeOccurredAt(t time.Time) time.Time {
+	return t.UTC().Round(time.Microsecond)
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/eval"
+	"github.com/accept-io/midas/internal/runtimeattr"
 	"github.com/accept-io/midas/internal/store/sqltx"
 )
 
@@ -64,14 +65,25 @@ func nullableBool(presenceID string, value bool) any {
 // sole place where the structural fields are decomposed into columns and
 // reassembled on read.
 type EnvelopeRepo struct {
-	db sqltx.DBTX
+	db   sqltx.DBTX
+	attr runtimeattr.Recorder
 }
 
 func NewEnvelopeRepo(db sqltx.DBTX) (*EnvelopeRepo, error) {
 	if db == nil {
 		return nil, ErrNilDB
 	}
-	return &EnvelopeRepo{db: db}, nil
+	return &EnvelopeRepo{db: db, attr: runtimeattr.NoOpRecorder{}}, nil
+}
+
+// WithAttribution wires optional benchmark/runtime attribution. Passing nil
+// restores the no-op recorder.
+func (r *EnvelopeRepo) WithAttribution(rec runtimeattr.Recorder) *EnvelopeRepo {
+	if r == nil {
+		return r
+	}
+	r.attr = runtimeattr.RecorderOrNoOp(rec)
+	return r
 }
 
 // ---------------------------------------------------------------------------
@@ -273,7 +285,7 @@ func (r *EnvelopeRepo) Create(ctx context.Context, e *envelope.Envelope) error {
 		)
 	`
 
-	cols, err := marshalEnvelopeCols(e)
+	cols, err := marshalEnvelopeColsWithAttribution(e, r.attr)
 	if err != nil {
 		return err
 	}
@@ -326,6 +338,9 @@ func (r *EnvelopeRepo) Create(ctx context.Context, e *envelope.Envelope) error {
 		}
 		return fmt.Errorf("create envelope: %w", err)
 	}
+	attr := runtimeattr.RecorderOrNoOp(r.attr)
+	attr.AddCount(runtimeattr.CountEnvelopeInsert, 1)
+	attr.AddCount(runtimeattr.CountSQLOperation, 1)
 	return nil
 }
 
@@ -376,7 +391,7 @@ func (r *EnvelopeRepo) Update(ctx context.Context, e *envelope.Envelope) error {
 		WHERE id = $1
 	`
 
-	cols, err := marshalEnvelopeCols(e)
+	cols, err := marshalEnvelopeColsWithAttribution(e, r.attr)
 	if err != nil {
 		return err
 	}
@@ -431,6 +446,9 @@ func (r *EnvelopeRepo) Update(ctx context.Context, e *envelope.Envelope) error {
 	if rowsAffected == 0 {
 		return fmt.Errorf("%w: id=%s", ErrEnvelopeNotFound, e.ID())
 	}
+	attr := runtimeattr.RecorderOrNoOp(r.attr)
+	attr.AddCount(runtimeattr.CountEnvelopeUpdate, 1)
+	attr.AddCount(runtimeattr.CountSQLOperation, 1)
 	return nil
 }
 
@@ -449,9 +467,17 @@ type envelopeCols struct {
 }
 
 func marshalEnvelopeCols(e *envelope.Envelope) (envelopeCols, error) {
+	return marshalEnvelopeColsWithAttribution(e, runtimeattr.NoOpRecorder{})
+}
+
+func marshalEnvelopeColsWithAttribution(e *envelope.Envelope, rec runtimeattr.Recorder) (envelopeCols, error) {
 	if e == nil {
 		return envelopeCols{}, fmt.Errorf("marshal envelope cols: envelope is nil")
 	}
+	rec = runtimeattr.RecorderOrNoOp(rec)
+	marshalStart := time.Now()
+	defer runtimeattr.Observe(rec, runtimeattr.StageEnvelopeMarshal, marshalStart)
+
 	var cols envelopeCols
 	var err error
 
@@ -477,10 +503,13 @@ func marshalEnvelopeCols(e *envelope.Envelope) (envelopeCols, error) {
 	})
 
 	// Section 3: serialise full Resolved struct.
+	resolvedStart := time.Now()
 	cols.resolvedJSON, err = json.Marshal(e.Resolved)
+	runtimeattr.Observe(rec, runtimeattr.StageEnvelopeResolvedMarshal, resolvedStart)
 	if err != nil {
 		return envelopeCols{}, fmt.Errorf("marshal resolved: %w", err)
 	}
+	runtimeattr.ObserveValue(rec, runtimeattr.ValueEnvelopeResolvedJSONBytes, int64(len(cols.resolvedJSON)))
 
 	// Section 3 (structural JSONB): the enabling capability set is also
 	// stored on a dedicated JSONB column for column-level visibility. The
@@ -490,21 +519,28 @@ func marshalEnvelopeCols(e *envelope.Envelope) (envelopeCols, error) {
 	if err != nil {
 		return envelopeCols{}, fmt.Errorf("marshal enabling capabilities: %w", err)
 	}
+	runtimeattr.ObserveValue(rec, runtimeattr.ValueEnvelopeEnablingCapabilitiesBytes, int64(len(cols.enablingCapsJSON)))
 
 	// Section 4: Explanation is nil until evaluation begins.
 	if e.Evaluation.Explanation != nil {
+		explanationStart := time.Now()
 		cols.explanationJSON, err = json.Marshal(e.Evaluation.Explanation)
+		runtimeattr.Observe(rec, runtimeattr.StageEnvelopeExplanationMarshal, explanationStart)
 		if err != nil {
 			return envelopeCols{}, fmt.Errorf("marshal explanation: %w", err)
 		}
+		runtimeattr.ObserveValue(rec, runtimeattr.ValueEnvelopeExplanationJSONBytes, int64(len(cols.explanationJSON)))
 	}
 	cols.evaluatedAt = e.Evaluation.EvaluatedAt
 
 	// Section 5: Integrity.
+	integrityStart := time.Now()
 	cols.integrityJSON, err = json.Marshal(e.Integrity)
+	runtimeattr.Observe(rec, runtimeattr.StageEnvelopeIntegrityMarshal, integrityStart)
 	if err != nil {
 		return envelopeCols{}, fmt.Errorf("marshal integrity: %w", err)
 	}
+	runtimeattr.ObserveValue(rec, runtimeattr.ValueEnvelopeIntegrityJSONBytes, int64(len(cols.integrityJSON)))
 
 	// Review: only set on escalated envelopes post-resolution.
 	if e.Review != nil {
@@ -512,6 +548,7 @@ func marshalEnvelopeCols(e *envelope.Envelope) (envelopeCols, error) {
 		if err != nil {
 			return envelopeCols{}, fmt.Errorf("marshal review: %w", err)
 		}
+		runtimeattr.ObserveValue(rec, runtimeattr.ValueEnvelopeReviewJSONBytes, int64(len(cols.reviewJSON)))
 	}
 
 	return cols, nil

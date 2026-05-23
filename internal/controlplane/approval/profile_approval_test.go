@@ -187,8 +187,17 @@ func (f *fakeOutboxRepo) Append(_ context.Context, ev *outbox.OutboxEvent) error
 	return nil
 }
 
+func (f *fakeOutboxRepo) AppendBatch(_ context.Context, events []*outbox.OutboxEvent) error {
+	f.appended = append(f.appended, events...)
+	return nil
+}
+
 func (f *fakeOutboxRepo) ListUnpublished(_ context.Context) ([]*outbox.OutboxEvent, error) {
 	return nil, nil
+}
+
+func (f *fakeOutboxRepo) BacklogStats(_ context.Context) (outbox.BacklogStats, error) {
+	return outbox.BacklogStats{}, nil
 }
 
 func (f *fakeOutboxRepo) ClaimUnpublished(_ context.Context, _ int) ([]*outbox.OutboxEvent, error) {

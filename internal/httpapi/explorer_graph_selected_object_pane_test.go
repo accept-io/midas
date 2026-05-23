@@ -617,3 +617,385 @@ func TestExplorer_D37pPane1_IndexHtmlWithinCeiling(t *testing.T) {
 		t.Errorf("D37p-pane-1: index.html line count %d exceeds the existing 7820 ceiling", lines)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// D37ak-graph-native-tabs-contract-impl — Formal graph-native tab contract.
+//
+// Extends the D37p-pane-1 shared shell with a declarative tab contract:
+//
+//   provider.tabs = {
+//     enabled:    true | false,
+//     defaultTab: '<tab-id>',
+//     items: [ { id, label, provider, supports, ... } ]
+//   }
+//
+// The shell does NOT own per-section render; per-tab render dispatch
+// remains owned by each provider (Authority's canvas-edge tabs keep
+// their existing render() that dispatches by _activeTabId). What the
+// shell DOES own:
+//
+//   • introspection helpers: getTabConfig / getTabs / getDefaultTab
+//   • active-tab shadow per lens: getActiveTab / setActiveTab
+//   • support filtering: tabSupportsKind (string membership;
+//     ['*'] = wildcard)
+//   • normalised selection context: buildSelectionContext
+//   • two new locked events: 'tab_config_registered',
+//     'active_tab_changed'
+//   • automatic active-tab reset on lens change (to the new lens's
+//     declared defaultTab)
+//
+// Shell invariants pinned by this section:
+//
+//   • the new public methods exist on the export
+//   • the new events are declared in EVENTS
+//   • the shell remains lens-agnostic (no Authority/Context kind or
+//     literal lens strings)
+//   • tab count is NOT hardcoded to three — the shell computes from
+//     provider.tabs.items dynamically
+//   • setActiveLens resets the active tab to the new lens's
+//     defaultTab and emits active_tab_changed
+//   • tabSupportsKind('*') matches every kind
+//   • open(sectionId) routes through setActiveTab so the shadow
+//     stays aligned with provider DOM intent
+//   • _activeTabIdByLens lives in module state
+
+// ── M. New public surface ──────────────────────────────────────────
+
+func TestExplorer_D37ak_Shell_NewTabContractPublicSurface(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	js := getExplorerAsset(t, srv, d37pPane1ShellAsset)
+
+	for _, want := range []string{
+		// Introspection helpers.
+		"getTabConfig:",
+		"getTabs:",
+		"getDefaultTab:",
+		// Active-tab shadow.
+		"getActiveTab:",
+		"setActiveTab:",
+		// Support filtering.
+		"tabSupportsKind:",
+		// Selection context normalisation.
+		"buildSelectionContext:",
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("D37ak-graph-native-tabs-contract-impl: shell public surface must declare %q", want)
+		}
+	}
+}
+
+// ── N. New event vocabulary ────────────────────────────────────────
+
+func TestExplorer_D37ak_Shell_NewEventsLocked(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	js := getExplorerAsset(t, srv, d37pPane1ShellAsset)
+
+	for _, want := range []string{
+		"'tab_config_registered'",
+		"'active_tab_changed'",
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("D37ak-graph-native-tabs-contract-impl: EVENTS must include %q", want)
+		}
+	}
+	// The seven prior events must remain declared (regression guard
+	// in case future churn drops one).
+	for _, want := range []string{
+		"'provider_registered'",
+		"'provider_unregistered'",
+		"'active_lens_changed'",
+		"'pane_opened'",
+		"'pane_closed'",
+		"'pane_mode_changed'",
+		"'pane_rendered'",
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("D37ak-graph-native-tabs-contract-impl: prior EVENTS entry %q must remain", want)
+		}
+	}
+}
+
+// ── O. Active-tab shadow ───────────────────────────────────────────
+
+func TestExplorer_D37ak_Shell_ActiveTabShadowExists(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	js := getExplorerAsset(t, srv, d37pPane1ShellAsset)
+
+	// Module-state slot for the per-lens active-tab shadow.
+	if !strings.Contains(js, "var _activeTabIdByLens") {
+		t.Errorf("D37ak-graph-native-tabs-contract-impl: shell must keep a per-lens active-tab shadow")
+	}
+	// setActiveTab must be guarded against duplicate writes (no event
+	// when value unchanged).
+	if !regexp.MustCompile(`function setActiveTab\([^)]*\)[\s\S]*?if \(prev === next\) return;`).MatchString(js) {
+		t.Errorf("D37ak-graph-native-tabs-contract-impl: setActiveTab must short-circuit when the value is unchanged")
+	}
+	// setActiveTab must emit 'active_tab_changed' when the value
+	// changes.
+	if !regexp.MustCompile(`'active_tab_changed'[\s\S]*?previousTabId`).MatchString(js) {
+		t.Errorf("D37ak-graph-native-tabs-contract-impl: active_tab_changed event payload must include previousTabId")
+	}
+}
+
+// ── P. setActiveLens resets active tab ─────────────────────────────
+
+func TestExplorer_D37ak_Shell_SetActiveLensResetsActiveTab(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	js := getExplorerAsset(t, srv, d37pPane1ShellAsset)
+
+	idx := strings.Index(js, "function setActiveLens")
+	if idx < 0 {
+		t.Fatal("D37ak-graph-native-tabs-contract-impl: setActiveLens must exist")
+	}
+	tail := js[idx:]
+	end := strings.Index(tail[1:], "\n  function ")
+	if end < 0 {
+		t.Fatalf("D37ak-graph-native-tabs-contract-impl: setActiveLens body must be well-formed")
+	}
+	body := tail[:end+1]
+
+	for _, want := range []string{
+		"nextDefault = getDefaultTab(lensId)",
+		"_activeTabIdByLens[lensId] = nextDefault",
+		"active_lens_changed",
+		"active_tab_changed",
+		"reason:         'active_lens_changed'",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D37ak-graph-native-tabs-contract-impl: setActiveLens body must contain %q (reset active tab to new lens's defaultTab)", want)
+		}
+	}
+}
+
+// ── Q. tabSupportsKind wildcard + membership ───────────────────────
+
+func TestExplorer_D37ak_Shell_TabSupportsKindLogic(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	js := getExplorerAsset(t, srv, d37pPane1ShellAsset)
+
+	idx := strings.Index(js, "function tabSupportsKind")
+	if idx < 0 {
+		t.Fatal("D37ak-graph-native-tabs-contract-impl: tabSupportsKind must exist")
+	}
+	tail := js[idx:]
+	end := strings.Index(tail[1:], "\n  function ")
+	if end < 0 {
+		t.Fatalf("D37ak-graph-native-tabs-contract-impl: tabSupportsKind body must be well-formed")
+	}
+	body := tail[:end+1]
+
+	// Wildcard handling.
+	if !strings.Contains(body, "sup.indexOf('*') >= 0") {
+		t.Errorf("D37ak-graph-native-tabs-contract-impl: tabSupportsKind must treat ['*'] as a universal wildcard")
+	}
+	// String membership for specific kinds.
+	if !strings.Contains(body, "sup.indexOf(kind) >= 0") {
+		t.Errorf("D37ak-graph-native-tabs-contract-impl: tabSupportsKind must do string membership against supports[]")
+	}
+}
+
+// ── R. Tab count NOT hardcoded ─────────────────────────────────────
+
+func TestExplorer_D37ak_Shell_TabCountNotHardcoded(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	js := getExplorerAsset(t, srv, d37pPane1ShellAsset)
+
+	// The shell must not hardcode a tab-count number anywhere in its
+	// tab-contract logic. Specifically: no literal `=== 3` or
+	// `.length === 3` patterns, and no reference to Authority's
+	// three-tab vocabulary.
+	bannedPatterns := []string{
+		"items.length === 3",
+		"items.length === 5",
+		"items.length == 3",
+		"items.length == 5",
+		"length === 3",
+		"=== 3 ?",
+	}
+	for _, banned := range bannedPatterns {
+		if strings.Contains(js, banned) {
+			t.Errorf("D37ak-graph-native-tabs-contract-impl: shell must not hardcode a tab count (%q)", banned)
+		}
+	}
+	// And no Authority-workbench-specific tab id literals in the
+	// shell. (Note: `'relationships'` is part of the platform-level
+	// DEFAULT_SECTIONS vocabulary and is intentionally present —
+	// it's the generic suggested section id alongside `'summary'`,
+	// `'details'`, `'actions'`, `'evidence'`.)
+	for _, banned := range []string{
+		"'fail-mode'",
+		"'escalation'",
+		"'grants'",
+		"'overview'",
+	} {
+		if strings.Contains(js, banned) {
+			t.Errorf("D37ak-graph-native-tabs-contract-impl: shell must not hardcode a per-lens tab id (%q)", banned)
+		}
+	}
+}
+
+// ── S. Shell stays lens-agnostic ───────────────────────────────────
+
+func TestExplorer_D37ak_Shell_StaysLensAgnostic(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	js := getExplorerAsset(t, srv, d37pPane1ShellAsset)
+
+	// Re-pin the existing bans against the new code surface. Note:
+	// the pre-existing docblock contains an illustrative
+	// `contextSelectedObjectPane` reference (line 76 era) — that
+	// stays out of this ban list. The ban list targets executable
+	// lens-specific coupling and lens-kind literals.
+	for _, banned := range []string{
+		"'authority'",
+		"\"authority\"",
+		"'context'",
+		"\"context\"",
+		"authorityCanvasEdgeTabs",
+		"contextSelectionBridge",
+		"business_service",
+		"decision_surface",
+		"authority_profile",
+		"authority_grant",
+		"fail_mode_policy",
+	} {
+		if strings.Contains(js, banned) {
+			t.Errorf("D37ak-graph-native-tabs-contract-impl: shell must not contain lens-specific token %q", banned)
+		}
+	}
+}
+
+// ── T. registerLensProvider emits tab_config_registered ────────────
+
+func TestExplorer_D37ak_Shell_RegisterEmitsTabConfigRegistered(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	js := getExplorerAsset(t, srv, d37pPane1ShellAsset)
+
+	if !regexp.MustCompile(`(?s)function registerLensProvider[\s\S]*?type: 'tab_config_registered'`).MatchString(js) {
+		t.Errorf("D37ak-graph-native-tabs-contract-impl: registerLensProvider must emit 'tab_config_registered' when provider.tabs is present")
+	}
+	// The emission must be conditional on provider.tabs being an
+	// object — providers without a tab config must not trigger the
+	// event.
+	if !strings.Contains(js, "if (_isPlainObject(provider.tabs))") {
+		t.Errorf("D37ak-graph-native-tabs-contract-impl: tab_config_registered emission must be gated on provider.tabs presence")
+	}
+}
+
+// ── U. open/close route through setActiveTab ───────────────────────
+
+func TestExplorer_D37ak_Shell_OpenAndCloseUpdateActiveTab(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	js := getExplorerAsset(t, srv, d37pPane1ShellAsset)
+
+	// open(sectionId) must call setActiveTab before delegating so
+	// dev tools watching active_tab_changed see the new value when
+	// pane_opened fires.
+	if !regexp.MustCompile(`(?s)function open\(sectionId\)[\s\S]*?setActiveTab\(resolvedTabId\)[\s\S]*?_callProvider\('open'`).MatchString(js) {
+		t.Errorf("D37ak-graph-native-tabs-contract-impl: open(sectionId) must call setActiveTab before delegating")
+	}
+	// close() must clear the shadow via setActiveTab(null).
+	if !regexp.MustCompile(`(?s)function close\(\)[\s\S]*?setActiveTab\(null\)`).MatchString(js) {
+		t.Errorf("D37ak-graph-native-tabs-contract-impl: close() must call setActiveTab(null) to clear the shadow")
+	}
+}
+
+// ── V. destroy() clears the active-tab shadow ──────────────────────
+
+func TestExplorer_D37ak_Shell_DestroyClearsActiveTabShadow(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	js := getExplorerAsset(t, srv, d37pPane1ShellAsset)
+
+	idx := strings.Index(js, "function destroy")
+	if idx < 0 {
+		t.Fatal("D37ak-graph-native-tabs-contract-impl: destroy must exist")
+	}
+	tail := js[idx:]
+	end := strings.Index(tail[1:], "\n  function ")
+	if end < 0 {
+		t.Fatalf("D37ak-graph-native-tabs-contract-impl: destroy body must be well-formed")
+	}
+	body := tail[:end+1]
+	if !strings.Contains(body, "_activeTabIdByLens   = {};") {
+		t.Errorf("D37ak-graph-native-tabs-contract-impl: destroy() must clear the active-tab shadow")
+	}
+}
+
+// ── W. buildSelectionContext shape ─────────────────────────────────
+
+func TestExplorer_D37ak_Shell_BuildSelectionContextShape(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	js := getExplorerAsset(t, srv, d37pPane1ShellAsset)
+
+	idx := strings.Index(js, "function buildSelectionContext")
+	if idx < 0 {
+		t.Fatal("D37ak-graph-native-tabs-contract-impl: buildSelectionContext must exist")
+	}
+	tail := js[idx:]
+	end := strings.Index(tail[1:], "\n  function ")
+	if end < 0 {
+		t.Fatalf("D37ak-graph-native-tabs-contract-impl: buildSelectionContext body must be well-formed")
+	}
+	body := tail[:end+1]
+
+	for _, want := range []string{
+		"lensId:    _activeLensId",
+		"selection: { selectedId:",
+		"kind:",
+		"data:",
+		"isStale:",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D37ak-graph-native-tabs-contract-impl: buildSelectionContext payload must declare %q", want)
+		}
+	}
+}
+
+// ── X. Overlay-only guarantee re-pin ───────────────────────────────
+//
+// The shell must continue to avoid every coupling that would
+// implicate engine/layout/safe-area. D37ak adds tab-contract code
+// only — re-pin the prior bans.
+
+func TestExplorer_D37ak_Shell_NoOverlayOnlyRegression(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	js := getExplorerAsset(t, srv, d37pPane1ShellAsset)
+
+	for _, banned := range []string{
+		// Engine / camera / fit.
+		"_runFitPipeline",
+		"_fitToUsableRect",
+		"_fitWithSafeArea",
+		"cy.fit(",
+		"cy.viewport(",
+		"cy.pan(",
+		"cy.zoom(",
+		// Viewport / safe area.
+		"getUsableGraphRect",
+		"getSafeArea",
+		"viewport.activate",
+		// Resize coupling.
+		"ResizeObserver",
+		"scheduleFitToView",
+		// Legacy right-rail / drawer / margin reservation.
+		"#gmap-details",
+		"gmap-right-rail",
+		"inspector-width",
+		"body.gmap-mode",
+	} {
+		if strings.Contains(js, banned) {
+			t.Errorf("D37ak-graph-native-tabs-contract-impl: shell must stay overlay-only and engine-agnostic; banned token %q must not appear", banned)
+		}
+	}
+}

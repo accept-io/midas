@@ -18,6 +18,7 @@ import (
 	"database/sql"
 	"os"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,6 +29,7 @@ import (
 	"github.com/accept-io/midas/internal/businessservice"
 	"github.com/accept-io/midas/internal/capability"
 	"github.com/accept-io/midas/internal/process"
+	"github.com/accept-io/midas/internal/runtimeattr"
 	"github.com/accept-io/midas/internal/store"
 	"github.com/accept-io/midas/internal/store/postgres"
 	"github.com/accept-io/midas/internal/surface"
@@ -259,4 +261,39 @@ func percentilesBench(durations []time.Duration) (p50, p95, p99, max time.Durati
 		return sorted[idx]
 	}
 	return pick(0.50), pick(0.95), pick(0.99), sorted[len(sorted)-1]
+}
+
+func reportHTTPBenchAttribution(b *testing.B, c *runtimeattr.Collector, iterations float64) {
+	b.Helper()
+	if iterations <= 0 {
+		return
+	}
+	snap := c.Snapshot()
+	for _, stage := range snap.Stages() {
+		stats := snap.Durations[stage]
+		if stats.Count == 0 {
+			continue
+		}
+		unit := "attr_" + sanitizeBenchMetricName(string(stage)) + "_avg_us"
+		b.ReportMetric(float64(stats.Average().Microseconds()), unit)
+	}
+	for _, name := range snap.CountNames() {
+		unit := "attr_" + sanitizeBenchMetricName(string(name)) + "_per_op"
+		b.ReportMetric(float64(snap.Counts[name])/iterations, unit)
+	}
+	for _, name := range snap.ValueNames() {
+		stats := snap.Values[name]
+		if stats.Count == 0 {
+			continue
+		}
+		base := "attr_" + sanitizeBenchMetricName(string(name))
+		b.ReportMetric(float64(stats.Average()), base+"_avg_bytes")
+		b.ReportMetric(float64(stats.Max), base+"_max_bytes")
+		b.ReportMetric(float64(stats.Count)/iterations, base+"_count_per_op")
+	}
+}
+
+func sanitizeBenchMetricName(s string) string {
+	replacer := strings.NewReplacer(".", "_", "-", "_", "/", "_", " ", "_")
+	return replacer.Replace(s)
 }

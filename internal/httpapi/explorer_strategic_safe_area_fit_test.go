@@ -187,22 +187,27 @@ func TestExplorer_StrategicFit_EngineFitsToUsableRect(t *testing.T) {
 		t.Errorf("D37s-viewport-fit-1: _fitToUsableRect must apply zoom+pan atomically via cy.viewport({zoom, pan})")
 	}
 
-	// _settle prefers the usable-rect path.
-	sIdx := strings.Index(js, "function _settle()")
+	// _runFitPipeline (the shared helper called by both _settle and
+	// _runResizeRefit per D37s-strategic-fit-resize-lifecycle-impl)
+	// prefers the usable-rect path before falling back to safe-area
+	// padding. _settle is a one-liner wrapper over _runFitPipeline;
+	// asserting on the helper covers both the initial-fit path and
+	// the resize-driven refit path.
+	sIdx := strings.Index(js, "function _runFitPipeline(source, phase)")
 	if sIdx < 0 {
-		t.Fatal("D37s-viewport-fit-1: _settle must exist")
+		t.Fatal("D37s-viewport-fit-1: _runFitPipeline(source, phase) must exist (post-D37ad-initial-fit-stable-cadence source-tagged shared helper)")
 	}
 	sTail := js[sIdx:]
 	sEnd := strings.Index(sTail, "\n    }\n")
 	if sEnd < 0 {
-		t.Fatalf("D37s-viewport-fit-1: _settle body must be well-formed")
+		t.Fatalf("D37s-viewport-fit-1: _runFitPipeline body must be well-formed")
 	}
 	sBody := sTail[:sEnd+1]
 	if !strings.Contains(sBody, "opts.getUsableGraphRect()") {
-		t.Errorf("D37s-viewport-fit-1: _settle must read opts.getUsableGraphRect() before falling back to safe-area padding")
+		t.Errorf("D37s-viewport-fit-1: _runFitPipeline must read opts.getUsableGraphRect() before falling back to safe-area padding")
 	}
 	if !strings.Contains(sBody, "_fitToUsableRect(cy, usable, _recordFitDiagnostic)") {
-		t.Errorf("D37s-viewport-fit-1: _settle must call _fitToUsableRect(cy, usable, _recordFitDiagnostic) when a non-zero rect is available")
+		t.Errorf("D37s-viewport-fit-1: _runFitPipeline must call _fitToUsableRect(cy, usable, _recordFitDiagnostic) when a non-zero rect is available")
 	}
 
 	// handle.fit also prefers the usable-rect path.

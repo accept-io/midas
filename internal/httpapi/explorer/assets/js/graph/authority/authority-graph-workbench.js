@@ -17,9 +17,17 @@
 // This module:
 //   • renders projection-derived content into the workbench's panel
 //     mount on every Authority paint;
-//   • supports five tabs — Overview / Fail Mode / Escalation /
+//   • supports six tabs — Overview / Posture / Fail Mode / Escalation /
 //     Grants / Evidence — defined by data-authority-tab buttons in
 //     index.html;
+//     D37av2-prereq — the Posture tab is the strategic home for the
+//     Authority projection-wide Surface Posture clickable list. Pre-
+//     tranche it lived in the legacy right-rail "Posture & Help" tab,
+//     which is being decommissioned. The Posture tab embeds an empty
+//     [data-authority-surface-posture] container; the existing
+//     authoritySurfacePosturePanel.render(...) helper fills it in via
+//     querySelector. The panel's click-to-select / focus behaviour is
+//     unchanged.
 //   • re-renders on operator-driven node selection (subscribes to the
 //     existing _gmapRenderCtx selectNode hook via a small observer);
 //   • renders an empty / placeholder state when no Authority data is
@@ -50,7 +58,12 @@
 
   window.MIDASExplorerGraph = window.MIDASExplorerGraph || {};
 
-  var TAB_IDS = Object.freeze(['overview', 'fail-mode', 'escalation', 'grants', 'evidence']);
+  // D37av2-prereq — tab order fixed by the tranche brief:
+  //   overview, posture, fail-mode, escalation, grants, evidence.
+  // Posture sits second so operators commonly reference the projection-
+  // wide posture grid after Overview and before drilling into per-
+  // surface Fail Mode detail.
+  var TAB_IDS = Object.freeze(['overview', 'posture', 'fail-mode', 'escalation', 'grants', 'evidence']);
 
   function _utils() { return window.MIDASExplorerUtils || {}; }
   function _store() { return window.MIDASExplorerStore || null; }
@@ -291,6 +304,23 @@
         '<h4 class="authority-workbench-section-title">Diagnostics</h4>' +
         '<div class="authority-workbench-stats">' + diag + '</div>' +
       '</div>' : '')
+    );
+  }
+
+  // D37av2-prereq — Workbench Posture tab. Embeds the
+  // [data-authority-surface-posture] container that the existing
+  // authority-surface-posture-panel.js module fills in via
+  // querySelector. The post-render dispatch in render() calls the
+  // panel module after innerHTML is set so the container exists when
+  // the panel runs. Click-to-select / focus behaviour is owned by the
+  // panel module and is preserved unchanged.
+  function _renderPosture() {
+    var spec = _spec();
+    if (!spec) return _emptyState('No Authority projection loaded.');
+    return (
+      '<div class="authority-workbench-section authority-workbench-section-posture">' +
+        '<div class="authority-surface-posture" data-authority-surface-posture></div>' +
+      '</div>'
     );
   }
 
@@ -558,6 +588,7 @@
     var html;
     switch (_activeTab) {
       case 'overview':    html = _renderOverview();     break;
+      case 'posture':     html = _renderPosture();      break;
       case 'fail-mode':   html = _renderFailMode();     break;
       case 'escalation':  html = _renderEscalation();   break;
       case 'grants':      html = _renderGrants();       break;
@@ -565,6 +596,29 @@
       default:            html = _emptyState('Unknown tab.');
     }
     mount.innerHTML = html;
+
+    // D37av2-prereq — Post-mount dispatch for the Posture tab. The
+    // [data-authority-surface-posture] container we just stamped is
+    // filled by authority-surface-posture-panel.js's render(projection)
+    // which queries the container by data-attribute. Call the panel
+    // here so the container exists in the DOM at call time. Defensive:
+    // swallow errors from a missing / malformed peer; bridge the
+    // camelCase / snake_case key mismatch between the Authority view's
+    // cached spec (surfacePosture) and the panel's expected projection
+    // shape (surface_posture).
+    if (_activeTab === 'posture') {
+      var posturePanel = window.MIDASExplorerGraph
+        && window.MIDASExplorerGraph.authoritySurfacePosturePanel;
+      if (posturePanel && typeof posturePanel.render === 'function') {
+        var spec = _spec();
+        if (spec) {
+          var bridged = {
+            surface_posture: spec.surface_posture || spec.surfacePosture || [],
+          };
+          try { posturePanel.render(bridged); } catch (_) { /* swallow */ }
+        }
+      }
+    }
   }
 
   function notifySelectionChanged() {

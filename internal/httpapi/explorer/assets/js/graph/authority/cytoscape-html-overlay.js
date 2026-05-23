@@ -153,26 +153,24 @@
       .replace(/'/g, '&#39;');
   }
 
-  // _nodeTypeLabel returns the eyebrow string for a card. Mirrors
-  // the labels Context Graph uses (`CAPABILITY`, `DECISION SURFACE`,
-  // `PROCESS`) for kinds that overlap, and falls back to a
-  // human-readable version of the projection kind for Authority-
-  // specific kinds.
+  // _nodeTypeLabel returns the eyebrow string for a card. Authority
+  // labels are resolved from the canonical authority-graph-adapter
+  // NODE_KIND_LABELS table via authorityAdapter.nodeKindLabel(kind);
+  // uppercase is applied here as an overlay presentation transform.
+  // Unknown kinds fall back to underscore-to-space uppercase so a
+  // novel kind still renders something readable rather than the raw
+  // id. The overlay is Authority-only (the mount call hard-codes
+  // lensId: 'authority' and the Authority adapter explicitly forbids
+  // Context-only kinds via FORBIDDEN_CONTEXT_NODE_KINDS), so this
+  // function does not need cross-lens routing.
   function _nodeTypeLabel(kind) {
     var k = String(kind || '');
-    switch (k) {
-      case 'business_service':  return 'BUSINESS SERVICE';
-      case 'decision_surface':  return 'DECISION SURFACE';
-      case 'authority_profile': return 'AUTHORITY PROFILE';
-      case 'authority_grant':   return 'AUTHORITY GRANT';
-      case 'agent':             return 'AGENT';
-      case 'fail_mode_policy':  return 'FAIL-MODE POLICY';
-      case 'escalation_target': return 'ESCALATION TARGET';
-      case 'capability':        return 'CAPABILITY';
-      case 'process':           return 'PROCESS';
-      case 'ai_system':         return 'AI SYSTEM';
-      default:                  return k.replace(/_/g, ' ').toUpperCase();
+    var adapter = window.MIDASExplorerGraph && window.MIDASExplorerGraph.authorityAdapter;
+    if (adapter && typeof adapter.nodeKindLabel === 'function') {
+      var label = adapter.nodeKindLabel(k);
+      if (label && label !== k) return label.toUpperCase();
     }
+    return k.replace(/_/g, ' ').toUpperCase();
   }
 
   // _statusFor returns the secondary line for a card. Pulls from

@@ -74,6 +74,58 @@
   // the legacy path produces.
   var GOVERNANCE_KEYS = ['fail_mode_policy_id'];
 
+  // ── D37aq-strategic-context-drawer-gate ────────────────────────────
+  //
+  // Strategic Context now defaults to the graph-native pane and stops
+  // writing to the legacy right-side drawer. The fallback flag
+  // `?legacyContextInspector=1` re-enables the legacy drawer for
+  // support / comparison without altering Authority, legacy/native
+  // Context, or any other lens.
+  //
+  // The gate is intentionally scoped to the strategic Context
+  // renderer: it short-circuits the `_populateInspector(card)` call
+  // (which is the ONLY drawer-setter site in this bridge per
+  // D37o-impl-5) so the rest of the selection plumbing — shared
+  // selection state, bottom evidence tray, subscriber notification,
+  // shared-bridge push, action dispatch — runs unchanged. The
+  // graph-native pane stays in charge of selected-object detail.
+
+  var LEGACY_CONTEXT_INSPECTOR_QUERY_PARAM = 'legacyContextInspector';
+
+  function _hasLegacyContextInspectorFlag() {
+    try {
+      var search = (window.location && window.location.search) || '';
+      var pairs = search.replace(/^\?/, '').split('&');
+      for (var i = 0; i < pairs.length; i++) {
+        var pair = pairs[i].split('=');
+        if (decodeURIComponent(pair[0]) === LEGACY_CONTEXT_INSPECTOR_QUERY_PARAM &&
+            decodeURIComponent(pair[1] || '') === '1') {
+          return true;
+        }
+      }
+    } catch (_) { /* fall through */ }
+    return false;
+  }
+
+  function _isStrategicContextRendererActive() {
+    // The bridge MUST NOT scrape legacy DOM (pinned by
+    // D37o-impl-5's `BridgeDoesNotScrapeLegacyDom`). Detection is
+    // therefore the GraphViewport API only — if the API is not
+    // available (very early boot, or an unexpected platform state)
+    // we treat as not-strategic and the legacy drawer is populated
+    // as before, which is the safer fail-open behaviour.
+    var g = window.MIDASExplorerGraph;
+    if (g && g.viewport && typeof g.viewport.getActiveRendererId === 'function') {
+      try { return g.viewport.getActiveRendererId() === 'context'; }
+      catch (_) { /* swallow */ }
+    }
+    return false;
+  }
+
+  function _isLegacyContextDrawerSuppressed() {
+    return _isStrategicContextRendererActive() && !_hasLegacyContextInspectorFlag();
+  }
+
   // ── Module state ──────────────────────────────────────────────────
 
   var _currentCardId = null;
@@ -94,8 +146,16 @@
       catch (_) { /* swallow */ }
     }
 
-    // Populate the existing right drawer through the inspector frame.
-    _populateInspector(card);
+    // D37aq-strategic-context-drawer-gate — for strategic Context the
+    // graph-native pane owns selected-object detail. The legacy
+    // right-side drawer is only populated when the operator opts
+    // into the fallback flag (`?legacyContextInspector=1`) or when
+    // a non-strategic Context renderer is active. Authority and
+    // other lenses are not affected (they never reached this
+    // bridge).
+    if (!_isLegacyContextDrawerSuppressed()) {
+      _populateInspector(card);
+    }
 
     // Notify the existing bottom evidence tray; signal-class dispatch
     // is owned by the tray, so we only fire the hook.

@@ -68,11 +68,18 @@ func TestExplorer_D33aSpike2gImpl5d_TabLabelIsInspector(t *testing.T) {
 	if strings.Contains(view, "id: 'inspector', label: 'Showcase'") {
 		t.Error("D33a-spike-2g-impl-5d: Authority drawer-lens must no longer declare `label: 'Showcase'`")
 	}
-	if !strings.Contains(view, "label: 'Diagnostics'") {
-		t.Error("D33a-spike-2g-impl-5d: Diagnostics tab label must remain")
-	}
-	if !strings.Contains(view, "label: 'Posture & Help'") {
-		t.Error("D33a-spike-2g-impl-5d: Posture & Help tab label must remain")
+	// D37av2-prereq-authority-rail-decommission-content-impl dropped
+	// the Diagnostics + Posture & Help slot registrations from
+	// authority-graph-view.js. Only the inspector slot remains; the
+	// previous positive pins on `label: 'Diagnostics'` and
+	// `label: 'Posture & Help'` are flipped to negative pins.
+	for _, banned := range []string{
+		"label: 'Diagnostics'",
+		"label: 'Posture & Help'",
+	} {
+		if strings.Contains(view, banned) {
+			t.Errorf("D37av2-prereq: Authority drawer registration must not declare %q — slot decommissioned", banned)
+		}
 	}
 }
 

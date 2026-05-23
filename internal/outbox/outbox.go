@@ -144,6 +144,13 @@ type OutboxEvent struct {
 	PublishedAt *time.Time
 }
 
+// BacklogStats summarises unpublished outbox rows for operational metrics.
+// It contains only aggregate values and never includes event payloads or IDs.
+type BacklogStats struct {
+	UnpublishedCount     int64
+	OldestUnpublishedAge time.Duration
+}
+
 // New constructs an OutboxEvent with a new UUID and the current time.
 //
 // Invariants enforced at construction:
@@ -204,10 +211,20 @@ type Repository interface {
 	// Returns an error if persistence fails.
 	Append(ctx context.Context, ev *OutboxEvent) error
 
+	// AppendBatch writes multiple outbox events in declaration order. A nil or
+	// empty slice is a no-op. Individual events must not be nil.
+	// Implementations must execute as one persistence operation where practical
+	// and inherit the caller's transaction exactly like Append.
+	AppendBatch(ctx context.Context, events []*OutboxEvent) error
+
 	// ListUnpublished returns all rows where published_at IS NULL, ordered
 	// by created_at ascending. Dispatcher implementations call this to find
 	// events awaiting delivery.
 	ListUnpublished(ctx context.Context) ([]*OutboxEvent, error)
+
+	// BacklogStats returns aggregate unpublished-row metrics for operators.
+	// Implementations must not mutate outbox rows.
+	BacklogStats(ctx context.Context) (BacklogStats, error)
 
 	// ClaimUnpublished returns up to limit unpublished rows using
 	// SELECT FOR UPDATE SKIP LOCKED inside a short-lived transaction.

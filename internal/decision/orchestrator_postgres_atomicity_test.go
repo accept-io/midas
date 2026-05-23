@@ -29,11 +29,18 @@ type failAfterNAuditRepo struct {
 }
 
 func (r *failAfterNAuditRepo) Append(ctx context.Context, ev *audit.AuditEvent) error {
+	return r.AppendBatch(ctx, []*audit.AuditEvent{ev})
+}
+
+func (r *failAfterNAuditRepo) AppendBatch(ctx context.Context, events []*audit.AuditEvent) error {
+	if len(events) == 0 {
+		return nil
+	}
 	r.calls++
-	if r.calls >= r.failAfter {
+	if r.calls+len(events)-1 >= r.failAfter {
 		return errForcedAuditFailure
 	}
-	return r.inner.Append(ctx, ev)
+	return r.inner.AppendBatch(ctx, events)
 }
 
 func (r *failAfterNAuditRepo) ListByEnvelopeID(ctx context.Context, envelopeID string) ([]*audit.AuditEvent, error) {

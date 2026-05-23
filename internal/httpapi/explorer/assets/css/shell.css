@@ -271,6 +271,88 @@
   body.gmap-mode.inspector-collapsed .shell-footer { right: var(--gmap-right-rail-handle-width); }
   body.gmap-mode.inspector-collapsed .shell-main   { margin-right: var(--gmap-right-rail-handle-width); }
 
+  /* D37aq-strategic-context-drawer-gate — Strategic Context default.
+     When the strategic Context renderer is the active renderer AND
+     the operator has not opted into the fallback flag
+     (`?legacyContextInspector=1`), the body carries
+     `data-strategic-context-inspector="graph-pane"` (set by
+     context-selected-object-pane.js). The graph-native pane is the
+     selected-object detail surface in this mode, so the right-rail
+     width reservation drops to zero and the graph canvas reclaims
+     the space the legacy drawer used to consume. The legacy drawer
+     markup + JS + frame setters all remain served and reachable
+     under the fallback flag; the attribute is removed in that case
+     and the rules above apply unchanged. Authority, legacy/native
+     Context, and non-graph views never carry this attribute, so
+     their right-rail behaviour is unaffected. */
+  body[data-strategic-context-inspector="graph-pane"].gmap-mode .shell-header { right: 0; }
+  body[data-strategic-context-inspector="graph-pane"].gmap-mode .shell-footer { right: 0; }
+  body[data-strategic-context-inspector="graph-pane"].gmap-mode .shell-main   { margin-right: 0; }
+  body[data-strategic-context-inspector="graph-pane"].gmap-mode.inspector-collapsed .shell-header { right: 0; }
+  body[data-strategic-context-inspector="graph-pane"].gmap-mode.inspector-collapsed .shell-footer { right: 0; }
+  body[data-strategic-context-inspector="graph-pane"].gmap-mode.inspector-collapsed .shell-main   { margin-right: 0; }
+
+  /* D37aq-fix-right-rail-visual-suppression — Strategic Context default
+     also visually suppresses the legacy right rail itself. The
+     D37aq width-reservation override above reclaims the canvas
+     width but leaves the rail element painted at the canvas edge
+     (the inspector / evidence / config tab strip stays visible).
+     This rule completes the gate by hiding the legacy rail and
+     removing its interactive surface when the graph-pane mode
+     attribute is present. The fallback flag
+     (`?legacyContextInspector=1`) removes the body attribute, so
+     the legacy drawer is restored verbatim. Authority, legacy/
+     native Context, and non-graph views never carry the attribute
+     and therefore never trigger this rule.
+
+     D37aq-fix2-right-rail-css-cascade — the previous selector
+     (`body[data-strategic-context-inspector="graph-pane"] #gmap-details`)
+     had specificity (1,1,1), TIED with the existing
+     `body.gmap-mode #gmap-details { display: flex; }` rule in
+     governance-map.css. Because shell.css loads BEFORE
+     governance-map.css the later flex rule won the cascade and
+     the rail stayed visible. The selector below adds `.gmap-mode`
+     to the body and `.gmap-right-rail` to the id, bumping
+     specificity to (1,3,1) so the suppression rule unambiguously
+     beats the (1,1,1) `display: flex` competitor regardless of
+     stylesheet ordering. No `!important` is needed. */
+  body.gmap-mode[data-strategic-context-inspector="graph-pane"] #gmap-details.gmap-right-rail {
+    display: none;
+  }
+
+  /* D37av2-authority-right-rail-gate-impl — Authority full-rail gate.
+     When the Authority renderer is active AND the operator has not
+     opted into the fallback flag (`?legacyAuthorityRail=1`), the body
+     carries `data-strategic-authority-rail="hidden"` (set by
+     authority-canvas-edge-tabs.js). The Authority graph reclaims the
+     right-rail width and the legacy rail (`#gmap-details`) is hidden
+     entirely — its strategic content has already been relocated:
+     selected-object detail lives in the canvas-edge tabs; Surface
+     Posture lives in the Authority Workbench Posture tab; Diagnostics
+     summary + projection-wide diagnostics live in the Workbench
+     Overview + Evidence tabs; help lives in OSS Help. The Inspector
+     slot is the only Authority drawer registration remaining; the
+     fallback flag restores rail visibility for engineering / regression
+     triage only (no decommissioned content returns).
+
+     The width-override and rail-hide selectors mirror the D37aq Context
+     pattern (specificity (1,3,1) with body + `.gmap-mode` + the
+     attribute + `#gmap-details.gmap-right-rail`) so they unambiguously
+     beat the (1,1,1) default `body.gmap-mode #gmap-details { display:
+     flex; }` rule in governance-map.css. Authority, legacy/native
+     Context, and non-graph views never carry this attribute, so their
+     right-rail behaviour is unaffected. */
+  body[data-strategic-authority-rail="hidden"].gmap-mode .shell-header { right: 0; }
+  body[data-strategic-authority-rail="hidden"].gmap-mode .shell-footer { right: 0; }
+  body[data-strategic-authority-rail="hidden"].gmap-mode .shell-main   { margin-right: 0; }
+  body[data-strategic-authority-rail="hidden"].gmap-mode.inspector-collapsed .shell-header { right: 0; }
+  body[data-strategic-authority-rail="hidden"].gmap-mode.inspector-collapsed .shell-footer { right: 0; }
+  body[data-strategic-authority-rail="hidden"].gmap-mode.inspector-collapsed .shell-main   { margin-right: 0; }
+
+  body.gmap-mode[data-strategic-authority-rail="hidden"] #gmap-details.gmap-right-rail {
+    display: none;
+  }
+
   /* Phase 2B Step 24 — graph focus mode (D21).
      A workspace-level CSS class on <body> that aggressively
      compresses non-essential chrome so the canvas claims ~95% of a

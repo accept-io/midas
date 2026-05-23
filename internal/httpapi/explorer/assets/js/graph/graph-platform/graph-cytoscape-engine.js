@@ -364,6 +364,164 @@
   var DIAG_FIT_ZOOM_CLAMPED_MIN         = 'fit_zoom_clamped_min';
   var DIAG_FIT_ZOOM_CLAMPED_MAX         = 'fit_zoom_clamped_max';
   var DIAG_USABLE_RECT_SMALLER_THAN_MIN = 'usable_rect_smaller_than_minimum';
+  // D37x-engine-node-geometry-contract — Emitted (dedup'd) when a
+  // lens supplies a node without positive finite `data.width` and
+  // `data.height`. Geometry is required: declared body dimensions
+  // are the engine's source of truth for layout footprint and fit
+  // math. Invalid dimensions produce a permissive fallback at the
+  // mount path (cy will use its own defaults) but the operator and
+  // tests see the violation in the diagnostics buffer.
+  var DIAG_NODE_GEOMETRY_INVALID        = 'node_geometry_invalid_dimensions';
+  // D37u-cytoscape-resize-policy-impl — Resize-only passive lifecycle.
+  //
+  // The shared graph engine owns resize lifecycle, camera policy, and
+  // fit policy on behalf of every lens (Context, Authority post-
+  // migration, Knowledge, drift, resilience, future workbench views).
+  // The upstream Cytoscape assessment (D37t) established the correct
+  // rule:
+  //
+  //   cy.resize() invalidates Cytoscape's cached container size and
+  //   schedules a redraw; it does not mutate _private.pan or
+  //   _private.zoom. cy.fit() and cy.viewport({zoom, pan}) DO mutate
+  //   camera state. Passive container resizes (drawer toggle, tray
+  //   expand, focus-mode chrome change, window resize) are NOT
+  //   camera-mutation events; the operator's pan/zoom must survive.
+  //
+  // Policy:
+  //
+  //   • Passive resize path: cy.resize() only. No fit. No viewport.
+  //     No deferred refit timer. Operator camera preserved.
+  //   • Explicit fit path (handle.fit, _settle, future operator
+  //     actions): allowed, source-tagged via `engine_fit_invoked`.
+  //
+  // The earlier trailing-edge debounce + previous-rect guard
+  // (RESIZE_SETTLE_WINDOW_MS, _lastFittedRect, _rectMateriallyDiffers,
+  // _runResizeRefit) was a refinement of the WRONG policy: it reduced
+  // multiple incorrect refits to one delayed incorrect refit, which
+  // the operator saw as a single longer flash. This tranche removes
+  // that machinery entirely.
+  //
+  // Four codes report the lifecycle. Each emits PER FIRING (no
+  // dedup) so external observers can count events.
+  //
+  //   engine_resize_detected             — ResizeObserver tick
+  //                                        observed on the engine
+  //                                        container.
+  //   engine_cy_resize_called            — cy.resize() ran.
+  //   engine_camera_preserved_on_resize  — passive resize completed
+  //                                        without mutating pan/zoom.
+  //   engine_fit_invoked                 — emitted by the explicit-
+  //                                        fit code path with a
+  //                                        `source` field naming the
+  //                                        trigger (initial_mount,
+  //                                        explicit_fit, reset_view,
+  //                                        zoom_to_selected,
+  //                                        lens_activation,
+  //                                        data_reload).
+  var DIAG_ENGINE_RESIZE_DETECTED            = 'engine_resize_detected';
+  var DIAG_ENGINE_CY_RESIZE_CALLED           = 'engine_cy_resize_called';
+  var DIAG_ENGINE_CAMERA_PRESERVED_ON_RESIZE = 'engine_camera_preserved_on_resize';
+  var DIAG_ENGINE_FIT_INVOKED                = 'engine_fit_invoked';
+  // D37ah-readiness-gated-initial-fit — Readiness-gated initial fit.
+  //
+  // CLEAN BREAK from D37af. D37ab established hide-before-reveal;
+  // D37ad added a multi-tick fit cadence; D37af replaced the fixed
+  // cadence with a stability counter inside a time-bounded rAF loop.
+  // All three were TIME-GATED — the rAF loop fired whether or not
+  // the graph was actually ready to be fitted. The D37ag geometry
+  // dump confirmed the failure mode in production: cy.width was 0
+  // at forced reveal, meaning the loop ran while cy had no viewport.
+  //
+  // D37ah replaces the time-gated loop with a READINESS-GATED
+  // two-mode lifecycle. Six discrete states (per per-mount
+  // docblock below):
+  //
+  //   awaiting_container → stabilising → revealed                  (clean)
+  //                                    → forced_reveal_cy_zero
+  //                                    → forced_reveal_fit_failed
+  //                                    → (safety cap; see rule)
+  //   awaiting_container → blocked_zero_container                  (cap)
+  //
+  // In 'stabilising' state, the rAF loop checks 9 fit-input gates
+  // each frame and only attempts a fit when ALL gates pass. Failing
+  // gates emit engine_readiness_gate_failed. A failed fit pipeline
+  // emits engine_readiness_fit_failed. Reveal occurs after
+  // INITIAL_FIT_STABLE_FRAMES consecutive stable post-fit snapshots.
+  //
+  // The single external safety-cap setTimeout (INITIAL_FIT_SAFETY_MS)
+  // owns the three-way SAFETY-CAP RULE — fan-out at firing time by
+  // state.
+  //
+  // After reveal, a single guarded post-reveal correction may fire
+  // inside POST_REVEAL_STABILISATION_MS if the FIRST RO tick after
+  // reveal carries a materially different snapshot — catching late
+  // layout settling that landed just after stability detection. The
+  // correction is disabled once the user interacts with the camera
+  // or the grace window expires; D37u steady-state then takes over.
+  // Eligibility includes 'revealed' AND 'forced_reveal_cy_zero'.
+  var DIAG_ENGINE_INITIAL_STABILISATION_STARTED       = 'engine_initial_stabilisation_started';
+  var DIAG_ENGINE_INITIAL_STABILISATION_SAMPLE        = 'engine_initial_stabilisation_sample';
+  var DIAG_ENGINE_INITIAL_STABILISATION_STABLE        = 'engine_initial_stabilisation_stable';
+  var DIAG_ENGINE_INITIAL_FIT_APPLIED                 = 'engine_initial_fit_applied';
+  var DIAG_ENGINE_INITIAL_REVEAL                      = 'engine_initial_reveal';
+  // D37ah-readiness-gated-initial-fit — Forced-reveal is now split
+  // into two distinct codes so dev tools can distinguish the two
+  // root causes (cy.width/height never settled vs. cy was sized but
+  // fit pipeline never reported success). The D37af unified
+  // DIAG_ENGINE_INITIAL_REVEAL_FORCED has been removed.
+  var DIAG_ENGINE_INITIAL_REVEAL_FORCED_CY_ZERO       = 'engine_initial_reveal_forced_cy_zero';
+  var DIAG_ENGINE_INITIAL_REVEAL_FORCED_FIT_FAILED    = 'engine_initial_reveal_forced_fit_failed';
+  var DIAG_ENGINE_POST_REVEAL_STABILISATION_FIT       = 'engine_post_reveal_stabilisation_fit';
+  // D37ag-diagnostic-geometry-dump — Captures the exact geometry
+  // inputs and the post-fit camera state at every fit-relevant
+  // moment so initial-mount fit and manual Fit can be diffed in dev
+  // tools. The dump is emitted AFTER the fit at each site so the
+  // post-fit pan/zoom reflect that fit's result. The dump does not
+  // change behaviour; it is observational only.
+  var DIAG_ENGINE_GEOMETRY_DUMP                       = 'engine_geometry_dump';
+  // D37ah-readiness-gated-initial-fit — Two-mode lifecycle
+  // diagnostics. The initial render lifecycle now distinguishes:
+  //   • 'awaiting_container' — the container has zero size; the
+  //     engine waits for the ResizeObserver to fire with positive
+  //     dimensions before kicking off the readiness loop.
+  //   • 'stabilising' — the readiness loop checks 9 fit-input gates
+  //     each rAF. Failing gates emit engine_readiness_gate_failed.
+  //     A failed fit pipeline emits engine_readiness_fit_failed.
+  //   • 'blocked_zero_container' — terminal failure mode reached
+  //     when the safety cap fires while still 'awaiting_container'
+  //     (the container never became sized).
+  // State transitions emit engine_initial_lifecycle_state_changed
+  // and a co-located geometry dump with trigger='state_transition'.
+  var DIAG_ENGINE_INITIAL_LIFECYCLE_STATE_CHANGED     = 'engine_initial_lifecycle_state_changed';
+  var DIAG_ENGINE_READINESS_GATE_FAILED               = 'engine_readiness_gate_failed';
+  var DIAG_ENGINE_READINESS_FIT_FAILED                = 'engine_readiness_fit_failed';
+  var DIAG_ENGINE_INITIAL_MOUNT_CONTAINER_UNSIZED     = 'engine_initial_mount_container_unsized';
+  var DIAG_ENGINE_INITIAL_MOUNT_CONTAINER_BLOCKED     = 'engine_initial_mount_container_blocked';
+
+  // D37ah constants (retained verbatim from D37af; the readiness-
+  // gated loop reuses the stability counter + epsilon). Tunable, but
+  // the defaults below have specific rationale:
+  //
+  //   INITIAL_FIT_STABLE_FRAMES = 4 — at 60 fps this is ~66 ms of
+  //     stability, enough to outlast a single browser layout pass
+  //     while staying imperceptible.
+  //   INITIAL_FIT_STABILITY_EPSILON_PX = 0.5 — matches the sub-pixel
+  //     noise filter used elsewhere (DIM_PROPAGATION_THRESHOLD,
+  //     RECT_STABILITY_THRESHOLD_PX) so a fractional reflow doesn't
+  //     reset the stability counter.
+  //   INITIAL_FIT_SAFETY_MS = 2000 — the safety-cap budget applied
+  //     by the single external setTimeout. Three-way fan-out at
+  //     firing time (see SAFETY-CAP RULE above).
+  //   POST_REVEAL_STABILISATION_MS = 1000 — after reveal, one RO
+  //     tick within this window may trigger ONE corrective fit. Any
+  //     RO tick after this window is camera-preserving per D37u.
+  //   POST_REVEAL_MAX_CORRECTIONS = 1 — exactly one one-shot
+  //     correction per mount.
+  var INITIAL_FIT_STABLE_FRAMES        = 4;
+  var INITIAL_FIT_STABILITY_EPSILON_PX = 0.5;
+  var INITIAL_FIT_SAFETY_MS            = 2000;
+  var POST_REVEAL_STABILISATION_MS     = 1000;
+  var POST_REVEAL_MAX_CORRECTIONS      = 1;
 
   // ── Dimension propagation constant ─────────────────────────────────
   //
@@ -402,6 +560,35 @@
     }
     return a;
   }
+
+  // ── Fit-math bounding-box options ────────────────────────────────
+  //
+  // D37x-engine-node-geometry-contract — Fit math must use declared
+  // node BODIES, not rendered label / overlay / outline overflow.
+  //
+  // Cytoscape's `collection.boundingBox()` defaults include labels,
+  // main labels, source labels, target labels, overlays, underlays,
+  // and outlines (D37t §2.5 finding from the local bundled library).
+  // When the engine fits to the platform-supplied usable rect or
+  // safe-area padding, the bounding box it consumes must reflect
+  // ONLY the declared node footprint geometry — otherwise long
+  // labels, wrap-induced label height, selection overlays, or focus
+  // outlines can inflate the bbox and produce a smaller (over-padded)
+  // zoom for the same data.
+  //
+  // This single options object is reused by every engine fit path so
+  // the platform behaviour is one source of truth.
+  var FIT_BBOX_OPTS = {
+    includeNodes:        true,
+    includeEdges:        true,
+    includeLabels:       false,
+    includeMainLabels:   false,
+    includeSourceLabels: false,
+    includeTargetLabels: false,
+    includeOverlays:     false,
+    includeUnderlays:    false,
+    includeOutlines:     false,
+  };
 
   // ── Fit padding resolution ────────────────────────────────────────
   //
@@ -486,7 +673,10 @@
     }
     if (!eles || eles.length === 0) return;
     var bb;
-    try { bb = eles.boundingBox(); } catch (_) { return; }
+    // D37x-engine-node-geometry-contract — pass FIT_BBOX_OPTS so the
+    // bbox reflects declared node bodies only. Labels, overlays,
+    // underlays, and outlines are excluded.
+    try { bb = eles.boundingBox(FIT_BBOX_OPTS); } catch (_) { return; }
     if (!bb || !(bb.w > 0) || !(bb.h > 0)) return;
 
     var cw = _isFn(cy.width)  ? cy.width()  : 0;
@@ -671,7 +861,10 @@
       return false;
     }
     var bb;
-    try { bb = eles.boundingBox(); } catch (_) { return false; }
+    // D37x-engine-node-geometry-contract — pass FIT_BBOX_OPTS so the
+    // bbox reflects declared node bodies only. Labels, overlays,
+    // underlays, and outlines are excluded.
+    try { bb = eles.boundingBox(FIT_BBOX_OPTS); } catch (_) { return false; }
     if (!bb || !(bb.w > 0) || !(bb.h > 0)) {
       if (_isFn(emitDiag)) emitDiag(DIAG_FIT_BOUNDS_EMPTY);
       return false;
@@ -883,6 +1076,40 @@
   // override at the engine level — not via `nodeStyleOverride`, to
   // preserve the architectural commitment that overlays are the
   // visible card surface.
+  //
+  // ── D37x-engine-node-geometry-contract ──
+  //
+  // The base style locks the engine's NODE GEOMETRY CONTRACT:
+  //
+  //   • `width:  data(width)`  — declared per-node body width.
+  //   • `height: data(height)` — declared per-node body height.
+  //   • `label:  ''`           — no native Cytoscape label by default.
+  //
+  // Rules the contract enforces (asserted by source-contract tests):
+  //
+  //   1. data.width and data.height are REQUIRED on every node. The
+  //      lens supplies them through canonical data; the engine
+  //      validates positive finite numbers at element-build time
+  //      and emits `node_geometry_invalid_dimensions` when violated.
+  //   2. data.label is OPTIONAL. Absence → `label: ''` (the engine
+  //      default) → cy renders no native label. Lenses that paint
+  //      the visible card via an HTML overlay (e.g. Authority's
+  //      html-card theme) MUST leave data.label absent.
+  //   3. Labels never define or enlarge node geometry. The base
+  //      style binds dimensions to `data(width)` / `data(height)`
+  //      and NEVER to the `'label'` enum that Cytoscape supports for
+  //      node-sizes-from-label. That enum is strictly forbidden for
+  //      production lenses (a source-contract test guards it).
+  //   4. Labels never participate in fit math. The engine's fit
+  //      pipeline calls `boundingBox(FIT_BBOX_OPTS)` with
+  //      `includeLabels: false` and the related label / overlay /
+  //      outline flags off so the fit bbox reflects only the
+  //      declared bodies.
+  //   5. Lenses that DO opt into native labels MUST pre-truncate the
+  //      label via `graphNativeLabels.makeNativeNodeLabel(...)`
+  //      before writing it to `data.label`. The helper bounds the
+  //      label to the declared body at the engine's native-label
+  //      font / line / padding constants.
   function _buildBaseStyle() {
     return [
       {
@@ -963,6 +1190,18 @@
     container.style.width    = '100%';
     container.style.height   = '100%';
     container.style.overflow = 'hidden';
+    // D37ab-graph-engine-initial-fit-before-reveal — Mount the engine
+    // surface INVISIBLE. The graph is held back until the first
+    // successful safe-area-aware fit applies (or a bounded safety
+    // timer force-reveals). `visibility: hidden` is the chosen
+    // mechanism because — unlike `display: none` — it preserves the
+    // container's box and lets Cytoscape's mount-time measurement
+    // (cy.width / cy.height / cy.elements().boundingBox(...)) succeed.
+    // The `data-initial-fit` attribute is the test-pinnable lifecycle
+    // signal; downstream consumers may also key CSS off it if they
+    // want a fade-in (none required by this tranche).
+    container.style.visibility = 'hidden';
+    container.setAttribute('data-initial-fit', 'pending');
     mountEl.appendChild(container);
 
     // ── Cy mount ──
@@ -985,6 +1224,24 @@
 
     var cyElements = _toCyElements(opts.data);
     var styleArray = _buildBaseStyle().concat(_arr(opts.nodeStyleOverride));
+
+    // D37x-engine-node-geometry-contract — Pre-scan supplied data
+    // for geometry violations. Each node MUST arrive with positive
+    // finite `data.width` and `data.height`. We record the result
+    // as a closure flag here; the dedup'd diagnostic emit happens
+    // once `_recordFitDiagnostic` is defined further down in mount().
+    var _nodeGeometryViolated = false;
+    if (_isPlainObject(opts.data) && Array.isArray(opts.data.nodes)) {
+      for (var _gi = 0; _gi < opts.data.nodes.length; _gi++) {
+        var _sn = opts.data.nodes[_gi];
+        if (!_isPlainObject(_sn) || _sn.id == null) continue;
+        var _snData = _isPlainObject(_sn.data) ? _sn.data : {};
+        var _gw = _snData.width, _gh = _snData.height;
+        var _gWOk = (typeof _gw === 'number' && isFinite(_gw) && _gw > 0);
+        var _gHOk = (typeof _gh === 'number' && isFinite(_gh) && _gh > 0);
+        if (!_gWOk || !_gHOk) { _nodeGeometryViolated = true; break; }
+      }
+    }
 
     // ── Instantiate Cytoscape ──
 
@@ -1023,6 +1280,133 @@
     var _destroyed = false;
     var overlayHandle = null;
     var resizeObs = null;
+
+    // D37u-cytoscape-resize-policy-impl — No per-mount resize state.
+    //
+    // The resize lifecycle holds no state: every tick calls
+    // `cy.resize()` and returns. No timers, no rect cache, no
+    // re-entry guards. Camera preservation is the default policy and
+    // is enforced by NOT calling fit/viewport on the passive path.
+
+    // D37ah-readiness-gated-initial-fit — Per-mount initial render
+    // lifecycle state machine (clean break from D37af time-gated
+    // stabilisation). Six discrete states, gated by READINESS rather
+    // than by elapsed time:
+    //
+    //   'awaiting_container'      — the container has zero size at
+    //                               mount. The readiness loop is NOT
+    //                               running; the engine waits for a
+    //                               ResizeObserver tick to deliver
+    //                               positive container dimensions
+    //                               before transitioning to
+    //                               'stabilising'.
+    //   'stabilising'             — the rAF readiness loop runs each
+    //                               frame: checks 9 fit-input gates,
+    //                               runs the canonical fit pipeline
+    //                               when all gates pass, and reveals
+    //                               after INITIAL_FIT_STABLE_FRAMES
+    //                               consecutive stable snapshots.
+    //   'revealed'                — readiness gates all passed and
+    //                               snapshots stabilised; visibility
+    //                               restored cleanly.
+    //   'forced_reveal_cy_zero'   — safety cap fired while still
+    //                               'stabilising' AND cy.width or
+    //                               cy.height was 0. The container
+    //                               became visible but the cy mount
+    //                               never reported a non-zero
+    //                               viewport.
+    //   'forced_reveal_fit_failed' — safety cap fired while still
+    //                                'stabilising', cy was sized, but
+    //                                _runFitPipeline never reported
+    //                                fitApplied = true within the
+    //                                window. Reveal proceeds without
+    //                                a guaranteed fit.
+    //   'blocked_zero_container'  — safety cap fired while state was
+    //                               still 'awaiting_container'. The
+    //                               container never became sized; the
+    //                               graph stays hidden. Operator
+    //                               intervention (parent layout fix)
+    //                               required.
+    //
+    // SAFETY-CAP RULE (three-way) — applied by the single external
+    //   safety-cap setTimeout at INITIAL_FIT_SAFETY_MS:
+    //
+    //     1. state === 'awaiting_container'
+    //          → _transitionTo('blocked_zero_container');
+    //            emit DIAG_ENGINE_INITIAL_MOUNT_CONTAINER_BLOCKED.
+    //          NOTE: this branch does NOT call _revealGraph; the
+    //          container stays hidden.
+    //     2. state === 'stabilising' AND cy.width/height === 0
+    //          → _revealGraph('forced_cy_zero').
+    //     3. state === 'stabilising' AND cy.width/height > 0
+    //          → _revealGraph('forced_fit_failed') — fit attempts
+    //            either ran and reported failure, or never reached
+    //            the fit pipeline within the window.
+    //
+    // POST-REVEAL CORRECTION:
+    //   Allowed from BOTH 'revealed' and 'forced_reveal_cy_zero'
+    //   states (the latter because a late ResizeObserver tick may
+    //   finally deliver positive cy dimensions and a corrective fit
+    //   becomes valuable). NOT allowed from 'forced_reveal_fit_failed'
+    //   (a fit attempted and failed — re-attempting on the same data
+    //   is futile) or 'blocked_zero_container' (no reveal happened).
+    //
+    // Per-mount state vars:
+    //   `_initialFitState`               — current state (one of the
+    //                                      six above).
+    //   `_revealReason`                  — string reason passed to
+    //                                      _revealGraph: one of
+    //                                      'clean' | 'forced_cy_zero'
+    //                                      | 'forced_fit_failed'.
+    //                                      Null until reveal.
+    //   `_initialFitRevealTimer`         — the safety-cap setTimeout
+    //                                      id; cleared by reveal /
+    //                                      destroy.
+    //   `_lastFitSnapshot`               — most recent valid snapshot
+    //                                      taken during the readiness
+    //                                      loop.
+    //   `_stableFrameCount`              — consecutive-frame counter;
+    //                                      ≥ INITIAL_FIT_STABLE_FRAMES
+    //                                      triggers clean reveal.
+    //   `_fitPipelineAppliedAtLeastOnce` — true once any rAF tick
+    //                                      observed _runFitPipeline
+    //                                      returning fitApplied=true.
+    //                                      Used by the safety cap to
+    //                                      pick between
+    //                                      'forced_fit_failed' and
+    //                                      (defensively) the same.
+    //   `_stabilisationStartTs`          — Date.now() at mount;
+    //                                      retained for diagnostic
+    //                                      payloads and parity.
+    //   `_stabilisationRaf`              — pending rAF / fallback
+    //                                      timer id for the readiness
+    //                                      loop.
+    //   `_revealSnapshot`                — snapshot at reveal time;
+    //                                      compared by the post-reveal
+    //                                      correction guard.
+    //   `_postRevealCorrectionsRemaining` — counts down from
+    //                                       POST_REVEAL_MAX_CORRECTIONS.
+    //   `_postRevealGraceEndTs`          — Date.now() + grace window;
+    //                                      corrections only allowed
+    //                                      while now() <= this.
+    //   `_userInteracted`                — set true on cy pan/zoom/
+    //                                      drag/tap events after
+    //                                      reveal; disables corrections.
+    //   `_userInteractionGuardBound`     — idempotence flag for the
+    //                                      cy event subscription.
+    var _initialFitState                 = 'awaiting_container';
+    var _revealReason                    = null;
+    var _initialFitRevealTimer           = 0;
+    var _lastFitSnapshot                 = null;
+    var _stableFrameCount                = 0;
+    var _fitPipelineAppliedAtLeastOnce   = false;
+    var _stabilisationStartTs            = 0;
+    var _stabilisationRaf                = 0;
+    var _revealSnapshot                  = null;
+    var _postRevealCorrectionsRemaining  = POST_REVEAL_MAX_CORRECTIONS;
+    var _postRevealGraceEndTs            = 0;
+    var _userInteracted                  = false;
+    var _userInteractionGuardBound       = false;
 
     // D37s-context-geometry-2-impl — Engine measurement state.
     //
@@ -1077,6 +1461,28 @@
         if (_overlapValidationTimer) {
           try { clearTimeout(_overlapValidationTimer); } catch (_) { /* swallow */ }
           _overlapValidationTimer = 0;
+        }
+        // D37u-cytoscape-resize-policy-impl — No deferred resize
+        // state to clean up. The passive lifecycle is synchronous
+        // (cy.resize() per tick); there is no pending timer or
+        // cached rect to invalidate.
+
+        // D37af-initial-fit-stability-gate — Cancel the safety-reveal
+        // timer and any pending stabilisation rAF / fallback timer
+        // so late ticks can't run after teardown.
+        if (_initialFitRevealTimer) {
+          try { clearTimeout(_initialFitRevealTimer); } catch (_) { /* swallow */ }
+          _initialFitRevealTimer = 0;
+        }
+        if (_stabilisationRaf) {
+          try {
+            if (typeof window.cancelAnimationFrame === 'function') {
+              window.cancelAnimationFrame(_stabilisationRaf);
+            } else {
+              clearTimeout(_stabilisationRaf);
+            }
+          } catch (_) { /* swallow */ }
+          _stabilisationRaf = 0;
         }
         // Order matters: overlay first (its listener-detach path
         // must see a live cy), then camera-bus deregistration, then
@@ -1167,21 +1573,40 @@
         //   3. `opts.getSafeArea` (legacy fallback) → compose insets
         //      with `DEFAULT_FIT_PADDING` floor and apply per-side.
         //   4. Uniform `DEFAULT_FIT_PADDING` on all sides.
+        //
+        // D37u-cytoscape-resize-policy-impl — Caller may pass
+        // `fitOpts.source` (e.g. `'explicit_fit'`, `'reset_view'`,
+        // `'zoom_to_selected'`, `'lens_activation'`, `'data_reload'`)
+        // to attribute the camera mutation in the `engine_fit_invoked`
+        // diagnostic. Default is `'explicit_fit'`.
+        var source = (fitOpts && _isPlainObject(fitOpts) && typeof fitOpts.source === 'string' && fitOpts.source)
+          ? fitOpts.source : 'explicit_fit';
         var padInput = (fitOpts && _isPlainObject(fitOpts)) ? fitOpts.padding : undefined;
         if (padInput !== undefined) {
           _fitWithSafeArea(cy, _resolveFitPadding(padInput, opts.getSafeArea));
+          _emitLifecycleDiagnostic(DIAG_ENGINE_FIT_INVOKED, { source: source });
+          // D37ag-diagnostic-geometry-dump — observational only.
+          _emitGeometryDump('explicit_fit', source, null);
           return;
         }
         if (_isFn(opts.getUsableGraphRect)) {
           var usable = null;
           try { usable = opts.getUsableGraphRect(); } catch (_) { usable = null; }
           if (_isPlainObject(usable) && usable.width > 0 && usable.height > 0) {
-            if (_fitToUsableRect(cy, usable, _recordFitDiagnostic)) return;
+            if (_fitToUsableRect(cy, usable, _recordFitDiagnostic)) {
+              _emitLifecycleDiagnostic(DIAG_ENGINE_FIT_INVOKED, { source: source });
+              // D37ag-diagnostic-geometry-dump — observational only.
+              _emitGeometryDump('explicit_fit', source, null);
+              return;
+            }
           } else if (_isFn(_recordFitDiagnostic)) {
             _recordFitDiagnostic(DIAG_USABLE_RECT_EMPTY);
           }
         }
         _fitWithSafeArea(cy, _resolveFitPadding(undefined, opts.getSafeArea));
+        _emitLifecycleDiagnostic(DIAG_ENGINE_FIT_INVOKED, { source: source });
+        // D37ag-diagnostic-geometry-dump — observational only.
+        _emitGeometryDump('explicit_fit', source, null);
       },
       reset: function () {
         if (_destroyed) return;
@@ -1314,6 +1739,16 @@
       }
     }
 
+    // D37x-engine-node-geometry-contract — Emit the dedup'd geometry
+    // diagnostic now that `_recordFitDiagnostic` is in scope. The
+    // pre-mount scan above set `_nodeGeometryViolated` if any
+    // supplied node lacked positive finite width/height. Emitting it
+    // here means the violation is observable via
+    // `handle.getDiagnostics()` immediately after mount returns.
+    if (_nodeGeometryViolated) {
+      _recordFitDiagnostic(DIAG_NODE_GEOMETRY_INVALID);
+    }
+
     function _runOverlapValidation() {
       if (_destroyed) return;
       var result = _validateNoOverlap(cy);
@@ -1441,43 +1876,68 @@
       } catch (_) { overlayHandle = null; }
     }
 
-    // ── ResizeObserver ──
+    // ── Per-firing lifecycle diagnostic emitter ──
     //
-    // When the container's box size changes (drawer toggle, viewport
-    // resize, font load), cy must be told to re-read its container
-    // dimensions and re-fit. The overlay's own ResizeObserver is on
-    // the same container, so both react to the same trigger.
-    if (typeof window.ResizeObserver === 'function') {
-      try {
-        resizeObs = new window.ResizeObserver(function () {
-          try { cy.resize(); } catch (_) { /* swallow */ }
-        });
-        resizeObs.observe(container);
-      } catch (_) { resizeObs = null; }
+    // The fit-pipeline diagnostics (`usable_rect_empty`,
+    // `fit_zoom_clamped_*`, etc.) emit at most ONCE per mount via
+    // `_recordFitDiagnostic` so a chatty consumer doesn't spam the
+    // console. The resize / fit LIFECYCLE codes have the opposite
+    // need: external observers (tests, dev tools, browser console
+    // during a drawer toggle) must be able to count events.
+    // `_emitLifecycleDiagnostic` writes to the same diagnostics
+    // buffer and console channel as `_recordFitDiagnostic` but skips
+    // the dedup map.
+    //
+    // D37u-cytoscape-resize-policy-impl — Optional `payload` carries
+    // structured context (e.g. `{ source: 'initial_mount' }` for
+    // `engine_fit_invoked`). The payload is merged into the diagnostic
+    // entry and the console warn so downstream consumers can tell
+    // why a camera mutation occurred.
+    function _emitLifecycleDiagnostic(code, payload) {
+      if (_destroyed || !code) return;
+      var ts = (typeof Date !== 'undefined' && typeof Date.now === 'function') ? Date.now() : 0;
+      var entry = { code: code, ts: ts };
+      if (_isPlainObject(payload)) {
+        for (var k in payload) {
+          if (Object.prototype.hasOwnProperty.call(payload, k)) entry[k] = payload[k];
+        }
+      }
+      _engineDiagnostics.push(entry);
+      if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+        try {
+          var logCtx = { lensId: lensId };
+          if (_isPlainObject(payload)) {
+            for (var k2 in payload) {
+              if (Object.prototype.hasOwnProperty.call(payload, k2)) logCtx[k2] = payload[k2];
+            }
+          }
+          console.warn('[graph-cytoscape-engine] ' + code, logCtx);
+        } catch (_) { /* swallow */ }
+      }
     }
 
-    // ── Initial settle / fit ──
+    // ── Shared fit pipeline ──
     //
-    // The container's size may not be final at mount time (display:
-    // none siblings toggling, flex/grid containers laying out, font
-    // loads pending). A double-rAF + safety timeout settles the
-    // initial cy fit. Subsequent fits come through the
-    // `handle.fit()` surface or through ResizeObserver-driven
-    // cy.resize() calls.
-    function _settle() {
-      if (_destroyed) return;
-      // D37s-viewport-fit-1-impl — Strategic fit envelope.
-      //
-      // Preferred path: `opts.getUsableGraphRect` supplies the actual
-      // usable graph rectangle (`{x, y, width, height, insets}`) from
-      // `GraphViewport.getUsableGraphRect()`. The engine fits cy's
-      // bounding box into that rectangle directly via
-      // `_fitToUsableRect`.
-      //
-      // Fallback path: `opts.getSafeArea` (legacy) — composed with
-      // `DEFAULT_FIT_PADDING` floor into per-side padding, applied
-      // via the per-side `_fitWithSafeArea`. Bit-for-bit equivalent
-      // to the pre-tranche behaviour when neither option is supplied.
+    // D37u-cytoscape-resize-policy-impl — Used by EXPLICIT fit
+    // triggers only (initial settle, `handle.fit()`, future operator
+    // actions). NEVER called by the passive resize lifecycle.
+    //
+    // The pipeline:
+    //
+    //   1. cy.resize()  — re-reads container dimensions (cheap; no
+    //                     camera change).
+    //   2. If `opts.getUsableGraphRect` returns a non-empty rect:
+    //      fit via `_fitToUsableRect` (strategic path).
+    //   3. Otherwise fall back to `_fitWithSafeArea` with per-side
+    //      padding resolved from `opts.getSafeArea`.
+    //
+    // The `source` argument names the trigger (`initial_mount`,
+    // `explicit_fit`, `reset_view`, `zoom_to_selected`, etc.) and is
+    // emitted on the `engine_fit_invoked` diagnostic so dev tools can
+    // attribute camera changes.
+    function _runFitPipeline(source, phase) {
+      if (_destroyed) return false;
+      var fitApplied = false;
       try {
         cy.resize();
         var fittedViaUsable = false;
@@ -1494,17 +1954,744 @@
           var padding = _resolveFitPadding(undefined, opts.getSafeArea);
           _fitWithSafeArea(cy, padding);
         }
+        fitApplied = true;
+        // D37ad-initial-fit-stable-cadence — Optional `phase` payload
+        // distinguishes the initial settle ticks ('raf1' / 'raf2' /
+        // 'tail') so multi-fit diagnostics are observable per tick.
+        // Explicit fits (handle.fit) omit `phase`.
+        var diagPayload = {
+          source: (typeof source === 'string' && source) ? source : 'explicit_fit',
+        };
+        if (typeof phase === 'string' && phase) diagPayload.phase = phase;
+        _emitLifecycleDiagnostic(DIAG_ENGINE_FIT_INVOKED, diagPayload);
+      } catch (_) { /* swallow */ }
+      return fitApplied;
+    }
+
+    // ── Initial fit / reveal lifecycle (stability-driven) ──
+    //
+    // D37af-initial-fit-stability-gate — Replaces the D37ad fixed
+    // cadence (rAF + rAF + 120 ms tail + 500 ms safety) with an
+    // animation-frame-driven stabilisation loop. While the graph is
+    // hidden, every frame:
+    //
+    //   1. cy.resize() — re-read live container dimensions.
+    //   2. `_takeFitSnapshot()` reads the fit-relevant geometry.
+    //   3. If the snapshot is valid, run the canonical fit pipeline.
+    //   4. Compare against the previous snapshot.
+    //   5. If stable across INITIAL_FIT_STABLE_FRAMES consecutive
+    //      frames → reveal.
+    //   6. If INITIAL_FIT_SAFETY_MS elapsed → force-reveal.
+    //
+    // After reveal, `_tryPostRevealCorrection()` (invoked from the
+    // passive resize handler) may fire ONE corrective fit if the
+    // FIRST resize tick within POST_REVEAL_STABILISATION_MS carries
+    // a materially different snapshot, the user hasn't interacted
+    // with the camera, and a correction budget is still available.
+    // After that, D37u steady-state takes over.
+
+    // ── D37ag-diagnostic-geometry-dump — observational only ──
+    //
+    // Emits `engine_geometry_dump` with the full set of fit-relevant
+    // geometry inputs AND the post-fit camera state at the call site.
+    // Used by dev tools to diff initial-mount fit against manual Fit:
+    // identical math + differing inputs ⇒ a field-level diff pinpoints
+    // which input drifted.
+    //
+    // The helper MUST NOT mutate engine state. Each measurement is
+    // wrapped so a single failing read returns `null` for that field
+    // but never throws. Every payload field is present (`null` when
+    // unavailable); fields are never omitted, so dev-tool consumers
+    // can shape-match the payload.
+    function _emitGeometryDump(trigger, source, phase) {
+      if (_destroyed) return;
+      var cw = null, ch = null;
+      try { cw = _isFn(cy.width)  ? cy.width()  : null; } catch (_) { cw = null; }
+      try { ch = _isFn(cy.height) ? cy.height() : null; } catch (_) { ch = null; }
+      var containerRect = null;
+      try {
+        if (container && typeof container.getBoundingClientRect === 'function') {
+          var r = container.getBoundingClientRect();
+          containerRect = {
+            left:   (r && typeof r.left   === 'number') ? r.left   : null,
+            top:    (r && typeof r.top    === 'number') ? r.top    : null,
+            width:  (r && typeof r.width  === 'number') ? r.width  : null,
+            height: (r && typeof r.height === 'number') ? r.height : null,
+            right:  (r && typeof r.right  === 'number') ? r.right  : null,
+            bottom: (r && typeof r.bottom === 'number') ? r.bottom : null,
+          };
+        }
+      } catch (_) { containerRect = null; }
+      var usableRect = null;
+      try {
+        if (_isFn(opts.getUsableGraphRect)) {
+          var u = opts.getUsableGraphRect();
+          if (_isPlainObject(u)) {
+            usableRect = {
+              x:      (typeof u.x      === 'number') ? u.x      : null,
+              y:      (typeof u.y      === 'number') ? u.y      : null,
+              width:  (typeof u.width  === 'number') ? u.width  : null,
+              height: (typeof u.height === 'number') ? u.height : null,
+            };
+          }
+        }
+      } catch (_) { usableRect = null; }
+      var elementsBbox = null;
+      try {
+        var eles = cy.elements();
+        if (eles && eles.length > 0) {
+          var bb = eles.boundingBox(FIT_BBOX_OPTS);
+          if (bb) {
+            elementsBbox = {
+              x1: (typeof bb.x1 === 'number') ? bb.x1 : null,
+              y1: (typeof bb.y1 === 'number') ? bb.y1 : null,
+              x2: (typeof bb.x2 === 'number') ? bb.x2 : null,
+              y2: (typeof bb.y2 === 'number') ? bb.y2 : null,
+              w:  (typeof bb.w  === 'number') ? bb.w  : null,
+              h:  (typeof bb.h  === 'number') ? bb.h  : null,
+            };
+          }
+        }
+      } catch (_) { elementsBbox = null; }
+      var resolvedPadding = null;
+      try { resolvedPadding = _resolveFitPadding(undefined, opts.getSafeArea); }
+      catch (_) { resolvedPadding = null; }
+      var postFitPan = null;
+      try {
+        if (_isFn(cy.pan)) {
+          var p = cy.pan();
+          if (p && typeof p.x === 'number' && typeof p.y === 'number') {
+            postFitPan = { x: p.x, y: p.y };
+          }
+        }
+      } catch (_) { postFitPan = null; }
+      var postFitZoom = null;
+      try {
+        if (_isFn(cy.zoom)) {
+          var z = cy.zoom();
+          if (typeof z === 'number' && isFinite(z)) postFitZoom = z;
+        }
+      } catch (_) { postFitZoom = null; }
+      var ts = (typeof Date !== 'undefined' && typeof Date.now === 'function') ? Date.now() : 0;
+      _emitLifecycleDiagnostic(DIAG_ENGINE_GEOMETRY_DUMP, {
+        trigger:         (typeof trigger === 'string') ? trigger : null,
+        source:          (typeof source  === 'string') ? source  : null,
+        phase:           (typeof phase   === 'string') ? phase   : null,
+        cyWidth:         (typeof cw === 'number') ? cw : null,
+        cyHeight:        (typeof ch === 'number') ? ch : null,
+        containerRect:   containerRect,
+        usableRect:      usableRect,
+        elementsBbox:    elementsBbox,
+        resolvedPadding: resolvedPadding,
+        postFitPan:      postFitPan,
+        postFitZoom:     postFitZoom,
+        timestamp:       ts,
+      });
+    }
+
+    function _takeFitSnapshot() {
+      if (_destroyed) return { ok: false, reason: 'destroyed' };
+      var cw = 0, ch = 0;
+      try { cw = _isFn(cy.width)  ? cy.width()  : 0; } catch (_) { cw = 0; }
+      try { ch = _isFn(cy.height) ? cy.height() : 0; } catch (_) { ch = 0; }
+      if (!(cw > 0) || !(ch > 0)) return { ok: false, reason: 'zero_container' };
+      var eles;
+      try { eles = cy.elements(); }
+      catch (_) { return { ok: false, reason: 'empty_graph' }; }
+      if (!eles || eles.length === 0) return { ok: false, reason: 'empty_graph' };
+      var bb;
+      try { bb = eles.boundingBox(FIT_BBOX_OPTS); }
+      catch (_) { return { ok: false, reason: 'invalid_bbox' }; }
+      if (!bb || !(bb.w > 0) || !(bb.h > 0)) return { ok: false, reason: 'invalid_bbox' };
+      var usable = null;
+      if (_isFn(opts.getUsableGraphRect)) {
+        try { usable = opts.getUsableGraphRect(); } catch (_) { usable = null; }
+      }
+      return {
+        ok: true,
+        snapshot: {
+          cyWidth:      cw,
+          cyHeight:     ch,
+          usableX:      _isPlainObject(usable) ? (usable.x      || 0) : 0,
+          usableY:      _isPlainObject(usable) ? (usable.y      || 0) : 0,
+          usableWidth:  _isPlainObject(usable) ? (usable.width  || 0) : 0,
+          usableHeight: _isPlainObject(usable) ? (usable.height || 0) : 0,
+          bboxX1:       bb.x1,
+          bboxY1:       bb.y1,
+          bboxX2:       bb.x2,
+          bboxY2:       bb.y2,
+          bboxWidth:    bb.w,
+          bboxHeight:   bb.h,
+        },
+      };
+    }
+
+    function _snapshotsMatch(a, b, epsilon) {
+      if (!_isPlainObject(a) || !_isPlainObject(b)) return false;
+      var eps = (typeof epsilon === 'number' && epsilon >= 0)
+        ? epsilon : INITIAL_FIT_STABILITY_EPSILON_PX;
+      var keys = [
+        'cyWidth', 'cyHeight',
+        'usableX', 'usableY', 'usableWidth', 'usableHeight',
+        'bboxX1', 'bboxY1', 'bboxX2', 'bboxY2',
+        'bboxWidth', 'bboxHeight',
+      ];
+      for (var i = 0; i < keys.length; i++) {
+        var k = keys[i];
+        if (Math.abs((a[k] || 0) - (b[k] || 0)) > eps) return false;
+      }
+      return true;
+    }
+
+    // D37ah-readiness-gated-initial-fit — Generic state-transition
+    // helper. Centralises the state_changed lifecycle diagnostic and
+    // its co-located geometry dump so every transition emits both.
+    //
+    //   • Self-transitions (newState === current) are dropped.
+    //   • Diagnostic payload carries { from: prevState, to: newState }.
+    //   • Geometry dump trigger='state_transition', source=newState,
+    //     phase=null (per D37ah spec).
+    //
+    // Callers MUST go through this helper for any change to
+    // `_initialFitState`. Direct assignment is restricted to the
+    // initial-value declaration in the per-mount state block.
+    function _transitionTo(newState) {
+      if (_destroyed) return;
+      if (_initialFitState === newState) return;
+      var prevState = _initialFitState;
+      _initialFitState = newState;
+      _emitLifecycleDiagnostic(DIAG_ENGINE_INITIAL_LIFECYCLE_STATE_CHANGED, {
+        from: prevState,
+        to:   newState,
+      });
+      // D37ag-diagnostic-geometry-dump — observational only.
+      _emitGeometryDump('state_transition', newState, null);
+    }
+
+    // D37ah-readiness-gated-initial-fit — readiness-gated rAF loop.
+    //
+    // Each frame while state === 'stabilising' the loop checks 9
+    // fit-input gates BEFORE attempting any fit:
+    //
+    //   1. containerRect.width  > 0
+    //   2. containerRect.height > 0
+    //   3. cy.width()           > 0
+    //   4. cy.height()          > 0
+    //   5. usableRect.width     > 0   (only when getUsableGraphRect set)
+    //   6. usableRect.height    > 0   (only when getUsableGraphRect set)
+    //   7. elementsBbox.w       > 0
+    //   8. elementsBbox.h       > 0
+    //   9. fitApplied = true (from _runFitPipeline)
+    //
+    // Failing input gates (1-8) emit engine_readiness_gate_failed and
+    // reschedule WITHOUT advancing the stability counter. A failed
+    // fit pipeline (gate 9) emits engine_readiness_fit_failed and
+    // reschedules; the stability counter is NOT advanced because the
+    // snapshot wasn't validated against a successful fit.
+    //
+    // The previous D37af time-based safety cap inside the rAF body
+    // has been REMOVED — the single external setTimeout below now
+    // owns the safety-cap rule.
+    function _runStabilisationFrame() {
+      _stabilisationRaf = 0;
+      if (_destroyed) return;
+      if (_initialFitState !== 'stabilising') return;
+      // cy.resize() reads the live container dims; cheap.
+      try { cy.resize(); } catch (_) { /* swallow */ }
+
+      // Gates 1-2: container bounding rect.
+      var containerRect = null;
+      try {
+        if (container && typeof container.getBoundingClientRect === 'function') {
+          containerRect = container.getBoundingClientRect();
+        }
+      } catch (_) { containerRect = null; }
+      if (!containerRect || !(containerRect.width > 0)) {
+        _emitLifecycleDiagnostic(DIAG_ENGINE_READINESS_GATE_FAILED, {
+          gate: 'containerRect.width',
+        });
+        _scheduleNextStabilisationFrame();
+        return;
+      }
+      if (!(containerRect.height > 0)) {
+        _emitLifecycleDiagnostic(DIAG_ENGINE_READINESS_GATE_FAILED, {
+          gate: 'containerRect.height',
+        });
+        _scheduleNextStabilisationFrame();
+        return;
+      }
+
+      // Gates 3-4: cy viewport dimensions.
+      var cw = 0, ch = 0;
+      try { cw = _isFn(cy.width)  ? cy.width()  : 0; } catch (_) { cw = 0; }
+      try { ch = _isFn(cy.height) ? cy.height() : 0; } catch (_) { ch = 0; }
+      if (!(cw > 0)) {
+        _emitLifecycleDiagnostic(DIAG_ENGINE_READINESS_GATE_FAILED, {
+          gate: 'cy.width',
+        });
+        _scheduleNextStabilisationFrame();
+        return;
+      }
+      if (!(ch > 0)) {
+        _emitLifecycleDiagnostic(DIAG_ENGINE_READINESS_GATE_FAILED, {
+          gate: 'cy.height',
+        });
+        _scheduleNextStabilisationFrame();
+        return;
+      }
+
+      // Gates 5-6: usable graph rect (only when provided).
+      if (_isFn(opts.getUsableGraphRect)) {
+        var usable = null;
+        try { usable = opts.getUsableGraphRect(); } catch (_) { usable = null; }
+        if (!_isPlainObject(usable) || !(usable.width > 0)) {
+          _emitLifecycleDiagnostic(DIAG_ENGINE_READINESS_GATE_FAILED, {
+            gate: 'usableRect.width',
+          });
+          _scheduleNextStabilisationFrame();
+          return;
+        }
+        if (!(usable.height > 0)) {
+          _emitLifecycleDiagnostic(DIAG_ENGINE_READINESS_GATE_FAILED, {
+            gate: 'usableRect.height',
+          });
+          _scheduleNextStabilisationFrame();
+          return;
+        }
+      }
+
+      // Gates 7-8: elements bounding box.
+      var eles;
+      try { eles = cy.elements(); } catch (_) { eles = null; }
+      if (!eles || eles.length === 0) {
+        _emitLifecycleDiagnostic(DIAG_ENGINE_READINESS_GATE_FAILED, {
+          gate: 'elementsBbox.empty',
+        });
+        _scheduleNextStabilisationFrame();
+        return;
+      }
+      var bb;
+      try { bb = eles.boundingBox(FIT_BBOX_OPTS); } catch (_) { bb = null; }
+      if (!bb || !(bb.w > 0)) {
+        _emitLifecycleDiagnostic(DIAG_ENGINE_READINESS_GATE_FAILED, {
+          gate: 'elementsBbox.w',
+        });
+        _scheduleNextStabilisationFrame();
+        return;
+      }
+      if (!(bb.h > 0)) {
+        _emitLifecycleDiagnostic(DIAG_ENGINE_READINESS_GATE_FAILED, {
+          gate: 'elementsBbox.h',
+        });
+        _scheduleNextStabilisationFrame();
+        return;
+      }
+
+      // All input gates passed; take the snapshot used for stability
+      // comparison and run the canonical fit pipeline.
+      var sample = _takeFitSnapshot();
+      if (!sample.ok) {
+        _emitLifecycleDiagnostic(DIAG_ENGINE_INITIAL_STABILISATION_SAMPLE, {
+          ok: false, reason: sample.reason,
+        });
+        _scheduleNextStabilisationFrame();
+        return;
+      }
+
+      // Gate 9: canonical fit pipeline. Phase remains 'stabilising'
+      // so the D37u source/phase pin survives.
+      var fitApplied = _runFitPipeline('initial_mount', 'stabilising');
+      // D37ag-diagnostic-geometry-dump — observational only.
+      _emitGeometryDump('stabilisation_tick', 'initial_mount', 'stabilising');
+      if (!fitApplied) {
+        _emitLifecycleDiagnostic(DIAG_ENGINE_READINESS_FIT_FAILED);
+        _scheduleNextStabilisationFrame();
+        return;
+      }
+
+      if (_lastFitSnapshot == null) {
+        _emitLifecycleDiagnostic(DIAG_ENGINE_INITIAL_FIT_APPLIED);
+      }
+      _fitPipelineAppliedAtLeastOnce = true;
+
+      // Stability count: increment if this snapshot matches the
+      // previous; reset to 1 (current frame is the new baseline)
+      // otherwise.
+      if (_lastFitSnapshot && _snapshotsMatch(sample.snapshot, _lastFitSnapshot)) {
+        _stableFrameCount++;
+      } else {
+        _stableFrameCount = 1;
+      }
+      _lastFitSnapshot = sample.snapshot;
+      _emitLifecycleDiagnostic(DIAG_ENGINE_INITIAL_STABILISATION_SAMPLE, {
+        ok: true, stableFrames: _stableFrameCount,
+      });
+      if (_stableFrameCount >= INITIAL_FIT_STABLE_FRAMES) {
+        _emitLifecycleDiagnostic(DIAG_ENGINE_INITIAL_STABILISATION_STABLE, {
+          frames: _stableFrameCount,
+        });
+        _revealSnapshot = sample.snapshot;
+        _revealGraph('clean');
+        return;
+      }
+      _scheduleNextStabilisationFrame();
+    }
+
+    function _scheduleNextStabilisationFrame() {
+      if (_destroyed) return;
+      if (_initialFitState !== 'stabilising') return;
+      if (_stabilisationRaf) return;
+      if (typeof window.requestAnimationFrame === 'function') {
+        _stabilisationRaf = window.requestAnimationFrame(_runStabilisationFrame);
+      } else {
+        _stabilisationRaf = setTimeout(_runStabilisationFrame, 16);
+      }
+    }
+
+    function _bindUserInteractionGuards() {
+      if (_userInteractionGuardBound) return;
+      _userInteractionGuardBound = true;
+      // Any operator-driven camera change (or programmatic camera
+      // change like an explicit handle.fit) fires these cy events.
+      // After any such event the post-reveal correction is disabled
+      // so the operator's intent is never overwritten.
+      try {
+        cy.on('pan zoom drag tap', function () { _userInteracted = true; });
       } catch (_) { /* swallow */ }
     }
-    if (typeof window.requestAnimationFrame === 'function') {
-      window.requestAnimationFrame(function () {
-        _settle();
-        window.requestAnimationFrame(_settle);
-      });
-    } else {
-      _settle();
+
+    // D37ah-readiness-gated-initial-fit — Reason-based reveal.
+    //
+    // `reason` MUST be one of 'clean' | 'forced_cy_zero' |
+    // 'forced_fit_failed'. Any other value is treated as 'clean'
+    // (defensive default — the safety-cap fan-out validates the
+    // value at the call site).
+    //
+    // Mapping:
+    //   'clean'             → state 'revealed';
+    //                         data-initial-fit='complete';
+    //                         DIAG_ENGINE_INITIAL_REVEAL.
+    //   'forced_cy_zero'    → state 'forced_reveal_cy_zero';
+    //                         data-initial-fit='failed-reveal-cy-zero';
+    //                         DIAG_ENGINE_INITIAL_REVEAL_FORCED_CY_ZERO.
+    //   'forced_fit_failed' → state 'forced_reveal_fit_failed';
+    //                         data-initial-fit='failed-reveal-fit';
+    //                         DIAG_ENGINE_INITIAL_REVEAL_FORCED_FIT_FAILED.
+    //
+    // NOTE: 'blocked_zero_container' is NOT a reveal reason — it is
+    // a terminal state reached via _transitionTo directly, with the
+    // container remaining hidden.
+    function _revealGraph(reason) {
+      if (_destroyed) return;
+      if (_initialFitState === 'revealed' ||
+          _initialFitState === 'forced_reveal_cy_zero' ||
+          _initialFitState === 'forced_reveal_fit_failed' ||
+          _initialFitState === 'blocked_zero_container') return;
+      var safeReason = (reason === 'clean' ||
+                        reason === 'forced_cy_zero' ||
+                        reason === 'forced_fit_failed')
+        ? reason : 'clean';
+      _revealReason = safeReason;
+      var newState;
+      var attrValue;
+      var revealDiag;
+      if (safeReason === 'clean') {
+        newState   = 'revealed';
+        attrValue  = 'complete';
+        revealDiag = DIAG_ENGINE_INITIAL_REVEAL;
+      } else if (safeReason === 'forced_cy_zero') {
+        newState   = 'forced_reveal_cy_zero';
+        attrValue  = 'failed-reveal-cy-zero';
+        revealDiag = DIAG_ENGINE_INITIAL_REVEAL_FORCED_CY_ZERO;
+      } else {
+        newState   = 'forced_reveal_fit_failed';
+        attrValue  = 'failed-reveal-fit';
+        revealDiag = DIAG_ENGINE_INITIAL_REVEAL_FORCED_FIT_FAILED;
+      }
+      _transitionTo(newState);
+      try {
+        container.style.visibility = '';
+        container.setAttribute('data-initial-fit', attrValue);
+      } catch (_) { /* swallow */ }
+      if (_initialFitRevealTimer) {
+        try { clearTimeout(_initialFitRevealTimer); } catch (_) { /* swallow */ }
+        _initialFitRevealTimer = 0;
+      }
+      if (_stabilisationRaf) {
+        try {
+          if (typeof window.cancelAnimationFrame === 'function') {
+            window.cancelAnimationFrame(_stabilisationRaf);
+          } else {
+            clearTimeout(_stabilisationRaf);
+          }
+        } catch (_) { /* swallow */ }
+        _stabilisationRaf = 0;
+      }
+      // Open the post-reveal grace window.
+      var now = (typeof Date !== 'undefined' && typeof Date.now === 'function') ? Date.now() : 0;
+      _postRevealGraceEndTs = now + POST_REVEAL_STABILISATION_MS;
+      _bindUserInteractionGuards();
+      _emitLifecycleDiagnostic(revealDiag);
+      // D37ag-diagnostic-geometry-dump — observational only.
+      _emitGeometryDump('initial_reveal', null, null);
     }
-    setTimeout(_settle, 120);
+
+    // Post-reveal correction. Returns true iff a corrective fit was
+    // applied — caller (the passive RO handler) then SKIPS its
+    // camera-preserved diagnostic for this tick because the camera
+    // was, in fact, mutated.
+    //
+    // D37ah-readiness-gated-initial-fit — Eligibility (ALL must hold):
+    //   • state is 'revealed' OR 'forced_reveal_cy_zero'. The cy-zero
+    //     forced reveal is correction-eligible because a late RO tick
+    //     may finally deliver non-zero cy dimensions and a corrective
+    //     fit becomes valuable. 'forced_reveal_fit_failed' and
+    //     'blocked_zero_container' are NOT eligible (fit attempted and
+    //     failed, or no reveal at all).
+    //   • _postRevealCorrectionsRemaining > 0.
+    //   • _userInteracted === false (no pan / zoom / drag / tap
+    //     observed after reveal).
+    //   • Date.now() <= _postRevealGraceEndTs.
+    //   • A fresh valid snapshot is materially different from the
+    //     snapshot recorded at reveal time (or any previous snapshot
+    //     was recorded if reveal was forced_cy_zero).
+    function _tryPostRevealCorrection() {
+      if (_initialFitState !== 'revealed' &&
+          _initialFitState !== 'forced_reveal_cy_zero') return false;
+      if (_postRevealCorrectionsRemaining <= 0) return false;
+      if (_userInteracted) return false;
+      var now = (typeof Date !== 'undefined' && typeof Date.now === 'function') ? Date.now() : 0;
+      if (now > _postRevealGraceEndTs) return false;
+      var sample = _takeFitSnapshot();
+      if (!sample.ok) return false;
+      if (_revealSnapshot && _snapshotsMatch(sample.snapshot, _revealSnapshot)) return false;
+      _postRevealCorrectionsRemaining--;
+      _runFitPipeline('post_reveal_stabilisation', null);
+      _revealSnapshot = sample.snapshot;
+      _emitLifecycleDiagnostic(DIAG_ENGINE_POST_REVEAL_STABILISATION_FIT);
+      // D37ag-diagnostic-geometry-dump — observational only.
+      _emitGeometryDump('post_reveal_correction', 'post_reveal_stabilisation', null);
+      return true;
+    }
+
+    // D37ai-blocked-container-recovery — Single external safety-cap
+    // helper. (Extracted from the inline mount-time setTimeout so
+    // blocked → stabilising recovery can RE-ARM the cap from the
+    // recovery moment, not from mount time.) Idempotent: any
+    // pending timer is cleared before a new one is armed.
+    //
+    // Three-way SAFETY-CAP RULE at firing time (unchanged from D37ah):
+    //   1. 'awaiting_container' → _transitionTo('blocked_zero_container');
+    //      data-initial-fit='blocked-zero-container'; emit
+    //      DIAG_ENGINE_INITIAL_MOUNT_CONTAINER_BLOCKED. NO reveal —
+    //      the container remained zero-sized and the graph stays
+    //      hidden. The ResizeObserver-driven recovery path
+    //      (_onContainerResize, 'blocked_zero_container' branch) is
+    //      responsible for re-arming this cap when a later resize
+    //      tick delivers a measurable container.
+    //   2. 'stabilising' AND cy.width/height === 0 →
+    //      _revealGraph('forced_cy_zero').
+    //   3. 'stabilising' AND cy.width/height > 0 →
+    //      _revealGraph('forced_fit_failed').
+    //
+    // If state has advanced past 'awaiting_container' / 'stabilising'
+    // (clean reveal already happened, or already blocked again by a
+    // previous cap), the cap is a no-op.
+    function _armInitialSafetyCap() {
+      if (_destroyed) return;
+      if (_initialFitRevealTimer) {
+        try { clearTimeout(_initialFitRevealTimer); } catch (_) { /* swallow */ }
+        _initialFitRevealTimer = 0;
+      }
+      _initialFitRevealTimer = setTimeout(function () {
+        _initialFitRevealTimer = 0;
+        if (_destroyed) return;
+        if (_initialFitState === 'awaiting_container') {
+          _transitionTo('blocked_zero_container');
+          try {
+            container.setAttribute('data-initial-fit', 'blocked-zero-container');
+          } catch (_) { /* swallow */ }
+          _emitLifecycleDiagnostic(DIAG_ENGINE_INITIAL_MOUNT_CONTAINER_BLOCKED);
+          return;
+        }
+        if (_initialFitState !== 'stabilising') return;
+        var capCw = 0, capCh = 0;
+        try { capCw = _isFn(cy.width)  ? cy.width()  : 0; } catch (_) { capCw = 0; }
+        try { capCh = _isFn(cy.height) ? cy.height() : 0; } catch (_) { capCh = 0; }
+        if (!(capCw > 0) || !(capCh > 0)) {
+          _revealGraph('forced_cy_zero');
+          return;
+        }
+        _revealGraph('forced_fit_failed');
+      }, INITIAL_FIT_SAFETY_MS);
+    }
+
+    // ── ResizeObserver / resize-only passive lifecycle ──
+    //
+    // D37u-cytoscape-resize-policy-impl — Passive container resize
+    // (drawer toggle, tray expand/collapse, focus-mode chrome change,
+    // window resize) MUST preserve the operator's camera. The
+    // upstream Cytoscape model is:
+    //
+    //   • cy.resize() invalidates the cached container size and
+    //     schedules a redraw; it does NOT touch _private.pan or
+    //     _private.zoom.
+    //   • cy.fit() and cy.viewport({zoom, pan}) DO mutate camera and
+    //     are therefore CAMERA TRIGGERS — they belong at explicit
+    //     events (initial mount, operator Fit / Reset button, lens
+    //     activation that explicitly requests a recompose, etc.).
+    //
+    // STEADY-STATE passive lifecycle reduces to:
+    //
+    //   1. Emit engine_resize_detected.
+    //   2. Call cy.resize().
+    //   3. Emit engine_cy_resize_called.
+    //   4. Emit engine_camera_preserved_on_resize.
+    //
+    // The operator's pan/zoom survives across CSS transitions because
+    // the engine never touches them.
+    //
+    // D37ai-blocked-container-recovery — INITIAL-STABILISATION
+    // lifecycle is NOT steady state. While in 'awaiting_container',
+    // 'blocked_zero_container', or 'stabilising', the resize handler
+    // routes recovery (where applicable) but does NOT emit the
+    // engine_camera_preserved_on_resize diagnostic. That diagnostic
+    // represents steady-state intent and would otherwise mask the
+    // fact that the engine is still trying to reach a valid initial
+    // fit.
+    function _onContainerResize() {
+      if (_destroyed) return;
+      _emitLifecycleDiagnostic(DIAG_ENGINE_RESIZE_DETECTED);
+      // D37ai-blocked-container-recovery — State-branching dispatch.
+      //
+      //   'awaiting_container'      → check container measurability;
+      //                                promote to 'stabilising' when
+      //                                measurable. No cy.resize() /
+      //                                cy_resize_called /
+      //                                camera_preserved emission —
+      //                                initial-stabilisation work,
+      //                                not steady state.
+      //   'blocked_zero_container'  → RECOVERY PATH (new in D37ai).
+      //                                Check container measurability;
+      //                                if measurable, restart initial
+      //                                stabilisation with fresh
+      //                                state and a re-armed safety
+      //                                cap. The graph stays hidden
+      //                                until the readiness loop
+      //                                reveals cleanly. No
+      //                                camera_preserved emission.
+      //   'stabilising'             → the readiness rAF loop already
+      //                                owns its own pacing; resize
+      //                                tick is a no-op. No
+      //                                camera_preserved emission
+      //                                (initial-stabilisation phase).
+      //   'revealed' /
+      //   'forced_reveal_cy_zero' /
+      //   'forced_reveal_fit_failed'
+      //                             → D37u steady-state path.
+      //                                cy.resize(); emit
+      //                                cy_resize_called; try
+      //                                post-reveal correction; if it
+      //                                doesn't fire, emit
+      //                                camera_preserved.
+      if (_initialFitState === 'awaiting_container') {
+        var cr = null;
+        try {
+          if (container && typeof container.getBoundingClientRect === 'function') {
+            cr = container.getBoundingClientRect();
+          }
+        } catch (_) { cr = null; }
+        if (cr && cr.width > 0 && cr.height > 0) {
+          _transitionTo('stabilising');
+          _stabilisationStartTs = (typeof Date !== 'undefined' && typeof Date.now === 'function')
+            ? Date.now() : 0;
+          _emitLifecycleDiagnostic(DIAG_ENGINE_INITIAL_STABILISATION_STARTED);
+          _scheduleNextStabilisationFrame();
+        }
+        return;
+      }
+      if (_initialFitState === 'blocked_zero_container') {
+        var crBlocked = null;
+        try {
+          if (container && typeof container.getBoundingClientRect === 'function') {
+            crBlocked = container.getBoundingClientRect();
+          }
+        } catch (_) { crBlocked = null; }
+        if (crBlocked && crBlocked.width > 0 && crBlocked.height > 0) {
+          // Fresh start of initial stabilisation — reset stability
+          // state, reset DOM attr to 'pending', re-arm the safety
+          // cap from now, and schedule the first readiness frame.
+          _lastFitSnapshot = null;
+          _stableFrameCount = 0;
+          _revealSnapshot  = null;
+          _transitionTo('stabilising');
+          try {
+            container.setAttribute('data-initial-fit', 'pending');
+          } catch (_) { /* swallow */ }
+          _stabilisationStartTs = (typeof Date !== 'undefined' && typeof Date.now === 'function')
+            ? Date.now() : 0;
+          _armInitialSafetyCap();
+          _emitLifecycleDiagnostic(DIAG_ENGINE_INITIAL_STABILISATION_STARTED);
+          _scheduleNextStabilisationFrame();
+        }
+        return;
+      }
+      if (_initialFitState === 'stabilising') {
+        return;
+      }
+      // Steady-state path (revealed / forced_reveal_*).
+      try { cy.resize(); } catch (_) { /* swallow */ }
+      _emitLifecycleDiagnostic(DIAG_ENGINE_CY_RESIZE_CALLED);
+      if (_tryPostRevealCorrection()) return;
+      _emitLifecycleDiagnostic(DIAG_ENGINE_CAMERA_PRESERVED_ON_RESIZE);
+    }
+
+    if (typeof window.ResizeObserver === 'function') {
+      try {
+        resizeObs = new window.ResizeObserver(_onContainerResize);
+        resizeObs.observe(container);
+      } catch (_) { resizeObs = null; }
+    }
+
+    // ── Initial state decision + safety cap ──
+    //
+    // D37ah-readiness-gated-initial-fit — Replace the D37af time-
+    // gated stabilisation loop with a readiness-gated two-mode
+    // lifecycle. Mount-time decision:
+    //
+    //   • Container has positive width AND height
+    //       → transition to 'stabilising'; the readiness rAF loop
+    //         takes over.
+    //   • Container has zero width or height
+    //       → remain in 'awaiting_container'; the ResizeObserver is
+    //         responsible for promoting state once the container
+    //         gains size. Emit DIAG_ENGINE_INITIAL_MOUNT_CONTAINER_UNSIZED
+    //         so dev tools can observe the deferred path.
+    var initialContainerRect = null;
+    try {
+      if (container && typeof container.getBoundingClientRect === 'function') {
+        initialContainerRect = container.getBoundingClientRect();
+      }
+    } catch (_) { initialContainerRect = null; }
+    _stabilisationStartTs = (typeof Date !== 'undefined' && typeof Date.now === 'function')
+      ? Date.now() : 0;
+    if (initialContainerRect &&
+        initialContainerRect.width > 0 &&
+        initialContainerRect.height > 0) {
+      _transitionTo('stabilising');
+      _emitLifecycleDiagnostic(DIAG_ENGINE_INITIAL_STABILISATION_STARTED);
+      _scheduleNextStabilisationFrame();
+    } else {
+      // Stay in 'awaiting_container'; ResizeObserver will promote.
+      _emitLifecycleDiagnostic(DIAG_ENGINE_INITIAL_MOUNT_CONTAINER_UNSIZED);
+    }
+
+    // D37ai-blocked-container-recovery — Arm the single external
+    // safety-cap timer via the shared helper. The helper applies the
+    // three-way SAFETY-CAP RULE at firing time and is also called
+    // from the ResizeObserver blocked → stabilising recovery branch
+    // to re-arm the cap from the recovery moment.
+    _armInitialSafetyCap();
 
     return handle;
   }

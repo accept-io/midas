@@ -110,9 +110,15 @@ func TestExplorer_D37fRichCard_IconUsesInlineSvgHelper(t *testing.T) {
 		t.Errorf("D37f-rich-card: _buildHtmlCard must call `icons.inlineSvg(iconKey, ...)` for HTML embedding — body was:\n%s", body)
 	}
 	// Title field passed for screen-reader / hover accessibility.
-	if !strings.Contains(body, "title:  _nodeTypeLabel(d.kind") &&
-		!strings.Contains(body, "title: _nodeTypeLabel(d.kind") {
-		t.Errorf("D37f-rich-card: inlineSvg call must pass `title: _nodeTypeLabel(d.kind ...)` so the SVG carries an accessible <title> — body was:\n%s", body)
+	// D37at2-followup-t1 migrated the kind-label source from the
+	// local _nodeTypeLabel switch to the adapter-backed nodeKindLabel
+	// wrapper; the SVG <title> still carries the same operator-visible
+	// label for every Authority kind (and the canonical convergence
+	// for fail_mode_policy from 'Fail-Mode Policy' to 'Fail Mode
+	// Policy').
+	if !strings.Contains(body, "title:  nodeKindLabel(d.kind") &&
+		!strings.Contains(body, "title: nodeKindLabel(d.kind") {
+		t.Errorf("D37f-rich-card / D37at2-followup-t1: inlineSvg call must pass `title: nodeKindLabel(d.kind ...)` so the SVG carries an accessible <title> resolved from the canonical adapter — body was:\n%s", body)
 	}
 }
 

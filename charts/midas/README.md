@@ -84,6 +84,10 @@ These values **must** be supplied for a functional production deployment:
 | `midas.server.headless` | `true` | API-only mode; disables Explorer, local IAM, OIDC |
 | `midas.server.explorerEnabled` | `false` | Enable the Explorer sandbox UI at `/explorer` |
 | `midas.store.backend` | `postgres` | Store backend: `memory` or `postgres` |
+| `midas.store.maxOpenConns` | `25` | Per-replica maximum open Postgres connections |
+| `midas.store.maxIdleConns` | `5` | Per-replica idle Postgres connection pool size |
+| `midas.store.connMaxLifetime` | `30m` | Maximum connection lifetime before database/sql retires it |
+| `midas.store.connMaxIdleTime` | `5m` | Maximum idle duration before database/sql closes an idle connection |
 | `midas.auth.mode` | `required` | Auth mode: `open` (dev) or `required` (production) |
 | `midas.localIam.enabled` | `false` | Enable Local IAM for browser-based login |
 | `midas.localIam.secureCookies` | `false` | **MUST be `true` when running behind TLS.** Production-profile deployments fail config validation at startup if `localIam.enabled` is `true` and this is `false`. |
@@ -147,6 +151,67 @@ MIDAS runs schema migrations automatically at startup via `EnsureSchema`. No sep
 The readiness probe (`/readyz`) performs a Postgres ping with a two-second timeout. Pods will not receive traffic until the database is reachable.
 
 Expected DSN format: `postgres://user:password@host:5432/dbname?sslmode=require`
+
+### Pool sizing for high-write runtime use
+
+The chart now exposes the same Postgres pool controls that MIDAS validates and
+logs at startup:
+
+```yaml
+midas:
+  store:
+    maxOpenConns: 25
+    maxIdleConns: 5
+    connMaxLifetime: "30m"
+    connMaxIdleTime: "5m"
+```
+
+These values are per replica. Keep total application connections within the
+database budget:
+
+```text
+replicaCount * midas.store.maxOpenConns <= postgres_max_connections - reserved_headroom
+```
+
+Reserve headroom for Postgres superuser access, migration/admin sessions,
+monitoring, incident response, and failover. For example, with a database
+connection budget of 100 and 20 reserved connections, four MIDAS replicas at
+`maxOpenConns: 20` consume the full remaining application budget. Raising
+replicas or pool size beyond that can move queueing from the app into Postgres.
+
+Local D38i sustained-load evidence after audit/outbox batching showed:
+
+- default pool, concurrency 8: acceptable local posture with no pool waits in
+  the sample and p99 around 65 ms;
+- default pool, concurrency 16: tail-latency concern, with p99 around 239 ms
+  and transaction callback/commit time rising;
+- constrained pool, concurrency 16 with `maxOpenConns: 5`: severe pool
+  saturation, rising `midas_database_pool_wait_count_total`, roughly 958 s of
+  cumulative pool wait, and client-side timeouts.
+
+These are local Docker measurements, not production SLOs. Use them as a
+diagnostic pattern: compare request p95/p99 with
+`midas_store_transaction_stage_duration_seconds`, pool wait metrics, and
+Postgres-native telemetry before changing pool sizes.
+
+Operational interpretation:
+
+- Rising `midas_database_pool_wait_count_total` or
+  `midas_database_pool_wait_duration_seconds_total` means requests waited for a
+  database connection.
+- `midas_database_pool_in_use_connections` near
+  `midas_database_pool_max_open_connections` with low idle connections means the
+  per-replica pool is saturated.
+- Rising transaction `begin` points to pool acquisition, database accept, or
+  network pressure.
+- Rising transaction `callback` points to repository persistence work.
+- Rising transaction `commit` points toward durable write, WAL/fsync, or index
+  maintenance pressure.
+- Rising `midas_outbox_unpublished_total` or oldest unpublished age means the
+  dispatcher/downstream path is behind. It does not by itself prove
+  `/v1/evaluate` response latency is outbox-publication-bound.
+- Redis/read-model caching does not reduce governed transaction commits, WAL,
+  audit rows, outbox rows, or envelope writes.
 
 ## Auth token format
 
@@ -213,7 +278,10 @@ helm install midas charts/midas \
 The default is one replica. Do not increase `replicaCount` without considering:
 
 - **Memory backend:** each replica has independent in-memory state. Multiple replicas with `backend: memory` will produce inconsistent results.
-- **Postgres backend:** horizontal scaling is not yet documented or tested by the MIDAS project. Use `replicaCount: 1` unless you have validated the behaviour.
+- **Postgres backend:** every replica writes durable governed evidence for
+  successful evaluations. Use `replicaCount: 1` until you have validated your
+  Postgres connection budget, WAL/commit posture, outbox dispatcher capacity,
+  and p95/p99 latency under target-shaped load.
 
 ## Health probes
 

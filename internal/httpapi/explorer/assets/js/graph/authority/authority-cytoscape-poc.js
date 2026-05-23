@@ -234,20 +234,21 @@
 
   // ── D33a-spike-2 — Display helpers for rich themes ───────────────────
   //
-  // _nodeTypeLabel returns the operator-facing display name for a kind.
-  // Used by the rich themes to compose a two-line label (Title / TYPE)
-  // and by the HTML overlay to render the type chip.
-  function _nodeTypeLabel(kind) {
-    switch (kind) {
-      case 'business_service':  return 'Business Service';
-      case 'decision_surface':  return 'Decision Surface';
-      case 'authority_profile': return 'Authority Profile';
-      case 'authority_grant':   return 'Authority Grant';
-      case 'agent':             return 'Agent';
-      case 'fail_mode_policy':  return 'Fail-Mode Policy';
-      case 'escalation_target': return 'Escalation Target';
-      default:                  return String(kind || '').replace(/_/g, ' ');
+  // nodeKindLabel returns the operator-facing display name for a kind.
+  // The canonical table lives in authority-graph-adapter.js
+  // (NODE_KIND_LABELS); this helper is a thin call-site wrapper that
+  // resolves through the adapter so the rich-theme label, the HTML-
+  // card kind chip, and the HTML-card icon title all converge on the
+  // same vocabulary as the drawer, the legend, and the view payload.
+  // Falls back to the previous underscore→space form when the adapter
+  // is unavailable or the kind is not in the canonical table.
+  function nodeKindLabel(kind) {
+    var adapter = window.MIDASExplorerGraph && window.MIDASExplorerGraph.authorityAdapter;
+    if (adapter && typeof adapter.nodeKindLabel === 'function') {
+      var label = adapter.nodeKindLabel(kind);
+      if (label && label !== String(kind || '')) return label;
     }
+    return String(kind || '').replace(/_/g, ' ');
   }
 
   // _displayLabel truncates a node label for in-card display so long
@@ -324,16 +325,11 @@
   // approximation of the Palantir Title+Subtitle composition; a
   // future HTML overlay tranche can render mixed typography if
   // needed.
-  var _NODE_SUBTITLES = {
-    business_service:  'Business Service',
-    decision_surface:  'Decision Surface',
-    authority_profile: 'Authority Profile',
-    authority_grant:   'Authority Grant',
-    agent:             'Agent',
-    fail_mode_policy:  'Fail-Mode Policy',
-    escalation_target: 'Escalation Target',
-  };
-
+  //
+  // The subtitle vocabulary is sourced from the canonical
+  // authority-graph-adapter.js NODE_KIND_LABELS table; this helper
+  // returns '' for unknown kinds so _displayCardLabel degrades to
+  // a title-only label rather than echoing a raw kind id.
   function _nodeSubtitle(ele) {
     if (!ele) return '';
     var kind = '';
@@ -343,7 +339,11 @@
       var d = ele.data || ele;
       kind = String(d.kind || '');
     }
-    return _NODE_SUBTITLES[kind] || '';
+    if (!kind) return '';
+    var adapter = window.MIDASExplorerGraph && window.MIDASExplorerGraph.authorityAdapter;
+    if (!adapter || typeof adapter.nodeKindLabel !== 'function') return '';
+    var label = adapter.nodeKindLabel(kind);
+    return (label === kind) ? '' : label;
   }
 
   // _displayCardLabel composes the native two-line thin-card label:
@@ -2334,7 +2334,7 @@
       iconEl.setAttribute('aria-hidden', 'true');
       iconEl.innerHTML = icons.inlineSvg(iconKey, {
         size:   18,
-        title:  _nodeTypeLabel(d.kind || ''),
+        title:  nodeKindLabel(d.kind || ''),
       });
       headerEl.appendChild(iconEl);
     }
@@ -2343,7 +2343,7 @@
     var kindEl = document.createElement('span');
     kindEl.className = 'cytoscape-poc-html-card-kind';
     kindEl.classList.add('authority-html-card-kind');
-    kindEl.textContent = _nodeTypeLabel(d.kind || '');
+    kindEl.textContent = nodeKindLabel(d.kind || '');
 
     var titleEl = document.createElement('div');
     titleEl.className = 'cytoscape-poc-html-card-title';
@@ -2919,7 +2919,7 @@
     // selectors so hover / select / path-emphasis behave identically.
 
     // Rich themes get a richer two-line label "Title\nTYPE LABEL".
-    // The label function references _displayLabel + _nodeTypeLabel so
+    // The label function references _displayLabel + nodeKindLabel so
     // long ids truncate without overflowing and the kind reads as an
     // implicit subtitle. html-card empties the label because the HTML
     // overlay carries the visible text.
@@ -2930,7 +2930,7 @@
         selector: 'node',
         style: {
           'label': function (ele) {
-            return _displayLabel(ele) + '\n' + _nodeTypeLabel(ele.data('kind')).toUpperCase();
+            return _displayLabel(ele) + '\n' + nodeKindLabel(ele.data('kind')).toUpperCase();
           },
           'text-valign':   (themeName === 'object-card-v2') ? 'bottom' : 'center',
           'text-margin-y': (themeName === 'object-card-v2') ? -8 : 0,
@@ -4306,20 +4306,23 @@
     _authorityKindIconKeys:    _AUTHORITY_KIND_ICON_KEYS,
     _iconForKind:              _iconForKind,
     // D33a-spike-2 — display helpers + HTML overlay lifecycle.
+    // (D37at2-followup-t1 — _nodeTypeLabel removed; all Cytoscape-
+    // native kind-label readers resolve through nodeKindLabel(), which
+    // delegates to authority-graph-adapter.js NODE_KIND_LABELS.)
     _displayLabel:             _displayLabel,
-    _nodeTypeLabel:            _nodeTypeLabel,
     // D33a-spike-2g-impl-4 — thin-card title normaliser and connector
     // hover label vocabulary. Exposed for in-browser diagnostics.
     _displayTitle:             _displayTitle,
     _displayEdgeLabel:         _displayEdgeLabel,
     _authorityEdgeHoverLabels: _AUTHORITY_EDGE_HOVER_LABELS,
     // D33a-spike-2g-impl-4a — two-line thin-card label composer +
-    // controlled subtitle vocabulary. (Retained for diagnostics and
-    // future workbench breadcrumb work; the impl-4c visible card
-    // label uses _displayTitle directly, not _displayCardLabel.)
+    // subtitle helper. (Retained for diagnostics and future workbench
+    // breadcrumb work; the impl-4c visible card label uses
+    // _displayTitle directly, not _displayCardLabel. The previous
+    // _NODE_SUBTITLES table was removed by D37at2-followup-t1; the
+    // subtitle vocabulary is now sourced from the canonical adapter.)
     _displayCardLabel:         _displayCardLabel,
     _nodeSubtitle:             _nodeSubtitle,
-    _nodeSubtitles:            _NODE_SUBTITLES,
     // D33a-spike-2g-impl-4c — right-side strategic symbol model.
     _strategicSymbolsForNode:  _strategicSymbolsForNode,
     _authoritySymbolKeys:      _AUTHORITY_SYMBOL_KEYS,

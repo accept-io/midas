@@ -694,6 +694,12 @@
                       data-authority-tab="overview"
                       role="tab"
                       aria-selected="true">Overview</button>
+              <!-- D37av2-prereq — Authority projection-wide Surface Posture clickable list. Pre-tranche it lived in the legacy right-rail "Posture & Help" tab, which is being decommissioned. The Workbench Posture tab is the strategic home; click-to-select / focus behaviour preserved by authority-surface-posture-panel.js. -->
+              <button type="button"
+                      class="gmap-authority-workbench-tab"
+                      data-authority-tab="posture"
+                      role="tab"
+                      aria-selected="false">Posture</button>
               <button type="button"
                       class="gmap-authority-workbench-tab"
                       data-authority-tab="fail-mode"
@@ -1714,12 +1720,16 @@
 <script src="/explorer/assets/js/vendor/cytoscape.min.js"></script>
 <!-- D37r-tranche-B' — Shared Cytoscape HTML overlay module. One lens-agnostic implementation of the Cytoscape overlay mechanism (position sync, viewport-event subscription, selected/hover class application, teardown). Used by the graph engine module as its overlay component; Authority's still-direct consumption remains (whitelisted by the engine's strategic-rule test pending tranche B''-Authority). Loaded BEFORE the engine module and BEFORE Context renderer / Authority overlay so all consumers find `graphCytoscapeOverlay` already initialised at their IIFE eval time. -->
 <script src="/explorer/assets/js/graph/graph-platform/graph-cytoscape-overlay.js"></script>
+<!-- D37x-engine-node-geometry-contract — Shared native label helper. Pure deterministic helper that takes a display label + declared node body dimensions and returns a label string truncated to fit inside the body at the engine's native-label font/line/padding constants. Lenses that opt into native Cytoscape labels feed each node's `data.label` through this helper BEFORE writing it to cy data; lenses that paint via an HTML overlay leave `data.label` absent and the engine's `label: ''` default applies. Loaded before the engine module so the engine can expose the helper's constants and before lens consumers. -->
+<script src="/explorer/assets/js/graph/graph-platform/graph-native-labels.js"></script>
 <!-- D37r-tranche-B'' — Shared Graph Engine platform module. One Cytoscape instantiation, one mount lifecycle, one coordinate frame, one overlay alignment mechanism. Lenses supply data, templates, and adapters; the engine owns the engine. Loaded AFTER the vendor script (so `window.cytoscape` is defined at IIFE eval) and AFTER the overlay module (used internally), and BEFORE every lens consumer (Context renderer in this tranche; Authority migration in tranche B''-Authority). The strategic rule "no graph lens may instantiate Cytoscape directly" is encoded as a source-contract test with Authority whitelisted pending migration. -->
 <script src="/explorer/assets/js/graph/graph-platform/graph-cytoscape-engine.js"></script>
 <!-- D37o-impl-2 — Strategic Context renderer skeleton. Registers with GraphViewport as `context`; activates only under `?contextRenderer=strategic`. Legacy native Context renderer remains the default. -->
 <script src="/explorer/assets/js/graph/context/context-cytoscape-renderer.js"></script>
 <!-- D37p-pane-1 — Shared Selected-Object Pane Shell. Lens-aware coordination layer: provider registry, locked PANE_MODES (auto / pinned / hidden), locked event vocabulary, subscription to graphSelectionBridge. Context registers itself as the 'context' provider; Authority / Knowledge providers register from their own modules in later tranches. Loaded after graph-selection-bridge.js and before context-selected-object-pane.js so the Context provider can register against an already-initialised shell. -->
 <script src="/explorer/assets/js/graph/graph-platform/graph-selected-object-pane.js"></script>
+<!-- D37as-strategic-node-pane-contract-impl — Composite lens-registration helper. One entry point that wires viewport / selection-bridge / camera-bus / selected-object-pane / drawer for a future graph lens. Carries zero domain vocabulary. Authority and Context continue to use their own per-surface registrations in this tranche; the helper is forward-compat for Knowledge / Risk / Dependency / user-composed lenses. Loaded after the five surfaces it composes. -->
+<script src="/explorer/assets/js/graph/graph-platform/graph-lens-registry.js"></script>
 <!-- D37o-impl-6 — Context Selected-Object Pane. Consumes contextSelectionBridge + contextProjection; renders Summary / Details / Actions / Relationships / Evidence sections. Drawer + tray + Authority canvas-edge tabs remain unchanged. D37p-pane-1 added a one-time provider registration: after the Context pane finishes its existing init, it calls graphSelectedObjectPane.registerLensProvider('context', provider) so cross-lens UI can read pane state from one platform surface. -->
 <script src="/explorer/assets/js/graph/context/context-selected-object-pane.js"></script>
 <!-- D32b-impl-1 — Authority Graph lens modules. Adapter owns lens-

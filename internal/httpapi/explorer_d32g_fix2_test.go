@@ -106,15 +106,25 @@ func TestExplorer_D32gFix2_NoSecondaryRowChromeForAuthority(t *testing.T) {
 	}
 }
 
-// TestExplorer_D32gFix2_DrawerStillCarriesAuthorityContent confirms
-// the shared drawer's Posture & Help tab still renders Authority
-// content (legend + summary + layer chips + posture). All four
-// sections must be wired by the view's drawer registration.
+// TestExplorer_D32gFix2_DrawerStillCarriesAuthorityContent originally
+// pinned that the right-rail Posture & Help tab wired the legend +
+// summary + layer chips + posture content.
+//
+// D37av2-prereq-authority-rail-decommission-content-impl flipped this
+// test to negative pins: the Authority drawer view no longer wires
+// the Posture & Help tab. Surface Posture moved to the Workbench
+// Posture tab (graph-native projection-wide operational surface);
+// Diagnostics is duplicated by Workbench Overview + Evidence; summary
+// pills are duplicated by Workbench Overview; layer chips and graph
+// legend are no longer mounted as live runtime UI; help framing is
+// owned by the OSS Help module (toolbar Help button →
+// /help/static/graphs/authority-graph/). Only the inspector slot
+// remains registered on the Authority drawer.
 func TestExplorer_D32gFix2_DrawerStillCarriesAuthorityContent(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
 	viewJS := getExplorerAsset(t, srv, "/explorer/assets/js/graph/authority/authority-graph-view.js")
-	for _, want := range []string{
+	for _, banned := range []string{
 		`label: 'Posture & Help'`,
 		`data-authority-surface-posture`,
 		`data-authority-summary-mount`,
@@ -124,8 +134,8 @@ func TestExplorer_D32gFix2_DrawerStillCarriesAuthorityContent(t *testing.T) {
 		`overlays.renderSummaryInto`,
 		`overlays.renderLayerChipsInto`,
 	} {
-		if !strings.Contains(viewJS, want) {
-			t.Errorf("D32g-fix-2: drawer Posture & Help tab must still wire %q (content moved into the shared drawer, not removed)", want)
+		if strings.Contains(viewJS, banned) {
+			t.Errorf("D37av2-prereq: Authority drawer view must not wire %q — Posture & Help drawer tab decommissioned; Surface Posture moved to Workbench Posture tab", banned)
 		}
 	}
 }

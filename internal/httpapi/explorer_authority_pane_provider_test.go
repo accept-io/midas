@@ -510,3 +510,267 @@ func TestExplorer_D37pAuthority2_CanvasEdgeScriptLoadedOnce(t *testing.T) {
 		t.Errorf("D37p-authority-2-impl: authority-canvas-edge-tabs.js must be loaded exactly once (found %d)", c)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// D37ak-graph-native-tabs-contract-impl — Authority provider migrated onto
+// the formal GraphTabConfig contract.
+//
+// Pins:
+//   • AUTHORITY_TAB_CONFIG declared as a module-level constant
+//   • config.enabled = true; defaultTab = 'details'
+//   • config.items contains exactly three entries — details, authority,
+//     evidence — each with id / label / provider / supports
+//   • support lists cover the Authority kind vocabulary; evidence
+//     supports ['*']
+//   • the provider object exposes `tabs: AUTHORITY_TAB_CONFIG`
+//   • openTab() / closePane() forward into shell.setActiveTab so the
+//     shell shadow stays aligned with canvas-edge intent
+//   • diagnostic export surfaces _AUTHORITY_TAB_CONFIG
+//   • the canvas-edge module does not duplicate the shell's tab-config
+//     introspection helpers (no parallel getTabs / getDefaultTab here)
+//
+// All previous D37p-authority-2-impl invariants are preserved
+// unchanged; the migration adds a declarative `tabs` field plus the
+// shell-shadow sync calls.
+
+// ── M. Declarative tab config ──────────────────────────────────────
+
+func TestExplorer_D37ak_Authority_TabConfigDeclared(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	js := getExplorerAsset(t, srv, d37pAuth2EdgeAsset)
+
+	if !strings.Contains(js, "var AUTHORITY_TAB_CONFIG = {") {
+		t.Errorf("D37ak-graph-native-tabs-contract-impl: AUTHORITY_TAB_CONFIG must be declared as a module-level constant")
+	}
+	for _, want := range []string{
+		"enabled:    true,",
+		"defaultTab: 'details',",
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("D37ak-graph-native-tabs-contract-impl: AUTHORITY_TAB_CONFIG must declare %q", want)
+		}
+	}
+}
+
+func TestExplorer_D37ak_Authority_TabItems(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	js := getExplorerAsset(t, srv, d37pAuth2EdgeAsset)
+
+	// Extract the AUTHORITY_TAB_CONFIG block to scope the pins.
+	startIdx := strings.Index(js, "var AUTHORITY_TAB_CONFIG = {")
+	if startIdx < 0 {
+		t.Fatal("D37ak-graph-native-tabs-contract-impl: AUTHORITY_TAB_CONFIG must be declared")
+	}
+	tail := js[startIdx:]
+	// Find the closing '};' that ends the config literal. The next
+	// `\n  var _paneProvider` marker is a robust delimiter — the
+	// config sits between AUTHORITY_TAB_CONFIG and the provider.
+	endIdx := strings.Index(tail, "var _paneProvider")
+	if endIdx < 0 {
+		t.Fatalf("D37ak-graph-native-tabs-contract-impl: AUTHORITY_TAB_CONFIG must precede _paneProvider")
+	}
+	cfg := tail[:endIdx]
+
+	// Three tab items: details / authority / evidence.
+	for _, want := range []string{
+		"id:       'details',",
+		"id:       'authority',",
+		"id:       'evidence',",
+		"label:    'Details',",
+		"label:    'Authority',",
+		"label:    'Evidence',",
+		"provider: 'authority.details',",
+		"provider: 'authority.authority',",
+		"provider: 'authority.evidence',",
+	} {
+		if !strings.Contains(cfg, want) {
+			t.Errorf("D37ak-graph-native-tabs-contract-impl: AUTHORITY_TAB_CONFIG.items must declare %q", want)
+		}
+	}
+	// supports lists.
+	if !strings.Contains(cfg, "supports: [\n          'business_service',\n          'decision_surface',\n          'authority_profile',\n          'authority_grant',\n          'agent',\n          'fail_mode_policy',\n          'escalation_target',\n        ],") {
+		t.Errorf("D37ak-graph-native-tabs-contract-impl: details tab supports must cover the Authority eligible-kind vocabulary")
+	}
+	if !strings.Contains(cfg, "supports: ['*'],") {
+		t.Errorf("D37ak-graph-native-tabs-contract-impl: evidence tab supports must be ['*'] (wildcard)")
+	}
+	// The exact count of supports lists should be three (one per tab).
+	if got := strings.Count(cfg, "supports:"); got != 3 {
+		t.Errorf("D37ak-graph-native-tabs-contract-impl: AUTHORITY_TAB_CONFIG must have exactly 3 supports lists (one per tab); got %d", got)
+	}
+}
+
+// ── N. Provider exposes the formal config ──────────────────────────
+
+func TestExplorer_D37ak_Authority_ProviderExposesTabsField(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	js := getExplorerAsset(t, srv, d37pAuth2EdgeAsset)
+
+	// The provider literal must include `tabs: AUTHORITY_TAB_CONFIG`.
+	startIdx := strings.Index(js, "var _paneProvider")
+	if startIdx < 0 {
+		t.Fatalf("D37ak-graph-native-tabs-contract-impl: provider object must be declared")
+	}
+	endIdx := strings.Index(js[startIdx:], "function _registerWithSharedPaneShell")
+	if endIdx < 0 {
+		t.Fatalf("D37ak-graph-native-tabs-contract-impl: provider block must end before _registerWithSharedPaneShell")
+	}
+	providerBlock := js[startIdx : startIdx+endIdx]
+
+	if !strings.Contains(providerBlock, "tabs: AUTHORITY_TAB_CONFIG") {
+		t.Errorf("D37ak-graph-native-tabs-contract-impl: provider must expose `tabs: AUTHORITY_TAB_CONFIG`")
+	}
+	// The legacy `sections` field is preserved for backward-compat
+	// introspection tools (D37p-authority-2-impl invariant).
+	if !strings.Contains(providerBlock, "sections:") {
+		t.Errorf("D37ak-graph-native-tabs-contract-impl: provider must retain its sections field (preserved from D37p-authority-2-impl)")
+	}
+}
+
+// ── O. Shell sync on openTab/closePane ─────────────────────────────
+
+func TestExplorer_D37ak_Authority_OpenTabSyncsShellShadow(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	js := getExplorerAsset(t, srv, d37pAuth2EdgeAsset)
+
+	// openTab must end with a _syncShellActiveTab(tabId) call.
+	if !regexp.MustCompile(`(?s)function openTab\(tabId\)[\s\S]*?_syncShellActiveTab\(tabId\);\s*\n  \}`).MatchString(js) {
+		t.Errorf("D37ak-graph-native-tabs-contract-impl: openTab must end by calling _syncShellActiveTab(tabId) so the shell shadow stays aligned")
+	}
+	// closePane must clear the shadow via _syncShellActiveTab(null).
+	if !regexp.MustCompile(`(?s)function closePane\(\)[\s\S]*?_syncShellActiveTab\(null\);\s*\n  \}`).MatchString(js) {
+		t.Errorf("D37ak-graph-native-tabs-contract-impl: closePane must end by calling _syncShellActiveTab(null) so the shell shadow clears")
+	}
+	// The sync helper itself must defend against the shell being
+	// unavailable.
+	if !regexp.MustCompile(`function _syncShellActiveTab\(tabId\)\s*\{[\s\S]*?if \(!shell \|\| typeof shell\.setActiveTab !== 'function'\) return;[\s\S]*?shell\.setActiveTab\(tabId, 'authority'\);`).MatchString(js) {
+		t.Errorf("D37ak-graph-native-tabs-contract-impl: _syncShellActiveTab must defensively short-circuit when the shell is unavailable")
+	}
+}
+
+// ── P. Diagnostic export ───────────────────────────────────────────
+
+func TestExplorer_D37ak_Authority_DiagnosticExportsAuthorityTabConfig(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	js := getExplorerAsset(t, srv, d37pAuth2EdgeAsset)
+
+	if !strings.Contains(js, "_AUTHORITY_TAB_CONFIG: AUTHORITY_TAB_CONFIG,") {
+		t.Errorf("D37ak-graph-native-tabs-contract-impl: canvas-edge diagnostic surface must export _AUTHORITY_TAB_CONFIG")
+	}
+}
+
+// ── Q. Authority module does not duplicate shell helpers ───────────
+
+func TestExplorer_D37ak_Authority_DoesNotDuplicateShellHelpers(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	js := getExplorerAsset(t, srv, d37pAuth2EdgeAsset)
+
+	// The Authority module must not declare any parallel introspection
+	// helpers — those live on the shell. (Function declarations only;
+	// referencing the shell's methods is allowed.)
+	for _, banned := range []string{
+		"function getTabConfig(",
+		"function getTabs(",
+		"function getDefaultTab(",
+		"function tabSupportsKind(",
+		"function buildSelectionContext(",
+	} {
+		if strings.Contains(js, banned) {
+			t.Errorf("D37ak-graph-native-tabs-contract-impl: Authority module must not duplicate shell helper %q (use graphSelectedObjectPane instead)", banned)
+		}
+	}
+}
+
+// ── R. Legacy letterbox guard (D37ak does not touch the drawer) ────
+
+func TestExplorer_D37ak_LegacyLetterboxUnchanged(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	body := performRequest(t, srv, http.MethodGet, "/explorer", nil).Body.String()
+
+	// Right-side letterbox markup remains intact — D37ak does NOT
+	// remove or disable it.
+	for _, want := range []string{
+		`id="gmap-details"`,
+		`class="governance-map-details gmap-right-rail"`,
+		`data-rail-tab="inspector"`,
+		`data-rail-tab="evidence"`,
+		`data-rail-tab="config"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D37ak-graph-native-tabs-contract-impl: legacy right-rail markup %q must remain (this tranche does not retire the letterbox)", want)
+		}
+	}
+	// Drawer + inspector modules remain served.
+	for _, asset := range []string{
+		"/explorer/assets/js/graph/graph-drawer.js",
+		"/explorer/assets/js/graph/graph-inspector.js",
+	} {
+		if len(getExplorerAsset(t, srv, asset)) == 0 {
+			t.Errorf("D37ak-graph-native-tabs-contract-impl: %q must remain served", asset)
+		}
+	}
+}
+
+// ── S. Engine isolation guard ──────────────────────────────────────
+
+func TestExplorer_D37ak_EngineSurfaceUntouched(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+
+	// Pin a few load-bearing engine markers; if D37ak silently
+	// touched any of these, the markers would shift.
+	engineJs := getExplorerAsset(t, srv, "/explorer/assets/js/graph/graph-platform/graph-cytoscape-engine.js")
+	for _, want := range []string{
+		"function _runFitPipeline(source, phase)",
+		"function _onContainerResize()",
+		"function _armInitialSafetyCap()",
+		"DIAG_ENGINE_INITIAL_REVEAL",
+		"INITIAL_FIT_SAFETY_MS",
+	} {
+		if !strings.Contains(engineJs, want) {
+			t.Errorf("D37ak-graph-native-tabs-contract-impl: engine marker %q must remain present (this tranche does not modify the engine)", want)
+		}
+	}
+	// And the engine itself must not now reference the new tab
+	// contract helpers — those live on the shell only.
+	for _, banned := range []string{
+		"graphSelectedObjectPane.getTabs",
+		"graphSelectedObjectPane.setActiveTab",
+		"AUTHORITY_TAB_CONFIG",
+	} {
+		if strings.Contains(engineJs, banned) {
+			t.Errorf("D37ak-graph-native-tabs-contract-impl: engine must not couple to the tab contract (%q)", banned)
+		}
+	}
+}
+
+// ── T. Context provider untouched in this tranche ──────────────────
+
+// TestExplorer_D37am_ContextProviderMigratedToTabsConfig is the
+// lockstep successor to the D37ak-era `ContextProviderNotMigrated`
+// pin. After D37am-context-tabs-config-impl, Context becomes the
+// second formal consumer of the global tab contract (Authority was
+// first). This test asserts the migration happened: Context still
+// registers as the 'context' provider AND declares a `tabs:
+// CONTEXT_TAB_CONFIG` field on the provider literal.
+func TestExplorer_D37am_ContextProviderMigratedToTabsConfig(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	ctxJs := getExplorerAsset(t, srv, d37pAuth2ContextPaneAsset)
+
+	// Context still registers as the 'context' provider.
+	if !strings.Contains(ctxJs, "registerLensProvider('context'") {
+		t.Errorf("D37am-context-tabs-config-impl: Context must remain registered")
+	}
+	// Context now declares the formal tabs config.
+	if !strings.Contains(ctxJs, "tabs: CONTEXT_TAB_CONFIG") {
+		t.Errorf("D37am-context-tabs-config-impl: Context provider must declare `tabs: CONTEXT_TAB_CONFIG` (migration completed)")
+	}
+}

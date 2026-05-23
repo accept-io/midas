@@ -85,6 +85,13 @@ midas:
     # When backend=postgres, DATABASE_URL must be provided in the secret section
     # or via an existing Secret — the deployment will not become ready without it.
     backend: postgres
+    # Postgres connection-pool controls. These are per MIDAS replica; ensure
+    # replicaCount * maxOpenConns stays within the database connection budget
+    # after reserving headroom for migrations, operators, monitoring, and failover.
+    maxOpenConns: 25
+    maxIdleConns: 5
+    connMaxLifetime: "30m"
+    connMaxIdleTime: "5m"
 
   auth:
     # mode: "open" (no authentication, development only) or "required"

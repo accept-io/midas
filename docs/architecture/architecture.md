@@ -64,6 +64,18 @@ MIDAS does not execute the business action itself. It governs whether the action
 
 The authority outcome drives downstream behaviour. An accept outcome lets the caller proceed. An escalate outcome routes the decision to a workflow system (Camunda, Temporal), a case management queue, or a human review interface. The operational envelope and audit record are available for compliance reporting, analytics dashboards, and monitoring systems. Events published by MIDAS (to Kafka or structured logs) feed operational analytics and alerting.
 
+## Database boundary
+
+Postgres is the governed system of record for Runtime decisions. Runtime writes to
+operational envelopes, audit events, outbox intent, and idempotency-critical
+state are primary-bound and authoritative. Explorer, Evidence, Graph, and Drift
+workloads are first-class consumers, but at scale their search, graph, reporting,
+and analytics reads should use read replicas, projections, or read models rather
+than unbounded access to the runtime primary.
+
+The formal decision is recorded in
+[ADR-0003: Runtime versus Explorer Database Boundary](../adr/0003-runtime-explorer-database-boundary.md).
+
 ## Core concepts
 
 ### Decision surface

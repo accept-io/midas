@@ -30,12 +30,14 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
 	_ "github.com/lib/pq"
 
 	"github.com/accept-io/midas/internal/agent"
+	"github.com/accept-io/midas/internal/audit"
 	"github.com/accept-io/midas/internal/authority"
 	"github.com/accept-io/midas/internal/businessservice"
 	"github.com/accept-io/midas/internal/capability"
@@ -45,6 +47,7 @@ import (
 	"github.com/accept-io/midas/internal/outbox"
 	"github.com/accept-io/midas/internal/policy"
 	"github.com/accept-io/midas/internal/process"
+	"github.com/accept-io/midas/internal/runtimeattr"
 	"github.com/accept-io/midas/internal/store"
 	pgstore "github.com/accept-io/midas/internal/store/postgres"
 	"github.com/accept-io/midas/internal/surface"
@@ -328,6 +331,8 @@ func TestOrchestrator_Outbox_DecisionCompleted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
+	attr := runtimeattr.NewCollector()
+	s.WithAttribution(attr)
 
 	repos, err := s.Repositories()
 	if err != nil {
@@ -339,6 +344,7 @@ func TestOrchestrator_Outbox_DecisionCompleted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewOrchestrator: %v", err)
 	}
+	orch.WithAttributionRecorder(attr)
 
 	raw := json.RawMessage(`{"request_source":"outbox-test-src","request_id":"req-outbox-accept"}`)
 	result, err := orch.Evaluate(context.Background(), outboxAcceptRequest("req-outbox-accept"), raw)
@@ -347,6 +353,36 @@ func TestOrchestrator_Outbox_DecisionCompleted(t *testing.T) {
 	}
 	if result.Outcome != eval.OutcomeAccept {
 		t.Fatalf("expected Accept outcome, got %q", result.Outcome)
+	}
+
+	env, err := repos.Envelopes.GetByID(context.Background(), result.EnvelopeID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if env == nil {
+		t.Fatalf("expected persisted envelope %q", result.EnvelopeID)
+	}
+	integrity, err := audit.VerifyEnvelopeIntegrity(context.Background(), repos.Audit, env)
+	if err != nil {
+		t.Fatalf("VerifyEnvelopeIntegrity: %v", err)
+	}
+	if !integrity.Valid {
+		t.Fatalf("expected valid audit hash chain, got %s: %s", integrity.ErrorKind, integrity.ErrorMessage)
+	}
+	if integrity.ChainLength != 10 {
+		t.Fatalf("expected unchanged 10-event audit chain, got %d", integrity.ChainLength)
+	}
+	auditEvents, err := repos.Audit.ListByEnvelopeID(context.Background(), result.EnvelopeID)
+	if err != nil {
+		t.Fatalf("ListByEnvelopeID: %v", err)
+	}
+	if len(auditEvents) != 10 {
+		t.Fatalf("expected 10 audit events, got %d", len(auditEvents))
+	}
+	for i, ev := range auditEvents {
+		if ev.SequenceNo != i+1 {
+			t.Fatalf("audit event %d sequence: got %d, want %d", i, ev.SequenceNo, i+1)
+		}
 	}
 
 	events := listOutboxEvents(t, db)
@@ -374,6 +410,31 @@ func TestOrchestrator_Outbox_DecisionCompleted(t *testing.T) {
 		}
 		if ev.PublishedAt != nil {
 			t.Errorf("events[%d]: expected published_at to be nil (unpublished)", i)
+		}
+	}
+
+	snap := attr.Snapshot()
+	if got := snap.Counts[runtimeattr.CountAuditSelect]; got != 1 {
+		t.Fatalf("audit select attribution: got %d, want 1", got)
+	}
+	if got := snap.Counts[runtimeattr.CountAuditInsert]; got != 1 {
+		t.Fatalf("audit insert attribution: got %d, want 1", got)
+	}
+	if got := snap.Counts[runtimeattr.CountEnvelopeInsert]; got != 1 {
+		t.Fatalf("envelope insert attribution: got %d, want 1", got)
+	}
+	if got := snap.Counts[runtimeattr.CountEnvelopeUpdate]; got != 1 {
+		t.Fatalf("envelope update attribution: got %d, want 1", got)
+	}
+	if got := snap.Counts[runtimeattr.CountOutboxInsertStatement]; got != 1 {
+		t.Fatalf("outbox insert statement attribution: got %d, want 1", got)
+	}
+	if got := snap.Values[runtimeattr.ValueAuditPayloadBytes].Count; got != 10 {
+		t.Fatalf("audit payload size attribution count: got %d, want 10", got)
+	}
+	for name := range snap.Values {
+		if strings.Contains(string(name), result.EnvelopeID) || strings.Contains(string(name), "req-outbox-accept") {
+			t.Fatalf("value attribution name contains high-cardinality content: %q", name)
 		}
 	}
 }
@@ -773,10 +834,10 @@ func TestOrchestrator_Outbox_RequestClarificationEmitsExternalEvents(t *testing.
 	// Profile declares a required context key. The request will not provide it,
 	// triggering INSUFFICIENT_CONTEXT → RequestClarification.
 	if err := repos.Profiles.Create(ctx, &authority.AuthorityProfile{
-		ID:        "prof-clarify-ctx-1",
-		SurfaceID: "surf-clarify-ctx-1",
-		Name:      "clarify test profile",
-		Status:    authority.ProfileStatusActive,
+		ID:                  "prof-clarify-ctx-1",
+		SurfaceID:           "surf-clarify-ctx-1",
+		Name:                "clarify test profile",
+		Status:              authority.ProfileStatusActive,
 		ConfidenceThreshold: 0.5,
 		ConsequenceThreshold: authority.Consequence{
 			Type:       value.ConsequenceTypeRiskRating,

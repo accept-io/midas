@@ -10,6 +10,7 @@ import "time"
 // persistence boundary, including begin, callback execution, and commit/rollback.
 type TransactionRecorder interface {
 	RecordTransactionDuration(operation string, outcome string, d time.Duration)
+	RecordTransactionStageDuration(operation string, stage string, result string, d time.Duration)
 	IncrementTransactionCommit(operation string)
 	IncrementTransactionRollback(operation string)
 	IncrementTransactionError(operation string, stage string)
@@ -19,8 +20,10 @@ type TransactionRecorder interface {
 type NoOpTransactionRecorder struct{}
 
 func (NoOpTransactionRecorder) RecordTransactionDuration(string, string, time.Duration) {}
-func (NoOpTransactionRecorder) IncrementTransactionCommit(string)                       {}
-func (NoOpTransactionRecorder) IncrementTransactionRollback(string)                     {}
-func (NoOpTransactionRecorder) IncrementTransactionError(string, string)                {}
+func (NoOpTransactionRecorder) RecordTransactionStageDuration(string, string, string, time.Duration) {
+}
+func (NoOpTransactionRecorder) IncrementTransactionCommit(string)        {}
+func (NoOpTransactionRecorder) IncrementTransactionRollback(string)      {}
+func (NoOpTransactionRecorder) IncrementTransactionError(string, string) {}
 
 var _ TransactionRecorder = NoOpTransactionRecorder{}

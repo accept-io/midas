@@ -34,6 +34,7 @@ import (
 	"github.com/accept-io/midas/internal/decision"
 	"github.com/accept-io/midas/internal/eval"
 	"github.com/accept-io/midas/internal/policy"
+	"github.com/accept-io/midas/internal/runtimeattr"
 )
 
 // poolProfile names a connection-pool sizing the benchmark exercises.
@@ -84,6 +85,8 @@ func BenchmarkInlineEvaluate_Postgres(b *testing.B) {
 
 	cleanupPostgresTestData(b, db)
 	pgStore := mustPostgresStore(b, db)
+	attr := runtimeattr.NewCollector()
+	pgStore.WithAttribution(attr)
 	repos := mustRepositories(b, pgStore)
 	seedPostgresHappyPathData(b, repos)
 
@@ -96,7 +99,10 @@ func BenchmarkInlineEvaluate_Postgres(b *testing.B) {
 				if err != nil {
 					b.Fatalf("NewOrchestrator: %v", err)
 				}
+				orch.WithAttributionRecorder(attr)
+				attr.Reset()
 				runInlineEvaluateBench(b, orch, conc)
+				reportInlineBenchAttribution(b, attr, float64(b.N))
 			})
 		}
 	}

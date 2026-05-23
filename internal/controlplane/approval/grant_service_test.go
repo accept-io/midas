@@ -46,8 +46,17 @@ func (m *mockOutboxRepo) Append(_ context.Context, ev *outbox.OutboxEvent) error
 	return nil
 }
 
+func (m *mockOutboxRepo) AppendBatch(_ context.Context, events []*outbox.OutboxEvent) error {
+	m.appended = append(m.appended, events...)
+	return nil
+}
+
 func (m *mockOutboxRepo) ListUnpublished(_ context.Context) ([]*outbox.OutboxEvent, error) {
 	return nil, nil
+}
+
+func (m *mockOutboxRepo) BacklogStats(_ context.Context) (outbox.BacklogStats, error) {
+	return outbox.BacklogStats{}, nil
 }
 
 func (m *mockOutboxRepo) ClaimUnpublished(_ context.Context, _ int) ([]*outbox.OutboxEvent, error) {

@@ -25,13 +25,23 @@ func NewMemoryRepository() *MemoryRepository {
 }
 
 // Append adds ev to the in-memory event list. ev must not be nil.
-func (r *MemoryRepository) Append(_ context.Context, ev *OutboxEvent) error {
-	if ev == nil {
-		return fmt.Errorf("outbox: Append called with nil event")
+func (r *MemoryRepository) Append(ctx context.Context, ev *OutboxEvent) error {
+	return r.AppendBatch(ctx, []*OutboxEvent{ev})
+}
+
+// AppendBatch adds events to the in-memory event list in declaration order.
+func (r *MemoryRepository) AppendBatch(_ context.Context, events []*OutboxEvent) error {
+	if len(events) == 0 {
+		return nil
+	}
+	for _, ev := range events {
+		if ev == nil {
+			return fmt.Errorf("outbox: AppendBatch called with nil event")
+		}
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.events = append(r.events, ev)
+	r.events = append(r.events, events...)
 	return nil
 }
 
@@ -66,6 +76,32 @@ func (r *MemoryRepository) ListUnpublished(_ context.Context) ([]*OutboxEvent, e
 		}
 	}
 	return out, nil
+}
+
+// BacklogStats returns aggregate unpublished-row metrics for the in-memory
+// repository. It is used by tests and memory-mode safety checks.
+func (r *MemoryRepository) BacklogStats(_ context.Context) (BacklogStats, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var stats BacklogStats
+	var oldest time.Time
+	for _, ev := range r.events {
+		if ev.PublishedAt != nil {
+			continue
+		}
+		stats.UnpublishedCount++
+		if oldest.IsZero() || ev.CreatedAt.Before(oldest) {
+			oldest = ev.CreatedAt
+		}
+	}
+	if !oldest.IsZero() {
+		stats.OldestUnpublishedAge = time.Since(oldest)
+		if stats.OldestUnpublishedAge < 0 {
+			stats.OldestUnpublishedAge = 0
+		}
+	}
+	return stats, nil
 }
 
 // MarkPublished sets PublishedAt on the event with the given ID.

@@ -3368,26 +3368,33 @@ func TestExplorer_D32bImpl2_AuthorityPanelContainer(t *testing.T) {
 			t.Errorf("D32b-impl-3: .authority-graph-panels overlay markup must remain removed: %q", gone)
 		}
 	}
-	// Positive pin — the Authority drawer provider lives in
-	// authority-graph-view.js and emits the data-* containers into
-	// the drawer panel mount on tab activation. We assert the JS
-	// source contains the injection strings.
+	// D37av2-prereq-authority-rail-decommission-content-impl flipped
+	// these from positive to negative pins. The Authority drawer's
+	// Diagnostics + Posture & Help tabs were decommissioned; their
+	// render functions were removed from authority-graph-view.js. The
+	// strategic homes are:
+	//   • Workbench Overview (diagnostic summary counts)
+	//   • Workbench Evidence (projection-wide diagnostics)
+	//   • Workbench Posture (Surface Posture clickable list — moved by
+	//     this tranche)
+	//   • OSS Help / authority-graph (legend / glyph reference)
+	// data-authority-surface-posture now lives in the Workbench Posture
+	// tab markup (authority-graph-workbench.js), not view.js. The
+	// Workbench Posture tab is the SOLE authoritative Surface Posture
+	// home.
 	viewJS := getExplorerAsset(t, srv, "/explorer/assets/js/graph/authority/authority-graph-view.js")
-	for _, want := range []string{
+	for _, banned := range []string{
 		`data-authority-diagnostic-summary`,
 		`data-authority-diagnostics`,
 		`data-authority-surface-posture`,
+		`data-authority-summary-mount`,
+		`data-authority-layer-chips`,
+		`data-authority-legend`,
 		`_authorityRenderDiagnosticsIntoDrawer`,
-		// D32g-fix-1 renamed `_authorityRenderPostureIntoDrawer` to
-		// `_authorityRenderPostureAndHelpIntoDrawer` when the Posture
-		// tab grew to consolidate posture + summary + layer chips +
-		// legend into the shared drawer. The injection contract is
-		// preserved; only the function name reflects the broader
-		// content the tab now hosts.
 		`_authorityRenderPostureAndHelpIntoDrawer`,
 	} {
-		if !strings.Contains(viewJS, want) {
-			t.Errorf("D32b-impl-3 (post-D32g): authority-graph-view.js must inject %q into the drawer panel mount", want)
+		if strings.Contains(viewJS, banned) {
+			t.Errorf("D37av2-prereq: authority-graph-view.js must not contain decommissioned right-rail mount/render token %q (Surface Posture moved to Workbench Posture tab; Diagnostics duplicated by Workbench Overview + Evidence; summary/layers/legend retired as live runtime UI)", banned)
 		}
 	}
 }
@@ -4039,44 +4046,47 @@ func TestExplorer_D32bImpl3_LensProvidersRegistered(t *testing.T) {
 	if !strings.Contains(viewJS, "window.MIDASExplorerGraph.drawer.registerLens('authority'") {
 		t.Error("D32b-impl-3: authority-graph-view.js must register the Authority lens drawer provider")
 	}
-	// Authority labels per the D32b-impl-3 design (Inspector |
-	// Diagnostics | Posture). D32g-fix-1 relabelled the third tab to
-	// "Posture & Help" when it grew to host the consolidated posture
-	// list + full summary counts + layer toggle chips + the legend
-	// that previously lived above the canvas. D33a-spike-2g-impl-5d
-	// renamed the inspector tab user-facing label `Inspector` →
-	// `Showcase` (slot id stays 'inspector'); accept either label
-	// here so the historical pin survives the additive change while
-	// the impl-5d test (D33aSpike2gImpl5d_InspectorTabRenamedToShowcase)
-	// pins the new value exactly.
+	// Authority labels — only the inspector slot remains registered as
+	// of D37av2-prereq-authority-rail-decommission-content-impl. The
+	// Diagnostics + Posture & Help slot registrations were dropped
+	// after the corrective right-rail retirement assessment confirmed:
+	//   • Surface Posture moved to the Workbench Posture tab;
+	//   • Diagnostics is duplicated by Workbench Overview + Evidence;
+	//   • Summary pills are duplicated by Workbench Overview;
+	//   • Layer chips and Graph legend are no longer mounted as live
+	//     runtime UI;
+	//   • Help framing is owned by the OSS Help module.
+	// D33a-spike-2g-impl-5d renamed the inspector tab user-facing label
+	// `Inspector` → `Showcase` (slot id stays 'inspector'); accept
+	// either label here so the historical pin survives the additive
+	// change while the impl-5d test
+	// (D33aSpike2gImpl5d_InspectorTabRenamedToShowcase) pins the new
+	// value exactly.
 	if !strings.Contains(viewJS, "label: 'Inspector'") &&
 		!strings.Contains(viewJS, "label: 'Showcase'") {
-		t.Error("D32b-impl-3 (post-D32g, post-impl-5d): Authority drawer registration must declare label 'Inspector' or 'Showcase' for the inspector slot")
+		t.Error("D32b-impl-3 (post-D37av2-prereq): Authority drawer registration must still declare label 'Inspector' or 'Showcase' for the inspector slot (the only slot Authority registers post-tranche)")
 	}
-	for _, want := range []string{
+	// D37av2-prereq — negative pins on the decommissioned slot labels
+	// and render-function dispatches. The previous positive pins on
+	// `label: 'Diagnostics'` / `label: 'Posture & Help'` /
+	// `_authorityRenderDiagnosticsIntoDrawer` /
+	// `_authorityRenderPostureAndHelpIntoDrawer` were flipped to
+	// negative pins after this tranche dropped those entries.
+	for _, banned := range []string{
 		"label: 'Diagnostics'",
 		"label: 'Posture & Help'",
+		"_authorityRenderDiagnosticsIntoDrawer",
+		"_authorityRenderPostureAndHelpIntoDrawer",
 	} {
-		if !strings.Contains(viewJS, want) {
-			t.Errorf("D32b-impl-3 (post-D32g): Authority drawer registration must declare %q", want)
+		if strings.Contains(viewJS, banned) {
+			t.Errorf("D37av2-prereq: Authority drawer registration must not declare/dispatch %q — slot decommissioned, content moved to Workbench/OSS Help", banned)
 		}
 	}
-	// Authority Inspector tab renderer is a no-op (the existing
+	// Authority Inspector tab renderer remains a no-op (the existing
 	// #gmap-details-* DOM is populated by authorityInspector on
 	// node selection).
 	if !strings.Contains(viewJS, "void ctx; void mount;") {
 		t.Error("D32b-impl-3: Authority Inspector tab renderer is intentionally a no-op (existing DOM scaffold)")
-	}
-	// Diagnostics + Posture renderers dispatch to the panel modules.
-	for _, want := range []string{
-		"_authorityRenderDiagnosticsIntoDrawer",
-		"_authorityRenderPostureAndHelpIntoDrawer",
-		"window.MIDASExplorerGraph.authorityDiagnosticsPanel",
-		"window.MIDASExplorerGraph.authoritySurfacePosturePanel",
-	} {
-		if !strings.Contains(viewJS, want) {
-			t.Errorf("D32b-impl-3 (post-D32g): Authority drawer must dispatch to %q", want)
-		}
 	}
 }
 

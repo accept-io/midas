@@ -416,8 +416,16 @@ func (r *noopOutboxRepo) Append(_ context.Context, _ *outbox.OutboxEvent) error 
 	return nil
 }
 
+func (r *noopOutboxRepo) AppendBatch(_ context.Context, _ []*outbox.OutboxEvent) error {
+	return nil
+}
+
 func (r *noopOutboxRepo) ListUnpublished(_ context.Context) ([]*outbox.OutboxEvent, error) {
 	return nil, nil
+}
+
+func (r *noopOutboxRepo) BacklogStats(_ context.Context) (outbox.BacklogStats, error) {
+	return outbox.BacklogStats{}, nil
 }
 
 func (r *noopOutboxRepo) ClaimUnpublished(_ context.Context, _ int) ([]*outbox.OutboxEvent, error) {

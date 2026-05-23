@@ -40,6 +40,7 @@ import (
 	"github.com/accept-io/midas/internal/decision"
 	"github.com/accept-io/midas/internal/identity"
 	"github.com/accept-io/midas/internal/policy"
+	"github.com/accept-io/midas/internal/runtimeattr"
 	"github.com/accept-io/midas/internal/store/postgres"
 )
 
@@ -91,8 +92,8 @@ func benchAuthenticator() auth.Authenticator {
 //   - p50_us, p95_us, p99_us, max_us — per-request HTTP latency
 //   - ops/sec                       — sustained throughput
 //   - errors                        — count of non-2xx responses or
-//                                     post-decode errors (must be 0 on
-//                                     happy path)
+//     post-decode errors (must be 0 on
+//     happy path)
 func BenchmarkHTTPInlineEvaluate_Postgres(b *testing.B) {
 	// Silence orchestrator INFO logging for the duration of the benchmark
 	// — at thousands of ops/sec they would interleave with b.ReportMetric
@@ -107,10 +108,12 @@ func BenchmarkHTTPInlineEvaluate_Postgres(b *testing.B) {
 
 	cleanupBenchData(b, db)
 
+	attr := runtimeattr.NewCollector()
 	pgStore, err := postgres.NewStore(db, nil)
 	if err != nil {
 		b.Fatalf("postgres.NewStore: %v", err)
 	}
+	pgStore.WithAttribution(attr)
 	repos, err := pgStore.Repositories()
 	if err != nil {
 		b.Fatalf("Repositories: %v", err)
@@ -121,6 +124,7 @@ func BenchmarkHTTPInlineEvaluate_Postgres(b *testing.B) {
 	if err != nil {
 		b.Fatalf("NewOrchestrator: %v", err)
 	}
+	orch.WithAttributionRecorder(attr)
 
 	// Build a real Server with the production wiring path: full route
 	// registration, auth required, PlatformOperator role enforced on
@@ -129,14 +133,17 @@ func BenchmarkHTTPInlineEvaluate_Postgres(b *testing.B) {
 	srv := NewServerFull(orch, nil, nil, nil, nil, nil).
 		WithAuthMode(config.AuthModeRequired).
 		WithAuthenticator(benchAuthenticator()).
-		WithHandlerTimeout(30 * time.Second)
+		WithHandlerTimeout(30 * time.Second).
+		WithAttributionRecorder(attr)
 
 	for _, pool := range httpBenchPoolProfiles {
 		applyPoolForHTTPBench(db, pool)
 		for _, conc := range httpBenchConcurrencyLevels {
 			name := fmt.Sprintf("%s/concurrency=%d", pool.name, conc)
 			b.Run(name, func(b *testing.B) {
+				attr.Reset()
 				runHTTPInlineEvaluateBench(b, srv, conc)
+				reportHTTPBenchAttribution(b, attr, float64(b.N))
 			})
 		}
 	}

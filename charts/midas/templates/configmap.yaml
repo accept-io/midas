@@ -20,6 +20,10 @@ data:
 
     store:
       backend: {{ .Values.midas.store.backend | quote }}
+      max_open_conns: {{ .Values.midas.store.maxOpenConns }}
+      max_idle_conns: {{ .Values.midas.store.maxIdleConns }}
+      conn_max_lifetime: {{ .Values.midas.store.connMaxLifetime | quote }}
+      conn_max_idle_time: {{ .Values.midas.store.connMaxIdleTime | quote }}
       # dsn is supplied via MIDAS_DATABASE_URL environment variable
 
     auth:

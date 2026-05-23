@@ -2,11 +2,12 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"testing"
 	"time"
 
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 
 	"github.com/accept-io/midas/internal/outbox"
 )
@@ -95,6 +96,166 @@ func TestOutboxRepo_AppendAndListUnpublished(t *testing.T) {
 	}
 	if got.PublishedAt != nil {
 		t.Error("expected PublishedAt to be nil")
+	}
+}
+
+func TestOutboxRepo_BacklogStats(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	repo, err := NewOutboxRepo(db)
+	if err != nil {
+		t.Fatalf("NewOutboxRepo: %v", err)
+	}
+
+	old := mustNewOutboxEvent(t, outbox.EventDecisionCompleted, "envelope", "outbox-test-env-stats", "midas.decisions", "src:req-stats", json.RawMessage(`{"n":1}`))
+	newer := mustNewOutboxEvent(t, outbox.EventDecisionOutcomeRecorded, "envelope", "outbox-test-env-stats", "midas.decisions", "src:req-stats", json.RawMessage(`{"n":2}`))
+	published := mustNewOutboxEvent(t, outbox.EventDecisionEnvelopeClosed, "envelope", "outbox-test-env-stats", "midas.decisions", "src:req-stats", json.RawMessage(`{"n":3}`))
+	old.CreatedAt = time.Now().UTC().Add(-2 * time.Minute)
+	newer.CreatedAt = time.Now().UTC().Add(-10 * time.Second)
+	published.CreatedAt = time.Now().UTC().Add(-5 * time.Minute)
+
+	t.Cleanup(func() {
+		cleanupOutboxEventByID(t, old.ID)
+		cleanupOutboxEventByID(t, newer.ID)
+		cleanupOutboxEventByID(t, published.ID)
+	})
+
+	if err := repo.AppendBatch(ctx, []*outbox.OutboxEvent{old, newer, published}); err != nil {
+		t.Fatalf("AppendBatch: %v", err)
+	}
+	if err := repo.MarkPublished(ctx, published.ID); err != nil {
+		t.Fatalf("MarkPublished: %v", err)
+	}
+
+	stats, err := repo.BacklogStats(ctx)
+	if err != nil {
+		t.Fatalf("BacklogStats: %v", err)
+	}
+	if stats.UnpublishedCount < 2 {
+		t.Fatalf("UnpublishedCount: got %d, want at least 2", stats.UnpublishedCount)
+	}
+	if stats.OldestUnpublishedAge < time.Minute {
+		t.Fatalf("OldestUnpublishedAge: got %s, want at least 1m", stats.OldestUnpublishedAge)
+	}
+}
+
+func TestOutboxRepo_AppendBatch_InsertsMultipleEvents(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	repo, err := NewOutboxRepo(db)
+	if err != nil {
+		t.Fatalf("NewOutboxRepo: %v", err)
+	}
+
+	ev1 := mustNewOutboxEvent(t, outbox.EventDecisionCompleted, "envelope", "outbox-test-env-batch-1", "midas.decisions", "src:req-batch-1", json.RawMessage(`{"n":1}`))
+	ev2 := mustNewOutboxEvent(t, outbox.EventDecisionOutcomeRecorded, "envelope", "outbox-test-env-batch-1", "midas.decisions", "src:req-batch-1", json.RawMessage(`{"n":2}`))
+	ev3 := mustNewOutboxEvent(t, outbox.EventDecisionEnvelopeClosed, "envelope", "outbox-test-env-batch-1", "midas.decisions", "src:req-batch-1", json.RawMessage(`{"n":3}`))
+	baseCreatedAt := time.Now().UTC()
+	ev1.CreatedAt = baseCreatedAt
+	ev2.CreatedAt = baseCreatedAt.Add(time.Nanosecond)
+	ev3.CreatedAt = baseCreatedAt.Add(2 * time.Nanosecond)
+	t.Cleanup(func() {
+		cleanupOutboxEventByID(t, ev1.ID)
+		cleanupOutboxEventByID(t, ev2.ID)
+		cleanupOutboxEventByID(t, ev3.ID)
+	})
+
+	if err := repo.AppendBatch(ctx, []*outbox.OutboxEvent{ev1, ev2, ev3}); err != nil {
+		t.Fatalf("AppendBatch: %v", err)
+	}
+
+	rows, err := db.Query(`
+		SELECT id, event_type, aggregate_id, payload, published_at
+		FROM outbox_events
+		WHERE id = ANY($1)
+		ORDER BY created_at ASC, id ASC`,
+		pq.Array([]string{ev1.ID, ev2.ID, ev3.ID}),
+	)
+	if err != nil {
+		t.Fatalf("query batch rows: %v", err)
+	}
+	defer rows.Close()
+
+	var got []outbox.OutboxEvent
+	for rows.Next() {
+		var (
+			ev          outbox.OutboxEvent
+			payloadJSON []byte
+			publishedAt sql.NullTime
+		)
+		if err := rows.Scan(&ev.ID, &ev.EventType, &ev.AggregateID, &payloadJSON, &publishedAt); err != nil {
+			t.Fatalf("scan batch row: %v", err)
+		}
+		ev.Payload = json.RawMessage(payloadJSON)
+		if publishedAt.Valid {
+			ev.PublishedAt = &publishedAt.Time
+		}
+		got = append(got, ev)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("batch rows error: %v", err)
+	}
+
+	if len(got) != 3 {
+		t.Fatalf("got %d batch rows, want 3", len(got))
+	}
+	wantTypes := []outbox.EventType{
+		outbox.EventDecisionCompleted,
+		outbox.EventDecisionOutcomeRecorded,
+		outbox.EventDecisionEnvelopeClosed,
+	}
+	for i, ev := range got {
+		if ev.EventType != wantTypes[i] {
+			t.Errorf("row %d event_type: got %q, want %q", i, ev.EventType, wantTypes[i])
+		}
+		if ev.AggregateID != "outbox-test-env-batch-1" {
+			t.Errorf("row %d aggregate_id: got %q", i, ev.AggregateID)
+		}
+		if ev.PublishedAt != nil {
+			t.Errorf("row %d published_at: got non-nil", i)
+		}
+	}
+}
+
+func TestOutboxRepo_AppendBatch_TransactionRollbackLeavesNoRows(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	ev1 := mustNewOutboxEvent(t, outbox.EventDecisionCompleted, "envelope", "outbox-test-env-batch-rollback", "midas.decisions", "k-batch-rollback", json.RawMessage(`{"n":1}`))
+	ev2 := mustNewOutboxEvent(t, outbox.EventDecisionOutcomeRecorded, "envelope", "outbox-test-env-batch-rollback", "midas.decisions", "k-batch-rollback", json.RawMessage(`{"n":2}`))
+	t.Cleanup(func() {
+		cleanupOutboxEventByID(t, ev1.ID)
+		cleanupOutboxEventByID(t, ev2.ID)
+	})
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+	txRepo, err := NewOutboxRepo(tx)
+	if err != nil {
+		tx.Rollback()
+		t.Fatalf("NewOutboxRepo(tx): %v", err)
+	}
+	if err := txRepo.AppendBatch(ctx, []*outbox.OutboxEvent{ev1, ev2}); err != nil {
+		tx.Rollback()
+		t.Fatalf("AppendBatch inside tx: %v", err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM outbox_events WHERE id IN ($1, $2)`, ev1.ID, ev2.ID).Scan(&count); err != nil {
+		t.Fatalf("count rolled back rows: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected 0 outbox rows after rollback, got %d", count)
 	}
 }
 
