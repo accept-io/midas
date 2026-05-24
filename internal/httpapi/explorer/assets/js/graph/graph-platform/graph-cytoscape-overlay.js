@@ -8,9 +8,9 @@
 // supply only a per-node template. The module owns:
 //
 //   • the overlay layer DIV created inside the cy mount;
-//   • the rAF-coalesced position sync that reads
-//     `node.renderedPosition()` and writes a CSS transform on every
-//     overlay card;
+//   • the rAF-coalesced projection sync that applies Cytoscape pan /
+//     zoom to the overlay layer and positions every overlay card from
+//     model-space `node.position()`;
 //   • the subscription to Cytoscape viewport events
 //     (`render pan zoom position layoutstop`);
 //   • optional ResizeObserver on the mount;
@@ -31,8 +31,8 @@
 //   • create a `position: absolute` overlay layer DIV inside the cy
 //     mount that hosts per-node card elements;
 //   • subscribe to Cytoscape viewport events (`render`, `pan`, `zoom`,
-//     `position`, `layoutstop`) and iterate `cy.nodes()` to call
-//     `renderedPosition()` for card position sync;
+//     `position`, `layoutstop`) and iterate `cy.nodes()` to perform
+//     card projection sync;
 //   • run an rAF-coalesced loop that re-positions per-node DOM cards
 //     from Cytoscape state.
 //
@@ -59,7 +59,8 @@
 //   mountEl  — the DOM element the cy canvas is hosted in. The overlay
 //              layer DIV is appended inside this element.
 //   options  — { lensId, template, keyForNode, stateClasses?,
-//                syncSelected?, syncHover?, pointerEvents? }
+//                syncSelected?, syncHover?, pointerEvents?,
+//                projectionMode?, nativeNodeVisibility? }
 //
 //   options.lensId      — string, required. Carried on the overlay
 //                         layer DIV as `data-lens="<lensId>"` for
@@ -132,6 +133,18 @@
 //                         migration. The shared module never owns
 //                         the lens's CSS — it just stamps the
 //                         additional class.
+//   options.projectionMode — optional string. Default
+//                         `'model-layer-transform'`. In that mode the
+//                         overlay layer receives Cytoscape pan/zoom
+//                         and cards are placed from model-space
+//                         node.position().
+//   options.nativeNodeVisibility — optional string. Default
+//                         `'hidden-while-mounted'`. Hides native node
+//                         bodies/labels/borders while the HTML overlay
+//                         owns the visual card surface, and restores
+//                         Cytoscape styles on destroy. Use `'preserve'`
+//                         only for consumers that intentionally want
+//                         native nodes visible under cards.
 //
 // The returned handle exposes:
 //
@@ -179,6 +192,9 @@
   var DEFAULT_STATE_CLASS_SELECTED = 'is-selected';
   var DEFAULT_STATE_CLASS_HOVER    = 'is-hover';
   var DEFAULT_POINTER_EVENTS       = 'none';
+  var PROJECTION_MODEL_LAYER_TRANSFORM = 'model-layer-transform';
+  var NATIVE_NODE_VISIBILITY_HIDDEN    = 'hidden-while-mounted';
+  var NATIVE_NODE_VISIBILITY_PRESERVE  = 'preserve';
 
   // ── Helpers ────────────────────────────────────────────────────────
 
@@ -219,18 +235,27 @@
     var syncHover     = (opts.syncHover    === false) ? false : true;
     var pointerEvents = _str(opts.pointerEvents) || DEFAULT_POINTER_EVENTS;
     var layerExtraClassName = _str(opts.layerClassName);
-    // D37s-context-geometry-1-impl — onMeasure(key, w, h) callback.
+    var projectionMode = _str(opts.projectionMode) || PROJECTION_MODEL_LAYER_TRANSFORM;
+    if (projectionMode !== PROJECTION_MODEL_LAYER_TRANSFORM) {
+      projectionMode = PROJECTION_MODEL_LAYER_TRANSFORM;
+    }
+    var nativeNodeVisibility = _str(opts.nativeNodeVisibility) || NATIVE_NODE_VISIBILITY_HIDDEN;
+    if (nativeNodeVisibility !== NATIVE_NODE_VISIBILITY_PRESERVE) {
+      nativeNodeVisibility = NATIVE_NODE_VISIBILITY_HIDDEN;
+    }
+    var hideNativeNodes = nativeNodeVisibility === NATIVE_NODE_VISIBILITY_HIDDEN;
+    var initialFootprintForNode = _isFn(opts.initialFootprintForNode) ? opts.initialFootprintForNode : null;
+    // onMeasure(key, w, h) callback.
     //
     // When supplied (by the engine), the overlay invokes this callback
     // after every successful measurement of an inner card:
     //   • once at mount time (synchronous _measureCard succeeds);
     //   • on every per-card ResizeObserver tick where the measured
     //     dimensions change.
-    // The engine uses the callback to propagate the visible card
-    // footprint back to the corresponding cy node's `data.width` /
-    // `data.height` (see graph-cytoscape-engine.js's PROPAGATION
-    // CONTRACT). The overlay does NOT call cy directly; it only
-    // emits measured values via this callback.
+    // Consumers use the callback for diagnostics, footprint validation,
+    // and future variable-footprint support. Projection correctness
+    // does not depend on measurement-driven recompose; zoom-induced
+    // overlap is prevented by the model-layer projection contract.
     var onMeasure = _isFn(opts.onMeasure) ? opts.onMeasure : null;
 
     // ── Module-instance state ──
@@ -247,6 +272,8 @@
     //     inner:            HTMLElement  — the lens-supplied template DOM
     //     measuredWidth:    number       — cached rendered width  (px)
     //     measuredHeight:   number       — cached rendered height (px)
+    //     fallbackWidth:    number       — optional model-space width
+    //     fallbackHeight:   number       — optional model-space height
     //     resizeObserver:   ResizeObserver | null — per-card observer (when available)
     //   }
     // Measured dimensions are populated synchronously on mount and updated
@@ -264,6 +291,7 @@
     var _mouseoutBound  = null;
     var _resizeObs  = null;
     var _destroyed  = false;
+    var _nativeNodesDimmed = false;
     // _hasResizeObserver — captured once at mount time. When `false`,
     // `_sync` re-measures each card's footprint on every sync pass
     // (correctness over performance). Modern browsers all expose
@@ -280,12 +308,14 @@
       _layerEl = document.createElement('div');
       _layerEl.className = LAYER_CLASS + (layerExtraClassName ? (' ' + layerExtraClassName) : '');
       _layerEl.setAttribute('data-lens', lensId);
+      _layerEl.setAttribute('data-projection-mode', projectionMode);
       _layerEl.setAttribute('role', 'presentation');
       _layerEl.style.position = 'absolute';
       _layerEl.style.left     = '0';
       _layerEl.style.top      = '0';
       _layerEl.style.right    = '0';
       _layerEl.style.bottom   = '0';
+      _layerEl.style.transformOrigin = 'top left';
       // The layer is ALWAYS pointer-events:none. It is a transparent
       // visual surface; clicks on the layer background fall through
       // to the cy canvas so Cytoscape owns pan / drag / marquee on
@@ -296,11 +326,38 @@
       return _layerEl;
     }
 
+    function _dimNativeNodes() {
+      if (!hideNativeNodes) return;
+      if (_nativeNodesDimmed) return;
+      try {
+        cy.nodes().style({
+          'opacity': 0,
+          'text-opacity': 0,
+          'border-opacity': 0,
+          'background-opacity': 0
+        });
+        _nativeNodesDimmed = true;
+      } catch (_) { /* native visibility must not break overlay mount */ }
+    }
+
+    function _restoreNativeNodes() {
+      if (!_nativeNodesDimmed) return;
+      try {
+        cy.nodes().removeStyle('opacity text-opacity border-opacity background-opacity');
+      } catch (_) { /* native visibility restore is best-effort */ }
+      _nativeNodesDimmed = false;
+    }
+
     // ── STRATEGIC OVERLAY CENTRING CONTRACT ───────────────────────────
     //
-    // The engine measures lens-supplied card DOM and centres it on the
-    // cy node's renderedPosition via EXPLICIT PIXEL ARITHMETIC. The
-    // engine MUST NOT rely on the lens card's CSS positioning mode,
+    // The engine places lens-supplied card DOM in Cytoscape model
+    // coordinates while the overlay layer receives Cytoscape pan/zoom:
+    //
+    //   layer transform = translate(cy.pan.x, cy.pan.y) scale(cy.zoom)
+    //   card  transform = translate(node.position.x - innerWidth  / 2,
+    //                               node.position.y - innerHeight / 2)
+    //
+    // The engine MUST NOT rely on the lens card's CSS positioning mode,
     // dimensions, or root element type for the centring calculation.
     //
     // Lens templates may return any DOM:
@@ -311,18 +368,17 @@
     //   • dynamic content (handled via the per-card ResizeObserver)
     //
     // The contract is: the lens returns DOM; the engine positions it.
-    // Centring is computed as:
+    // Centring is computed with EXPLICIT PIXEL ARITHMETIC:
     //
-    //   transform = translate3d(rp.x - measuredWidth  / 2,
-    //                           rp.y - measuredHeight / 2, 0)
+    //   transform = translate(node.position.x - innerWidth  / 2,
+    //                         node.position.y - innerHeight / 2)
     //
-    // where `measuredWidth` and `measuredHeight` come from a
-    // `getBoundingClientRect` reading taken synchronously after the
-    // wrapper is appended to the layer (so the browser has laid the
-    // inner DOM out). The translate(-50%, -50%) pattern is INTENTIONALLY
-    // ABSENT — translate-by-percent against the wrapper's own box fails
-    // for any template whose root is `position: absolute` (the wrapper
-    // collapses to 0 × 0, so -50% translates by zero).
+    // where `innerWidth` and `innerHeight` come from the inner card's
+    // layout dimensions (`offsetWidth` / `offsetHeight`) or an explicit
+    // model-space fallback. The translate(-50%, -50%) pattern is
+    // INTENTIONALLY ABSENT — translate-by-percent against the wrapper's
+    // own box fails for any template whose root is `position: absolute`
+    // (the wrapper collapses to 0 x 0, so -50% translates by zero).
     //
     // Per-card ResizeObserver (when available) invalidates the cached
     // measurements when the inner card's content/state changes shape
@@ -331,6 +387,17 @@
     //
     // This contract is pinned by source-contract tests in
     // `internal/httpapi/explorer_graph_cytoscape_overlay_centring_test.go`.
+    function _readInitialFootprint(node) {
+      if (!initialFootprintForNode) return null;
+      var fp;
+      try { fp = initialFootprintForNode(node); } catch (_) { fp = null; }
+      if (!fp) return null;
+      var w = Number(fp.width || fp.w || fp.reservedWidth || 0);
+      var h = Number(fp.height || fp.h || fp.reservedHeight || 0);
+      if (!(w > 0 && h > 0)) return null;
+      return { width: w, height: h };
+    }
+
     function _wrapElement(node) {
       var inner;
       try { inner = template.create(node, _ctx()); }
@@ -371,7 +438,16 @@
       // the engine accepts whatever they return and centres it via
       // measured-dimension arithmetic in `_sync` / `_syncCard`.
       wrapper.appendChild(inner);
-      return { wrapper: wrapper, inner: inner, measuredWidth: 0, measuredHeight: 0, resizeObserver: null };
+      var fp = _readInitialFootprint(node);
+      return {
+        wrapper: wrapper,
+        inner: inner,
+        measuredWidth: 0,
+        measuredHeight: 0,
+        fallbackWidth: fp ? fp.width : 0,
+        fallbackHeight: fp ? fp.height : 0,
+        resizeObserver: null
+      };
     }
 
     // _measureCard reads the inner card's rendered footprint via
@@ -440,6 +516,39 @@
       catch (_) { /* swallow — propagation must not break sync */ }
     }
 
+    function _currentZoom() {
+      var z;
+      try { z = (typeof cy.zoom === 'function') ? cy.zoom() : 1; }
+      catch (_) { z = 1; }
+      return (typeof z === 'number' && isFinite(z) && z > 0) ? z : 1;
+    }
+
+    function _cardModelDimensions(entry) {
+      if (!entry || !entry.inner) return { width: 0, height: 0 };
+
+      var w = Number(entry.inner.offsetWidth || 0);
+      var h = Number(entry.inner.offsetHeight || 0);
+      if (w > 0 && h > 0) return { width: w, height: h };
+
+      if (entry.fallbackWidth > 0 && entry.fallbackHeight > 0) {
+        return { width: entry.fallbackWidth, height: entry.fallbackHeight };
+      }
+
+      if (!_hasResizeObserver || !(entry.measuredWidth > 0 && entry.measuredHeight > 0)) {
+        _measureCard(entry);
+      }
+
+      if (entry.measuredWidth > 0 && entry.measuredHeight > 0) {
+        var zoom = _currentZoom();
+        return {
+          width: entry.measuredWidth / zoom,
+          height: entry.measuredHeight / zoom
+        };
+      }
+
+      return { width: 0, height: 0 };
+    }
+
     function _disconnectCardObserver(entry) {
       if (!entry || !entry.resizeObserver) return;
       try { entry.resizeObserver.disconnect(); } catch (_) { /* swallow */ }
@@ -487,15 +596,33 @@
       });
     }
 
-    // _syncCard centres ONE card on its cy node's rendered position
-    // using measured dimensions. Called by the per-card ResizeObserver
-    // when the inner card's content changes shape. The formula is:
+    function _syncLayer() {
+      if (_destroyed || !_layerEl) return;
+      var pan, zoom;
+      try {
+        pan = (typeof cy.pan === 'function') ? cy.pan() : { x: 0, y: 0 };
+        zoom = (typeof cy.zoom === 'function') ? cy.zoom() : 1;
+      } catch (_) { return; }
+      if (!pan || typeof zoom !== 'number' || !isFinite(zoom)) return;
+      var tx = (typeof pan.x === 'number' && isFinite(pan.x)) ? pan.x : 0;
+      var ty = (typeof pan.y === 'number' && isFinite(pan.y)) ? pan.y : 0;
+      var t = 'translate(' + tx + 'px, ' + ty + 'px) scale(' + zoom + ')';
+      _layerEl.style.webkitTransform = t;
+      _layerEl.style.transform = t;
+    }
+
+    // _syncCard centres ONE card on its cy node's model-space position.
+    // Called by the per-card ResizeObserver when the inner card's
+    // content changes shape. The formula is:
     //
-    //   transform = translate3d(rp.x - measuredWidth  / 2,
-    //                           rp.y - measuredHeight / 2, 0)
+    //   transform = translate(node.position.x - innerWidth  / 2,
+    //                         node.position.y - innerHeight / 2)
     //
-    // The `translate(-50%, -50%)` pattern is intentionally absent — see
-    // the STRATEGIC OVERLAY CENTRING CONTRACT in `_wrapElement`.
+    // The layer owns pan/zoom scaling. This path intentionally does not
+    // read rendered-position APIs, subtract rendered dimensions, or apply
+    // per-card scale. The `translate(-50%, -50%)` pattern is also
+    // intentionally absent — see the STRATEGIC OVERLAY CENTRING CONTRACT
+    // in `_wrapElement`.
     function _syncCard(entry) {
       if (_destroyed || !_layerEl || !entry || !entry.wrapper) return;
       var key = entry.wrapper.getAttribute('data-overlay-key') || '';
@@ -506,24 +633,15 @@
         return;
       }
       var p;
-      try { p = n.renderedPosition(); } catch (_) { p = null; }
+      try { p = n.position(); } catch (_) { p = null; }
       if (!p) {
         entry.wrapper.style.display = 'none';
         return;
       }
-      var w = entry.measuredWidth;
-      var h = entry.measuredHeight;
-      // Fallback re-measure path. Two triggers can land here:
-      //   1. ResizeObserver hasn't fired yet AND the synchronous
-      //      mount-time measure read zero (e.g. font load pending).
-      //   2. The host lacks ResizeObserver entirely — every sync
-      //      re-measures, honouring correctness over performance.
-      if (!w || !h || !_hasResizeObserver) {
-        _measureCard(entry);
-        w = entry.measuredWidth;
-        h = entry.measuredHeight;
-      }
-      if (!w || !h) {
+      var dims = _cardModelDimensions(entry);
+      var w = dims.width;
+      var h = dims.height;
+      if (!(w > 0 && h > 0)) {
         // Still zero — fall back to top-left alignment (no centring).
         // Better than hiding the card; the user sees something at the
         // correct upper-left, and the next observer tick will re-sync
@@ -536,12 +654,13 @@
       }
       var tx = Math.round(p.x - w / 2);
       var ty = Math.round(p.y - h / 2);
-      entry.wrapper.style.transform = 'translate3d(' + tx + 'px, ' + ty + 'px, 0)';
+      entry.wrapper.style.transform = 'translate(' + tx + 'px, ' + ty + 'px)';
       entry.wrapper.style.display = '';
     }
 
     function _sync() {
       if (_destroyed || !_layerEl) return;
+      _syncLayer();
       var keys = Object.keys(_byKey);
       for (var i = 0; i < keys.length; i++) {
         _syncCard(_byKey[keys[i]]);
@@ -669,6 +788,7 @@
       // the layer DOM so observers can't fire on stale entries.
       _disconnectAllCardObservers();
       _detachListeners();
+      _restoreNativeNodes();
       if (_layerEl && _layerEl.parentNode) {
         try { _layerEl.parentNode.removeChild(_layerEl); } catch (_) { /* swallow */ }
       }
@@ -701,6 +821,7 @@
     }
 
     // ── Bootstrap ──
+    _dimNativeNodes();
     _build();
     _attachListeners();
     _scheduleSync();
@@ -724,6 +845,9 @@
       DEFAULT_STATE_CLASS_SELECTED:    DEFAULT_STATE_CLASS_SELECTED,
       DEFAULT_STATE_CLASS_HOVER:       DEFAULT_STATE_CLASS_HOVER,
       DEFAULT_POINTER_EVENTS:          DEFAULT_POINTER_EVENTS,
+      PROJECTION_MODEL_LAYER_TRANSFORM: PROJECTION_MODEL_LAYER_TRANSFORM,
+      NATIVE_NODE_VISIBILITY_HIDDEN:    NATIVE_NODE_VISIBILITY_HIDDEN,
+      NATIVE_NODE_VISIBILITY_PRESERVE:  NATIVE_NODE_VISIBILITY_PRESERVE,
     },
   };
 })();

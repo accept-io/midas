@@ -42,18 +42,18 @@ import (
 // browser validation per the build prompt.
 
 const (
-	d37rContextRendererAsset       = "/explorer/assets/js/graph/context/context-cytoscape-renderer.js"
-	d37rContextSpikeAsset          = "/explorer/assets/js/graph/context/context-cytoscape-overlay-spike.js"
-	d37rContextConnectorPainter    = "/explorer/assets/js/graph/context/context-connector-painter.js"
-	d37rContextPaneAsset           = "/explorer/assets/js/graph/context/context-selected-object-pane.js"
-	d37rContextEvidenceTrayAsset   = "/explorer/assets/js/graph/context/context-evidence-tray.js"
-	d37rGraphDrawerAsset           = "/explorer/assets/js/graph/graph-drawer.js"
-	d37rGraphViewportAsset         = "/explorer/assets/js/graph/graph-viewport.js"
-	d37rAuthorityPocAsset          = "/explorer/assets/js/graph/authority/authority-cytoscape-poc.js"
-	d37rAuthorityCanvasEdgeAsset   = "/explorer/assets/js/graph/authority/authority-canvas-edge-tabs.js"
-	d37rIndexHTMLAsset             = "/explorer/index.html"
-	d37rContextSelectionBridgeJS   = "/explorer/assets/js/graph/context/context-selection-bridge.js"
-	d37rGraphSelectionBridgeJS     = "/explorer/assets/js/graph/graph-platform/graph-selection-bridge.js"
+	d37rContextRendererAsset     = "/explorer/assets/js/graph/context/context-cytoscape-renderer.js"
+	d37rContextSpikeAsset        = "/explorer/assets/js/graph/context/context-cytoscape-overlay-spike.js"
+	d37rContextConnectorPainter  = "/explorer/assets/js/graph/context/context-connector-painter.js"
+	d37rContextPaneAsset         = "/explorer/assets/js/graph/context/context-selected-object-pane.js"
+	d37rContextEvidenceTrayAsset = "/explorer/assets/js/graph/context/context-evidence-tray.js"
+	d37rGraphDrawerAsset         = "/explorer/assets/js/graph/graph-drawer.js"
+	d37rGraphViewportAsset       = "/explorer/assets/js/graph/graph-viewport.js"
+	d37rAuthorityPocAsset        = "/explorer/assets/js/graph/authority/authority-cytoscape-poc.js"
+	d37rAuthorityCanvasEdgeAsset = "/explorer/assets/js/graph/authority/authority-canvas-edge-tabs.js"
+	d37rIndexHTMLAsset           = "/explorer/index.html"
+	d37rContextSelectionBridgeJS = "/explorer/assets/js/graph/context/context-selection-bridge.js"
+	d37rGraphSelectionBridgeJS   = "/explorer/assets/js/graph/graph-platform/graph-selection-bridge.js"
 )
 
 // ── 1. Strategic spatial Context instantiates real Cytoscape ──────
@@ -63,7 +63,7 @@ const (
 // `window.cytoscape({...})` instantiation site inside the spatial
 // paint path — proving the engine convergence is structurally
 // present, not just named.
-// D37r-tranche-B'' flip: the Cytoscape instantiation moved from
+// D37r-tranche-B” flip: the Cytoscape instantiation moved from
 // the lens into the shared engine module. Context no longer holds
 // a `_cy = window.cytoscape({` site; instead it calls
 // `engine.mount(canvas, {...})` and the engine module owns the
@@ -147,7 +147,7 @@ func TestExplorer_ContextCytoscapeInstantiationIsNotDormantSpike(t *testing.T) {
 
 // ── 3. Cards map to Cytoscape nodes ───────────────────────────────
 
-// D37r-tranche-B'' flip note: this test still verifies the per-card
+// D37r-tranche-B” flip note: this test still verifies the per-card
 // builder produces the cy-element-shape interim form (which the
 // engine then translates to canonical via _toCyElements). The
 // builder's output shape is preserved deliberately so future
@@ -640,8 +640,8 @@ func TestExplorer_StrategicSpatialNoLongerUsesSvgConnectorPainterAsPrimaryEngine
 // ── 16. Cytoscape branch installs HTML overlay for rich cards ────
 
 // TestExplorer_ContextCytoscapeBranchMountsHtmlOverlay pins that the
-// strategic Cytoscape branch mounts an HTML overlay layer that
-// follows Cytoscape rendered positions and is pointer-events:none so
+// strategic Cytoscape branch mounts an HTML overlay layer that uses the
+// shared model-layer projection contract and is pointer-events:none so
 // Cytoscape gets every interaction.
 //
 // D37r-tranche-B' flip: the overlay mechanism moved out of this file
@@ -671,11 +671,17 @@ func TestExplorer_ContextCytoscapeBranchMountsHtmlOverlay(t *testing.T) {
 		t.Errorf("D37r-tranche-B' (flipped): Context must pass pointerEvents: 'none' so cy receives every interaction")
 	}
 
-	// Shared-module side: owns the live `renderedPosition()` reads,
-	// the viewport-event subscription, and the layer DIV creation.
+	// Shared-module side: owns the live model-layer projection, the
+	// viewport-event subscription, and the layer DIV creation.
 	sharedJS := getExplorerAsset(t, srv, "/explorer/assets/js/graph/graph-platform/graph-cytoscape-overlay.js")
-	if !strings.Contains(sharedJS, "n.renderedPosition()") {
-		t.Errorf("D37r-tranche-B' (flipped): shared overlay module must read Cytoscape rendered positions via n.renderedPosition()")
+	if !strings.Contains(sharedJS, "PROJECTION_MODEL_LAYER_TRANSFORM = 'model-layer-transform'") {
+		t.Errorf("D37p authority-projection: shared overlay module must declare model-layer-transform projection mode")
+	}
+	if !strings.Contains(sharedJS, "n.position()") {
+		t.Errorf("D37p authority-projection: shared overlay module must place cards from model-space n.position()")
+	}
+	if !strings.Contains(sharedJS, "cy.pan()") || !strings.Contains(sharedJS, "cy.zoom()") {
+		t.Errorf("D37p authority-projection: shared overlay module must apply Cytoscape pan and zoom to the overlay layer")
 	}
 	if !strings.Contains(sharedJS, "cy.on(SYNC_EVENTS, _syncBound)") {
 		t.Errorf("D37r-tranche-B' (flipped): shared overlay module must subscribe to cy viewport events via SYNC_EVENTS")
@@ -702,20 +708,20 @@ func TestExplorer_ContextCytoscapeBranchMountsHtmlOverlay(t *testing.T) {
 //
 // This test pins:
 //
-//   1. The trim is present in the adapter source — specifically the
-//      kind-specific `related_business_service` branch that drops
-//      everything past the first meta entry.
-//   2. The trim is positioned BEFORE the adapter's return value so
-//      the final spec carries the trimmed `meta`.
-//   3. The trim is NOT applied to other kinds (no general one-entry
-//      cap) — multi-entry meta on `business_service`,
-//      `decision_surface`, etc. is intentional and must be
-//      preserved.
-//   4. Native's single-meta-entry contract for related-service is
-//      still expressed at the source-of-truth call site in
-//      context-graph-view.js (parity prerequisite).
-//   5. The card-model's two-entry shape that necessitates the trim
-//      is still present (otherwise the trim is dead code).
+//  1. The trim is present in the adapter source — specifically the
+//     kind-specific `related_business_service` branch that drops
+//     everything past the first meta entry.
+//  2. The trim is positioned BEFORE the adapter's return value so
+//     the final spec carries the trimmed `meta`.
+//  3. The trim is NOT applied to other kinds (no general one-entry
+//     cap) — multi-entry meta on `business_service`,
+//     `decision_surface`, etc. is intentional and must be
+//     preserved.
+//  4. Native's single-meta-entry contract for related-service is
+//     still expressed at the source-of-truth call site in
+//     context-graph-view.js (parity prerequisite).
+//  5. The card-model's two-entry shape that necessitates the trim
+//     is still present (otherwise the trim is dead code).
 func TestExplorer_ContextCytoscapeAdapter_RelatedServiceSpecMatchesNative(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
@@ -760,7 +766,7 @@ func TestExplorer_ContextCytoscapeAdapter_RelatedServiceSpecMatchesNative(t *tes
 	// not contain a kind-agnostic slice or length cap on meta beyond
 	// the related_business_service branch.
 	for _, banned := range []string{
-		"meta = meta.slice(0, 1);\n    return",  // trim immediately followed by return = unconditional cap
+		"meta = meta.slice(0, 1);\n    return", // trim immediately followed by return = unconditional cap
 		"if (meta.length > 1) {\n      meta = meta.slice(0, 1);\n    }\n    return",
 		"meta.length = 1;",
 	} {
@@ -850,7 +856,7 @@ func TestExplorer_ContextCytoscapeEdges_UsePrefixedIdShape(t *testing.T) {
 
 // ── 17. Destroy path tears down Cytoscape cleanly ────────────────
 
-// D37r-tranche-B'' flip: cy ownership moved into the engine module.
+// D37r-tranche-B” flip: cy ownership moved into the engine module.
 // Teardown is now expressed via the engine handle's destroy() method
 // (the engine itself fans out to cy.destroy(), overlay teardown,
 // cameraBus deregistration, ResizeObserver disconnect). The

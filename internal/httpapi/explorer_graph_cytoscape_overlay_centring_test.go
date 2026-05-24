@@ -93,7 +93,7 @@ func TestExplorer_OverlayCentring_MeasuresInnerCardDimensions(t *testing.T) {
 	}
 	bBody := bTail[:bEndRel+1]
 
-	appendIdx  := strings.Index(bBody, "_layerEl.appendChild(entry.wrapper)")
+	appendIdx := strings.Index(bBody, "_layerEl.appendChild(entry.wrapper)")
 	measureIdx := strings.Index(bBody, "_measureCard(entry)")
 	if appendIdx < 0 {
 		t.Errorf("D37r-tranche-B''-centring-fix: _build must append entry.wrapper to _layerEl")
@@ -109,15 +109,15 @@ func TestExplorer_OverlayCentring_MeasuresInnerCardDimensions(t *testing.T) {
 // ── 2. Transform uses explicit pixel arithmetic ───────────────────
 
 // TestExplorer_OverlayCentring_TransformUsesExplicitArithmetic pins
-// that the sync transform uses translate3d(p.x - w/2, p.y - h/2, 0)
-// with measured dimensions, NOT translate(-50%, -50%) against the
-// wrapper's intrinsic box.
+// that the sync transform uses model-space translate(p.x - w/2,
+// p.y - h/2) with inner card dimensions, NOT translate(-50%, -50%)
+// against the wrapper's intrinsic box.
 func TestExplorer_OverlayCentring_TransformUsesExplicitArithmetic(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
 	js := getExplorerAsset(t, srv, overlayCentringAsset)
 
-	// _syncCard must read measured dimensions from the entry and apply
+	// _syncCard must read model-space inner dimensions and apply
 	// explicit-arithmetic centring.
 	scIdx := strings.Index(js, "function _syncCard(entry)")
 	if scIdx < 0 {
@@ -130,12 +130,14 @@ func TestExplorer_OverlayCentring_TransformUsesExplicitArithmetic(t *testing.T) 
 	}
 	scBody := scTail[:scEndRel+1]
 
-	// Reads measured dimensions from the cached entry.
-	if !regexp.MustCompile(`var w = entry\.measuredWidth;`).MatchString(scBody) {
-		t.Errorf("D37r-tranche-B''-centring-fix: _syncCard must read width from entry.measuredWidth")
+	if !strings.Contains(scBody, "var dims = _cardModelDimensions(entry);") {
+		t.Errorf("D37p authority-projection: _syncCard must read model-space inner dimensions via _cardModelDimensions(entry)")
 	}
-	if !regexp.MustCompile(`var h = entry\.measuredHeight;`).MatchString(scBody) {
-		t.Errorf("D37r-tranche-B''-centring-fix: _syncCard must read height from entry.measuredHeight")
+	if !regexp.MustCompile(`var w = dims\.width;`).MatchString(scBody) {
+		t.Errorf("D37p authority-projection: _syncCard must read width from dims.width")
+	}
+	if !regexp.MustCompile(`var h = dims\.height;`).MatchString(scBody) {
+		t.Errorf("D37p authority-projection: _syncCard must read height from dims.height")
 	}
 
 	// Centring computation: tx = round(p.x - w/2), ty = round(p.y - h/2).
@@ -146,10 +148,10 @@ func TestExplorer_OverlayCentring_TransformUsesExplicitArithmetic(t *testing.T) 
 		t.Errorf("D37r-tranche-B''-centring-fix: _syncCard must compute ty = Math.round(p.y - h/2) for centring")
 	}
 
-	// Transform writes translate3d with pre-computed offsets (NO
+	// Transform writes translate with pre-computed model-space offsets (NO
 	// translate(-50%, -50%) tail in the load-bearing centring write).
-	if !regexp.MustCompile(`entry\.wrapper\.style\.transform\s*=\s*'translate3d\(' \+ tx \+ 'px, ' \+ ty \+ 'px, 0\)'`).MatchString(scBody) {
-		t.Errorf("D37r-tranche-B''-centring-fix: _syncCard's centring transform must be translate3d(tx px, ty px, 0)")
+	if !regexp.MustCompile(`entry\.wrapper\.style\.transform\s*=\s*'translate\(' \+ tx \+ 'px, ' \+ ty \+ 'px\)'`).MatchString(scBody) {
+		t.Errorf("D37p authority-projection: _syncCard's centring transform must be translate(tx px, ty px)")
 	}
 
 	// Negative pin — translate(-50%, -50%) is absent from _syncCard.
@@ -252,24 +254,24 @@ func TestExplorer_OverlayCentring_ResizeObserverFallback(t *testing.T) {
 		t.Errorf("D37r-tranche-B''-centring-fix: _observeCard must early-return when !_hasResizeObserver")
 	}
 
-	// _syncCard's fallback path re-measures when dimensions are stale
-	// OR when _hasResizeObserver is false. The fallback condition
-	// must reference _hasResizeObserver.
-	scIdx := strings.Index(js, "function _syncCard(entry)")
+	// _cardModelDimensions' fallback path re-measures when dimensions
+	// are stale OR when _hasResizeObserver is false. The fallback
+	// condition must reference _hasResizeObserver.
+	scIdx := strings.Index(js, "function _cardModelDimensions(entry)")
 	if scIdx < 0 {
-		t.Fatal("D37r-tranche-B''-centring-fix: _syncCard must exist")
+		t.Fatal("D37p authority-projection: _cardModelDimensions must exist")
 	}
 	scTail := js[scIdx:]
 	scEndRel := strings.Index(scTail[1:], "\n    function ")
 	if scEndRel < 0 {
-		t.Fatalf("D37r-tranche-B''-centring-fix: _syncCard body must be well-formed")
+		t.Fatalf("D37p authority-projection: _cardModelDimensions body must be well-formed")
 	}
 	scBody := scTail[:scEndRel+1]
 	if !strings.Contains(scBody, "!_hasResizeObserver") {
-		t.Errorf("D37r-tranche-B''-centring-fix: _syncCard must re-measure when !_hasResizeObserver (fallback path for legacy hosts)")
+		t.Errorf("D37p authority-projection: _cardModelDimensions must re-measure when !_hasResizeObserver (fallback path for legacy hosts)")
 	}
 	if !strings.Contains(scBody, "_measureCard(entry)") {
-		t.Errorf("D37r-tranche-B''-centring-fix: _syncCard's fallback path must call _measureCard(entry) to refresh dimensions")
+		t.Errorf("D37p authority-projection: _cardModelDimensions fallback path must call _measureCard(entry) to refresh dimensions")
 	}
 }
 
@@ -337,7 +339,7 @@ func TestExplorer_OverlayCentring_StrategicRuleDocumented(t *testing.T) {
 	for _, phrase := range []string{
 		"MUST NOT rely on the lens card's CSS positioning mode",
 		"EXPLICIT PIXEL ARITHMETIC",
-		"translate(-50%, -50%) pattern is INTENTIONALLY",
+		"translate(-50%, -50%) pattern is",
 	} {
 		if !strings.Contains(js, phrase) {
 			t.Errorf("D37r-tranche-B''-centring-fix: strategic contract block must include %q", phrase)
@@ -347,7 +349,7 @@ func TestExplorer_OverlayCentring_StrategicRuleDocumented(t *testing.T) {
 	// The contract block must appear AT or BEFORE _wrapElement (it
 	// documents that function's invariants).
 	contractIdx := strings.Index(js, "STRATEGIC OVERLAY CENTRING CONTRACT")
-	wrapIdx     := strings.Index(js, "function _wrapElement(node)")
+	wrapIdx := strings.Index(js, "function _wrapElement(node)")
 	if contractIdx < 0 || wrapIdx < 0 {
 		t.Fatal("D37r-tranche-B''-centring-fix: contract block and _wrapElement must both be present")
 	}

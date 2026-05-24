@@ -62,7 +62,7 @@
 <!-- D37o-impl-2 — Context strategic renderer skeleton. Scoped to `.midas-graph-viewport[data-active-renderer="context"]`. Opt-in via `?contextRenderer=strategic`; legacy native Context renderer remains the default. -->
 <link rel="stylesheet" href="/explorer/assets/css/context-cytoscape-renderer.css">
 <!-- D37p-pane-1 — Shared Selected-Object Pane Shell styles. Generic, lens-agnostic wrapper / header / body / footer / section scaffolding scoped to a generic `[data-selected-object-pane]` attribute that future lens wrappers (Authority, Knowledge) can opt into. Loaded before the Context pane stylesheet so lens-specific identity rules cascade over the shared shell. -->
-<link rel="stylesheet" href="/explorer/assets/css/graph-selected-object-pane.css">
+<link rel="stylesheet" href="/explorer/assets/css/graph-selected-object-pane.css"><link rel="stylesheet" href="/explorer/assets/css/graph-inspector.css"><!-- D37p-graph-inspector-platform-substrate-impl — hidden reusable graph inspector chrome. -->
 <!-- D37o-impl-6 — Context Selected-Object Pane. Scoped to the strategic Context renderer's active scope. Coexists with the right drawer. -->
 <link rel="stylesheet" href="/explorer/assets/css/context-selected-object-pane.css">
 <!-- D36a-knowledge-graph-renderer-shell — Token-aligned placeholder styling for the Knowledge Graph renderer shell. Rules scoped under .midas-graph-viewport[data-active-renderer="knowledge-graph"] so they apply only when the shell is the active renderer. -->
@@ -599,6 +599,7 @@
             <div class="gmap-context-selected-object-pane-body" data-context-selected-object-pane-body tabindex="-1"></div>
             <footer class="gmap-context-selected-object-pane-footer" data-context-selected-object-pane-footer></footer>
           </aside>
+          <div class="graph-inspector-platform" data-graph-inspector-platform aria-hidden="true" hidden><nav class="graph-inspector-toolbar" data-graph-inspector-toolbar role="toolbar" aria-label="Graph inspector"></nav><aside class="graph-inspector-panel" data-graph-inspector-panel role="complementary" aria-label="Graph inspector panel" tabindex="-1" hidden><header class="graph-inspector-panel-header" data-graph-inspector-panel-header><h2 class="graph-inspector-panel-title" data-graph-inspector-panel-title></h2><p class="graph-inspector-panel-subtitle" data-graph-inspector-panel-subtitle hidden></p></header><div class="graph-inspector-panel-body" data-graph-inspector-panel-body></div><footer class="graph-inspector-panel-footer" data-graph-inspector-panel-footer></footer></aside></div>
           </div><!-- /.midas-graph-viewport -->
         </div>
         <!-- Phase 2B Step 36 (D25b) — Bottom evidence and governance
@@ -1735,7 +1736,7 @@
 <!-- D37o-impl-2 — Strategic Context renderer skeleton. Registers with GraphViewport as `context`; activates only under `?contextRenderer=strategic`. Legacy native Context renderer remains the default. -->
 <script src="/explorer/assets/js/graph/context/context-cytoscape-renderer.js"></script>
 <!-- D37p-pane-1 — Shared Selected-Object Pane Shell. Lens-aware coordination layer: provider registry, locked PANE_MODES (auto / pinned / hidden), locked event vocabulary, subscription to graphSelectionBridge. Context registers itself as the 'context' provider; Authority / Knowledge providers register from their own modules in later tranches. Loaded after graph-selection-bridge.js and before context-selected-object-pane.js so the Context provider can register against an already-initialised shell. -->
-<script src="/explorer/assets/js/graph/graph-platform/graph-selected-object-pane.js"></script>
+<script src="/explorer/assets/js/graph/graph-platform/graph-selected-object-pane.js"></script><script src="/explorer/assets/js/graph/graph-platform/graph-inspector-platform.js"></script><!-- D37p-graph-inspector-platform-substrate-impl — no graph registers in this tranche. -->
 <!-- D37as-strategic-node-pane-contract-impl — Composite lens-registration helper. One entry point that wires viewport / selection-bridge / camera-bus / selected-object-pane / drawer for a future graph lens. Carries zero domain vocabulary. Authority and Context continue to use their own per-surface registrations in this tranche; the helper is forward-compat for Knowledge / Risk / Dependency / user-composed lenses. Loaded after the five surfaces it composes. -->
 <script src="/explorer/assets/js/graph/graph-platform/graph-lens-registry.js"></script>
 <!-- D37o-impl-6 — Context Selected-Object Pane. Consumes contextSelectionBridge + contextProjection; renders Summary / Details / Actions / Relationships / Evidence sections. Drawer + tray + Authority canvas-edge tabs remain unchanged. D37p-pane-1 added a one-time provider registration: after the Context pane finishes its existing init, it calls graphSelectedObjectPane.registerLensProvider('context', provider) so cross-lens UI can read pane state from one platform surface. -->

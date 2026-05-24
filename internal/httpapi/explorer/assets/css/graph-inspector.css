@@ -1,0 +1,161 @@
+/* /explorer/assets/css/graph-inspector.css
+ *
+ * D37p-graph-inspector-platform-substrate-impl
+ *
+ * Reusable strategic graph inspector chrome. The geometry and visual
+ * mechanics intentionally mirror the Authority POC right-edge construct:
+ * one viewport-pinned 40px toolbar and one 300px overlay panel.
+ *
+ * Graph instances provide controls and content. This stylesheet owns
+ * placement, shell sizing, spacing, typography, pointer-event strategy,
+ * active/disabled states, and panel chrome.
+ */
+
+.midas-graph-viewport .graph-inspector-platform {
+  position: absolute;
+  top: 8px;
+  right: 0;
+  bottom: 64px;
+  pointer-events: none;
+}
+
+.midas-graph-viewport .graph-inspector-platform[hidden] {
+  display: none;
+}
+
+.midas-graph-viewport .graph-inspector-toolbar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 4px;
+  background: var(--surface-container-high, #1f2533);
+  border: 1px solid var(--outline-variant, #475569);
+  border-right: none;
+  border-radius: 6px 0 0 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.30);
+  z-index: 6;
+  pointer-events: auto;
+}
+
+.midas-graph-viewport .graph-inspector-control {
+  width: 32px;
+  height: 32px;
+  min-width: 0;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--slate-300, #cbd5e1);
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  line-height: 1;
+  position: relative;
+}
+
+.midas-graph-viewport .graph-inspector-control:hover:not(:disabled) {
+  background: var(--surface-container, #222838);
+}
+
+.midas-graph-viewport .graph-inspector-control:disabled {
+  opacity: 0.40;
+  cursor: not-allowed;
+}
+
+.midas-graph-viewport .graph-inspector-control:focus-visible {
+  outline: 2px solid var(--primary, #4ea1ff);
+  outline-offset: 1px;
+}
+
+.midas-graph-viewport .graph-inspector-control[aria-pressed="true"] {
+  background: var(--surface-container, #222838);
+  color: var(--primary, #7aa2ff);
+}
+
+.midas-graph-viewport .graph-inspector-control svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+.midas-graph-viewport .graph-inspector-panel {
+  position: absolute;
+  top: 0;
+  right: 40px;
+  width: 300px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-container-low, #1a1f2e);
+  border: 1px solid var(--outline-variant, #475569);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.40);
+  z-index: 8;
+  pointer-events: auto;
+  overflow: hidden;
+  font-family: var(--font-display, Inter, 'Segoe UI', system-ui, sans-serif);
+  color: var(--on-surface, #e2e8f0);
+}
+
+.midas-graph-viewport .graph-inspector-panel[hidden] {
+  display: none;
+}
+
+.midas-graph-viewport .graph-inspector-panel:focus {
+  outline: none;
+}
+
+.midas-graph-viewport .graph-inspector-panel-header {
+  position: sticky;
+  top: 0;
+  flex: 0 0 auto;
+  padding: 10px 12px;
+  background: var(--surface-container-low, #1a1f2e);
+  border-bottom: 1px solid var(--outline-variant, #475569);
+  z-index: 1;
+}
+
+.midas-graph-viewport .graph-inspector-panel-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.midas-graph-viewport .graph-inspector-panel-subtitle {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--on-surface-variant, #94a3b8);
+}
+
+.midas-graph-viewport .graph-inspector-panel-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 10px 12px;
+}
+
+.midas-graph-viewport .graph-inspector-panel-footer {
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  border-top: 1px solid var(--outline-variant, #475569);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.midas-graph-viewport .graph-inspector-empty {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  border: 1px dashed var(--outline-variant, #475569);
+  border-radius: 4px;
+  color: var(--on-surface-variant, #94a3b8);
+  background: rgba(255, 255, 255, 0.03);
+}

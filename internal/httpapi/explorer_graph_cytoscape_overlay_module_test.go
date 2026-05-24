@@ -21,7 +21,7 @@ import (
 //   1. ModuleExists                              — shared module present
 //   2. PublicAPIShape                            — `mount(cy, mountEl, options)` + handle surface
 //   3. LensAgnostic                              — no lens-specific names in the shared module
-//   4. OwnsPositionSync                          — shared module owns `renderedPosition` + viewport-event sync
+//   4. OwnsPositionSync                          — shared module owns model-layer projection + viewport-event sync
 //   5. OwnsSelectionClassSync                    — shared module owns cy select/unselect class toggling
 //   6. OwnsHoverClassSync                        — shared module owns cy mouseover/mouseout class toggling
 //   7. OwnsTeardown                              — `destroy()` removes layer + detaches listeners
@@ -41,14 +41,14 @@ import (
 //  21. GraphRenderer_AddNodeUsesBuildNodeCardElement — `addNode` constructs card DOM via the pure factory
 
 const (
-	d37rBprimeOverlayModule          = "/explorer/assets/js/graph/graph-platform/graph-cytoscape-overlay.js"
-	d37rBprimeContextRenderer        = "/explorer/assets/js/graph/context/context-cytoscape-renderer.js"
-	d37rBprimeAuthorityOverlay       = "/explorer/assets/js/graph/authority/cytoscape-html-overlay.js"
-	d37rBprimeGraphRenderer          = "/explorer/assets/js/graph/graph-renderer.js"
-	d37rBprimeAuthorityPoc           = "/explorer/assets/js/graph/authority/authority-cytoscape-poc.js"
-	d37rBprimeIndexHTML              = "/explorer/index.html"
-	d37rBprimeViewportJS             = "/explorer/assets/js/graph/graph-viewport.js"
-	d37rBprimeAuthorityOverlayCSS    = "/explorer/assets/css/cytoscape-html-overlay.css"
+	d37rBprimeOverlayModule       = "/explorer/assets/js/graph/graph-platform/graph-cytoscape-overlay.js"
+	d37rBprimeContextRenderer     = "/explorer/assets/js/graph/context/context-cytoscape-renderer.js"
+	d37rBprimeAuthorityOverlay    = "/explorer/assets/js/graph/authority/cytoscape-html-overlay.js"
+	d37rBprimeGraphRenderer       = "/explorer/assets/js/graph/graph-renderer.js"
+	d37rBprimeAuthorityPoc        = "/explorer/assets/js/graph/authority/authority-cytoscape-poc.js"
+	d37rBprimeIndexHTML           = "/explorer/index.html"
+	d37rBprimeViewportJS          = "/explorer/assets/js/graph/graph-viewport.js"
+	d37rBprimeAuthorityOverlayCSS = "/explorer/assets/css/cytoscape-html-overlay.css"
 )
 
 // ── 1. Shared module exists ───────────────────────────────────────
@@ -179,30 +179,27 @@ func TestExplorer_GraphCytoscapeOverlay_OwnsPositionSync(t *testing.T) {
 		t.Errorf("D37r-tranche-B': shared module must subscribe to cy via cy.on(SYNC_EVENTS, _syncBound)")
 	}
 
-	// D37r-tranche-B''-centring-fix flip: the per-card centring moved
-	// from `_sync` (bulk loop) into `_syncCard(entry)` (single-card
-	// callable, invoked both by the per-card ResizeObserver and by
-	// `_sync` iterating entries). `_sync`'s body now delegates to
-	// `_syncCard` per entry; the `renderedPosition()` call lives in
-	// `_syncCard`. The translate(-50%, -50%) pattern is REPLACED with
-	// explicit-arithmetic centring (translate3d(p.x - w/2, p.y - h/2,
-	// 0) using measured dimensions) per the strategic overlay
-	// centring contract. translate(-50%, -50%) silently fails when
-	// the wrapper has no intrinsic dimensions (which is the case
-	// whenever the lens template root is `position: absolute`); the
-	// measured-dimension formula works regardless of the inner card's
-	// CSS positioning mode.
-	if !regexp.MustCompile(`(?s)function _syncCard\(entry\)[\s\S]*?n\.renderedPosition\(\)`).MatchString(js) {
-		t.Errorf("D37r-tranche-B''-centring-fix (flipped): shared module's _syncCard must call n.renderedPosition() per tracked node")
+	// D37p authority-projection flip: the shared overlay now uses a
+	// two-tier projection contract. The layer receives cy.pan()/cy.zoom(),
+	// and each wrapper is placed from model-space node.position() with
+	// explicit centring against the inner card dimensions.
+	if !regexp.MustCompile(`(?s)function _syncLayer\(\)[\s\S]*?cy\.pan\(\)[\s\S]*?cy\.zoom\(\)[\s\S]*?scale\(`).MatchString(js) {
+		t.Errorf("D37p authority-projection: shared module's _syncLayer must apply Cytoscape pan and zoom to the overlay layer")
+	}
+	if !regexp.MustCompile(`(?s)function _syncCard\(entry\)[\s\S]*?n\.position\(\)`).MatchString(js) {
+		t.Errorf("D37p authority-projection: shared module's _syncCard must use model-space n.position() per tracked node")
+	}
+	if regexp.MustCompile(`(?s)function _syncCard\(entry\)[\s\S]*?renderedPosition\(\)`).MatchString(js) {
+		t.Errorf("D37p authority-projection: shared module's _syncCard must not use renderedPosition() in the model-layer path")
 	}
 	if !regexp.MustCompile(`(?s)function _sync\(\)\s*\{[\s\S]*?_syncCard\(`).MatchString(js) {
 		t.Errorf("D37r-tranche-B''-centring-fix (flipped): shared module's _sync must iterate tracked entries and delegate to _syncCard")
 	}
 
-	// Position sync writes translate3d on the wrapper (substring of
-	// a larger composed transform string).
-	if !strings.Contains(js, "translate3d(") {
-		t.Errorf("D37r-tranche-B': shared module must write translate3d() positions for GPU compositing")
+	// Projection sync writes translate() on wrappers while layer-level
+	// pan/zoom owns scale.
+	if !strings.Contains(js, "entry.wrapper.style.transform = 'translate(' + tx + 'px, ' + ty + 'px)'") {
+		t.Errorf("D37p authority-projection: shared module must write model-space translate() positions on card wrappers")
 	}
 	// translate(-50%, -50%) MUST be absent from the per-card transform
 	// path. If a future change re-introduces it (e.g. someone "fixes"
@@ -210,11 +207,6 @@ func TestExplorer_GraphCytoscapeOverlay_OwnsPositionSync(t *testing.T) {
 	// negative pin catches the regression.
 	if regexp.MustCompile(`wrapper\.style\.transform\s*=\s*[^;]*translate\(-50%`).MatchString(js) {
 		t.Errorf("D37r-tranche-B''-centring-fix (flipped): shared module must NOT use translate(-50%%, -50%%) for wrapper centring — measured-dimension arithmetic is the load-bearing contract (translate(-50%%) collapses to zero when the wrapper has no intrinsic dimensions, e.g. when the lens template root is position:absolute)")
-	}
-	// The new centring shape: translate3d(p.x - w/2, p.y - h/2, 0)
-	// using explicit pixel arithmetic against measured dimensions.
-	if !regexp.MustCompile(`translate3d\(' \+ tx \+ 'px, ' \+ ty \+ 'px, 0\)`).MatchString(js) {
-		t.Errorf("D37r-tranche-B''-centring-fix (flipped): shared module's centring transform must be translate3d(tx px, ty px, 0) with tx/ty pre-computed from measured dimensions")
 	}
 	if !regexp.MustCompile(`Math\.round\(p\.x\s*-\s*w\s*/\s*2\)`).MatchString(js) {
 		t.Errorf("D37r-tranche-B''-centring-fix (flipped): centring must compute tx = round(p.x - w/2) using measured width")
@@ -320,9 +312,9 @@ func TestExplorer_GraphCytoscapeOverlay_LoadedBeforeConsumers(t *testing.T) {
 	}
 	_ = d37rBprimeIndexHTML
 
-	idxOverlay  := strings.Index(html, "/explorer/assets/js/graph/graph-platform/graph-cytoscape-overlay.js")
-	idxContext  := strings.Index(html, "/explorer/assets/js/graph/context/context-cytoscape-renderer.js")
-	idxAuthOvr  := strings.Index(html, "/explorer/assets/js/graph/authority/cytoscape-html-overlay.js")
+	idxOverlay := strings.Index(html, "/explorer/assets/js/graph/graph-platform/graph-cytoscape-overlay.js")
+	idxContext := strings.Index(html, "/explorer/assets/js/graph/context/context-cytoscape-renderer.js")
+	idxAuthOvr := strings.Index(html, "/explorer/assets/js/graph/authority/cytoscape-html-overlay.js")
 
 	if idxOverlay < 0 {
 		t.Fatalf("D37r-tranche-B': shared overlay script tag must be in index.html")
@@ -690,8 +682,8 @@ func TestExplorer_StrategicRule_NoLensImplementsOverlayMechanism(t *testing.T) {
 	//   (c) creating an element with class containing 'overlay-layer'
 	//       or 'overlay-card' as load-bearing code
 	bannedSubscriptionRe := regexp.MustCompile(`cy\.on\(\s*['"](?:render|pan|zoom|position|layoutstop)['"]`)
-	bannedRenderedPosRe  := regexp.MustCompile(`\brenderedPosition\(\s*\)`)
-	bannedClassRe        := regexp.MustCompile(`['"][^'"]*(?:overlay-layer|overlay-card)[^'"]*['"]`)
+	bannedRenderedPosRe := regexp.MustCompile(`\brenderedPosition\(\s*\)`)
+	bannedClassRe := regexp.MustCompile(`['"][^'"]*(?:overlay-layer|overlay-card)[^'"]*['"]`)
 
 	for _, asset := range candidates {
 		if whitelist[asset] {
@@ -820,7 +812,7 @@ func TestExplorer_GraphCytoscapeOverlay_NonSpatialStrategicFallbackPreserved(t *
 
 // ── 20. Tranche A + B invariants hold ────────────────────────────
 
-// D37r-tranche-B'' flip: the cy instantiation marker moved into the
+// D37r-tranche-B” flip: the cy instantiation marker moved into the
 // shared engine module. The lens-side wiring is now the engine.mount
 // call. The visual-class style strings moved into the override
 // builder `_buildContextEdgeStyleOverride()`, still in the Context
@@ -876,13 +868,14 @@ func TestExplorer_GraphCytoscapeOverlay_TrancheAAndBInvariantsHold(t *testing.T)
 
 // TestExplorer_GraphRenderer_AddNodeUsesBuildNodeCardElement is the
 // required parity test from the user direction. It asserts:
-//   • addNode delegates card DOM construction to buildNodeCardElement;
-//   • the card-body innerHTML composition (`<span class="gmap-node-
+//   - addNode delegates card DOM construction to buildNodeCardElement;
+//   - the card-body innerHTML composition (`<span class="gmap-node-
 //     label">` and siblings) lives in buildNodeCardElement, not in
 //     addNode;
-//   • addNode does NOT mutate the card's innerHTML after the factory
+//   - addNode does NOT mutate the card's innerHTML after the factory
 //     returns (no inline createElement / innerHTML for the card body
 //     in addNode itself).
+//
 // Catches future drift where someone modifies addNode to mutate the
 // card after construction in a way that would not reach the Cytoscape
 // path.

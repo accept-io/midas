@@ -190,9 +190,19 @@
 
   // ── Gating helpers (multi-signal) ────────────────────────────────
 
+  function _alignContextLensForStrategicRenderer() {
+    if (typeof document === 'undefined' || !document.body) return false;
+    if (!_isStrategicContextActive()) return false;
+    if (document.body.getAttribute('data-graph-lens') === 'context') return true;
+    try { document.body.setAttribute('data-graph-lens', 'context'); }
+    catch (_) { return false; }
+    return true;
+  }
+
   function _isContextLens() {
     if (typeof document === 'undefined' || !document.body) return false;
-    return document.body.getAttribute('data-graph-lens') === 'context';
+    if (document.body.getAttribute('data-graph-lens') === 'context') return true;
+    return _alignContextLensForStrategicRenderer();
   }
 
   function _isStrategicContextActive() {
@@ -254,6 +264,7 @@
       document.body.setAttribute(
         STRATEGIC_CONTEXT_INSPECTOR_BODY_ATTR,
         STRATEGIC_CONTEXT_INSPECTOR_PANE_VALUE);
+      _alignContextLensForStrategicRenderer();
     } else {
       document.body.removeAttribute(STRATEGIC_CONTEXT_INSPECTOR_BODY_ATTR);
     }
@@ -539,10 +550,12 @@
       if (_paneMode === 'pinned' && _getCurrentCard()) {
         _setOpen(true);
         _renderAll(_getCurrentCard());
-        return;
       }
       // Auto / hidden: stay closed (operator must reselect).
+      return;
     }
+
+    _refreshAfterMaybeMissedEvents();
   }
 
   function _onViewportAttributesChanged() {
@@ -1296,16 +1309,14 @@
       isOpen:         isOpen,
       setPaneMode:    setPaneMode,
       getPaneMode:    getPaneMode,
-      notifySelectionChanged: function (_selection, _event) {
-        // Context already subscribes to contextSelectionBridge for
-        // its own selection updates (see _wireBridgeAndProjection
-        // / _onSelectionChanged). The shared shell forwards its
-        // own selection events here for diagnostic parity, but the
-        // visible pane behaviour is driven by Context's existing
-        // subscription — this callback intentionally no-ops to
-        // avoid double-rendering.
+      notifySelectionChanged: function (selection, _event) {
+        if (!selection || selection.lens !== 'context') {
+          _onSelectionChanged(null);
+          return;
+        }
+        _onSelectionChanged(selection.card || _getCurrentCard());
       },
-      // Section descriptors — generic metadata for cross-lens
+      // Section descriptors - generic metadata for cross-lens
       // consumers (a future shared shell renderer can iterate
       // sections to build a uniform header / accordion structure).
       // Today the visible section rendering still happens via

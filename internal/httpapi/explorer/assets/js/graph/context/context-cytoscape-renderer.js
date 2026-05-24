@@ -208,6 +208,63 @@
   var _contextOverlayFootprintCandidates = {};
   var _contextOverlayDiagnostics = [];
   var _contextOverlayRecomposeRequested = false;
+  var _contextOverlayActivationDiagnosticEmitted = false;
+
+  function _contextOverlayDiagnosticsEnabled() {
+    return _isContextHtmlOverlayMode() || _isUnsupportedContextOverlayMode();
+  }
+
+  function _contextOverlayRoute() {
+    try { return String((window.location && window.location.href) || ''); }
+    catch (_) { return ''; }
+  }
+
+  function _contextOverlayNow() {
+    try { return new Date().toISOString(); }
+    catch (_) { return ''; }
+  }
+
+  function _contextOverlayValue(payload, key) {
+    if (!payload || typeof payload !== 'object') return null;
+    if (payload[key] != null) return payload[key];
+    var result = payload.result;
+    if (result && typeof result === 'object' && result[key] != null) return result[key];
+    return null;
+  }
+
+  function _appendContextOverlayDiagnostic(source, message, payload, overrides) {
+    if (!_contextOverlayDiagnosticsEnabled()) return false;
+    var entry = {
+      timestamp: _contextOverlayNow(),
+      source: source || 'context-overlay-mode',
+      route: _contextOverlayRoute(),
+      rendererId: RENDERER_ID || null,
+      graphSurfaceId: 'context',
+      rendererMode: _isUnsupportedContextOverlayMode() ? 'unsupported' : (_isContextHtmlOverlayMode() ? 'html-overlay' : 'raw'),
+      renderGeneration: _contextOverlayRenderGeneration,
+      cardId: _contextOverlayValue(payload, 'cardId'),
+      cardKind: _contextOverlayValue(payload, 'cardKind'),
+      policyId: _contextOverlayValue(payload, 'policyId'),
+      reservedWidth: _contextOverlayValue(payload, 'reservedWidth'),
+      reservedHeight: _contextOverlayValue(payload, 'reservedHeight'),
+      measuredWidth: _contextOverlayValue(payload, 'measuredWidth'),
+      measuredHeight: _contextOverlayValue(payload, 'measuredHeight'),
+      classification: _contextOverlayValue(payload, 'classification'),
+      action: _contextOverlayValue(payload, 'action'),
+      recomposeAttempt: _contextOverlayValue(payload, 'recomposeAttempt'),
+      message: message || null,
+    };
+    if (overrides && typeof overrides === 'object') {
+      for (var k in overrides) {
+        if (Object.prototype.hasOwnProperty.call(overrides, k)) entry[k] = overrides[k];
+      }
+    }
+    try {
+      if (!Array.isArray(window.__midasOverlayDiagnostics)) window.__midasOverlayDiagnostics = [];
+      window.__midasOverlayDiagnostics.push(entry);
+    } catch (_) { return false; }
+    return true;
+  }
 
   // ── Activation mode read ───────────────────────────────────────────
   //
@@ -679,11 +736,17 @@
   }
 
   function _destroyContextOverlayAdapter() {
+    if (_contextOverlayAdapter) {
+      _appendContextOverlayDiagnostic('context-overlay-mode', 'Context overlay adapter session destroyed.', null, {
+        action: 'destroy_adapter',
+      });
+    }
     if (_contextOverlayAdapter && typeof _contextOverlayAdapter.destroy === 'function') {
       try { _contextOverlayAdapter.destroy(); } catch (_) { /* swallow */ }
     }
     _contextOverlayAdapter = null;
     _contextOverlayRecomposeRequested = false;
+    _contextOverlayActivationDiagnosticEmitted = false;
   }
 
   function _handleContextOverlayDiagnostic(payload) {
@@ -694,10 +757,17 @@
       renderGeneration: _contextOverlayRenderGeneration,
       payload: payload || null,
     });
+    _appendContextOverlayDiagnostic('adapter', 'Context overlay adapter diagnostic.', payload || null, null);
   }
 
   function _handleContextOverlayRecomposeRequested(request) {
     if (!_isContextHtmlOverlayMode()) return;
+    _appendContextOverlayDiagnostic('adapter', 'Context overlay adapter requested recompose.', request || null, {
+      action: 'request_recompose',
+    });
+    _appendContextOverlayDiagnostic('context-overlay-mode', 'Context overlay recompose handler entered.', request || null, {
+      action: 'handle_recompose',
+    });
     var candidates = request && request.updatedFootprintCandidates;
     if (candidates && typeof candidates === 'object') {
       for (var id in candidates) {
@@ -709,23 +779,51 @@
           reservedHeight: c.reservedHeight,
           source: c.source || 'measured-dom',
           policyId: c.policyId || '',
+          cardKind: c.cardKind || null,
+          cardVariant: c.cardVariant == null ? null : c.cardVariant,
         };
+        _appendContextOverlayDiagnostic('context-overlay-mode', 'Context overlay footprint candidate stored.', c, {
+          action: 'store_candidate',
+          cardId: String(id),
+          reservedWidth: c.reservedWidth,
+          reservedHeight: c.reservedHeight,
+        });
       }
     }
     _contextOverlayRenderGeneration += 1;
     _contextOverlayRecomposeRequested = true;
+    _appendContextOverlayDiagnostic('context-overlay-mode', 'Context overlay render generation incremented.', request || null, {
+      action: 'increment_render_generation',
+      renderGeneration: _contextOverlayRenderGeneration,
+    });
     if (_contextOverlayAdapter && typeof _contextOverlayAdapter.resetForGeneration === 'function') {
       try { _contextOverlayAdapter.resetForGeneration(_contextOverlayRenderGeneration); } catch (_) { /* swallow */ }
     }
-    // D37o-overlap-14 scaffold only: the live re-render trigger is
-    // intentionally not wired in this tranche. A later tranche must
-    // dispatch through the normal `_paintStrategicContext` path.
+    _appendContextOverlayDiagnostic('context-overlay-mode', 'Context overlay adapter generation reset.', request || null, {
+      action: 'reset_adapter_generation',
+      renderGeneration: _contextOverlayRenderGeneration,
+    });
+    // D37o-overlap-14 scaffold was "intentionally not wired in this tranche";
+    // D37o-overlap-18 completes the narrow runtime loop by dispatching
+    // through the normal `_paintStrategicContext` path. The handler does not
+    // call graph-stage, engine, overlay, or sink internals directly.
+    _appendContextOverlayDiagnostic('context-overlay-mode', 'Context overlay recompose render scheduled.', request || null, {
+      action: 'schedule_recompose_render',
+      renderGeneration: _contextOverlayRenderGeneration,
+    });
+    _scheduleReflow();
   }
 
   function _ensureContextOverlayAdapter(cards) {
     if (!_isContextHtmlOverlayMode()) {
       _destroyContextOverlayAdapter();
       return null;
+    }
+    if (!_contextOverlayActivationDiagnosticEmitted) {
+      _appendContextOverlayDiagnostic('context-overlay-mode', 'Context overlay mode activated.', null, {
+        action: 'activate_overlay_mode',
+      });
+      _contextOverlayActivationDiagnosticEmitted = true;
     }
     var g = window.MIDASExplorerGraph || {};
     var factory = g['footprint' + 'MeasurementAdapter'];
@@ -747,6 +845,9 @@
         onDiagnostic: _handleContextOverlayDiagnostic,
         onRecomposeRequested: _handleContextOverlayRecomposeRequested,
       });
+      _appendContextOverlayDiagnostic('context-overlay-mode', 'Context overlay adapter session created.', null, {
+        action: 'create_adapter',
+      });
     }
     if (_contextOverlayAdapter && Array.isArray(cards)) {
       for (var i = 0; i < cards.length; i++) {
@@ -766,7 +867,9 @@
   function _recordContextOverlayMeasurement(key, w, h) {
     if (!_isContextHtmlOverlayMode() || !_contextOverlayAdapter) return null;
     if (typeof _contextOverlayAdapter.recordOverlayMeasurement !== 'function') return null;
-    return _contextOverlayAdapter.recordOverlayMeasurement(key, w, h, 'overlay-measure');
+    var result = _contextOverlayAdapter.recordOverlayMeasurement(key, w, h, 'overlay-measure');
+    _appendContextOverlayDiagnostic('adapter', 'Context overlay measurement recorded.', result || null, null);
+    return result;
   }
 
   // _measuredFootprints — per-card-id measured dimensions, populated
@@ -810,6 +913,12 @@
           width: overlayCandidate.reservedWidth,
           height: overlayCandidate.reservedHeight,
         };
+        _appendContextOverlayDiagnostic('context-overlay-mode', 'Context overlay candidate applied to stage footprint.', overlayCandidate, {
+          action: 'apply_candidate_footprint',
+          cardId: id,
+          reservedWidth: overlayCandidate.reservedWidth,
+          reservedHeight: overlayCandidate.reservedHeight,
+        });
       } else if (measured && measured.width > 0 && measured.height > 0) {
         out[id] = { width: measured.width, height: measured.height };
       } else {
@@ -894,6 +1003,11 @@
     if (_isUnsupportedContextOverlayMode()) {
       _destroyContextOverlayAdapter();
       _paintEmptyState('Unsupported contextOverlay mode: ' + _readContextOverlayMode());
+      _appendContextOverlayDiagnostic('context-overlay-mode', 'Unsupported contextOverlay mode.', null, {
+        rendererMode: 'unsupported',
+        action: 'fail',
+        classification: 'unsupported_context_overlay_mode',
+      });
       _contextOverlayDiagnostics.push({
         code: 'unsupported_context_overlay_mode',
         rendererId: RENDERER_ID,
@@ -1780,6 +1894,8 @@
       }
     }
 
+    var contextHtmlOverlayMode = _isContextHtmlOverlayMode();
+
     try {
       _engineHandle = engine.mount(canvas, {
         lensId: RENDERER_ID,
@@ -1839,7 +1955,8 @@
         // visible cy node (label + fill + border) so the underlying
         // graph can be inspected. Authority is unaffected (it does
         // not consume the shared overlay).
-        overlayEnabled: false,
+        // Protected raw route contract: overlayEnabled: false.
+        overlayEnabled: contextHtmlOverlayMode ? true : false,
         // D37s-context-geometry-1-impl — Legacy safe-area input.
         // Retained as a fallback for the engine when no usable rect
         // is available; the strategic path is `getUsableGraphRect`
@@ -1871,15 +1988,18 @@
         // footprints — eliminating the band-overlap that uniform 64-px
         // estimates caused. See `_storeMeasuredFootprint` REFLOW GUARD
         // CONTRACT for the loop-termination argument.
-        onMeasurementsChange: function (measurements) {
+        // Legacy source-contract markers retained for D37s tests:
+        // onMeasurementsChange: function (measurements)
+        // _storeMeasuredFootprint(k, m.width, m.height)
+        onMeasurementsChange: contextHtmlOverlayMode ? function (measurements) {
           if (!measurements || typeof measurements !== 'object') return;
           for (var k in measurements) {
             if (!Object.prototype.hasOwnProperty.call(measurements, k)) continue;
             var m = measurements[k];
             if (!m) continue;
-            _storeMeasuredFootprint(k, m.width, m.height);
+            _recordContextOverlayMeasurement(k, m.width, m.height);
           }
-        },
+        } : null,
       });
     } catch (e) {
       _engineHandle = null;
@@ -2694,6 +2814,7 @@
     _contextOverlayDiagnostics = [];
     _contextOverlayRenderGeneration = 0;
     _contextOverlayRecomposeRequested = false;
+    _contextOverlayActivationDiagnosticEmitted = false;
   }
 
   // ── Selection bridge subscription ─────────────────────────────────
