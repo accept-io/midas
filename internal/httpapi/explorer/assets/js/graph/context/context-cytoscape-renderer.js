@@ -100,12 +100,19 @@
   var QUERY_PARAM    = 'contextRenderer';
   var MODE_STRATEGIC = 'strategic';
   var MODE_LEGACY    = 'legacy';
+  var INTERACTION_TOOLBAR_ID = 'context-interaction-toolbar';
 
   // CSS hook class for the renderer-owned root. Note: no rollout-mode
   // word in the class name — it is a renderer DOM hook, not a mode
   // hook.
   var MOUNT_CLASS = 'context-renderer-mount';
   var MOUNT_ATTR  = 'data-context-renderer-mount';
+  var PAN_ICON_SVG = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3v6"/><path d="M5 6L8 3l3 3"/><path d="M3 8h10"/><path d="M5 10l-2 -2 2 -2"/><path d="M11 10l2 -2 -2 -2"/><path d="M5 10l3 3 3 -3"/></svg>';
+  var SELECT_ICON_SVG = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="2 2" aria-hidden="true"><rect x="3" y="3" width="10" height="10"/></svg>';
+
+  function _str(value) {
+    return value == null ? '' : String(value);
+  }
 
   // ── Module state ───────────────────────────────────────────────────
 
@@ -179,6 +186,8 @@
   var _engineHandle    = null;
   var _cy              = null;
   var _cyOverlayHandle = null;
+  var _hoveredConnectorEdge = null;
+  var _interactionToolbarEngineHandle = null;
   // D37s-context-raw-cytoscape-1-impl — Tracks the live paint mode:
   //   • 'empty'  — diagnostic empty-state text in document layout.
   //   • 'graph'  — spatial mode + engine mounted; canvas fills mount.
@@ -1278,7 +1287,20 @@
         target:      ce.data.target,
         kind:        ce.data.edgeKind,
         visualClass: ce.data.visualClass,
-        data:        { dashSemantic: ce.data.dashSemantic },
+        data:        {
+          dashSemantic:       ce.data.dashSemantic,
+          connectorType:      ce.data.connectorType,
+          family:             ce.data.family,
+          label:              ce.data.label,
+          direction:          ce.data.direction,
+          arrowPolicy:        ce.data.arrowPolicy,
+          labelPolicy:        ce.data.labelPolicy,
+          weightPolicy:       ce.data.weightPolicy,
+          statePolicy:        ce.data.statePolicy,
+          accessibilityLabel: ce.data.accessibilityLabel,
+          hoverSummary:       ce.data.hoverSummary,
+          fallback:           ce.data.fallback,
+        },
         classes:     ce.classes,
       });
     }
@@ -1333,7 +1355,28 @@
       // suppresses the Cytoscape default selection halo; this
       // selector exists for lens-specific future styling.
       { selector: 'node.context-node-emphasis-root', style: { 'overlay-opacity': 0 } },
-
+      {
+        selector: 'edge',
+        style: {
+          'label': '',
+          'target-arrow-shape': 'none',
+          'source-arrow-shape': 'none',
+        },
+      },
+      {
+        selector: 'edge.context-edge-arrow-directed',
+        style: {
+          'target-arrow-shape':        'triangle',
+          'target-arrow-color':        serviceColor,
+          'target-arrow-fill':         'filled',
+          'arrow-scale':               1.3,
+          'target-distance-from-node': 16,
+        },
+      },
+      {
+        selector: 'edge.context-edge-arrow-none',
+        style: { 'target-arrow-shape': 'none', 'source-arrow-shape': 'none' },
+      },
       // Per-visual-class edge styling (parity with the strategic
       // Context CSS `.context-connector--*` rules and the original
       // tranche B Cytoscape edge style array).
@@ -1343,11 +1386,11 @@
       },
       {
         selector: 'edge.context-edge-visual-ai_binding',
-        style: { 'line-color': aiBindingColor, 'width': 1.6, 'opacity': 0.88, 'line-style': 'solid' },
+        style: { 'line-color': aiBindingColor, 'width': 1.4, 'opacity': 0.88, 'line-style': 'solid' },
       },
       {
         selector: 'edge.context-edge-visual-authority',
-        style: { 'line-color': authorityColor, 'width': 1.5, 'opacity': 0.82, 'line-style': 'dashed', 'line-dash-pattern': [6, 4] },
+        style: { 'line-color': authorityColor, 'width': 1.4, 'opacity': 0.82, 'line-style': 'dashed', 'line-dash-pattern': [6, 4] },
       },
       {
         selector: 'edge.context-edge-visual-evidence',
@@ -1355,7 +1398,23 @@
       },
       {
         selector: 'edge.context-edge-visual-gap',
-        style: { 'line-color': gapColor,       'width': 1.6, 'opacity': 0.92, 'line-style': 'dashed', 'line-dash-pattern': [5, 5] },
+        style: { 'line-color': gapColor,       'width': 1.4, 'opacity': 0.92, 'line-style': 'dashed', 'line-dash-pattern': [5, 5] },
+      },
+      { selector: 'edge.context-edge-family-structural.context-edge-arrow-directed',            style: { 'target-arrow-color': serviceColor } },
+      { selector: 'edge.context-edge-family-dependency.context-edge-arrow-directed',            style: { 'target-arrow-color': aiBindingColor } },
+      { selector: 'edge.context-edge-family-runtime_operational.context-edge-arrow-directed',   style: { 'target-arrow-color': evidenceColor } },
+      { selector: 'edge.context-edge-family-evidence.context-edge-arrow-directed',              style: { 'target-arrow-color': evidenceColor } },
+      { selector: 'edge.context-edge-family-drift_risk_exception.context-edge-arrow-directed',  style: { 'target-arrow-color': gapColor } },
+      { selector: 'edge.context-edge-family-authority_governance.context-edge-arrow-directed',  style: { 'target-arrow-color': authorityColor } },
+      {
+        selector: 'edge.context-edge-hovered',
+        style: {
+          'width':                     1.8,
+          'opacity':                   1,
+          'z-index':                   20,
+          'arrow-scale':               1.5,
+          'target-distance-from-node': 20,
+        },
       },
 
       // Generic dash-semantic markers (forward-compat with future
@@ -1560,6 +1619,11 @@
         'context-edge-visual-' + visualClass,
       ];
       if (c.edgeKind) classes.push('context-edge-kind-' + String(c.edgeKind));
+      if (c.connectorType) classes.push('context-edge-type-' + String(c.connectorType));
+      if (c.family) classes.push('context-edge-family-' + String(c.family));
+      if (c.arrowPolicy) classes.push('context-edge-arrow-' + String(c.arrowPolicy));
+      if (c.labelPolicy) classes.push('context-edge-label-' + String(c.labelPolicy));
+      if (c.weightPolicy) classes.push('context-edge-weight-' + String(c.weightPolicy));
       var dashSemantic = 'solid';
       if (c.dashPattern && typeof c.dashPattern === 'object' && c.dashPattern !== null) {
         dashSemantic = 'dashed';
@@ -1572,14 +1636,308 @@
           source:      srcId,
           target:      dstId,
           edgeKind:    String(c.edgeKind || ''),
+          connectorType: String(c.connectorType || c.edgeKind || ''),
+          family:      String(c.family || ''),
           visualClass: visualClass,
           dashSemantic: dashSemantic,
+          label:       String(c.label || c.hoverLabel || ''),
+          direction:   String(c.direction || ''),
+          arrowPolicy: String(c.arrowPolicy || ''),
+          labelPolicy: String(c.labelPolicy || 'hover'),
+          weightPolicy: String(c.weightPolicy || 'none'),
+          statePolicy: String(c.statePolicy || ''),
+          accessibilityLabel: String(c.accessibilityLabel || c.ariaText || ''),
+          hoverSummary: String(c.hoverSummary || c.hoverLabel || c.label || ''),
+          fallback:    c.fallback === true,
         },
         classes: classes.join(' '),
         selectable: false,
       });
     }
     return out;
+  }
+
+  function _humanizeConnectorType(type) {
+    var raw = _str(type);
+    if (!raw) return '';
+    return raw.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+
+  function _edgeDisplayName(node) {
+    if (!node) return '';
+    var full = '';
+    try { full = _str(node.data('fullLabel')); } catch (_) { full = ''; }
+    if (full) return full;
+    var label = '';
+    try { label = _str(node.data('label')); } catch (_) { label = ''; }
+    if (label) return label;
+    try { return _str(node.id()); } catch (_) { return ''; }
+  }
+
+  function _connectorTooltipPayload(edge) {
+    if (!edge) return null;
+    function data(name) {
+      try { return _str(edge.data(name)); } catch (_) { return ''; }
+    }
+    var label = data('label') || data('connectorLabel') || _humanizeConnectorType(data('connectorType') || data('edgeKind'));
+    if (!label) label = 'Connector';
+    var summary = data('hoverSummary') || data('accessibilityLabel');
+    if (!summary) {
+      var sourceLabel = _edgeDisplayName(edge.source && edge.source());
+      var targetLabel = _edgeDisplayName(edge.target && edge.target());
+      if (sourceLabel || targetLabel) summary = sourceLabel + ' -> ' + targetLabel;
+    }
+    return {
+      label: label,
+      summary: summary,
+    };
+  }
+
+  function _connectorTooltipPosition(evt, container) {
+    var original = evt && evt.originalEvent;
+    if (original && typeof original.clientX === 'number' && typeof original.clientY === 'number') {
+      return { clientX: original.clientX, clientY: original.clientY };
+    }
+    var rendered = evt && evt.renderedPosition;
+    if (rendered && container && typeof container.getBoundingClientRect === 'function') {
+      var rect = container.getBoundingClientRect();
+      return { clientX: rect.left + rendered.x, clientY: rect.top + rendered.y };
+    }
+    return null;
+  }
+
+  function _showContextConnectorTooltip(edge, evt, container) {
+    var tip = document.getElementById('gmap-connector-tooltip');
+    if (!tip) return;
+    var payload = _connectorTooltipPayload(edge);
+    if (!payload) return;
+    var kind = tip.querySelector('.gmap-connector-tooltip-kind');
+    var route = tip.querySelector('.gmap-connector-tooltip-route');
+    if (kind) kind.textContent = payload.label;
+    if (route) route.textContent = payload.summary || '';
+    var point = _connectorTooltipPosition(evt, container);
+    var body = document.getElementsByClassName('governance-map-body')[0];
+    if (point && body && typeof body.getBoundingClientRect === 'function') {
+      var rect = body.getBoundingClientRect();
+      tip.style.left = (point.clientX - rect.left + 12) + 'px';
+      tip.style.top = (point.clientY - rect.top + 12) + 'px';
+    }
+    tip.removeAttribute('hidden');
+  }
+
+  function _hideContextConnectorTooltip() {
+    var tip = document.getElementById('gmap-connector-tooltip');
+    if (tip) {
+      tip.setAttribute('hidden', '');
+      var kind = tip.querySelector('.gmap-connector-tooltip-kind');
+      var route = tip.querySelector('.gmap-connector-tooltip-route');
+      if (kind) kind.textContent = '';
+      if (route) route.textContent = '';
+    }
+    if (_hoveredConnectorEdge) {
+      try { _hoveredConnectorEdge.removeClass('context-edge-hovered'); } catch (_) { /* swallow */ }
+      _hoveredConnectorEdge = null;
+    }
+  }
+
+  function _wireContextConnectorHover(readyCtx) {
+    var cy = readyCtx && readyCtx.cytoscape;
+    if (!cy || typeof cy.on !== 'function') return null;
+    var container = readyCtx.container || null;
+    var onOver = function (evt) {
+      var edge = evt && evt.target;
+      if (!edge) return;
+      if (_hoveredConnectorEdge && _hoveredConnectorEdge !== edge) {
+        try { _hoveredConnectorEdge.removeClass('context-edge-hovered'); } catch (_) { /* swallow */ }
+      }
+      _hoveredConnectorEdge = edge;
+      try { edge.addClass('context-edge-hovered'); } catch (_) { /* swallow */ }
+      _showContextConnectorTooltip(edge, evt, container);
+    };
+    var onMove = function (evt) {
+      var edge = evt && evt.target;
+      if (!edge) return;
+      _showContextConnectorTooltip(edge, evt, container);
+    };
+    var onOut = function () {
+      _hideContextConnectorTooltip();
+    };
+    var hide = function () {
+      _hideContextConnectorTooltip();
+    };
+    try { cy.on('mouseover', 'edge', onOver); } catch (_) { /* swallow */ }
+    try { cy.on('mousemove', 'edge', onMove); } catch (_) { /* swallow */ }
+    try { cy.on('mouseout', 'edge', onOut); } catch (_) { /* swallow */ }
+    try { cy.on('pan zoom layoutstart', hide); } catch (_) { /* swallow */ }
+    return function () {
+      try { cy.off('mouseover', 'edge', onOver); } catch (_) { /* swallow */ }
+      try { cy.off('mousemove', 'edge', onMove); } catch (_) { /* swallow */ }
+      try { cy.off('mouseout', 'edge', onOut); } catch (_) { /* swallow */ }
+      try { cy.off('pan zoom layoutstart', hide); } catch (_) { /* swallow */ }
+      _hideContextConnectorTooltip();
+    };
+  }
+
+  function _contextInteractionModes() {
+    return [
+      {
+        id: 'pan',
+        label: 'Pan Canvas',
+        tooltip: 'Pan Canvas',
+        ariaLabel: 'Pan canvas',
+        icon: PAN_ICON_SVG,
+        cytoscapeOptions: {
+          userPanningEnabled: true,
+          nodesGrabbable: false,
+          boxSelectionEnabled: false,
+        },
+      },
+      {
+        id: 'select',
+        label: 'Select Nodes',
+        tooltip: 'Select Nodes',
+        ariaLabel: 'Select nodes',
+        icon: SELECT_ICON_SVG,
+        cytoscapeOptions: {
+          userPanningEnabled: false,
+          nodesGrabbable: true,
+          boxSelectionEnabled: true,
+        },
+      },
+    ];
+  }
+
+  function _contextInteractionToolbarActive(ctx) {
+    if (!_interactionToolbarEngineHandle) return false;
+    if (!ctx || ctx.rendererId !== RENDERER_ID) return false;
+    if (ctx.lensId && ctx.lensId !== RENDERER_ID) return false;
+    return _isStrategicMode();
+  }
+
+  function _registerContextInteractionToolbar(readyCtx) {
+    var handle = readyCtx && readyCtx.handle;
+    if (!handle || typeof handle.setInteractionMode !== 'function') return null;
+    var g = window.MIDASExplorerGraph || {};
+    var toolbar = g.graphInteractionModeToolbar;
+    if (!toolbar || typeof toolbar.register !== 'function' || typeof toolbar.activate !== 'function') return null;
+
+    _interactionToolbarEngineHandle = handle;
+    toolbar.register({
+      id: INTERACTION_TOOLBAR_ID,
+      rendererId: RENDERER_ID,
+      lensId: RENDERER_ID,
+      defaultMode: 'pan',
+      modes: _contextInteractionModes(),
+      getController: function () { return _interactionToolbarEngineHandle; },
+      enabled: _contextInteractionToolbarActive,
+      cleanup: function () { _interactionToolbarEngineHandle = null; },
+    });
+    toolbar.activate(INTERACTION_TOOLBAR_ID);
+
+    return function () {
+      if (toolbar && typeof toolbar.unregister === 'function') {
+        try { toolbar.unregister(INTERACTION_TOOLBAR_ID); } catch (_) { /* swallow */ }
+      } else if (toolbar && typeof toolbar.deactivate === 'function') {
+        try { toolbar.deactivate(); } catch (_) { /* swallow */ }
+      }
+      _interactionToolbarEngineHandle = null;
+    };
+  }
+
+  function _contextSelectionSetBridge() {
+    var g = window.MIDASExplorerGraph || {};
+    var bridge = g.graphSelectionBridge;
+    if (!bridge || typeof bridge.replaceSelectionSet !== 'function' || typeof bridge.clearSelectionSet !== 'function') {
+      return null;
+    }
+    return bridge;
+  }
+
+  function _contextSelectionSetItemFromNode(node) {
+    if (!node) return null;
+    var id = '';
+    try { id = String(node.id() || ''); } catch (_) { id = ''; }
+    if (!id) return null;
+
+    var data = {};
+    try { data = node.data() || {}; } catch (_) { data = {}; }
+    var card = _cardsById[id] || null;
+    var label = '';
+    if (card && card.name != null && String(card.name).length > 0) label = String(card.name);
+    else if (card && card.label != null) label = String(card.label);
+    else if (data.fullLabel != null && String(data.fullLabel).length > 0) label = String(data.fullLabel);
+    else if (data.label != null) label = String(data.label);
+    else label = id;
+
+    return {
+      id:            id,
+      kind:          String((card && card.kind) || data.kind || ''),
+      label:         label,
+      sourceNodeRef: (card && card.sourceNodeRef) || data.sourceNodeRef || id,
+      card:          card,
+    };
+  }
+
+  function _contextSelectionSetItemsFromCy(cy) {
+    var items = [];
+    if (!cy || typeof cy.nodes !== 'function') return items;
+    var selected = null;
+    try { selected = cy.nodes(':selected'); } catch (_) { selected = null; }
+    if (!selected || typeof selected.length !== 'number') return items;
+    for (var i = 0; i < selected.length; i++) {
+      var item = _contextSelectionSetItemFromNode(selected[i]);
+      if (item) items.push(item);
+    }
+    return items;
+  }
+
+  function _contextSelectionSetItemsFromNodes(nodes) {
+    var items = [];
+    if (!nodes || typeof nodes.length !== 'number') return items;
+    for (var i = 0; i < nodes.length; i++) {
+      var item = _contextSelectionSetItemFromNode(nodes[i]);
+      if (item) items.push(item);
+    }
+    return items;
+  }
+
+  function _clearContextSelectionSet() {
+    var bridge = _contextSelectionSetBridge();
+    if (!bridge) return;
+    try { bridge.clearSelectionSet({ lens: RENDERER_ID }); } catch (_) { /* swallow */ }
+  }
+
+  function clearSelectionSet() {
+    if (_engineHandle && typeof _engineHandle.clearSelectionSet === 'function') {
+      try { _engineHandle.clearSelectionSet(); return; } catch (_) { /* swallow */ }
+    }
+    _clearContextSelectionSet();
+  }
+
+  function _publishContextSelectionSet(evt) {
+    var bridge = _contextSelectionSetBridge();
+    if (!bridge) return;
+    if (evt && evt.type === 'clear') {
+      _clearContextSelectionSet();
+      return;
+    }
+    var items = _contextSelectionSetItemsFromNodes(evt && evt.selectedNodes);
+    if (!items.length) {
+      _clearContextSelectionSet();
+      return;
+    }
+    try {
+      bridge.replaceSelectionSet(items, {
+        lens:      RENDERER_ID,
+        primaryId: (evt && evt.primaryId) || items[0].id || null,
+      });
+    } catch (_) { /* swallow */ }
+  }
+
+  function _registerContextSelectionSetCleanup() {
+    return function () {
+      _clearContextSelectionSet();
+    };
   }
 
   // _readCssVar reads a `--foo` custom property off the document root
@@ -1694,7 +2052,25 @@
           'line-color':           serviceColor,
           'target-arrow-shape':   'none',
           'source-arrow-shape':   'none',
+          'label':                '',
           'opacity':              0.78,
+        },
+      },
+      {
+        selector: 'edge.context-edge-arrow-directed',
+        style: {
+          'target-arrow-shape':        'triangle',
+          'target-arrow-color':        serviceColor,
+          'target-arrow-fill':         'filled',
+          'arrow-scale':               1.3,
+          'target-distance-from-node': 16,
+        },
+      },
+      {
+        selector: 'edge.context-edge-arrow-none',
+        style: {
+          'target-arrow-shape': 'none',
+          'source-arrow-shape': 'none',
         },
       },
 
@@ -1713,22 +2089,22 @@
           'line-style': 'solid',
         },
       },
-      // ai_binding → primary, 1.6, 0.88, solid
+      // ai_binding → primary, uniform taxonomy width, 0.88, solid
       {
         selector: 'edge.context-edge-visual-ai_binding',
         style: {
           'line-color': aiBindingColor,
-          'width':      1.6,
+          'width':      1.4,
           'opacity':    0.88,
           'line-style': 'solid',
         },
       },
-      // authority → primary, 1.5, 0.82, dashed (6,4)
+      // authority → primary, uniform taxonomy width, 0.82, dashed (6,4)
       {
         selector: 'edge.context-edge-visual-authority',
         style: {
           'line-color':        authorityColor,
-          'width':             1.5,
+          'width':             1.4,
           'opacity':           0.82,
           'line-style':        'dashed',
           'line-dash-pattern': [6, 4],
@@ -1744,18 +2120,51 @@
           'line-style': 'solid',
         },
       },
-      // gap → badge-bad, 1.6, 0.92, dashed (5,5)
+      // gap → badge-bad, uniform taxonomy width, 0.92, dashed (5,5)
       {
         selector: 'edge.context-edge-visual-gap',
         style: {
           'line-color':        gapColor,
-          'width':             1.6,
+          'width':             1.4,
           'opacity':           0.92,
           'line-style':        'dashed',
           'line-dash-pattern': [5, 5],
         },
       },
-
+      {
+        selector: 'edge.context-edge-family-structural.context-edge-arrow-directed',
+        style: { 'target-arrow-color': serviceColor },
+      },
+      {
+        selector: 'edge.context-edge-family-dependency.context-edge-arrow-directed',
+        style: { 'target-arrow-color': aiBindingColor },
+      },
+      {
+        selector: 'edge.context-edge-family-runtime_operational.context-edge-arrow-directed',
+        style: { 'target-arrow-color': evidenceColor },
+      },
+      {
+        selector: 'edge.context-edge-family-evidence.context-edge-arrow-directed',
+        style: { 'target-arrow-color': evidenceColor },
+      },
+      {
+        selector: 'edge.context-edge-family-drift_risk_exception.context-edge-arrow-directed',
+        style: { 'target-arrow-color': gapColor },
+      },
+      {
+        selector: 'edge.context-edge-family-authority_governance.context-edge-arrow-directed',
+        style: { 'target-arrow-color': authorityColor },
+      },
+      {
+        selector: 'edge.context-edge-hovered',
+        style: {
+          'width':                     1.8,
+          'opacity':                   1,
+          'z-index':                   20,
+          'arrow-scale':               1.5,
+          'target-distance-from-node': 20,
+        },
+      },
       // ── Dash semantic markers ──
       // The connector model emits `dashSemantic: 'solid' | 'dashed'`
       // on every edge, and the edge mapper appends `context-edge-
@@ -1937,6 +2346,10 @@
           if (!bridge || typeof bridge.selectCard !== 'function') return;
           try { bridge.selectCard(card); } catch (_) { /* swallow */ }
         },
+        selectionSetAdapter: function (evt, handle) {
+          void handle;
+          _publishContextSelectionSet(evt);
+        },
         cameraAdapter: function (handle) {
           return _buildContextEngineCameraDelegate(handle);
         },
@@ -2000,6 +2413,22 @@
             _recordContextOverlayMeasurement(k, m.width, m.height);
           }
         } : null,
+        onReady: function (readyCtx) {
+          var hoverCleanup = _wireContextConnectorHover(readyCtx);
+          var toolbarCleanup = _registerContextInteractionToolbar(readyCtx);
+          var selectionSetCleanup = _registerContextSelectionSetCleanup();
+          return function () {
+            if (selectionSetCleanup) {
+              try { selectionSetCleanup(); } catch (_) { /* swallow */ }
+            }
+            if (toolbarCleanup) {
+              try { toolbarCleanup(); } catch (_) { /* swallow */ }
+            }
+            if (hoverCleanup) {
+              try { hoverCleanup(); } catch (_) { /* swallow */ }
+            }
+          };
+        },
       });
     } catch (e) {
       _engineHandle = null;
@@ -3043,6 +3472,7 @@
     isAvailable:         isAvailable,
     isActive:            isActive,
     getLastModelSummary: getLastModelSummary,
+    clearSelectionSet:   clearSelectionSet,
     // D37p-impl-3 — diagnostic accessor for the shared camera
     // instance. Returns null when spatial mode is not active or the
     // camera has not yet been created.

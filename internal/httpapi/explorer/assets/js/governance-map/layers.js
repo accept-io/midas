@@ -60,12 +60,18 @@
 
   function gmapConnectorKindFromCls(cls) {
     const s = String(cls || '');
-    // Context lens connector classes (unchanged).
-    if (s.indexOf('connector-ai-binding') >= 0) return { kind: 'ai_binding',   label: 'AI binding' };
-    if (s.indexOf('connector-authority')  >= 0) return { kind: 'authority',    label: 'Authority' };
-    if (s.indexOf('connector-evidence')   >= 0) return { kind: 'evidence',     label: 'Evidence' };
-    if (s.indexOf('connector-gap')        >= 0) return { kind: 'coverage_gap', label: 'Coverage gap' };
-    if (s.indexOf('connector-service')    >= 0) return { kind: 'service',      label: 'Service relationship' };
+    // Context lens connector classes.
+    if (s.indexOf('context-connector-family-drift_risk_exception') >= 0) return { kind: 'drift_risk_exception', label: 'Drift / gap' };
+    if (s.indexOf('context-connector-family-evidence')             >= 0) return { kind: 'evidence',             label: 'Evidence signal' };
+    if (s.indexOf('context-connector-family-runtime_operational')  >= 0) return { kind: 'runtime_operational',  label: 'Runtime signal' };
+    if (s.indexOf('context-connector-family-authority_governance') >= 0) return { kind: 'authority_governance', label: 'Governance' };
+    if (s.indexOf('context-connector-family-dependency')           >= 0) return { kind: 'dependency',           label: 'Depends / supports' };
+    if (s.indexOf('context-connector-family-structural')           >= 0) return { kind: 'structural',           label: 'Contains' };
+    if (s.indexOf('connector-ai-binding') >= 0) return { kind: 'dependency',           label: 'Depends / supports' };
+    if (s.indexOf('connector-authority')  >= 0) return { kind: 'authority_governance', label: 'Governance' };
+    if (s.indexOf('connector-evidence')   >= 0) return { kind: 'evidence',             label: 'Evidence signal' };
+    if (s.indexOf('connector-gap')        >= 0) return { kind: 'drift_risk_exception', label: 'Drift / gap' };
+    if (s.indexOf('connector-service')    >= 0) return { kind: 'structural',           label: 'Contains' };
     // D32h-impl-1 — Authority lens connector classes. Names mirror the
     // wire-level edge kinds the adapter emits (authority-graph-
     // adapter.js connectorClassForEdge). Per-edge labels supply the

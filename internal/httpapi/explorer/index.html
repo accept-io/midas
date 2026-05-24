@@ -62,7 +62,7 @@
 <!-- D37o-impl-2 — Context strategic renderer skeleton. Scoped to `.midas-graph-viewport[data-active-renderer="context"]`. Opt-in via `?contextRenderer=strategic`; legacy native Context renderer remains the default. -->
 <link rel="stylesheet" href="/explorer/assets/css/context-cytoscape-renderer.css">
 <!-- D37p-pane-1 — Shared Selected-Object Pane Shell styles. Generic, lens-agnostic wrapper / header / body / footer / section scaffolding scoped to a generic `[data-selected-object-pane]` attribute that future lens wrappers (Authority, Knowledge) can opt into. Loaded before the Context pane stylesheet so lens-specific identity rules cascade over the shared shell. -->
-<link rel="stylesheet" href="/explorer/assets/css/graph-selected-object-pane.css"><link rel="stylesheet" href="/explorer/assets/css/graph-inspector.css"><!-- D37p-graph-inspector-platform-substrate-impl — hidden reusable graph inspector chrome. -->
+<link rel="stylesheet" href="/explorer/assets/css/graph-selected-object-pane.css"><link rel="stylesheet" href="/explorer/assets/css/graph-interaction-mode-toolbar.css"><!-- D37p-graph-interaction-mode-engine-impl — hidden reusable Pan / Select toolbar chrome. --><link rel="stylesheet" href="/explorer/assets/css/graph-inspector.css"><!-- D37p-graph-inspector-platform-substrate-impl — hidden reusable graph inspector chrome. -->
 <!-- D37o-impl-6 — Context Selected-Object Pane. Scoped to the strategic Context renderer's active scope. Coexists with the right drawer. -->
 <link rel="stylesheet" href="/explorer/assets/css/context-selected-object-pane.css">
 <!-- D36a-knowledge-graph-renderer-shell — Token-aligned placeholder styling for the Knowledge Graph renderer shell. Rules scoped under .midas-graph-viewport[data-active-renderer="knowledge-graph"] so they apply only when the shell is the active renderer. -->
@@ -541,17 +541,17 @@
           <!-- Phase 2B Step 27 (D24c) — connection key relocated from
                toolbar legend row to bottom-centre canvas overlay.
                Ambient reference content; low-contrast against
-               graph; same five edge-kind labels and swatches as
-               before. Does not extend canvas scroll dimensions
+                graph; taxonomy-family labels and swatches. Does not
+                extend canvas scroll dimensions
                (position: absolute against .governance-map-body,
                which is position: relative since D22). -->
           <div class="gmap-legend-overlay" aria-label="Connector legend">
             <span class="gmap-connection-key">
-              <span class="gmap-legend-item"><span class="gmap-legend-swatch"></span>Service relationship</span>
-              <span class="gmap-legend-item"><span class="gmap-legend-swatch ai-binding"></span>AI binding</span>
-              <span class="gmap-legend-item"><span class="gmap-legend-swatch authority"></span>Authority</span>
-              <span class="gmap-legend-item"><span class="gmap-legend-swatch evidence"></span>Evidence</span>
-              <span class="gmap-legend-item"><span class="gmap-legend-swatch gap"></span>Coverage gap</span>
+              <span class="gmap-legend-item"><span class="gmap-legend-swatch"></span>Contains</span>
+              <span class="gmap-legend-item"><span class="gmap-legend-swatch ai-binding"></span>Depends / supports</span>
+              <span class="gmap-legend-item"><span class="gmap-legend-swatch authority"></span>Governance</span>
+              <span class="gmap-legend-item"><span class="gmap-legend-swatch evidence"></span>Evidence signal</span>
+              <span class="gmap-legend-item"><span class="gmap-legend-swatch gap"></span>Drift / gap</span>
             </span>
           </div>
           <!-- D26h-impl — Connector hover relationship preview tooltip.
@@ -599,7 +599,7 @@
             <div class="gmap-context-selected-object-pane-body" data-context-selected-object-pane-body tabindex="-1"></div>
             <footer class="gmap-context-selected-object-pane-footer" data-context-selected-object-pane-footer></footer>
           </aside>
-          <div class="graph-inspector-platform" data-graph-inspector-platform aria-hidden="true" hidden><nav class="graph-inspector-toolbar" data-graph-inspector-toolbar role="toolbar" aria-label="Graph inspector"></nav><aside class="graph-inspector-panel" data-graph-inspector-panel role="complementary" aria-label="Graph inspector panel" tabindex="-1" hidden><header class="graph-inspector-panel-header" data-graph-inspector-panel-header><h2 class="graph-inspector-panel-title" data-graph-inspector-panel-title></h2><p class="graph-inspector-panel-subtitle" data-graph-inspector-panel-subtitle hidden></p></header><div class="graph-inspector-panel-body" data-graph-inspector-panel-body></div><footer class="graph-inspector-panel-footer" data-graph-inspector-panel-footer></footer></aside></div>
+          <div class="graph-interaction-mode-toolbar" data-graph-interaction-mode-toolbar role="toolbar" aria-label="Graph interaction mode" aria-hidden="true" hidden></div><div class="graph-inspector-platform" data-graph-inspector-platform aria-hidden="true" hidden><nav class="graph-inspector-toolbar" data-graph-inspector-toolbar role="toolbar" aria-label="Graph inspector"></nav><aside class="graph-inspector-panel" data-graph-inspector-panel role="complementary" aria-label="Graph inspector panel" tabindex="-1" hidden><header class="graph-inspector-panel-header" data-graph-inspector-panel-header><h2 class="graph-inspector-panel-title" data-graph-inspector-panel-title></h2><p class="graph-inspector-panel-subtitle" data-graph-inspector-panel-subtitle hidden></p></header><div class="graph-inspector-panel-body" data-graph-inspector-panel-body></div><footer class="graph-inspector-panel-footer" data-graph-inspector-panel-footer></footer></aside></div>
           </div><!-- /.midas-graph-viewport -->
         </div>
         <!-- Phase 2B Step 36 (D25b) — Bottom evidence and governance
@@ -1722,7 +1722,7 @@
 <!-- D37p-platform-3 — Active Graph Camera Command Bus. Lens-aware dispatcher that routes locked toolbar commands (zoomIn / zoomOut / fit / reset / focusRoot / focusSelected / setZoom / getZoom) to the currently-active lens's delegate. Pure platform module: registers no delegates and wires no toolbar buttons in this tranche. Loaded after graph-camera-controller.js so delegates can wrap controller instances, and before lens renderers so they may opt into registration in later tranches. -->
 <script src="/explorer/assets/js/graph/graph-platform/graph-camera-bus.js"></script>
 <!-- D37p-impl-4 — Camera Toolbar Adapter. Wires the existing gmap-camera-cluster buttons to graphCameraBus.<command>() and registers the native-context (legacy Context) delegate that wraps the existing graph-camera.js surface. Lens renderers (Authority, strategic Context) register their own delegates from their own modules. -->
-<script src="/explorer/assets/js/graph/graph-platform/graph-camera-toolbar-adapter.js"></script>
+<script src="/explorer/assets/js/graph/graph-platform/graph-camera-toolbar-adapter.js"></script><script src="/explorer/assets/js/graph/graph-platform/graph-interaction-mode-toolbar.js"></script><!-- D37p-graph-interaction-mode-engine-impl — no graph registers in this tranche. -->
 <!-- D37o-regress-2 — Runtime graph geometry sentinel. Zero-dependency, passive graph-platform diagnostic exposed as MIDASExplorerGraph.geometry. Uses plain browser geometry APIs only and runs automatically only when graphGeometryDiag=1 is present. -->
 <script src="/explorer/assets/js/graph/graph-platform/graph-geometry-sentinel.js"></script>
 <!-- D37r-tranche-B'' — Cytoscape vendor library moved earlier in the load order so `window.cytoscape` is defined before the engine module's IIFE evaluates. The pre-tranche-B'' position (after Authority's PoC) created a script-load race that Context's renderer worked around with a rAF retry; the engine's lifecycle assumes synchronous availability and the retry is deleted. Vendor library is the MIT-licensed Cytoscape 3.30.2 distribution. -->
@@ -4846,11 +4846,11 @@
     // current truth).
     const kindLabel = (function () {
       switch (kindAttr) {
-        case 'service':      return 'Service relationship';
-        case 'ai_binding':   return 'AI binding';
-        case 'authority':    return 'Authority';
-        case 'evidence':     return 'Evidence';
-        case 'coverage_gap': return 'Coverage gap';
+        case 'service':      return 'contains';
+        case 'ai_binding':   return 'depends / supports';
+        case 'authority':    return 'governance';
+        case 'evidence':     return 'evidence signal';
+        case 'coverage_gap': return 'drift / gap';
         default:             return 'Connector';
       }
     })();

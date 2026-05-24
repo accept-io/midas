@@ -39,6 +39,10 @@
 //   • setActiveLens(lensId) / getActiveLens()
 //   • selectCard(payload, opts?) / clearSelection()
 //   • getSelected() / getCurrentCard() / getCurrentNodeRef()
+//   • selectSet(payload, opts?) / replaceSelectionSet(items, opts?) /
+//     extendSelectionSet(items, opts?) / toggleSelectionInSet(item, opts?) /
+//     clearSelectionSet(opts?) / getSelectionSet() /
+//     subscribeSelectionSet(handler)
 //   • subscribe(handler) / subscribeLens(lensId, handler)
 //   • handleAction(action) / registerActionHandler / unregisterActionHandler
 //   • destroy()
@@ -90,6 +94,8 @@
   var EVENTS = Object.freeze([
     'selection_changed',
     'selection_cleared',
+    'selection_set_changed',
+    'selection_set_cleared',
     'action_dispatched',
     'action_error',
     'lens_registered',
@@ -104,12 +110,14 @@
 
   // ── Module state ───────────────────────────────────────────────────
 
-  var _selection      = null;   // normalised payload or null
-  var _activeLensId   = null;
-  var _registry       = {};     // lensId → delegate
-  var _subscribers    = [];     // [{ handler, lens|null }]
-  var _actionHandlers = {};     // action.kind → handler
-  var _destroyed      = false;
+  var _selection               = null;   // normalised payload or null
+  var _selectionSet            = null;   // normalised selection-set payload
+  var _activeLensId            = null;
+  var _registry                = {};     // lensId → delegate
+  var _subscribers             = [];     // [{ handler, lens|null }]
+  var _selectionSetSubscribers = [];     // [{ handler }]
+  var _actionHandlers          = {};     // action.kind → handler
+  var _destroyed               = false;
 
   // ── Helpers ────────────────────────────────────────────────────────
 
@@ -160,6 +168,108 @@
     };
   }
 
+  function _cloneSelectionSetItem(item) {
+    if (!_isPlainObject(item)) return null;
+    var out = {};
+    for (var k in item) {
+      if (Object.prototype.hasOwnProperty.call(item, k)) out[k] = item[k];
+    }
+    out.id = _str(out.id || out.cardId || '');
+    return out.id ? out : null;
+  }
+
+  function _normaliseSelectionSetItem(item) {
+    if (!_isPlainObject(item)) return null;
+    var card = _isPlainObject(item.card) ? item.card : null;
+    var id = _str(item.id || item.cardId || (card && card.id) || '');
+    if (!id) return null;
+    var out = {};
+    for (var k in item) {
+      if (Object.prototype.hasOwnProperty.call(item, k)) out[k] = item[k];
+    }
+    out.id = id;
+    out.kind = _str(item.kind || (card && card.kind) || '');
+    out.label = _str(item.label || item.name || (card && (card.label || card.name)) || '');
+    out.sourceNodeRef = item.sourceNodeRef || (card && card.sourceNodeRef) || null;
+    if (card) out.card = card;
+    return out;
+  }
+
+  function _cloneSelectionSet(set) {
+    var src = _isPlainObject(set) ? set : {};
+    var ids = Array.isArray(src.ids) ? src.ids.slice() : [];
+    var items = [];
+    if (Array.isArray(src.items)) {
+      for (var i = 0; i < src.items.length; i++) {
+        var item = _cloneSelectionSetItem(src.items[i]);
+        if (item) items.push(item);
+      }
+    }
+    return {
+      lens:       src.lens || null,
+      primaryId: src.primaryId || null,
+      ids:        ids,
+      items:      items,
+      mode:       _str(src.mode || 'replace') || 'replace',
+      selectedAt: typeof src.selectedAt === 'number' ? src.selectedAt : _now(),
+    };
+  }
+
+  function _normaliseSelectionSet(payload, opts) {
+    opts = _isPlainObject(opts) ? opts : {};
+    payload = _isPlainObject(payload) ? payload : {};
+
+    var lens = _str(payload.lens || opts.lens || _activeLensId || '');
+    var mode = _str(payload.mode || opts.mode || 'replace') || 'replace';
+    var selectedAt = typeof payload.selectedAt === 'number'
+      ? payload.selectedAt
+      : (typeof opts.selectedAt === 'number' ? opts.selectedAt : _now());
+
+    var seen = {};
+    var ids = [];
+    var items = [];
+
+    function addItem(raw) {
+      var item = _normaliseSelectionSetItem(raw);
+      if (!item || !item.id || seen[item.id]) return;
+      seen[item.id] = true;
+      ids.push(item.id);
+      items.push(item);
+    }
+
+    if (Array.isArray(payload.items)) {
+      for (var i = 0; i < payload.items.length; i++) addItem(payload.items[i]);
+    }
+    if (Array.isArray(payload.ids)) {
+      for (var j = 0; j < payload.ids.length; j++) {
+        addItem({ id: payload.ids[j] });
+      }
+    }
+
+    var primaryId = _str(payload.primaryId || opts.primaryId || '');
+    if (!primaryId || !seen[primaryId]) primaryId = ids.length ? ids[0] : null;
+
+    return {
+      lens:       lens || null,
+      primaryId: primaryId,
+      ids:        ids,
+      items:      items,
+      mode:       mode,
+      selectedAt: selectedAt,
+    };
+  }
+
+  function _emptySelectionSet(lens, mode) {
+    return _normaliseSelectionSet({
+      lens:       lens || _activeLensId || null,
+      ids:        [],
+      items:      [],
+      primaryId:  null,
+      mode:       mode || 'replace',
+      selectedAt: _now(),
+    });
+  }
+
   function _notify(event) {
     if (_destroyed) return;
     if (!_isPlainObject(event) || !event.type) return;
@@ -173,6 +283,18 @@
       if (entry.lens != null && event.lens != null && entry.lens !== event.lens) continue;
       try { entry.handler(event); }
       catch (_) { /* one bad subscriber must not stop the rest */ }
+    }
+  }
+
+  function _notifySelectionSet(event) {
+    if (_destroyed) return;
+    if (!_isPlainObject(event) || !event.type) return;
+    var snap = _selectionSetSubscribers.slice();
+    for (var i = 0; i < snap.length; i++) {
+      var entry = snap[i];
+      if (!entry || typeof entry.handler !== 'function') continue;
+      try { entry.handler(event); }
+      catch (_) { /* one bad selection-set subscriber must not stop the rest */ }
     }
   }
 
@@ -262,6 +384,94 @@
     return _selection ? _selection.sourceNodeRef : null;
   }
 
+  // ── Public API: selection sets ───────────────────────────────────────────
+  //
+  // Selection-set state is the shared, lens-neutral foundation for
+  // future rectangular Multi-Select / Box Select. It does not replace
+  // the existing single-selection APIs in this tranche; both surfaces
+  // can coexist while graph lenses migrate at their own pace.
+
+  function selectSet(payload, opts) {
+    if (_destroyed) return getSelectionSet();
+    var norm = _normaliseSelectionSet(payload, opts);
+    _selectionSet = _cloneSelectionSet(norm);
+    var event = {
+      type:         'selection_set_changed',
+      lens:         norm.lens,
+      selectionSet: _cloneSelectionSet(norm),
+    };
+    _notify(event);
+    _notifySelectionSet(event);
+    return _cloneSelectionSet(_selectionSet);
+  }
+
+  function replaceSelectionSet(items, opts) {
+    opts = _isPlainObject(opts) ? opts : {};
+    return selectSet({
+      lens:      opts.lens || _activeLensId || null,
+      items:     Array.isArray(items) ? items : [],
+      primaryId: opts.primaryId || null,
+      mode:      'replace',
+    }, opts);
+  }
+
+  function extendSelectionSet(items, opts) {
+    opts = _isPlainObject(opts) ? opts : {};
+    var current = getSelectionSet();
+    var incoming = Array.isArray(items) ? items : [];
+    return selectSet({
+      lens:      opts.lens || current.lens || _activeLensId || null,
+      items:     current.items.concat(incoming),
+      primaryId: current.primaryId || opts.primaryId || null,
+      mode:      'extend',
+    }, opts);
+  }
+
+  function toggleSelectionInSet(item, opts) {
+    opts = _isPlainObject(opts) ? opts : {};
+    var normItem = _normaliseSelectionSetItem(item);
+    if (!normItem) return getSelectionSet();
+    var current = getSelectionSet();
+    var nextItems = [];
+    var removed = false;
+    for (var i = 0; i < current.items.length; i++) {
+      if (current.items[i] && current.items[i].id === normItem.id) {
+        removed = true;
+        continue;
+      }
+      nextItems.push(current.items[i]);
+    }
+    if (!removed) nextItems.push(normItem);
+    var primaryId = current.primaryId;
+    if (removed && primaryId === normItem.id) primaryId = nextItems.length ? nextItems[0].id : null;
+    if (!removed && !primaryId) primaryId = normItem.id;
+    return selectSet({
+      lens:      opts.lens || current.lens || _activeLensId || null,
+      items:     nextItems,
+      primaryId: primaryId,
+      mode:      'toggle',
+    }, opts);
+  }
+
+  function clearSelectionSet(opts) {
+    if (_destroyed) return getSelectionSet();
+    opts = _isPlainObject(opts) ? opts : {};
+    var lens = opts.lens || (_selectionSet && _selectionSet.lens) || _activeLensId || null;
+    _selectionSet = _emptySelectionSet(lens, 'clear');
+    var event = {
+      type:         'selection_set_cleared',
+      lens:         lens || null,
+      selectionSet: _cloneSelectionSet(_selectionSet),
+    };
+    _notify(event);
+    _notifySelectionSet(event);
+    return _cloneSelectionSet(_selectionSet);
+  }
+
+  function getSelectionSet() {
+    return _selectionSet ? _cloneSelectionSet(_selectionSet) : _emptySelectionSet(_activeLensId, 'replace');
+  }
+
   // ── Public API: subscription ───────────────────────────────────────
 
   function subscribe(handler) {
@@ -288,6 +498,19 @@
       entry.disposed = true;
       var i = _subscribers.indexOf(entry);
       if (i >= 0) _subscribers.splice(i, 1);
+    };
+  }
+
+  function subscribeSelectionSet(handler) {
+    if (_destroyed) return function noop() {};
+    if (typeof handler !== 'function') return function noop() {};
+    var entry = { handler: handler, disposed: false };
+    _selectionSetSubscribers.push(entry);
+    return function unsubscribe() {
+      if (entry.disposed) return;
+      entry.disposed = true;
+      var i = _selectionSetSubscribers.indexOf(entry);
+      if (i >= 0) _selectionSetSubscribers.splice(i, 1);
     };
   }
 
@@ -362,9 +585,11 @@
     if (_destroyed) return;
     _destroyed = true;
     _selection      = null;
+    _selectionSet   = null;
     _activeLensId   = null;
     _registry       = {};
     _subscribers.length = 0;
+    _selectionSetSubscribers.length = 0;
     _actionHandlers = {};
   }
 
@@ -376,6 +601,14 @@
 
     selectCard:              selectCard,
     clearSelection:          clearSelection,
+
+    selectSet:               selectSet,
+    replaceSelectionSet:     replaceSelectionSet,
+    extendSelectionSet:      extendSelectionSet,
+    toggleSelectionInSet:    toggleSelectionInSet,
+    clearSelectionSet:       clearSelectionSet,
+    getSelectionSet:         getSelectionSet,
+    subscribeSelectionSet:   subscribeSelectionSet,
 
     getSelected:             getSelected,
     getCurrentCard:          getCurrentCard,

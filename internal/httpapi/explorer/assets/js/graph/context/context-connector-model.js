@@ -88,6 +88,35 @@
     'risk',
   ]);
 
+  var CONNECTOR_FAMILIES = Object.freeze([
+    'structural',
+    'dependency',
+    'runtime_operational',
+    'evidence',
+    'drift_risk_exception',
+    'semantic_contextual',
+    'authority_governance',
+  ]);
+
+  var CONNECTOR_TYPES = Object.freeze([
+    'service_contains_capability',
+    'service_supports_process',
+    'process_uses_surface',
+    'service_depends_on_service',
+    'ai_binding_applies_to_scope',
+    'ai_binding_uses_system',
+    'authority_summary_informs_service',
+    'coverage_reports_on_service',
+    'coverage_reports_gap_for_service',
+  ]);
+
+  var DIRECTION_SOURCE_TO_TARGET = 'source_to_target';
+  var DIRECTION_ASSOCIATIVE      = 'associative';
+  var ARROW_DIRECTED             = 'directed';
+  var ARROW_NONE                 = 'none';
+  var LABEL_POLICY_HOVER         = 'hover';
+  var WEIGHT_POLICY_NONE         = 'none';
+
   // Dash patterns are emitted as { on, off } in pixels. Solid renders
   // as the literal string 'solid' so consumers can branch cheaply
   // without inspecting object shape.
@@ -116,6 +145,51 @@
     bound_to:         { semantic: 'functional', visual: 'ai_binding', stroke: 'ai',        dash: DASH_SOLID, dir: 'directed' },
     system_of:        { semantic: 'functional', visual: 'ai_binding', stroke: 'ai',        dash: DASH_SOLID, dir: 'directed' },
     summarises:       { semantic: 'synthesis',  visual: 'authority',  stroke: 'authority', dash: DASH_6_4,   dir: 'directed' },
+  });
+
+  var TAXONOMY_BY_EDGE_KIND = Object.freeze({
+    has_capability: {
+      connectorType: 'service_contains_capability',
+      family: 'structural',
+      label: 'contains',
+      hoverTemplate: 'Business Service contains Capability',
+    },
+    has_process: {
+      connectorType: 'service_supports_process',
+      family: 'dependency',
+      label: 'supports',
+      hoverTemplate: 'Business Service supports Process',
+    },
+    has_surface: {
+      connectorType: 'process_uses_surface',
+      family: 'dependency',
+      label: 'uses surface',
+      hoverTemplate: 'Process uses Decision Surface',
+    },
+    relates_to: {
+      connectorType: 'service_depends_on_service',
+      family: 'dependency',
+      label: 'depends on',
+      hoverTemplate: 'Business Service depends on Business Service',
+    },
+    bound_to: {
+      connectorType: 'ai_binding_applies_to_scope',
+      family: 'dependency',
+      label: 'applies to',
+      hoverTemplate: 'AI Binding applies to selected scope',
+    },
+    system_of: {
+      connectorType: 'ai_binding_uses_system',
+      family: 'dependency',
+      label: 'uses system',
+      hoverTemplate: 'AI Binding uses AI System',
+    },
+    summarises: {
+      connectorType: 'authority_summary_informs_service',
+      family: 'authority_governance',
+      label: 'informs',
+      hoverTemplate: 'Authority Summary informs Business Service',
+    },
   });
 
   // ── Helpers ────────────────────────────────────────────────────────
@@ -186,6 +260,51 @@
     return _str(edge.src && edge.src.kind) + ' ' + k + ' ' + _str(edge.dst && edge.dst.kind);
   }
 
+  function _kindLabel(kind) {
+    var s = _str(kind).replace(/[_-]+/g, ' ');
+    return s.replace(/\b\w/g, function (m) { return m.toUpperCase(); });
+  }
+
+  function _taxonomyForEdge(edge, tpl) {
+    var kind = _str(edge && edge.kind);
+    if (kind === 'reports_coverage') {
+      var isGap = tpl && tpl.visual === 'gap';
+      return {
+        connectorType: isGap ? 'coverage_reports_gap_for_service' : 'coverage_reports_on_service',
+        family: isGap ? 'drift_risk_exception' : 'evidence',
+        label: isGap ? 'coverage gap' : 'reports coverage',
+        hoverTemplate: isGap ? 'Coverage reports gap for Business Service' : 'Coverage reports on Business Service',
+      };
+    }
+    return TAXONOMY_BY_EDGE_KIND[kind] || {
+      connectorType: kind || 'unknown_context_connector',
+      family: 'semantic_contextual',
+      label: kind ? kind.replace(/_/g, ' ') : 'relates to',
+      hoverTemplate: 'Context relationship',
+      fallback: true,
+    };
+  }
+
+  function _directionForTemplate(tpl) {
+    return tpl && tpl.dir === 'undirected' ? DIRECTION_ASSOCIATIVE : DIRECTION_SOURCE_TO_TARGET;
+  }
+
+  function _arrowPolicyForTemplate(tpl) {
+    return tpl && tpl.dir === 'undirected' ? ARROW_NONE : ARROW_DIRECTED;
+  }
+
+  function _accessibilityLabel(edge, taxonomy) {
+    var src = _kindLabel(edge && edge.src && edge.src.kind);
+    var dst = _kindLabel(edge && edge.dst && edge.dst.kind);
+    var label = taxonomy && taxonomy.label ? taxonomy.label : 'relates to';
+    return (src + ' ' + label + ' ' + dst).replace(/\s+/g, ' ').trim();
+  }
+
+  function _hoverSummary(edge, taxonomy) {
+    if (taxonomy && taxonomy.hoverTemplate) return taxonomy.hoverTemplate;
+    return _accessibilityLabel(edge, taxonomy);
+  }
+
   // ── Public API ─────────────────────────────────────────────────────
 
   // buildConnectorForEdge — produce a single ContextConnector for the
@@ -195,6 +314,7 @@
     if (EDGE_KINDS.indexOf(_str(edge.kind)) < 0) return null;
     var tpl = _templateForEdge(edge, projection);
     if (!tpl) return null;
+    var taxonomy = _taxonomyForEdge(edge, tpl);
 
     var srcKind = _str(edge.src && edge.src.kind);
     var srcId   = _str(edge.src && edge.src.id);
@@ -204,17 +324,27 @@
     return {
       id:             _edgeId(edge),
       edgeKind:       _str(edge.kind),
+      connectorType:  taxonomy.connectorType,
+      family:         taxonomy.family,
       source:         { kind: srcKind, id: srcId },
       target:         { kind: dstKind, id: dstId },
       semanticClass:  tpl.semantic,
       visualClass:    tpl.visual,
       directionality: tpl.dir,
+      direction:      _directionForTemplate(tpl),
+      arrowPolicy:    _arrowPolicyForTemplate(tpl),
+      labelPolicy:    LABEL_POLICY_HOVER,
+      weightPolicy:   WEIGHT_POLICY_NONE,
+      statePolicy:    taxonomy.family === 'drift_risk_exception' ? 'risk_state' : 'active',
       strokeFamily:   tpl.stroke,
       dashPattern:    tpl.dash,
       priority:       PRIORITY[tpl.visual] || 1,
-      label:          null,
-      hoverLabel:     null,
-      ariaText:       _ariaTextForEdge(edge),
+      label:          taxonomy.label,
+      hoverLabel:     taxonomy.label,
+      hoverSummary:   _hoverSummary(edge, taxonomy),
+      accessibilityLabel: _accessibilityLabel(edge, taxonomy),
+      fallback:       taxonomy.fallback === true,
+      ariaText:       _accessibilityLabel(edge, taxonomy) || _ariaTextForEdge(edge),
       sourceEdgeRef:  {
         kind: _str(edge.kind),
         src:  { kind: srcKind, id: srcId },
@@ -244,6 +374,8 @@
 
   window.MIDASExplorerGraph.contextModels.connector = {
     EDGE_KINDS:                    EDGE_KINDS,
+    CONNECTOR_TYPES:               CONNECTOR_TYPES,
+    CONNECTOR_FAMILIES:            CONNECTOR_FAMILIES,
     VISUAL_CLASSES:                VISUAL_CLASSES,
     SEMANTIC_CLASSES:              SEMANTIC_CLASSES,
     STROKE_FAMILIES:               STROKE_FAMILIES,

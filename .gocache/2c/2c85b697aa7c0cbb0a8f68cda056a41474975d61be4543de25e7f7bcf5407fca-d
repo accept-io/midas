@@ -1,0 +1,8 @@
+./cursor.go
+./event.go
+./hash.go
+./integrity.go
+./memory_repository.go
+./postgres_repository.go
+./repository.go
+./types.go

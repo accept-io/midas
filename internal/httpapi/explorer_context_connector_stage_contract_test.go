@@ -188,7 +188,7 @@ func TestExplorer_D37qViewport2_ConnectorVisualClassesPreserved(t *testing.T) {
 		"data-visual-class",
 		"data-edge-kind",
 		"'service'",
-		"line.setAttribute('class', CONNECTOR_CLASS + ' ' + CONNECTOR_CLASS_PREFIX + visualClass)",
+		"line.setAttribute('class', classes.join(' '))",
 	} {
 		if !strings.Contains(js, want) {
 			t.Errorf("D37q-viewport-2-impl: connector visual-class handling must remain intact (%q)", want)

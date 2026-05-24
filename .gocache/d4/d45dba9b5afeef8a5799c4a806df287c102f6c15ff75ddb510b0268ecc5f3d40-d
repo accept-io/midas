@@ -1,0 +1,8 @@
+=== RUN   TestExplorer_ContextSelectedObjectPanePreserved
+--- PASS: TestExplorer_ContextSelectedObjectPanePreserved (0.08s)
+=== RUN   TestExplorer_D37qViewport5_SelectedObjectPaneUsesSelectionBridge
+--- PASS: TestExplorer_D37qViewport5_SelectedObjectPaneUsesSelectionBridge (0.00s)
+=== RUN   TestExplorer_D37pSelectionSet_SelectedObjectPaneForwardsSafely
+--- PASS: TestExplorer_D37pSelectionSet_SelectedObjectPaneForwardsSafely (0.00s)
+PASS
+ok  	github.com/accept-io/midas/internal/httpapi	2.448s

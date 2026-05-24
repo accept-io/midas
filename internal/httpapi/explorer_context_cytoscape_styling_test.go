@@ -191,24 +191,30 @@ func TestExplorer_ContextCytoscapeStyle_FiveVisualClassesMatchNativeColour(t *te
 		}
 	}
 
-	// Per-class width parity (matches native CSS literally).
-	for _, w := range []string{
-		"'width':      1.4,",                  // service / evidence
-		"'width':      1.6,",                  // ai_binding / gap
-		"'width':             1.5,",           // authority (longer key padding)
+	// D37p connector taxonomy: width is no longer a decorative
+	// semantic channel. All visual classes use the same thin readable
+	// connector width, while meaning comes from connector metadata,
+	// arrow policy, family colour, and documented dash semantics.
+	for _, selector := range []string{
+		"edge.context-edge-visual-service",
+		"edge.context-edge-visual-ai_binding",
+		"edge.context-edge-visual-authority",
+		"edge.context-edge-visual-evidence",
+		"edge.context-edge-visual-gap",
 	} {
-		if !strings.Contains(body, w) {
-			t.Errorf("D37r tranche B: per-visual-class width parity must include %q", w)
+		re := regexp.MustCompile(regexp.QuoteMeta(selector) + `[\s\S]*?'width':\s+1\.4,`)
+		if !re.MatchString(body) {
+			t.Errorf("D37p connector taxonomy: %s must use uniform non-decorative width 1.4", selector)
 		}
 	}
 
 	// Per-class opacity parity.
 	for _, o := range []string{
-		"'opacity':    0.72,",  // service
-		"'opacity':    0.88,",  // ai_binding
-		"'opacity':           0.82,",  // authority
-		"'opacity':    0.78,",  // evidence
-		"'opacity':           0.92,",  // gap
+		"'opacity':    0.72,",        // service
+		"'opacity':    0.88,",        // ai_binding
+		"'opacity':           0.82,", // authority
+		"'opacity':    0.78,",        // evidence
+		"'opacity':           0.92,", // gap
 	} {
 		if !strings.Contains(body, o) {
 			t.Errorf("D37r tranche B: per-visual-class opacity parity must include %q", o)
@@ -745,7 +751,7 @@ func TestExplorer_ContextCytoscapeStyle_ConnectorPainterStillExists(t *testing.T
 
 // ── 19. Tranche A invariants still hold (post-tranche-B'' flips) ─
 
-// D37r-tranche-B'' flip: tranche A's cy instantiation marker
+// D37r-tranche-B” flip: tranche A's cy instantiation marker
 // (`_cy = window.cytoscape({`) and the cy-layout-config marker
 // (`layout: { name: 'preset', fit: false },`) both moved out of the
 // Context renderer when the shared graph engine module took over cy

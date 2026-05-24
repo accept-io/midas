@@ -1280,6 +1280,7 @@
     var _destroyed = false;
     var overlayHandle = null;
     var resizeObs = null;
+    var _selectionSetClearRequester = null;
 
     // D37u-cytoscape-resize-policy-impl — No per-mount resize state.
     //
@@ -1440,6 +1441,106 @@
     // condition resolves and re-emerges. Conservative dedup so a
     // chatty consumer doesn't spam the console / diagnostics buffer.
     var _fitDiagnosticsSeen     = {};
+    var _lifecycleCleanups      = [];
+
+    function _registerLifecycleCleanup(fn) {
+      if (_isFn(fn)) _lifecycleCleanups.push(fn);
+    }
+
+    function _runLifecycleCleanups() {
+      if (!_lifecycleCleanups.length) return;
+      var cleanups = _lifecycleCleanups.slice().reverse();
+      _lifecycleCleanups.length = 0;
+      for (var i = 0; i < cleanups.length; i++) {
+        try { cleanups[i](); } catch (_) { /* swallow */ }
+      }
+    }
+
+    // D37p-graph-interaction-mode-engine-impl — Generic Cytoscape
+    // interaction mode controller. The engine owns Cytoscape state;
+    // graph lenses supply mode configuration through the shared toolbar
+    // and call these narrow handle methods. No lens vocabulary belongs
+    // here.
+    var _interactionModeId = '';
+    var _interactionModeOptions = {};
+
+    function _setCyBoolean(methodName, value) {
+      if (!_isFn(cy[methodName])) return;
+      try { cy[methodName](!!value); } catch (_) { /* swallow */ }
+    }
+
+    function _setNodesGrabbable(enabled) {
+      try {
+        var nodes = cy.nodes();
+        if (!nodes) return;
+        if (enabled && _isFn(nodes.grabify)) {
+          nodes.grabify();
+          return;
+        }
+        if (!enabled && _isFn(nodes.ungrabify)) {
+          nodes.ungrabify();
+          return;
+        }
+        for (var i = 0; i < nodes.length; i++) {
+          var n = nodes[i];
+          if (enabled && n && _isFn(n.grabify)) n.grabify();
+          else if (!enabled && n && _isFn(n.ungrabify)) n.ungrabify();
+        }
+      } catch (_) { /* swallow */ }
+    }
+
+    function _normaliseInteractionOptions(modeId, modeOptions) {
+      var optsIn = _isPlainObject(modeOptions) ? modeOptions : {};
+      var cyOpts = _isPlainObject(optsIn.cytoscapeOptions) ? optsIn.cytoscapeOptions : optsIn;
+      var id = _str(modeId || optsIn.id || '');
+      if (id === 'select') {
+        return {
+          userPanningEnabled: cyOpts.userPanningEnabled !== false,
+          boxSelectionEnabled: cyOpts.boxSelectionEnabled === true,
+          nodesGrabbable: cyOpts.nodesGrabbable === true,
+          autounselectify: cyOpts.autounselectify === true,
+        };
+      }
+      return {
+        userPanningEnabled: cyOpts.userPanningEnabled !== false,
+        boxSelectionEnabled: cyOpts.boxSelectionEnabled === true,
+        nodesGrabbable: cyOpts.nodesGrabbable === true,
+        autounselectify: cyOpts.autounselectify === true,
+      };
+    }
+
+    function _applyInteractionMode(modeId, modeOptions) {
+      if (_destroyed) return false;
+      var nextId = _str(modeId || '');
+      if (!nextId) return false;
+      var nextOptions = _normaliseInteractionOptions(nextId, modeOptions);
+      _interactionModeId = nextId;
+      _interactionModeOptions = nextOptions;
+      _setCyBoolean('userPanningEnabled', nextOptions.userPanningEnabled);
+      _setCyBoolean('boxSelectionEnabled', nextOptions.boxSelectionEnabled);
+      _setCyBoolean('autounselectify', nextOptions.autounselectify);
+      _setNodesGrabbable(nextOptions.nodesGrabbable);
+      try {
+        container.setAttribute('data-interaction-mode', nextId);
+        container.setAttribute('data-nodes-grabbable', nextOptions.nodesGrabbable ? 'true' : 'false');
+        container.setAttribute('data-box-selection-enabled', nextOptions.boxSelectionEnabled ? 'true' : 'false');
+      } catch (_) { /* swallow */ }
+      return true;
+    }
+
+    function _resetInteractionMode() {
+      _interactionModeId = '';
+      _interactionModeOptions = {};
+      _setCyBoolean('userPanningEnabled', true);
+      _setCyBoolean('boxSelectionEnabled', false);
+      _setCyBoolean('autounselectify', false);
+      _setNodesGrabbable(false);
+      try {
+        container.removeAttribute('data-interaction-mode');
+        container.removeAttribute('data-nodes-grabbable');
+        container.removeAttribute('data-box-selection-enabled');
+      } catch (_) { /* swallow */ }
+    }
 
     var handle = {
       destroy: function () {
@@ -1484,9 +1585,11 @@
           } catch (_) { /* swallow */ }
           _stabilisationRaf = 0;
         }
-        // Order matters: overlay first (its listener-detach path
-        // must see a live cy), then camera-bus deregistration, then
-        // cy destroy, then DOM removal.
+        // Order matters: lens lifecycle cleanups first, while cy is
+        // still live, then overlay, camera-bus deregistration, cy
+        // destroy, and DOM removal.
+        _runLifecycleCleanups();
+        _resetInteractionMode();
         if (overlayHandle && _isFn(overlayHandle.destroy)) {
           try { overlayHandle.destroy(); } catch (_) { /* swallow */ }
         }
@@ -1651,6 +1754,27 @@
         if (_destroyed) return [];
         return _engineDiagnostics.slice();
       },
+      setInteractionMode: function (modeId, modeOptions) {
+        return _applyInteractionMode(modeId, modeOptions);
+      },
+      getInteractionMode: function () {
+        return _interactionModeId;
+      },
+      getInteractionModeOptions: function () {
+        return _shallowAssign({}, _interactionModeOptions);
+      },
+      setNodesGrabbable: function (enabled) {
+        if (_destroyed) return;
+        _setNodesGrabbable(enabled === true);
+      },
+      clearSelectionSet: function () {
+        if (_destroyed) return;
+        if (_isFn(_selectionSetClearRequester)) {
+          try { _selectionSetClearRequester(); } catch (_) { /* swallow */ }
+          return;
+        }
+        try { cy.nodes(':selected').unselect(); } catch (_) { /* swallow */ }
+      },
     };
 
     // ── Measurement-change forwarding (coalesced) ──
@@ -1801,6 +1925,123 @@
       });
     } catch (_) { /* swallow — selection tap wiring must not block mount */ }
 
+    // ── Selection-set routing ──
+    //
+    // Optional, lens-neutral bridge for box/multi-select customers.
+    // The engine owns the raw Cytoscape selection subscriptions and
+    // forwards a coalesced selected-node collection to the lens. The
+    // lens maps nodes into its own descriptor vocabulary and publishes
+    // through the shared selection bridge.
+    if (_isFn(opts.selectionSetAdapter)) {
+      (function () {
+        var selectionSetFrame = 0;
+        var selectionSetTimer = 0;
+        var selectionSetPrimaryId = null;
+        var disposed = false;
+
+        function cancelSelectionSetPublish() {
+          if (selectionSetFrame && typeof window.cancelAnimationFrame === 'function') {
+            try { window.cancelAnimationFrame(selectionSetFrame); } catch (_) { /* swallow */ }
+          }
+          if (selectionSetTimer && typeof window.clearTimeout === 'function') {
+            try { window.clearTimeout(selectionSetTimer); } catch (_) { /* swallow */ }
+          }
+          selectionSetFrame = 0;
+          selectionSetTimer = 0;
+        }
+
+        function selectedNodes() {
+          try { return cy.nodes(':selected'); }
+          catch (_) { return null; }
+        }
+
+        function publishSelectionSet() {
+          selectionSetFrame = 0;
+          selectionSetTimer = 0;
+          if (disposed || _destroyed) return;
+          var event = {
+            type:          'selection',
+            selectedNodes: selectedNodes(),
+            primaryId:     selectionSetPrimaryId,
+            cytoscape:     cy,
+          };
+          selectionSetPrimaryId = null;
+          try { opts.selectionSetAdapter(event, handle); } catch (_) { /* swallow */ }
+        }
+
+        function scheduleSelectionSet(primaryId) {
+          if (primaryId) selectionSetPrimaryId = primaryId;
+          if (selectionSetFrame || selectionSetTimer) return;
+          if (typeof window.requestAnimationFrame === 'function') {
+            selectionSetFrame = window.requestAnimationFrame(publishSelectionSet);
+          } else {
+            selectionSetTimer = window.setTimeout(publishSelectionSet, 0);
+          }
+        }
+
+        function clearSelectionSet() {
+          cancelSelectionSetPublish();
+          selectionSetPrimaryId = null;
+          try {
+            opts.selectionSetAdapter({
+              type:          'clear',
+              selectedNodes: selectedNodes(),
+              primaryId:     null,
+              cytoscape:     cy,
+            }, handle);
+          } catch (_) { /* swallow */ }
+        }
+
+        function clearVisualSelectionSet() {
+          try { cy.nodes(':selected').unselect(); } catch (_) { /* swallow */ }
+          clearSelectionSet();
+        }
+
+        _selectionSetClearRequester = clearVisualSelectionSet;
+
+        function onNodeTap(evt) {
+          var id = '';
+          try { id = evt && evt.target ? String(evt.target.id() || '') : ''; } catch (_) { id = ''; }
+          scheduleSelectionSet(id || null);
+        }
+
+        function onSelectionChange() {
+          scheduleSelectionSet(null);
+        }
+
+        function onCoreTap(evt) {
+          if (!evt || evt.target !== cy) return;
+          if (_interactionMode && _interactionMode !== 'select') return;
+          clearVisualSelectionSet();
+        }
+
+        function onKeydown(evt) {
+          if (!evt) return;
+          var key = evt.key || '';
+          if (key !== 'Escape' && key !== 'Esc') return;
+          clearVisualSelectionSet();
+        }
+
+        try { cy.on('tap', 'node', onNodeTap); } catch (_) { /* swallow */ }
+        try { cy.on('select unselect', 'node', onSelectionChange); } catch (_) { /* swallow */ }
+        try { cy.on('tap', onCoreTap); } catch (_) { /* swallow */ }
+        try { window.addEventListener('keydown', onKeydown); } catch (_) { /* swallow */ }
+
+        _registerLifecycleCleanup(function () {
+          disposed = true;
+          if (_selectionSetClearRequester === clearVisualSelectionSet) {
+            _selectionSetClearRequester = null;
+          }
+          cancelSelectionSetPublish();
+          try { cy.off('tap', 'node', onNodeTap); } catch (_) { /* swallow */ }
+          try { cy.off('select unselect', 'node', onSelectionChange); } catch (_) { /* swallow */ }
+          try { cy.off('tap', onCoreTap); } catch (_) { /* swallow */ }
+          try { window.removeEventListener('keydown', onKeydown); } catch (_) { /* swallow */ }
+          clearSelectionSet();
+        });
+      })();
+    }
+
     // ── Camera-bus registration ──
     //
     // The lens supplies a `cameraAdapter(handle)` factory. The engine
@@ -1874,6 +2115,18 @@
           },
         });
       } catch (_) { overlayHandle = null; }
+    }
+
+    if (_isFn(opts.onReady)) {
+      try {
+        var readyCleanup = opts.onReady({
+          cytoscape: cy,
+          handle: handle,
+          container: container,
+          registerCleanup: _registerLifecycleCleanup,
+        });
+        if (_isFn(readyCleanup)) _registerLifecycleCleanup(readyCleanup);
+      } catch (_) { /* swallow — lens lifecycle hooks must not block mount */ }
     }
 
     // ── Per-firing lifecycle diagnostic emitter ──

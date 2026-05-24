@@ -229,6 +229,15 @@
             selection: event.selection || null,
           });
         }
+        if (event.type === 'selection_set_changed' || event.type === 'selection_set_cleared') {
+          _callProvider('notifySelectionSetChanged', [event.selectionSet || null, event]);
+          _notify({
+            type:         'pane_rendered',
+            lens:         _activeLensId,
+            provider:     _activeProvider(),
+            selectionSet: event.selectionSet || null,
+          });
+        }
       });
     } catch (_) { _selectionUnsubscribe = null; }
   }

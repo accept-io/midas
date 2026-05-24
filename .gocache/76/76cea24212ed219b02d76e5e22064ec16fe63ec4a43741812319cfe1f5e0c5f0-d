@@ -1,0 +1,17 @@
+./array.go
+./buf.go
+./conn.go
+./conn_go18.go
+./connector.go
+./copy.go
+./deprecated.go
+./doc.go
+./encode.go
+./error.go
+./krb.go
+./notice.go
+./notify.go
+./quote.go
+./rows.go
+./ssl.go
+./stmt.go

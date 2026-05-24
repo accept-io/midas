@@ -1127,6 +1127,25 @@
     applyGmapEvidenceTrayState();
   }
 
+  function openEvidenceTray() {
+    gmapEvidenceTrayExpanded = true;
+    gmapEvidenceTrayActiveTab = 'evidence';
+    const tabs = document.querySelectorAll('.gmap-evidence-tray-tab');
+    tabs.forEach(function (tab) {
+      const active = tab.dataset && tab.dataset.tab === 'evidence';
+      tab.classList.toggle('is-active', active);
+      tab.setAttribute('aria-selected', String(active));
+    });
+    applyGmapEvidenceTrayState();
+    const panel = document.getElementById('gmap-evidence-tray-panel');
+    if (panel) {
+      panel.innerHTML = '<div class="gmap-evidence-tray-coming-soon">' +
+        'Evidence - coming soon. Drift signals ship first; overview / evidence panels arrive with the runtime analytics endpoint.' +
+        '</div>';
+    }
+    return true;
+  }
+
   // Lens-inspector dispatch entry-point: the tray follows selection
   // through notifySelectionChanged, so render(node, ctx) is a no-op.
   function render(/* node, ctx */) {}
@@ -1135,6 +1154,7 @@
     init:                    init,
     notifySelectionChanged:  notifySelectionChanged,
     applyState:              applyState,
+    openEvidenceTray:        openEvidenceTray,
     render:                  render,
     // Exposed for direct tests / advanced consumers.
     _hashSeed:               hashGmapDemoSeed,

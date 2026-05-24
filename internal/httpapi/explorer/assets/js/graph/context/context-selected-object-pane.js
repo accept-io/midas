@@ -79,6 +79,8 @@
     noDetails:          'No primary details available for this object.',
     evidenceDeferral:   'Detailed evidence remains available in the bottom Evidence tab.',
     closeButtonLabel:   'Close selected-object pane',
+    clearSelection:     'Clear selection',
+    multipleSelected:   'Multiple selected',
     paneAriaLabel:      'Selected object',
     pinnedLensSwitch:   'Switched to {lens} — select an object',
   };
@@ -166,6 +168,9 @@
     ],
   };
 
+  var CONTEXT_GRAPH_INSPECTOR_ID = 'context-node-inspector';
+  var CONTEXT_GRAPH_INSPECTOR_DEFAULT_CONTROL = 'inspector';
+
   // ── Module state (UI only) ───────────────────────────────────────
 
   var _inited                  = false;
@@ -187,6 +192,8 @@
   var _bodyClickHandler        = null;
   var _paneKeydownHandler      = null;
   var _bodyDelegatedClick      = null;
+  var _graphInspectorRegistered = false;
+  var _currentSelectionSet     = null;
 
   // ── Gating helpers (multi-signal) ────────────────────────────────
 
@@ -321,7 +328,6 @@
     // D37aq — apply the body attribute on first init so the CSS
     // override is in place before the user's first selection.
     _applyStrategicContextInspectorAttribute();
-    _refreshAfterMaybeMissedEvents();
 
     // D37p-pane-1 — register as the 'context' provider on the
     // shared platform pane shell. Calling registerLensProvider after
@@ -332,6 +338,8 @@
     // cross-lens coordination point without restructuring this
     // module's internals.
     _registerWithSharedShell();
+    _registerWithGraphInspectorPlatform();
+    _refreshAfterMaybeMissedEvents();
   }
 
   function destroy() {
@@ -347,6 +355,11 @@
       try { document.body.removeAttribute(STRATEGIC_CONTEXT_INSPECTOR_BODY_ATTR); }
       catch (_) { /* swallow */ }
     }
+    var platform = _graphInspectorPlatform();
+    if (platform && typeof platform.unregisterInspector === 'function') {
+      try { platform.unregisterInspector(CONTEXT_GRAPH_INSPECTOR_ID); } catch (_) {}
+    }
+    _graphInspectorRegistered = false;
     _inited = false;
     // wrapper markup intact, per D37o-ux-2 §22 rollback discipline.
   }
@@ -360,6 +373,11 @@
       return;
     }
     var card = _getCurrentCard();
+    if (_isGraphInspectorPlatformReady()) {
+      _refreshGraphInspectorPlatform(card, !!card && _paneMode !== 'hidden');
+      _setOpen(false);
+      return;
+    }
     if (_paneMode === 'auto' && card) {
       _setOpen(true);
       _renderAll(card);
@@ -417,7 +435,11 @@
         _projectionUnsubscribe = g.contextProjection.subscribe(function () {
           // Projection change may invalidate Relationships. Re-paint
           // if the pane is currently open.
-          if (_isOpen) _renderAll(_getCurrentCard());
+          _refreshGraphInspectorPlatform(_getCurrentCard(), false);
+          if (_isOpen) {
+            if (_isMultiSelectionSet(_currentSelectionSet)) _renderSelectionSetSummary(_currentSelectionSet);
+            else _renderAll(_getCurrentCard());
+          }
         });
       } catch (_) { /* swallow */ }
     }
@@ -436,6 +458,357 @@
     if (!g || !g.contextProjection || typeof g.contextProjection.getCurrentProjection !== 'function') return null;
     try { return g.contextProjection.getCurrentProjection(); }
     catch (_) { return null; }
+  }
+
+  function _graphInspectorPlatform() {
+    var g = window.MIDASExplorerGraph;
+    return g && g.graphInspectorPlatform ? g.graphInspectorPlatform : null;
+  }
+
+  function _isGraphInspectorPlatformReady() {
+    var platform = _graphInspectorPlatform();
+    if (!_graphInspectorRegistered || !platform ||
+        typeof platform.getActiveInspectorId !== 'function') {
+      return false;
+    }
+    return platform.getActiveInspectorId() === CONTEXT_GRAPH_INSPECTOR_ID;
+  }
+
+  function _refreshGraphInspectorPlatform(card, shouldOpen) {
+    var platform = _graphInspectorPlatform();
+    if (!platform) return false;
+    if (!_graphInspectorRegistered) _registerWithGraphInspectorPlatform();
+    if (!_graphInspectorRegistered) return false;
+    if (typeof platform.activate === 'function') {
+      try { platform.activate(CONTEXT_GRAPH_INSPECTOR_ID); } catch (_) {}
+    }
+    if (!card && typeof platform.close === 'function') {
+      try { platform.close(); } catch (_) {}
+    }
+    if (shouldOpen && card && typeof platform.open === 'function') {
+      var activeControl = CONTEXT_GRAPH_INSPECTOR_DEFAULT_CONTROL;
+      if (typeof platform.getActiveControl === 'function') {
+        try { activeControl = platform.getActiveControl() || activeControl; } catch (_) {}
+      }
+      try { platform.open(activeControl); return true; } catch (_) {}
+    }
+    if (typeof platform.render === 'function') {
+      try { platform.render(); return true; } catch (_) {}
+    }
+    return false;
+  }
+
+  function _registerWithGraphInspectorPlatform() {
+    if (_graphInspectorRegistered) return true;
+    var platform = _graphInspectorPlatform();
+    if (!platform || typeof platform.registerInspector !== 'function') return false;
+    var config = {
+      id: CONTEXT_GRAPH_INSPECTOR_ID,
+      name: 'Context node inspector',
+      rendererId: 'context',
+      lensId: 'context',
+      defaultControlId: CONTEXT_GRAPH_INSPECTOR_DEFAULT_CONTROL,
+      enabled: function () {
+        return _isPaneActive() && !_hasLegacyContextInspectorFlag();
+      },
+      getSelectedObject: _getCurrentCard,
+      getPanelTitle: function (selected) {
+        return _nodeName(selected);
+      },
+      getPanelSubtitle: function (selected) {
+        return _kindLabel(selected && selected.kind);
+      },
+      controls: [
+        {
+          id: 'inspector',
+          label: 'Inspector',
+          tooltip: 'Inspect selected Context node',
+          ariaLabel: 'Inspector',
+          icon: _graphInspectorIcon('inspector'),
+          enabled: _hasSelectedNode,
+          render: _renderGraphInspectorInspectorContent,
+          emptyState: function () { return 'Select a Context node to inspect it.'; },
+        },
+        {
+          id: 'context',
+          label: 'Context',
+          tooltip: 'Understand selected node context',
+          ariaLabel: 'Context',
+          icon: _graphInspectorIcon('context'),
+          enabled: _hasSelectedNode,
+          render: _renderGraphInspectorContextContent,
+          emptyState: function () { return 'Select a Context node to understand its graph context.'; },
+        },
+        {
+          id: 'evidence',
+          label: 'Evidence',
+          tooltip: 'Inspect compact evidence signal',
+          ariaLabel: 'Evidence',
+          icon: _graphInspectorIcon('evidence'),
+          enabled: _hasSelectedNode,
+          render: _renderGraphInspectorEvidenceContent,
+          emptyState: function () { return 'Select a Context node to inspect evidence signals.'; },
+          handoff: _openEvidenceTrayHandoff,
+        },
+      ],
+      handoffs: {
+        openEvidenceTray: _openEvidenceTrayHandoff,
+      },
+    };
+    try {
+      _graphInspectorRegistered = platform.registerInspector(config) === true;
+      if (_graphInspectorRegistered && typeof platform.activate === 'function') {
+        platform.activate(CONTEXT_GRAPH_INSPECTOR_ID);
+      }
+    } catch (_) {
+      _graphInspectorRegistered = false;
+    }
+    return _graphInspectorRegistered;
+  }
+
+  function _hasSelectedNode(selected) {
+    return !!selected;
+  }
+
+  function _text(value, fallback) {
+    if (value == null) return fallback || '';
+    var s = String(value).replace(/\s+/g, ' ').trim();
+    return s || fallback || '';
+  }
+
+  function _nodeName(card) {
+    if (!card) return 'Context node';
+    return _text(card.name || card.label || card.id, 'Context node');
+  }
+
+  function _kindLabel(kind) {
+    var s = _text(kind, 'Context node').replace(/[_-]+/g, ' ');
+    return s.replace(/\b\w/g, function (m) { return m.toUpperCase(); });
+  }
+
+  function _pluralKindLabel(kind, count) {
+    var label = _kindLabel(kind || 'Object');
+    if (count === 1) return label;
+    var lower = label.toLowerCase();
+    var irregular = {
+      'business service': 'Business Services',
+      'capability': 'Capabilities',
+      'process': 'Processes',
+      'decision surface': 'Decision Surfaces',
+      'authority profile': 'Authority Profiles',
+    };
+    if (Object.prototype.hasOwnProperty.call(irregular, lower)) return irregular[lower];
+    if (/s$/i.test(label)) return label;
+    if (/y$/i.test(label)) return label.slice(0, -1) + 'ies';
+    return label + 's';
+  }
+
+  function _selectionSetItemKind(item) {
+    return _text(item && (item.kind || item.type), 'Object');
+  }
+
+  function _selectionSetItemLabel(item) {
+    return _text(item && (item.label || item.name || item.title || item.id), 'Object');
+  }
+
+  function _normalisePaneSelectionSet(selectionSet) {
+    if (!selectionSet || typeof selectionSet !== 'object') {
+      return { lens: 'context', primaryId: null, ids: [], items: [] };
+    }
+    var items = [];
+    if (Array.isArray(selectionSet.items)) {
+      for (var i = 0; i < selectionSet.items.length; i++) {
+        var item = selectionSet.items[i];
+        if (!item || typeof item !== 'object') continue;
+        var id = _text(item.id || item.cardId || (item.card && item.card.id), '');
+        if (!id) continue;
+        items.push({
+          id:            id,
+          kind:          _selectionSetItemKind(item),
+          label:         _selectionSetItemLabel(item),
+          name:          item.name || null,
+          title:         item.title || null,
+          sourceNodeRef: item.sourceNodeRef || null,
+          card:          item.card || null,
+        });
+      }
+    }
+    return {
+      lens:      selectionSet.lens || 'context',
+      primaryId: selectionSet.primaryId || (items.length ? items[0].id : null),
+      ids:       Array.isArray(selectionSet.ids) ? selectionSet.ids.slice() : items.map(function (item) { return item.id; }),
+      items:     items,
+    };
+  }
+
+  function _isMultiSelectionSet(selectionSet) {
+    return !!selectionSet && Array.isArray(selectionSet.items) && selectionSet.items.length > 1;
+  }
+
+  function _detailValue(card, key) {
+    if (!card || !card.details || typeof card.details !== 'object') return '';
+    return _text(card.details[key], '');
+  }
+
+  function _badgeText(card) {
+    if (!card || !Array.isArray(card.badges) || card.badges.length === 0) return '';
+    var b = card.badges[0];
+    return _text(b && (b.text || b.cls), '');
+  }
+
+  function _metricRows(card, limit) {
+    var rows = [];
+    if (!card || !Array.isArray(card.metrics)) return rows;
+    for (var i = 0; i < card.metrics.length && rows.length < limit; i++) {
+      var m = card.metrics[i];
+      if (!m) continue;
+      rows.push([_text(m.label || m.id, 'Metric'), _text(m.value, '0')]);
+    }
+    return rows;
+  }
+
+  function _keyFacts(card) {
+    var facts = [];
+    facts.push(['Type', _kindLabel(card && card.kind)]);
+    var status = _detailValue(card, 'status') || _badgeText(card);
+    if (status) facts.push(['Status', status]);
+    var owner = _detailValue(card, 'owner');
+    if (owner) facts.push(['Owner', owner]);
+    var subtitle = _text(card && card.subtitle, '');
+    if (subtitle) facts.push(['Note', subtitle]);
+    var metrics = _metricRows(card, 2);
+    for (var i = 0; i < metrics.length && facts.length < 5; i++) facts.push(metrics[i]);
+    if (facts.length < 3 && card && card.id) facts.push(['ID', _text(card.id, '')]);
+    return facts.slice(0, 5);
+  }
+
+  function _buildNodeSummary(card) {
+    var kind = _kindLabel(card && card.kind).toLowerCase();
+    var name = _nodeName(card);
+    var status = _detailValue(card, 'status') || _badgeText(card);
+    var owner = _detailValue(card, 'owner');
+    var suffix = status ? ' with ' + status + ' status' : '';
+    if (!suffix && owner) suffix = ' owned by ' + owner;
+    return 'This Context node represents ' + kind + ' ' + name +
+      suffix + '; it anchors the selected graph area and nearby evidence signals.';
+  }
+
+  function _renderGraphInspectorInspectorContent(card) {
+    var root = _newGraphInspectorContent('inspector');
+    root.appendChild(_newGraphInspectorParagraph(_buildNodeSummary(card)));
+    root.appendChild(_newGraphInspectorFactList(_keyFacts(card)));
+    return root;
+  }
+
+  function _renderGraphInspectorContextContent(card) {
+    var root = _newGraphInspectorContent('context');
+    var counts = _relationshipCounts(card);
+    var sentence = 'This node sits in the current Context graph as ' +
+      _kindLabel(card && card.kind).toLowerCase() +
+      ', so its meaning comes from the surrounding topology and selected graph scope.';
+    root.appendChild(_newGraphInspectorParagraph(sentence));
+    var facts = [];
+    if (counts.total > 0) {
+      facts.push(['Connected context', String(counts.total) + ' direct graph connection' + (counts.total === 1 ? '' : 's')]);
+      if (counts.outbound > 0) facts.push(['Outbound', String(counts.outbound)]);
+      if (counts.inbound > 0) facts.push(['Inbound', String(counts.inbound)]);
+    } else {
+      facts.push(['Connected context', 'Use nearby canvas nodes and edges to explore surrounding context.']);
+    }
+    if (card && card.sourceNodeRef && card.sourceNodeRef.id) {
+      facts.push(['Source ref', _text(card.sourceNodeRef.kind, '') + ' / ' + _text(card.sourceNodeRef.id, '')]);
+    }
+    root.appendChild(_newGraphInspectorFactList(facts.slice(0, 4)));
+    return root;
+  }
+
+  function _renderGraphInspectorEvidenceContent(card) {
+    var root = _newGraphInspectorContent('evidence');
+    var badge = _badgeText(card);
+    var evidenceText = badge
+      ? 'Compact signal: ' + badge + '. Detailed evidence and drift exploration remain in the bottom Evidence tray.'
+      : 'No direct evidence badge is available on this node. Detailed evidence and drift exploration remain in the bottom Evidence tray.';
+    root.appendChild(_newGraphInspectorParagraph(evidenceText));
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'graph-inspector-content-action';
+    button.textContent = 'Open Evidence tray';
+    button.setAttribute('aria-label', 'Open Evidence tray for selected Context node');
+    button.addEventListener('click', function (ev) {
+      ev.preventDefault();
+      _openEvidenceTrayHandoff();
+    });
+    root.appendChild(button);
+    return root;
+  }
+
+  function _newGraphInspectorContent(kind) {
+    var root = document.createElement('div');
+    root.className = 'context-graph-inspector-content';
+    root.setAttribute('data-context-graph-inspector-content', kind);
+    return root;
+  }
+
+  function _newGraphInspectorParagraph(text) {
+    var p = document.createElement('p');
+    p.textContent = _text(text, '');
+    return p;
+  }
+
+  function _newGraphInspectorFactList(rows) {
+    var dl = document.createElement('dl');
+    dl.setAttribute('data-context-graph-inspector-facts', '');
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i];
+      if (!row || row.length < 2) continue;
+      var dt = document.createElement('dt');
+      dt.textContent = _text(row[0], '');
+      var dd = document.createElement('dd');
+      dd.textContent = _text(row[1], '');
+      dl.appendChild(dt);
+      dl.appendChild(dd);
+    }
+    return dl;
+  }
+
+  function _relationshipCounts(card) {
+    var out = { inbound: 0, outbound: 0, total: 0 };
+    var projection = _getCurrentProjection();
+    if (!card || !projection) return out;
+    var g = window.MIDASExplorerGraph;
+    var contextModels = g && g.contextModels;
+    if (!contextModels || !contextModels.connector ||
+        typeof contextModels.connector.buildConnectorsFromProjection !== 'function') {
+      return out;
+    }
+    var connectors;
+    try { connectors = contextModels.connector.buildConnectorsFromProjection(projection); }
+    catch (_) { connectors = []; }
+    var ref = card.sourceNodeRef || { kind: card.kind, id: card.id };
+    for (var i = 0; i < connectors.length; i++) {
+      var c = connectors[i];
+      if (!c) continue;
+      if (c.source && c.source.kind === ref.kind && c.source.id === ref.id) out.outbound++;
+      if (c.target && c.target.kind === ref.kind && c.target.id === ref.id) out.inbound++;
+    }
+    out.total = out.inbound + out.outbound;
+    return out;
+  }
+
+  function _openEvidenceTrayHandoff() {
+    var tray = window.MIDASExplorerGraph && window.MIDASExplorerGraph.contextEvidenceTray;
+    if (!tray || typeof tray.openEvidenceTray !== 'function') return false;
+    try { return tray.openEvidenceTray() === true; }
+    catch (_) { return false; }
+  }
+
+  function _graphInspectorIcon(name) {
+    var icons = {
+      inspector: '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 4h10v16H7z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 8h6M9 12h6M9 16h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+      context: '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="5" cy="6" r="2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="19" cy="6" r="2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="19" cy="18" r="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M7 7l3 3M14 10l3-3M14 14l3 3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+      evidence: '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 3h9l3 3v15H6z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 13l2 2 4-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    };
+    return icons[name] || '';
   }
 
   // ── Mode + open/close primitives ─────────────────────────────────
@@ -508,7 +881,14 @@
   // ── Selection / lens / focus event handlers ──────────────────────
 
   function _onSelectionChanged(card) {
+    _currentSelectionSet = null;
     if (!_isPaneActive()) {
+      _refreshGraphInspectorPlatform(null, false);
+      _setOpen(false);
+      return;
+    }
+    if (_isGraphInspectorPlatformReady()) {
+      _refreshGraphInspectorPlatform(card, !!card && _paneMode !== 'hidden');
       _setOpen(false);
       return;
     }
@@ -523,6 +903,34 @@
     _renderAll(card);
   }
 
+  function _onSelectionSetChanged(selectionSet, event) {
+    var set = _normalisePaneSelectionSet(selectionSet);
+    _currentSelectionSet = _isMultiSelectionSet(set) ? set : null;
+    if (!_isPaneActive()) {
+      _setOpen(false);
+      return;
+    }
+    if (_paneMode === 'hidden') return;
+    if (_isMultiSelectionSet(set)) {
+      _setOpen(true);
+      _renderSelectionSetSummary(set);
+      return;
+    }
+    if (!set.items.length || (event && event.type === 'selection_set_cleared')) {
+      if (_paneMode === 'pinned') {
+        _setOpen(true);
+        _renderAll(null);
+      } else {
+        _setOpen(false);
+      }
+      return;
+    }
+    if (set.items.length === 1) {
+      var card = set.items[0].card || _getCurrentCard();
+      if (card) _onSelectionChanged(card);
+    }
+  }
+
   function _onBodyAttributesChanged() {
     // D37aq — keep the strategic-context-inspector body attribute
     // in sync with the live lens / active-renderer / fallback-flag
@@ -532,9 +940,9 @@
     var paneActive = _isPaneActive();
     var focusOn    = _isFocusMode();
 
-    if (!paneActive) {
-      // Context lens not active OR strategic renderer not active.
-      if (_paneMode !== 'hidden') _setOpen(false);
+      if (!paneActive) {
+        // Context lens not active OR strategic renderer not active.
+        if (_paneMode !== 'hidden') _setOpen(false);
       return;
     }
 
@@ -549,7 +957,8 @@
       _wasOpenBeforeFocusMode = false;
       if (_paneMode === 'pinned' && _getCurrentCard()) {
         _setOpen(true);
-        _renderAll(_getCurrentCard());
+        if (_isMultiSelectionSet(_currentSelectionSet)) _renderSelectionSetSummary(_currentSelectionSet);
+        else _renderAll(_getCurrentCard());
       }
       // Auto / hidden: stay closed (operator must reselect).
       return;
@@ -561,7 +970,10 @@
   function _onViewportAttributesChanged() {
     // The viewport's data-active-renderer changed. Re-evaluate gating.
     _onBodyAttributesChanged();
-    if (_isOpen) _renderAll(_getCurrentCard());
+    if (_isOpen) {
+      if (_isMultiSelectionSet(_currentSelectionSet)) _renderSelectionSetSummary(_currentSelectionSet);
+      else _renderAll(_getCurrentCard());
+    }
   }
 
   function _bindBodyObserver() {
@@ -613,6 +1025,12 @@
     if (_bodyDelegatedClick || !_bodyEl) return;
     _bodyDelegatedClick = function (ev) {
       if (!ev || !ev.target) return;
+      var clearSelectionEl = _closestWithAttribute(ev.target, 'data-context-selection-set-clear');
+      if (clearSelectionEl) {
+        ev.stopPropagation();
+        _clearSelectionSetFromPane();
+        return;
+      }
       var actionEl = _closestWithAttribute(ev.target, 'data-action-kind');
       if (!actionEl) return;
       ev.stopPropagation();
@@ -663,6 +1081,135 @@
     _renderActions(card);
     _renderRelationships(card);
     _renderEvidence(card);
+  }
+
+  function _clearSelectionSetFromPane() {
+    var g = window.MIDASExplorerGraph || {};
+    var renderer = g.contextRenderer;
+    if (renderer && typeof renderer.clearSelectionSet === 'function') {
+      try { renderer.clearSelectionSet(); return; } catch (_) {}
+    }
+  }
+
+  function _renderSelectionSetSummary(selectionSet) {
+    if (!_headerEl || !_bodyEl || !_footerEl) return;
+    var set = _normalisePaneSelectionSet(selectionSet);
+    _clearChildrenExcept(_headerEl, '[data-context-selected-object-pane-close-header]');
+    _clearChildren(_bodyEl);
+    _renderSelectionSetHeader(set);
+    _renderSelectionSetOverview(set);
+    _renderSelectionSetObjectList(set);
+  }
+
+  function _renderSelectionSetHeader(selectionSet) {
+    var idEl = document.createElement('div');
+    idEl.className = 'gmap-context-selected-object-pane-header-identity';
+
+    var label = document.createElement('span');
+    label.className = 'gmap-context-selected-object-pane-header-label';
+    label.textContent = 'Selection set';
+
+    var name = document.createElement('h2');
+    name.className = 'gmap-context-selected-object-pane-header-name';
+    name.id = 'gmap-context-selected-object-pane-name';
+    name.textContent = COPY.multipleSelected;
+
+    var ref = document.createElement('p');
+    ref.className = 'gmap-context-selected-object-pane-header-ref';
+    ref.textContent = _selectionCountText(selectionSet.items.length);
+
+    idEl.appendChild(label);
+    idEl.appendChild(name);
+    idEl.appendChild(ref);
+
+    if (_closeButtonHeaderEl && _closeButtonHeaderEl.parentNode === _headerEl) {
+      _headerEl.insertBefore(idEl, _closeButtonHeaderEl);
+    } else {
+      _headerEl.appendChild(idEl);
+    }
+    _wrapperEl.setAttribute('aria-labelledby', name.id);
+  }
+
+  function _selectionCountText(count) {
+    return 'Selected: ' + count + ' ' + (count === 1 ? 'object' : 'objects');
+  }
+
+  function _groupSelectionSetByKind(items) {
+    var order = [];
+    var counts = {};
+    for (var i = 0; i < items.length; i++) {
+      var kind = _selectionSetItemKind(items[i]);
+      if (!Object.prototype.hasOwnProperty.call(counts, kind)) {
+        counts[kind] = 0;
+        order.push(kind);
+      }
+      counts[kind] += 1;
+    }
+    return order.map(function (kind) {
+      return {
+        kind:  kind,
+        count: counts[kind],
+        label: _pluralKindLabel(kind, counts[kind]),
+      };
+    });
+  }
+
+  function _renderSelectionSetOverview(selectionSet) {
+    var section = _newSection('selection-set-summary', 'Summary');
+    section.classList.add('context-selection-set-summary');
+
+    var count = document.createElement('p');
+    count.className = 'context-selection-set-count';
+    count.textContent = _selectionCountText(selectionSet.items.length);
+    section.appendChild(count);
+
+    var groups = _groupSelectionSetByKind(selectionSet.items);
+    if (groups.length) {
+      var list = document.createElement('dl');
+      list.className = 'context-selection-set-kind-list';
+      for (var i = 0; i < groups.length; i++) {
+        var row = groups[i];
+        var dt = document.createElement('dt');
+        dt.textContent = row.label;
+        var dd = document.createElement('dd');
+        dd.textContent = String(row.count);
+        list.appendChild(dt);
+        list.appendChild(dd);
+      }
+      section.appendChild(list);
+    }
+
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'context-selection-set-clear';
+    button.setAttribute('data-context-selection-set-clear', 'true');
+    button.textContent = COPY.clearSelection;
+    section.appendChild(button);
+
+    _bodyEl.appendChild(section);
+  }
+
+  function _renderSelectionSetObjectList(selectionSet) {
+    var section = _newSection('selection-set-objects', 'Selected objects');
+    var ul = document.createElement('ul');
+    ul.className = 'context-selection-set-object-list';
+    var max = 5;
+    for (var i = 0; i < selectionSet.items.length && i < max; i++) {
+      var li = document.createElement('li');
+      li.className = 'context-selection-set-object';
+      li.textContent = _selectionSetItemLabel(selectionSet.items[i]);
+      ul.appendChild(li);
+    }
+    section.appendChild(ul);
+
+    if (selectionSet.items.length > max) {
+      var overflow = document.createElement('p');
+      overflow.className = 'context-selection-set-overflow';
+      overflow.textContent = '+' + (selectionSet.items.length - max) + ' more';
+      section.appendChild(overflow);
+    }
+
+    _bodyEl.appendChild(section);
   }
 
   function _emptyMessageForNoSelection() {
@@ -1315,6 +1862,10 @@
           return;
         }
         _onSelectionChanged(selection.card || _getCurrentCard());
+      },
+      notifySelectionSetChanged: function (selectionSet, event) {
+        if (event && event.lens && event.lens !== 'context') return;
+        _onSelectionSetChanged(selectionSet, event);
       },
       // Section descriptors - generic metadata for cross-lens
       // consumers (a future shared shell renderer can iterate

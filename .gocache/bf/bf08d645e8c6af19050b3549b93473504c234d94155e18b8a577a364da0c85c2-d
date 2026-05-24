@@ -1,0 +1,54 @@
+=== RUN   TestExplorer_ContextSelectedObjectPanePreserved
+--- PASS: TestExplorer_ContextSelectedObjectPanePreserved (0.05s)
+=== RUN   TestExplorer_D37pContextInteractionToolbar_RegistersSharedPlatformCustomer
+--- PASS: TestExplorer_D37pContextInteractionToolbar_RegistersSharedPlatformCustomer (0.00s)
+=== RUN   TestExplorer_D37pContextInteractionToolbar_ModesDelegateToEngineOptions
+--- PASS: TestExplorer_D37pContextInteractionToolbar_ModesDelegateToEngineOptions (0.00s)
+=== RUN   TestExplorer_D37pContextInteractionToolbar_EngineReadyLifecycleAndCleanup
+--- PASS: TestExplorer_D37pContextInteractionToolbar_EngineReadyLifecycleAndCleanup (0.00s)
+=== RUN   TestExplorer_D37pContextInteractionToolbar_RemainsScopedAndDoesNotBypassController
+--- PASS: TestExplorer_D37pContextInteractionToolbar_RemainsScopedAndDoesNotBypassController (0.00s)
+=== RUN   TestExplorer_D37pContextInteractionToolbar_Phase2LassoRemainsConfigViable
+--- PASS: TestExplorer_D37pContextInteractionToolbar_Phase2LassoRemainsConfigViable (0.00s)
+=== RUN   TestExplorer_D37pContextSelectModeParity_ToolbarRemainsTwoModes
+--- PASS: TestExplorer_D37pContextSelectModeParity_ToolbarRemainsTwoModes (0.00s)
+=== RUN   TestExplorer_D37pContextSelectModeParity_SelectUsesCombinedNativeOptions
+--- PASS: TestExplorer_D37pContextSelectModeParity_SelectUsesCombinedNativeOptions (0.00s)
+=== RUN   TestExplorer_D37pContextSelectModeParity_SelectionSetAdapterPublishesGlobalBridge
+--- PASS: TestExplorer_D37pContextSelectModeParity_SelectionSetAdapterPublishesGlobalBridge (0.00s)
+=== RUN   TestExplorer_D37pContextSelectModeParity_PreservesSingleClickSelection
+--- PASS: TestExplorer_D37pContextSelectModeParity_PreservesSingleClickSelection (0.00s)
+=== RUN   TestExplorer_D37pContextSelectModeParity_CoalescesAndCleansSelectionSet
+--- PASS: TestExplorer_D37pContextSelectModeParity_CoalescesAndCleansSelectionSet (0.00s)
+=== RUN   TestExplorer_D37pContextSelectModeParity_DoesNotReuseLegacyDomMultiSelect
+--- PASS: TestExplorer_D37pContextSelectModeParity_DoesNotReuseLegacyDomMultiSelect (0.00s)
+=== RUN   TestExplorer_D37pGraphCytoscapeInteractionMode_EngineExposesGenericAPI
+--- PASS: TestExplorer_D37pGraphCytoscapeInteractionMode_EngineExposesGenericAPI (0.00s)
+=== RUN   TestExplorer_D37pGraphCytoscapeInteractionMode_AppliesPanAndSelectSemantics
+--- PASS: TestExplorer_D37pGraphCytoscapeInteractionMode_AppliesPanAndSelectSemantics (0.00s)
+=== RUN   TestExplorer_D37pGraphCytoscapeInteractionMode_CleanupRestoresSafeDefaults
+--- PASS: TestExplorer_D37pGraphCytoscapeInteractionMode_CleanupRestoresSafeDefaults (0.00s)
+=== RUN   TestExplorer_D37pGraphCytoscapeInteractionMode_RemainsLensNeutralAndDoesNotTouchOverlay
+--- PASS: TestExplorer_D37pGraphCytoscapeInteractionMode_RemainsLensNeutralAndDoesNotTouchOverlay (0.00s)
+=== RUN   TestExplorer_D37qViewport5_SelectedObjectPaneUsesSelectionBridge
+--- PASS: TestExplorer_D37qViewport5_SelectedObjectPaneUsesSelectionBridge (0.00s)
+=== RUN   TestExplorer_D37qViewport5_ContextDoesNotSubscribeToAuthorityEngineSelection
+--- PASS: TestExplorer_D37qViewport5_ContextDoesNotSubscribeToAuthorityEngineSelection (0.00s)
+=== RUN   TestExplorer_D37pGraphSelectionSet_PlatformAPIExists
+--- PASS: TestExplorer_D37pGraphSelectionSet_PlatformAPIExists (0.00s)
+=== RUN   TestExplorer_D37pGraphSelectionSet_NormalisationContract
+--- PASS: TestExplorer_D37pGraphSelectionSet_NormalisationContract (0.00s)
+=== RUN   TestExplorer_D37pGraphSelectionSet_EventsAndMutators
+--- PASS: TestExplorer_D37pGraphSelectionSet_EventsAndMutators (0.00s)
+=== RUN   TestExplorer_D37pGraphSelectionSet_SubscriberLifecycle
+--- PASS: TestExplorer_D37pGraphSelectionSet_SubscriberLifecycle (0.00s)
+=== RUN   TestExplorer_D37pGraphSelectionSet_SingleSelectionCompatibilityPreserved
+--- PASS: TestExplorer_D37pGraphSelectionSet_SingleSelectionCompatibilityPreserved (0.00s)
+=== RUN   TestExplorer_D37pGraphSelectionSet_SelectedObjectPaneForwardsSafely
+--- PASS: TestExplorer_D37pGraphSelectionSet_SelectedObjectPaneForwardsSafely (0.00s)
+=== RUN   TestExplorer_D37pGraphSelectionSet_LensNeutralAndDoesNotReuseLegacyModel
+--- PASS: TestExplorer_D37pGraphSelectionSet_LensNeutralAndDoesNotReuseLegacyModel (0.00s)
+=== RUN   TestExplorer_D37pGraphSelectionSet_NoOutOfScopeFilesChangedByContract
+--- PASS: TestExplorer_D37pGraphSelectionSet_NoOutOfScopeFilesChangedByContract (0.00s)
+PASS
+ok  	github.com/accept-io/midas/internal/httpapi	1.783s

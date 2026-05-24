@@ -2463,11 +2463,11 @@ func TestExplorer_HTML_GovernanceMap_CompactEdgeLegend(t *testing.T) {
 
 	// === 5. All five relationship labels preserved ===
 	for _, label := range []string{
-		"Service relationship",
-		"AI binding",
-		"Authority",
-		"Evidence",
-		"Coverage gap",
+		"Contains",
+		"Depends / supports",
+		"Governance",
+		"Evidence signal",
+		"Drift / gap",
 	} {
 		if !strings.Contains(body, label) {
 			t.Errorf("D26g-impl-3: relationship label %q must remain", label)
@@ -2481,11 +2481,11 @@ func TestExplorer_HTML_GovernanceMap_CompactEdgeLegend(t *testing.T) {
 	}
 	overlayMarkup := body[overlayMarkupIdx : overlayMarkupIdx+overlayMarkupEnd]
 	for _, label := range []string{
-		">Service relationship<",
-		">AI binding<",
-		">Authority<",
-		">Evidence<",
-		">Coverage gap<",
+		">Contains<",
+		">Depends / supports<",
+		">Governance<",
+		">Evidence signal<",
+		">Drift / gap<",
 	} {
 		if !strings.Contains(overlayMarkup, label) {
 			t.Errorf("D26g-impl-3: %q must live inside .gmap-legend-overlay", label)
@@ -2494,7 +2494,7 @@ func TestExplorer_HTML_GovernanceMap_CompactEdgeLegend(t *testing.T) {
 
 	// === 6. All five swatch classes preserved ===
 	for _, want := range []string{
-		`class="gmap-legend-swatch"`,           // Service relationship (default)
+		`class="gmap-legend-swatch"`,            // Service relationship (default)
 		`class="gmap-legend-swatch ai-binding"`, // AI binding
 		`class="gmap-legend-swatch authority"`,  // Authority
 		`class="gmap-legend-swatch evidence"`,   // Evidence
@@ -2666,7 +2666,6 @@ func TestExplorer_HTML_GovernanceMap_ViewModeIconToggle(t *testing.T) {
 	}
 }
 
-
 // TestExplorer_HTML_GovernanceMap_ToolbarContextWording pins the
 // D26i Part 1 contract: setGovernanceMapCurrentRoot now writes a
 // compact "<Kind> · <Name>" string into #gmap-current-root and
@@ -2832,14 +2831,15 @@ func TestExplorer_HTML_GovernanceMap_FocusMode_FitsOnEntry(t *testing.T) {
 // TestExplorer_HTML_GovernanceMap_RelatedServiceReframe pins the
 // D26j contract: Related Service nodes now expose two actions when
 // the related Business Service id is known —
-//   1. reframe-around-this (target_view: 'service', target_id:
-//      rel.target_business_service_id, label: 'Open service graph')
-//      — primary graph-to-graph navigation. Routes through the
-//      existing handleGovernanceMapAction reframe path which pushes
-//      gmapHistory before mutating root state, so Back continues
-//      to work.
-//   2. view-business-service-record — preserved drill-down to the
-//      related BS's record page (existing D24 behaviour).
+//  1. reframe-around-this (target_view: 'service', target_id:
+//     rel.target_business_service_id, label: 'Open service graph')
+//     — primary graph-to-graph navigation. Routes through the
+//     existing handleGovernanceMapAction reframe path which pushes
+//     gmapHistory before mutating root state, so Back continues
+//     to work.
+//  2. view-business-service-record — preserved drill-down to the
+//     related BS's record page (existing D24 behaviour).
+//
 // When rel.target_business_service_id is missing (an unresolvable
 // related service edge), neither action attaches — the action area
 // is empty rather than rendering a button that would deadlink.
@@ -3847,23 +3847,23 @@ func TestExplorer_HTML_GovernanceMap_CameraPuck(t *testing.T) {
 // TestExplorer_HTML_GovernanceMap_InspectorToggleHarmonisation
 // pins the Phase 2B Step 30 (D24f) inspector-toggle harmonisation:
 //
-//   1. The right inspector rail's toggle now multi-classes the
-//      canonical .shell-sidebar-toggle (left-sidebar's pattern) so
-//      it inherits the same 28x22 bordered visual.
-//   2. The toggle moves from D24d's .gmap-top-right-overlay back
-//      into the inspector rail itself (#gmap-details), anchored at
-//      the bottom-right via margin-top: auto in the rail's flex
-//      column.
-//   3. The chevron glyph harmonises with the sidebar (« / »); the
-//      right pane's chevron direction inverts the sidebar's so the
-//      arrow always points "in the direction of the action's effect"
-//      (» when expanded → click pushes the rail rightward to
-//      collapse; « when collapsed → click pulls it leftward to expand).
-//   4. The handler is unchanged — the helper writes the glyph into
-//      the inner .shell-sidebar-toggle-glyph span, mirroring the
-//      sidebar's updateSidebarCollapseUI pattern.
-//   5. The .gmap-top-right-overlay loses the inspector toggle; it
-//      now contains only orientation context + Form/Graph toggle.
+//  1. The right inspector rail's toggle now multi-classes the
+//     canonical .shell-sidebar-toggle (left-sidebar's pattern) so
+//     it inherits the same 28x22 bordered visual.
+//  2. The toggle moves from D24d's .gmap-top-right-overlay back
+//     into the inspector rail itself (#gmap-details), anchored at
+//     the bottom-right via margin-top: auto in the rail's flex
+//     column.
+//  3. The chevron glyph harmonises with the sidebar (« / »); the
+//     right pane's chevron direction inverts the sidebar's so the
+//     arrow always points "in the direction of the action's effect"
+//     (» when expanded → click pushes the rail rightward to
+//     collapse; « when collapsed → click pulls it leftward to expand).
+//  4. The handler is unchanged — the helper writes the glyph into
+//     the inner .shell-sidebar-toggle-glyph span, mirroring the
+//     sidebar's updateSidebarCollapseUI pattern.
+//  5. The .gmap-top-right-overlay loses the inspector toggle; it
+//     now contains only orientation context + Form/Graph toggle.
 func TestExplorer_HTML_GovernanceMap_InspectorToggleHarmonisation(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
@@ -4296,11 +4296,11 @@ func TestExplorer_HTML_GovernanceMap_ChromeReorganisation(t *testing.T) {
 		`aria-label="Centre on root"`,
 		`aria-label="Toggle focus mode"`,
 		// 5 distinctive SVG fragments per the brief's specifications.
-		`<line x1="8" y1="3" x2="8" y2="13"/>`,    // Zoom in
-		`<line x1="3" y1="8" x2="13" y2="8"/>`,    // Zoom out (also part of zoom in)
-		`<polyline points="3 6 3 3 6 3"/>`,        // Fit (corners INWARD)
-		`<circle cx="8" cy="8" r="5"/>`,           // Centre target
-		`<polyline points="6 3 3 3 3 6"/>`,        // Focus (corners OUTWARD)
+		`<line x1="8" y1="3" x2="8" y2="13"/>`, // Zoom in
+		`<line x1="3" y1="8" x2="13" y2="8"/>`, // Zoom out (also part of zoom in)
+		`<polyline points="3 6 3 3 6 3"/>`,     // Fit (corners INWARD)
+		`<circle cx="8" cy="8" r="5"/>`,        // Centre target
+		`<polyline points="6 3 3 3 3 6"/>`,     // Focus (corners OUTWARD)
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("D26g-impl-2 cluster literal missing: %q", want)
@@ -4327,12 +4327,12 @@ func TestExplorer_HTML_GovernanceMap_ChromeReorganisation(t *testing.T) {
 		// Ambient styling — pointer-events: none so it never blocks
 		// graph interaction.
 		"pointer-events: none;",
-		// All 5 swatch labels preserved.
-		"Service relationship",
-		"AI binding",
-		"Authority",
-		"Evidence",
-		"Coverage gap",
+		// Taxonomy swatch labels preserved.
+		"Contains",
+		"Depends / supports",
+		"Governance",
+		"Evidence signal",
+		"Drift / gap",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("D26g-impl-3 compact legend literal missing: %q", want)
@@ -4447,18 +4447,18 @@ func TestExplorer_HTML_GovernanceMap_ChromeReorganisation(t *testing.T) {
 // TestExplorer_HTML_GovernanceMap_FocusModePolish pins the Phase
 // 2B Step 26 D23 polish over D21 focus mode + D22 camera puck.
 // Five focused changes:
-//   1. Focus toggle relocated from toolbar to camera puck (graph
-//      workspace mode lives with zoom/centre/fit).
-//   2. Canvas border-bottom dropped in focus mode so the canvas
-//      merges into the workspace cleanly (no card-divider line).
-//   3. Connection swatches wrapped in .gmap-connection-key,
-//      separating the passive legend from the operational filter
-//      chips. Both stay reachable in focus mode.
-//   4. Focus mode no longer hides the legend; it compresses it
-//      (smaller padding/font/gap, no border-bottom).
-//   5. fitGmapToBounds() is scheduled via requestAnimationFrame on
-//      focus entry so the graph fits the expanded viewport without
-//      permanent scrollbars. Not called on exit.
+//  1. Focus toggle relocated from toolbar to camera puck (graph
+//     workspace mode lives with zoom/centre/fit).
+//  2. Canvas border-bottom dropped in focus mode so the canvas
+//     merges into the workspace cleanly (no card-divider line).
+//  3. Connection swatches wrapped in .gmap-connection-key,
+//     separating the passive legend from the operational filter
+//     chips. Both stay reachable in focus mode.
+//  4. Focus mode no longer hides the legend; it compresses it
+//     (smaller padding/font/gap, no border-bottom).
+//  5. fitGmapToBounds() is scheduled via requestAnimationFrame on
+//     focus entry so the graph fits the expanded viewport without
+//     permanent scrollbars. Not called on exit.
 //
 // Tests pin each change positively. Negative pins guard against
 // regressions to the rules being intentionally relaxed (legend
@@ -4536,11 +4536,11 @@ func TestExplorer_HTML_GovernanceMap_FocusModePolish(t *testing.T) {
 	keyEnd := 2048 // bounded window — adequate for the 5 swatch labels
 	keyBody := body[keyIdx : keyIdx+keyEnd]
 	for _, swatch := range []string{
-		"Service relationship",
-		"AI binding",
-		"Authority",
-		"Evidence",
-		"Coverage gap",
+		"Contains",
+		"Depends / supports",
+		"Governance",
+		"Evidence signal",
+		"Drift / gap",
 	} {
 		if !strings.Contains(keyBody, swatch) {
 			t.Errorf("gmap-connection-key must contain swatch label %q", swatch)
@@ -5722,6 +5722,7 @@ func TestExplorer_HTML_GovernanceMap_CentreOnRootButton(t *testing.T) {
 //     sparse views with the root near the canvas top do not produce
 //     negative scroll values.
 //   - All Step 13/14/15/16 affordances preserved.
+//
 // TestExplorer_HTML_GovernanceMap_RightRailInspector pins the
 // Phase 2B Step 16 workbench-shell layout: side-by-side canvas +
 // inspector instead of canvas-above-bottom-panel. Updated through
@@ -6278,6 +6279,7 @@ func TestExplorer_HTML_GovernanceMap_EvidenceTrayActivityFromExplorerEnvelopes(t
 //   - manual zoom paths consuming the lasso state by accident
 //   - fit-mode persisting after manual interaction
 //   - the lasso rectangle leaking outside the scene
+//
 // TestExplorer_HTML_GovernanceMap_BackStackHistory pins the
 // Phase 2B Step 15 graph-navigation history mechanism, evolved
 // through Phase 2B Step 34 (D24h-fix) into a camera-bar control
@@ -6551,6 +6553,7 @@ func TestExplorer_HTML_GovernanceMap_BackStackHistory(t *testing.T) {
 //     view (their data is null for that projection).
 //   - The toolbar root label updater receives the actual root entity
 //     name (no synthesised value).
+//
 // TestExplorer_HTML_GovernanceMap_GraphNativeNodeActions pins the
 // Phase 2B Step 13 graph-native UX deliverable:
 //
@@ -6573,6 +6576,7 @@ func TestExplorer_HTML_GovernanceMap_BackStackHistory(t *testing.T) {
 //   - The current view + root pretty-print labels ("Service",
 //     "AI System") and the format "View: X · Root: Y" are pinned so
 //     a regression that drops the orientation cue surfaces here.
+//
 // TestExplorer_HTML_GovernanceMap_NoInfrastructureNodeLabels asserts that
 // the governance-map markup does not introduce infrastructure-style
 // node labels. PR 5 explicitly disallows servers, VMs, load balancers,
@@ -6719,11 +6723,11 @@ func TestExplorer_HTML_GovernanceMap_LegendPresent(t *testing.T) {
 	body := getExplorerAllJS(t, srv)
 	for _, label := range []string{
 		"governance-map-legend",
-		"Service relationship",
-		"AI binding",
-		"Authority",
-		"Evidence",
-		"Coverage gap",
+		"Contains",
+		"Depends / supports",
+		"Governance",
+		"Evidence signal",
+		"Drift / gap",
 	} {
 		if !strings.Contains(body, label) {
 			t.Errorf("Governance Map legend missing item %q", label)
@@ -6814,9 +6818,10 @@ func TestExplorer_HTML_Polish_BannersRemoved(t *testing.T) {
 // reference to the canonical SVG asset (assets/img/midas-logo.svg) so
 // the favicon and the sidebar mark share byte-identical geometry.
 // The favicon must still:
-//   • declare rel="icon" + type="image/svg+xml"
-//   • be served from the embedded Explorer FS (no external network fetch)
-//   • render four white bars with bars 2 & 3 down-shifted by 2 px
+//   - declare rel="icon" + type="image/svg+xml"
+//   - be served from the embedded Explorer FS (no external network fetch)
+//   - render four white bars with bars 2 & 3 down-shifted by 2 px
+//
 // The asset payload is fetched directly so the bar-count + down-shift
 // pins survive both the data-URI and asset-path eras.
 func TestExplorer_HTML_Polish_FaviconPresent(t *testing.T) {
@@ -8698,9 +8703,9 @@ func TestExplorer_AssetsCSS_RecordsAndComponents_DarkBaseRulesPreserved(t *testi
 
 	// Records dark-base invariants.
 	for _, want := range []string{
-		`background: var(--surface-container-low);`, // .records-table-card
+		`background: var(--surface-container-low);`,  // .records-table-card
 		`background: var(--surface-container-high);`, // .records-detail
-		`color: var(--slate-300);`,                    // .col-mono
+		`color: var(--slate-300);`,                   // .col-mono
 		// Outcome badge dark tints.
 		`background: rgba(78, 222, 163, 0.10);`,
 		`background: rgba(252, 211, 77, 0.10);`,
@@ -9192,15 +9197,15 @@ func TestExplorer_AssetsCSS_GraphPerTypeNodes_ConsumeTokens(t *testing.T) {
 	}
 	for _, r := range []rule{
 		{".business-service-node", `border-left: 4px solid var(--gmap-type-business);`},
-		{".related-service-node",  `border-left: 4px solid var(--gmap-type-related);`},
-		{".capability-node",       `border-left: 4px solid var(--gmap-type-capability);`},
-		{".process-node",          `border-left: 4px solid var(--gmap-type-process);`},
+		{".related-service-node", `border-left: 4px solid var(--gmap-type-related);`},
+		{".capability-node", `border-left: 4px solid var(--gmap-type-capability);`},
+		{".process-node", `border-left: 4px solid var(--gmap-type-process);`},
 		{".decision-surface-node", `border-left: 4px solid var(--gmap-type-surface);`},
-		{".ai-system-node",        `border-left: 4px solid var(--gmap-type-ai);`},
+		{".ai-system-node", `border-left: 4px solid var(--gmap-type-ai);`},
 		// Authority keeps its dashed style; only the colour token swap
 		// matters here.
-		{".authority-node",        `border-left: 4px dashed var(--gmap-type-authority);`},
-		{".coverage-node",         `border-left: 4px solid var(--gmap-type-coverage);`},
+		{".authority-node", `border-left: 4px dashed var(--gmap-type-authority);`},
+		{".coverage-node", `border-left: 4px solid var(--gmap-type-coverage);`},
 	} {
 		body, ok := sliceRule(gmapCSS, r.selector)
 		if !ok {
@@ -9252,9 +9257,9 @@ func TestExplorer_AssetsCSS_GraphConnectors_ConsumeTokens(t *testing.T) {
 	}
 	for _, r := range []rule{
 		{".connector-ai-binding", `stroke: var(--gmap-type-ai);`},
-		{".connector-authority",  `stroke: var(--gmap-type-authority);`},
-		{".connector-evidence",   `stroke: var(--gmap-type-surface);`},
-		{".connector-gap",        `stroke: var(--gmap-type-risk);`},
+		{".connector-authority", `stroke: var(--gmap-type-authority);`},
+		{".connector-evidence", `stroke: var(--gmap-type-surface);`},
+		{".connector-gap", `stroke: var(--gmap-type-risk);`},
 	} {
 		body, ok := sliceConnector(gmapCSS, r.selector)
 		if !ok {
@@ -9574,11 +9579,11 @@ func TestExplorer_AssetsCSS_ConnectorHierarchy_TokensConsumed(t *testing.T) {
 		dash      string // empty = no dasharray expected
 	}
 	for _, r := range []rule{
-		{".connector-service",     `stroke: var(--gmap-conn-neutral);`,   `stroke-width: 1.6;`, `opacity: 0.78;`, ""},
-		{".connector-ai-binding",  `stroke: var(--gmap-type-ai);`,        `stroke-width: 1.8;`, `opacity: 0.92;`, ""},
-		{".connector-authority",   `stroke: var(--gmap-type-authority);`, `stroke-width: 1.7;`, `opacity: 0.88;`, `stroke-dasharray: 6 4;`},
-		{".connector-evidence",    `stroke: var(--gmap-type-surface);`,   `stroke-width: 1.7;`, `opacity: 0.88;`, ""},
-		{".connector-gap",         `stroke: var(--gmap-type-risk);`,      `stroke-width: 1.8;`, `opacity: 0.95;`, `stroke-dasharray: 5 5;`},
+		{".connector-service", `stroke: var(--gmap-conn-neutral);`, `stroke-width: 1.4;`, `opacity: 0.78;`, ""},
+		{".connector-ai-binding", `stroke: var(--gmap-type-ai);`, `stroke-width: 1.4;`, `opacity: 0.92;`, ""},
+		{".connector-authority", `stroke: var(--gmap-type-authority);`, `stroke-width: 1.4;`, `opacity: 0.88;`, `stroke-dasharray: 6 4;`},
+		{".connector-evidence", `stroke: var(--gmap-type-surface);`, `stroke-width: 1.4;`, `opacity: 0.88;`, ""},
+		{".connector-gap", `stroke: var(--gmap-type-risk);`, `stroke-width: 1.4;`, `opacity: 0.95;`, `stroke-dasharray: 5 5;`},
 	} {
 		body, ok := sliceRule(gmapCSS, r.selector)
 		if !ok {
@@ -10176,8 +10181,8 @@ func TestExplorer_AssetsCSS_RightRail_CollapsedStateChromeless(t *testing.T) {
 	// background and left border. The collapsed overrides above must
 	// not leak into the always-on rules.
 	for _, want := range []string{
-		`background: var(--surface-container-low);`,                   // .governance-map-details base
-		`border-left: 1px solid var(--outline-variant);`,              // #gmap-details base
+		`background: var(--surface-container-low);`,      // .governance-map-details base
+		`border-left: 1px solid var(--outline-variant);`, // #gmap-details base
 	} {
 		if !strings.Contains(gmapCSS, want) {
 			t.Errorf("D27j-ui-3a-refine-3b: expanded-state rail chrome %q must remain on the base rule", want)
@@ -10219,8 +10224,8 @@ func TestExplorer_AssetsCSS_RightRailTabs_StateDependentPosition(t *testing.T) {
 	baseBody := gmapCSS[baseStart : baseStart+baseEnd]
 
 	for _, want := range []string{
-		`right: 0;`,                          // collapsed-state default position
-		`transition: right 0.18s ease-out;`,  // animate the strip
+		`right: 0;`,                                   // collapsed-state default position
+		`transition: right 0.18s ease-out;`,           // animate the strip
 		`width: var(--gmap-right-rail-handle-width);`, // strip width via 5 token
 	} {
 		if !strings.Contains(baseBody, want) {

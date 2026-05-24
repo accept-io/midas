@@ -1,0 +1,3 @@
+./auth.go
+./chain.go
+./static.go

@@ -47,6 +47,14 @@
   z-index: 3;
 }
 
+/* D37p-interaction-mode-gate — Strategic Context uses the shared
+ * Cytoscape engine. The legacy Pan / Select rail remains available to
+ * the native Context route, but must not float above the strategic
+ * canvas before the shared interaction-mode toolbar is registered. */
+.midas-graph-viewport[data-active-renderer="context"] .gmap-mode-rail {
+  display: none;
+}
+
 .midas-graph-viewport[data-active-renderer="context"] .context-renderer-mount[data-mount-mode="document"] {
   display: flex;
   flex-direction: column;
@@ -303,10 +311,13 @@
   overflow: visible;
 }
 
-/* Base connector line. Per-class overrides set stroke + width. */
+/* Base connector line. Per-class overrides set stroke family only.
+ * Width is intentionally uniform so connector thickness is not used
+ * decoratively; semantic meaning comes from family, direction, dash,
+ * hover copy, and accessibility metadata. */
 .midas-graph-viewport[data-active-renderer="context"] .context-connector {
   stroke: var(--outline-variant, #475569);
-  stroke-width: 1.2;
+  stroke-width: 1.4;
   fill: none;
   opacity: 0.78;
 }
@@ -321,7 +332,6 @@
 /* AI binding (functional binding): AI accent, solid. */
 .midas-graph-viewport[data-active-renderer="context"] .context-connector--ai_binding {
   stroke: var(--primary, #7aa2ff);
-  stroke-width: 1.6;
   opacity: 0.88;
 }
 
@@ -329,14 +339,12 @@
  * stroke-dasharray="6 4"). */
 .midas-graph-viewport[data-active-renderer="context"] .context-connector--authority {
   stroke: var(--primary, #7aa2ff);
-  stroke-width: 1.5;
   opacity: 0.82;
 }
 
 /* Evidence (reserved for future runtime evidence edges). */
 .midas-graph-viewport[data-active-renderer="context"] .context-connector--evidence {
   stroke: var(--on-surface-variant, #94a3b8);
-  stroke-width: 1.4;
   opacity: 0.78;
 }
 
@@ -344,7 +352,32 @@
  * stroke-dasharray="5 5"). */
 .midas-graph-viewport[data-active-renderer="context"] .context-connector--gap {
   stroke: var(--badge-bad, #ff6b6b);
-  stroke-width: 1.6;
+  opacity: 0.92;
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-connector-family-structural {
+  stroke: var(--outline-variant, #475569);
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-connector-family-dependency {
+  stroke: var(--primary, #7aa2ff);
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-connector-family-runtime_operational,
+.midas-graph-viewport[data-active-renderer="context"] .context-connector-family-evidence {
+  stroke: var(--on-surface-variant, #94a3b8);
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-connector-family-drift_risk_exception {
+  stroke: var(--badge-bad, #ff6b6b);
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-connector-family-authority_governance {
+  stroke: var(--primary, #7aa2ff);
+}
+
+.midas-graph-viewport[data-active-renderer="context"] .context-connector-arrow-path {
+  fill: var(--on-surface-variant, #94a3b8);
   opacity: 0.92;
 }
 

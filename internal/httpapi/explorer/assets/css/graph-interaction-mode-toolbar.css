@@ -1,0 +1,73 @@
+/* /explorer/assets/css/graph-interaction-mode-toolbar.css
+ *
+ * Reusable strategic graph interaction-mode toolbar substrate.
+ *
+ * The chrome mirrors the legacy `.gmap-mode-rail` exactly: same
+ * top-left canvas placement, compact vertical rail, 32px icon buttons,
+ * spacing, border, radius, and active-state language. Graph instances
+ * may configure modes, labels, icons, and enablement, but not chrome.
+ */
+
+.midas-graph-viewport [data-graph-interaction-mode-toolbar] {
+  position: absolute;
+  top: 8px;
+  left: 16px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px;
+  background: var(--surface-container-high);
+  border: 1px solid var(--outline-variant);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.30);
+}
+
+.midas-graph-viewport [data-graph-interaction-mode-toolbar][hidden] {
+  display: none;
+}
+
+.midas-graph-viewport [data-graph-interaction-mode-button] {
+  width: 32px;
+  height: 32px;
+  min-width: 0;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--slate-300);
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.midas-graph-viewport [data-graph-interaction-mode-button]:hover:not(:disabled) {
+  background: var(--surface-container);
+  color: var(--on-surface);
+}
+
+.midas-graph-viewport [data-graph-interaction-mode-button]:disabled,
+.midas-graph-viewport [data-graph-interaction-mode-button][aria-disabled="true"] {
+  opacity: 0.40;
+  cursor: not-allowed;
+}
+
+.midas-graph-viewport [data-graph-interaction-mode-button]:focus-visible {
+  outline: 2px solid var(--primary, #4ea1ff);
+  outline-offset: 1px;
+}
+
+.midas-graph-viewport [data-graph-interaction-mode-button][aria-pressed="true"],
+.midas-graph-viewport [data-graph-interaction-mode-button].is-active {
+  background: var(--surface-container-high);
+  color: var(--primary, #4ea1ff);
+  border: 1px solid var(--primary, #4ea1ff);
+}
+
+.midas-graph-viewport [data-graph-interaction-mode-button] svg {
+  width: 16px;
+  height: 16px;
+  pointer-events: none;
+}

@@ -1,0 +1,22 @@
+=== RUN   TestExplorer_ContextSelectedObjectPanePreserved
+--- PASS: TestExplorer_ContextSelectedObjectPanePreserved (0.03s)
+=== RUN   TestExplorer_D37qViewport5_SelectedObjectPaneUsesSelectionBridge
+--- PASS: TestExplorer_D37qViewport5_SelectedObjectPaneUsesSelectionBridge (0.00s)
+=== RUN   TestExplorer_D37pGraphSelectionSet_PlatformAPIExists
+--- PASS: TestExplorer_D37pGraphSelectionSet_PlatformAPIExists (0.00s)
+=== RUN   TestExplorer_D37pGraphSelectionSet_NormalisationContract
+--- PASS: TestExplorer_D37pGraphSelectionSet_NormalisationContract (0.00s)
+=== RUN   TestExplorer_D37pGraphSelectionSet_EventsAndMutators
+--- PASS: TestExplorer_D37pGraphSelectionSet_EventsAndMutators (0.00s)
+=== RUN   TestExplorer_D37pGraphSelectionSet_SubscriberLifecycle
+--- PASS: TestExplorer_D37pGraphSelectionSet_SubscriberLifecycle (0.00s)
+=== RUN   TestExplorer_D37pGraphSelectionSet_SingleSelectionCompatibilityPreserved
+--- PASS: TestExplorer_D37pGraphSelectionSet_SingleSelectionCompatibilityPreserved (0.00s)
+=== RUN   TestExplorer_D37pGraphSelectionSet_SelectedObjectPaneForwardsSafely
+--- PASS: TestExplorer_D37pGraphSelectionSet_SelectedObjectPaneForwardsSafely (0.00s)
+=== RUN   TestExplorer_D37pGraphSelectionSet_LensNeutralAndDoesNotReuseLegacyModel
+--- PASS: TestExplorer_D37pGraphSelectionSet_LensNeutralAndDoesNotReuseLegacyModel (0.00s)
+=== RUN   TestExplorer_D37pGraphSelectionSet_NoOutOfScopeFilesChangedByContract
+--- PASS: TestExplorer_D37pGraphSelectionSet_NoOutOfScopeFilesChangedByContract (0.00s)
+PASS
+ok  	github.com/accept-io/midas/internal/httpapi	1.817s

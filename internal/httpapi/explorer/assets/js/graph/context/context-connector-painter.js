@@ -127,6 +127,26 @@
     while (svgEl.firstChild) svgEl.removeChild(svgEl.firstChild);
   }
 
+  function _ensureArrowMarker(svgEl) {
+    if (!svgEl || svgEl.querySelector('#context-connector-arrow')) return;
+    var defs = document.createElementNS(SVG_NS, 'defs');
+    var marker = document.createElementNS(SVG_NS, 'marker');
+    marker.setAttribute('id', 'context-connector-arrow');
+    marker.setAttribute('viewBox', '0 0 10 10');
+    marker.setAttribute('refX', '8');
+    marker.setAttribute('refY', '5');
+    marker.setAttribute('markerWidth', '7');
+    marker.setAttribute('markerHeight', '7');
+    marker.setAttribute('orient', 'auto');
+    marker.setAttribute('markerUnits', 'strokeWidth');
+    var path = document.createElementNS(SVG_NS, 'path');
+    path.setAttribute('d', 'M 0 0 L 10 5 L 0 10 z');
+    path.setAttribute('class', 'context-connector-arrow-path');
+    marker.appendChild(path);
+    defs.appendChild(marker);
+    svgEl.appendChild(defs);
+  }
+
   // D37q-viewport-2-impl — Stage-anchor lookup.
   //
   // _anchorFromStage delegates to the shared platform stage's
@@ -184,6 +204,7 @@
     if (!containerEl || typeof containerEl.getBoundingClientRect !== 'function') return 0;
 
     _emptySvg(svgEl);
+    _ensureArrowMarker(svgEl);
     var containerRect = containerEl.getBoundingClientRect();
     var painted = 0;
 
@@ -206,9 +227,35 @@
       line.setAttribute('x2', String(Math.round(dstC.x)));
       line.setAttribute('y2', String(Math.round(dstC.y)));
       var visualClass = _str(c.visualClass) || 'service';
-      line.setAttribute('class', CONNECTOR_CLASS + ' ' + CONNECTOR_CLASS_PREFIX + visualClass);
+      var classes = [
+        CONNECTOR_CLASS,
+        CONNECTOR_CLASS_PREFIX + visualClass,
+      ];
+      if (c.connectorType) classes.push(CONNECTOR_CLASS + '-type-' + _str(c.connectorType));
+      if (c.family) classes.push(CONNECTOR_CLASS + '-family-' + _str(c.family));
+      if (c.arrowPolicy) classes.push(CONNECTOR_CLASS + '-arrow-' + _str(c.arrowPolicy));
+      if (c.labelPolicy) classes.push(CONNECTOR_CLASS + '-label-' + _str(c.labelPolicy));
+      if (c.weightPolicy) classes.push(CONNECTOR_CLASS + '-weight-' + _str(c.weightPolicy));
+      line.setAttribute('class', classes.join(' '));
       line.setAttribute('data-visual-class', visualClass);
       if (c.edgeKind) line.setAttribute('data-edge-kind', _str(c.edgeKind));
+      if (c.connectorType) line.setAttribute('data-connector-type', _str(c.connectorType));
+      if (c.family) line.setAttribute('data-connector-family', _str(c.family));
+      if (c.label) line.setAttribute('data-connector-label', _str(c.label));
+      if (c.hoverSummary) line.setAttribute('data-hover-summary', _str(c.hoverSummary));
+      if (c.accessibilityLabel || c.ariaText) {
+        line.setAttribute('aria-label', _str(c.accessibilityLabel || c.ariaText));
+      }
+      if (c.arrowPolicy === 'directed') {
+        line.setAttribute('marker-end', 'url(#context-connector-arrow)');
+      }
+
+      var titleText = _str(c.hoverSummary || c.accessibilityLabel || c.ariaText || c.label);
+      if (titleText) {
+        var title = document.createElementNS(SVG_NS, 'title');
+        title.textContent = titleText;
+        line.appendChild(title);
+      }
 
       var dash = _dashAttr(c.dashPattern);
       if (dash) line.setAttribute('stroke-dasharray', dash);

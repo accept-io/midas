@@ -943,11 +943,11 @@
      verbatim. Hover stroke-width (3.5) and hit-target stroke-width
      (12) untouched — the lighter base makes the hover bump even more
      visible. */
-  .connector-service     { fill: none; stroke: var(--gmap-conn-neutral);   stroke-width: 1.6; opacity: 0.78; }
-  .connector-ai-binding  { fill: none; stroke: var(--gmap-type-ai);        stroke-width: 1.8; opacity: 0.92; }
-  .connector-authority   { fill: none; stroke: var(--gmap-type-authority); stroke-width: 1.7; stroke-dasharray: 6 4; opacity: 0.88; }
-  .connector-evidence    { fill: none; stroke: var(--gmap-type-surface);   stroke-width: 1.7; opacity: 0.88; }
-  .connector-gap         { fill: none; stroke: var(--gmap-type-risk);      stroke-width: 1.8; stroke-dasharray: 5 5; opacity: 0.95; }
+  .connector-service     { fill: none; stroke: var(--gmap-conn-neutral);   stroke-width: 1.4; opacity: 0.78; }
+  .connector-ai-binding  { fill: none; stroke: var(--gmap-type-ai);        stroke-width: 1.4; opacity: 0.92; }
+  .connector-authority   { fill: none; stroke: var(--gmap-type-authority); stroke-width: 1.4; stroke-dasharray: 6 4; opacity: 0.88; }
+  .connector-evidence    { fill: none; stroke: var(--gmap-type-surface);   stroke-width: 1.4; opacity: 0.88; }
+  .connector-gap         { fill: none; stroke: var(--gmap-type-risk);      stroke-width: 1.4; stroke-dasharray: 5 5; opacity: 0.95; }
 
   /* D26h-impl — Connector hover relationship preview.
      The base .governance-map-svg layer keeps pointer-events: none
