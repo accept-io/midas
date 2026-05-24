@@ -375,7 +375,60 @@
     try {
       node.dataset.nodeActions = JSON.stringify(spec.actions || []);
     } catch (_) { /* actions optional */ }
+    _appendNodeActionTrigger(node, spec);
     return node;
+  }
+
+  function _nodeActionContextFromSpec(spec) {
+    var base = (spec && spec.actionContext && typeof spec.actionContext === 'object') ? spec.actionContext : {};
+    var ctx = {};
+    Object.keys(base).forEach(function (key) { ctx[key] = base[key]; });
+    ctx.lensId = String(spec.lensId || ctx.lensId || '');
+    ctx.nodeId = String(ctx.nodeId || spec.id || '');
+    ctx.nodeKind = String(spec.nodeKind || ctx.nodeKind || spec.kind || '');
+    ctx.nodeLabel = String(ctx.nodeLabel || spec.name || spec.label || spec.id || 'node');
+    return ctx;
+  }
+
+  function _appendNodeActionTrigger(node, spec) {
+    var lensId = String((spec && spec.lensId) || '');
+    var nodeKind = String((spec && spec.nodeKind) || '');
+    if (!lensId || !nodeKind) return;
+    var graph = window.MIDASExplorerGraph || {};
+    var registry = graph.nodeActionRegistry;
+    if (!registry || typeof registry.hasActions !== 'function') return;
+    var context = _nodeActionContextFromSpec(spec);
+    var hasActions = false;
+    try { hasActions = registry.hasActions(lensId, nodeKind, context) === true; }
+    catch (_) { hasActions = false; }
+    if (!hasActions) return;
+
+    var trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'graph-node-action-trigger';
+    trigger.setAttribute('data-graph-node-action-trigger', 'true');
+    trigger.setAttribute('aria-haspopup', 'menu');
+    trigger.setAttribute('aria-expanded', 'false');
+    trigger.setAttribute('aria-label', 'More actions for ' + String(context.nodeLabel || context.nodeId || 'node'));
+    trigger.textContent = '\u2026';
+    trigger.addEventListener('pointerdown', function (event) {
+      event.stopPropagation();
+    });
+    trigger.addEventListener('mousedown', function (event) {
+      event.stopPropagation();
+    });
+    trigger.addEventListener('click', function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      var menu = (window.MIDASExplorerGraph || {}).nodeActionMenu;
+      if (!menu || typeof menu.openForNode !== 'function') return;
+      var ctx = {};
+      Object.keys(context).forEach(function (key) { ctx[key] = context[key]; });
+      ctx.sourceEvent = event;
+      menu.openForNode(trigger, ctx);
+    });
+    node.className += ' has-node-actions';
+    node.appendChild(trigger);
   }
 
   // addNode — production node card builder. The drag-handler hook +

@@ -10253,12 +10253,12 @@ func TestExplorer_AssetsCSS_RightRailTabs_StateDependentPosition(t *testing.T) {
 }
 
 // TestExplorer_AssetsCSS_RightRailPanel_LeftPaddingAllowance pins
-// the D27j-ui-3a-refine-3e panel padding flip. The chromeless tab
-// strip now lives at the panel-canvas seam in expanded state (i.e.
-// at the panel's LEFT edge), so panel content needs its 44px
-// (32px strip + var(--space-3)=12px breathing room) allowance on
-// the LEFT instead of the right. Collapsed panels are display:none
-// so the change is a no-op there.
+// the D27j-ui-3a-refine-3e panel padding flip plus the later
+// D33a-spike-2g-impl-5c tightening. The chromeless tab strip lives
+// at the panel-canvas seam in expanded state (i.e. at the panel's
+// LEFT edge), so panel content keeps its handle allowance on the
+// left. The gutter is intentionally space-2, matching the current
+// documented CSS and preserving horizontal room for value columns.
 func TestExplorer_AssetsCSS_RightRailPanel_LeftPaddingAllowance(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
@@ -10276,8 +10276,8 @@ func TestExplorer_AssetsCSS_RightRailPanel_LeftPaddingAllowance(t *testing.T) {
 	panelBody := gmapCSS[panelStart : panelStart+panelEnd]
 
 	// Padding shorthand: top right bottom left. Left value carries
-	// the handle-width allowance via the 5 token.
-	wantPadding := `padding: var(--space-3) var(--space-3) var(--space-3) calc(var(--gmap-right-rail-handle-width) + var(--space-3));`
+	// the handle-width allowance plus the tightened space-2 gutter.
+	wantPadding := `padding: var(--space-3) var(--space-2) var(--space-3) calc(var(--gmap-right-rail-handle-width) + var(--space-2));`
 	if !strings.Contains(panelBody, wantPadding) {
 		t.Errorf("D27j-ui-3a-refine-3e/5: .gmap-right-rail-panel must declare %q\n--- rule body:\n%s", wantPadding, panelBody)
 	}

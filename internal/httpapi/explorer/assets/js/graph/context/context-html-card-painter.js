@@ -73,6 +73,8 @@
   var ACTIONS_CLASS      = 'context-card-actions';
   var ACTION_CLASS       = 'context-card-action';
   var ROLE_CLASS_PREFIX  = 'context-card--role-';
+  var NODE_ACTIONS_CLASS = 'has-node-actions';
+  var NODE_ACTION_TRIGGER_ATTR = 'data-graph-node-action-trigger';
 
   // ── Helpers ────────────────────────────────────────────────────────
 
@@ -96,6 +98,11 @@
     return el;
   }
 
+  function _on(el, type, handler) {
+    el.addEventListener(type, handler);
+    return el;
+  }
+
   // ── Public API ─────────────────────────────────────────────────────
 
   function renderCard(card, options) {
@@ -111,6 +118,10 @@
     if (kindCls) classes += ' ' + kindCls;
     if (roleCls) classes += ' ' + roleCls;
 
+    var actionContext = _nodeActionContext(card, opts);
+    var hasNodeActions = _hasNodeActions(actionContext);
+    if (hasNodeActions) classes += ' ' + NODE_ACTIONS_CLASS;
+
     var el = _el('article', classes);
     if (card.id)              el.setAttribute('data-card-id', _str(card.id));
     if (card.kind)            el.setAttribute('data-kind', _str(card.kind));
@@ -125,6 +136,7 @@
     el.setAttribute('tabindex', '0');
 
     el.appendChild(renderCardBody(card, opts));
+    el.appendChild(_renderNodeActionTrigger(actionContext, hasNodeActions));
     return el;
   }
 
@@ -254,6 +266,59 @@
     return ul;
   }
 
+  function _nodeActionContext(card, options) {
+    var opts = options || {};
+    var nodeKind = _str(card.kind || card.type || '');
+    var nodeLabel = _str(card.name || card.label || card.title || card.id || 'node');
+    return {
+      lensId: _str(opts.lensId || card.lensId || card.lens || 'context'),
+      nodeId: _str(card.id || ''),
+      nodeKind: nodeKind,
+      nodeLabel: nodeLabel,
+      cardMetadata: card,
+    };
+  }
+
+  function _hasNodeActions(context) {
+    var graph = window.MIDASExplorerGraph || {};
+    var registry = graph.nodeActionRegistry;
+    if (!registry || typeof registry.hasActions !== 'function') return false;
+    try { return registry.hasActions(context.lensId, context.nodeKind, context) === true; }
+    catch (_) { return false; }
+  }
+
+  function _renderNodeActionTrigger(context, visible) {
+    var button = _el('button', 'graph-node-action-trigger');
+    button.type = 'button';
+    button.setAttribute(NODE_ACTION_TRIGGER_ATTR, 'true');
+    button.setAttribute('aria-label', 'More actions for ' + _str(context.nodeLabel || context.nodeId || 'node'));
+    button.setAttribute('aria-haspopup', 'menu');
+    button.setAttribute('aria-expanded', 'false');
+    button.textContent = '\u2026';
+    if (!visible) button.hidden = true;
+
+    _on(button, 'pointerdown', function (event) {
+      event.stopPropagation();
+    });
+    _on(button, 'mousedown', function (event) {
+      event.stopPropagation();
+    });
+    _on(button, 'click', function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      var graph = window.MIDASExplorerGraph || {};
+      var menu = graph.nodeActionMenu;
+      if (!menu || typeof menu.openForNode !== 'function') return;
+      var ctx = {};
+      var keys = Object.keys(context || {});
+      for (var i = 0; i < keys.length; i++) ctx[keys[i]] = context[keys[i]];
+      ctx.sourceEvent = event;
+      menu.openForNode(button, ctx);
+    });
+
+    return button;
+  }
+
   // ── Export ────────────────────────────────────────────────────────
 
   window.MIDASExplorerGraph.contextCardPainter = {
@@ -269,6 +334,7 @@
       BADGE_CLASS_PREFIX: BADGE_CLASS_PREFIX,
       METRIC_CLASS:       METRIC_CLASS,
       ACTION_CLASS:       ACTION_CLASS,
+      NODE_ACTION_TRIGGER_ATTR: NODE_ACTION_TRIGGER_ATTR,
     },
   };
 })();

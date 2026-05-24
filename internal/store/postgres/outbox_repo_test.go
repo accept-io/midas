@@ -154,10 +154,14 @@ func TestOutboxRepo_AppendBatch_InsertsMultipleEvents(t *testing.T) {
 	ev1 := mustNewOutboxEvent(t, outbox.EventDecisionCompleted, "envelope", "outbox-test-env-batch-1", "midas.decisions", "src:req-batch-1", json.RawMessage(`{"n":1}`))
 	ev2 := mustNewOutboxEvent(t, outbox.EventDecisionOutcomeRecorded, "envelope", "outbox-test-env-batch-1", "midas.decisions", "src:req-batch-1", json.RawMessage(`{"n":2}`))
 	ev3 := mustNewOutboxEvent(t, outbox.EventDecisionEnvelopeClosed, "envelope", "outbox-test-env-batch-1", "midas.decisions", "src:req-batch-1", json.RawMessage(`{"n":3}`))
+	// Postgres TIMESTAMPTZ stores at microsecond resolution; nanosecond
+	// deltas truncate to identical values and force ORDER BY to fall back
+	// to the random UUID id tiebreak, making the assertion below flaky.
+	// Microsecond deltas survive the round-trip.
 	baseCreatedAt := time.Now().UTC()
 	ev1.CreatedAt = baseCreatedAt
-	ev2.CreatedAt = baseCreatedAt.Add(time.Nanosecond)
-	ev3.CreatedAt = baseCreatedAt.Add(2 * time.Nanosecond)
+	ev2.CreatedAt = baseCreatedAt.Add(time.Microsecond)
+	ev3.CreatedAt = baseCreatedAt.Add(2 * time.Microsecond)
 	t.Cleanup(func() {
 		cleanupOutboxEventByID(t, ev1.ID)
 		cleanupOutboxEventByID(t, ev2.ID)

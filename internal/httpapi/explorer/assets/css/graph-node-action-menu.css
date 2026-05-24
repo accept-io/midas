@@ -1,0 +1,102 @@
+/* /explorer/assets/css/graph-node-action-menu.css
+ *
+ * Shared graph node action affordance. The pointer-events contract is narrow:
+ * Cytoscape overlay surfaces and cards remain pass-through; only the node
+ * ellipsis trigger and the menu surface receive pointer events.
+ */
+
+.graph-cytoscape-overlay-layer {
+  pointer-events: none;
+}
+
+.graph-cytoscape-overlay-card {
+  pointer-events: none;
+}
+
+.graph-cytoscape-overlay-card .context-card,
+.graph-cytoscape-overlay-card .context-card-body {
+  pointer-events: none;
+}
+
+.graph-cytoscape-overlay-card .context-card.has-node-actions {
+  position: relative;
+  padding-right: 40px;
+}
+
+[data-graph-node-action-trigger] {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--on-surface-variant, #94a3b8);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.gmap-node.has-node-actions .gmap-node-name,
+.gmap-node.has-node-actions .gmap-node-meta {
+  max-width: calc(100% - 44px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+[data-graph-node-action-trigger][hidden] {
+  display: none;
+}
+
+[data-graph-node-action-trigger]:hover,
+[data-graph-node-action-trigger][aria-expanded="true"] {
+  border-color: var(--outline-variant, #475569);
+  background: var(--surface-container-high, #2a3245);
+  color: var(--on-surface, #e2e8f0);
+}
+
+[data-graph-node-action-trigger]:focus-visible {
+  outline: 2px solid var(--primary, #4ea1ff);
+  outline-offset: 1px;
+}
+
+.graph-node-action-menu-surface {
+  position: absolute;
+  z-index: 80;
+  min-width: 160px;
+  padding: 4px;
+  border: 1px solid var(--outline-variant, #475569);
+  border-radius: 6px;
+  background: var(--surface-container-high, #2a3245);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+  pointer-events: auto;
+}
+
+.graph-node-action-menu-item {
+  appearance: none;
+  width: 100%;
+  display: block;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--on-surface, #e2e8f0);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.graph-node-action-menu-item:hover,
+.graph-node-action-menu-item:focus-visible {
+  outline: none;
+  background: var(--surface-container, #222838);
+  color: var(--on-surface, #e2e8f0);
+}

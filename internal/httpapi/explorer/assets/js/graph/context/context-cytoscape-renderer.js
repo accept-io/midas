@@ -2548,6 +2548,15 @@
       badges:  Array.isArray(card.badges)  ? card.badges  : [],
       details: card.details || {},
       actions: Array.isArray(card.actions) ? card.actions : [],
+      lensId:  'context',
+      nodeKind: card.kind || '',
+      actionContext: {
+        nodeId:        card.id,
+        nodeKind:      card.kind || '',
+        nodeLabel:     card.name || card.label || card.id || 'node',
+        sourceNodeRef: card.sourceNodeRef || null,
+        cardMetadata:  card,
+      },
     };
   }
 

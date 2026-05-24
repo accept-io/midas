@@ -1,0 +1,16 @@
+=== RUN   TestExplorer_D33aSpike2gImpl4_BreadcrumbAndContextPanelContractsDocumentedOnly
+--- PASS: TestExplorer_D33aSpike2gImpl4_BreadcrumbAndContextPanelContractsDocumentedOnly (0.00s)
+=== RUN   TestExplorer_D33aSpike2gImpl4a_ReportDocumentsTuning
+--- PASS: TestExplorer_D33aSpike2gImpl4a_ReportDocumentsTuning (0.00s)
+=== RUN   TestExplorer_D33aSpike2gImpl4b_ReportDocumentsCalibration
+--- PASS: TestExplorer_D33aSpike2gImpl4b_ReportDocumentsCalibration (0.00s)
+=== RUN   TestExplorer_D33aSpike2gImpl4c_ReportDocumentsDesignPrinciples
+--- PASS: TestExplorer_D33aSpike2gImpl4c_ReportDocumentsDesignPrinciples (0.00s)
+=== RUN   TestExplorer_D33aSpike2gImpl4d_ReportDocumentsNoOverlapPolicy
+--- PASS: TestExplorer_D33aSpike2gImpl4d_ReportDocumentsNoOverlapPolicy (0.00s)
+=== RUN   TestExplorer_D33aSpike2gImpl4e_ReportDocumentsVerticalNoOverlap
+--- PASS: TestExplorer_D33aSpike2gImpl4e_ReportDocumentsVerticalNoOverlap (0.00s)
+=== RUN   TestExplorer_AssetsCSS_RightRailPanel_LeftPaddingAllowance
+--- PASS: TestExplorer_AssetsCSS_RightRailPanel_LeftPaddingAllowance (0.03s)
+PASS
+ok  	github.com/accept-io/midas/internal/httpapi	0.478s

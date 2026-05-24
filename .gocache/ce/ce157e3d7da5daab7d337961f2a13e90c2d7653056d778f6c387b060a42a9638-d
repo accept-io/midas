@@ -1,0 +1,36 @@
+=== RUN   TestExplorer_GraphNodeActionCardContract_EllipsisButtonGatedByRegistry
+--- PASS: TestExplorer_GraphNodeActionCardContract_EllipsisButtonGatedByRegistry (0.03s)
+=== RUN   TestExplorer_GraphNodeActionCardContract_DelegatesToMenuAndStopsDragStart
+--- PASS: TestExplorer_GraphNodeActionCardContract_DelegatesToMenuAndStopsDragStart (0.00s)
+=== RUN   TestExplorer_GraphNodeActionCardContract_DoesNotConstructMenuDom
+--- PASS: TestExplorer_GraphNodeActionCardContract_DoesNotConstructMenuDom (0.00s)
+=== RUN   TestExplorer_GraphNodeActionCardContract_ContextRendererDoesNotOwnMenuOrActions
+--- PASS: TestExplorer_GraphNodeActionCardContract_ContextRendererDoesNotOwnMenuOrActions (0.00s)
+=== RUN   TestExplorer_GraphNodeActionCardContract_AuthorityModulesDoNotRenderEllipsis
+--- PASS: TestExplorer_GraphNodeActionCardContract_AuthorityModulesDoNotRenderEllipsis (0.00s)
+=== RUN   TestExplorer_GraphNodeActionMenu_LoadedAfterRegistry
+--- PASS: TestExplorer_GraphNodeActionMenu_LoadedAfterRegistry (0.00s)
+=== RUN   TestExplorer_GraphNodeActionMenu_PublicSurfaceAndActionResolution
+--- PASS: TestExplorer_GraphNodeActionMenu_PublicSurfaceAndActionResolution (0.00s)
+=== RUN   TestExplorer_GraphNodeActionMenu_RendersPortalNotInsideCard
+--- PASS: TestExplorer_GraphNodeActionMenu_RendersPortalNotInsideCard (0.00s)
+=== RUN   TestExplorer_GraphNodeActionMenu_NoCytoscapeDependency
+--- PASS: TestExplorer_GraphNodeActionMenu_NoCytoscapeDependency (0.00s)
+=== RUN   TestExplorer_GraphNodeActionPointerEvents_CssPinsTransparentOverlayAndCard
+--- PASS: TestExplorer_GraphNodeActionPointerEvents_CssPinsTransparentOverlayAndCard (0.00s)
+=== RUN   TestExplorer_GraphNodeActionPointerEvents_CssPinsOnlyEllipsisAndMenuSurfaceAuto
+--- PASS: TestExplorer_GraphNodeActionPointerEvents_CssPinsOnlyEllipsisAndMenuSurfaceAuto (0.00s)
+=== RUN   TestExplorer_GraphNodeActionPointerEvents_CssAndIndexAreLoaded
+--- PASS: TestExplorer_GraphNodeActionPointerEvents_CssAndIndexAreLoaded (0.00s)
+=== RUN   TestExplorer_GraphNodeActionPointerEvents_OverlayBaselineStillTransparent
+--- PASS: TestExplorer_GraphNodeActionPointerEvents_OverlayBaselineStillTransparent (0.00s)
+=== RUN   TestExplorer_GraphNodeActionRegistry_LoadedAfterPlatformPrerequisites
+--- PASS: TestExplorer_GraphNodeActionRegistry_LoadedAfterPlatformPrerequisites (0.00s)
+=== RUN   TestExplorer_GraphNodeActionRegistry_PublicSurfaceAndSemantics
+--- PASS: TestExplorer_GraphNodeActionRegistry_PublicSurfaceAndSemantics (0.00s)
+=== RUN   TestExplorer_GraphNodeActionRegistry_IsPurePlatformNoDomOrCyAccess
+--- PASS: TestExplorer_GraphNodeActionRegistry_IsPurePlatformNoDomOrCyAccess (0.00s)
+=== RUN   TestExplorer_GraphNodeActionRegistry_TestOnlyFixtureIsOnlyRegistration
+--- PASS: TestExplorer_GraphNodeActionRegistry_TestOnlyFixtureIsOnlyRegistration (0.00s)
+PASS
+ok  	github.com/accept-io/midas/internal/httpapi	1.692s

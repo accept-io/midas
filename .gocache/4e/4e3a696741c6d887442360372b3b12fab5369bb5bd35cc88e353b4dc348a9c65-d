@@ -1,0 +1,152 @@
+=== RUN   TestExplorer_ContextCopyReference_LoadedAfterNodeActionPlatform
+--- PASS: TestExplorer_ContextCopyReference_LoadedAfterNodeActionPlatform (0.00s)
+=== RUN   TestExplorer_ContextCopyReference_RegistersExactlyDecisionSurfaceCopyReference
+--- PASS: TestExplorer_ContextCopyReference_RegistersExactlyDecisionSurfaceCopyReference (0.03s)
+=== RUN   TestExplorer_ContextCopyReference_FormatHelperPinsReferenceShape
+--- PASS: TestExplorer_ContextCopyReference_FormatHelperPinsReferenceShape (0.00s)
+=== RUN   TestExplorer_ContextCopyReference_EligibilityRequiresStableId
+--- PASS: TestExplorer_ContextCopyReference_EligibilityRequiresStableId (0.00s)
+=== RUN   TestExplorer_ContextCopyReference_ClipboardDiagnosticsAndFailureContainment
+--- PASS: TestExplorer_ContextCopyReference_ClipboardDiagnosticsAndFailureContainment (0.00s)
+=== RUN   TestExplorer_ContextCopyReference_NoDomCyOrMenuFork
+--- PASS: TestExplorer_ContextCopyReference_NoDomCyOrMenuFork (0.00s)
+=== RUN   TestExplorer_ContextCopyReference_PointerEventsContractPreserved
+--- PASS: TestExplorer_ContextCopyReference_PointerEventsContractPreserved (0.00s)
+=== RUN   TestExplorer_ContextCopyReference_AuthorityAndRendererPreservationPins
+--- PASS: TestExplorer_ContextCopyReference_AuthorityAndRendererPreservationPins (0.00s)
+=== RUN   TestExplorer_ContextOverlayMode_ParserExistsAndRecognisesHtmlCards
+--- PASS: TestExplorer_ContextOverlayMode_ParserExistsAndRecognisesHtmlCards (0.00s)
+=== RUN   TestExplorer_ContextOverlayMode_RawSpatialRoutePreserved
+--- PASS: TestExplorer_ContextOverlayMode_RawSpatialRoutePreserved (0.00s)
+=== RUN   TestExplorer_ContextOverlayMode_ExplicitModeSeparateFromSpatialLayout
+--- PASS: TestExplorer_ContextOverlayMode_ExplicitModeSeparateFromSpatialLayout (0.00s)
+=== RUN   TestExplorer_ContextOverlayMode_InvalidModeHasDiagnosticNotSilentFallback
+--- PASS: TestExplorer_ContextOverlayMode_InvalidModeHasDiagnosticNotSilentFallback (0.00s)
+=== RUN   TestExplorer_ContextOverlayMode_AdapterSessionOnlyExplicitOverlayPath
+--- PASS: TestExplorer_ContextOverlayMode_AdapterSessionOnlyExplicitOverlayPath (0.00s)
+=== RUN   TestExplorer_ContextOverlayMode_RegistersFootprintsBeforeEngineMount
+--- PASS: TestExplorer_ContextOverlayMode_RegistersFootprintsBeforeEngineMount (0.00s)
+=== RUN   TestExplorer_ContextOverlayMode_MeasurementCallbackShapeDormant
+--- PASS: TestExplorer_ContextOverlayMode_MeasurementCallbackShapeDormant (0.00s)
+=== RUN   TestExplorer_ContextOverlayMode_RecomposeHandlerOwnedByContext
+--- PASS: TestExplorer_ContextOverlayMode_RecomposeHandlerOwnedByContext (0.00s)
+=== RUN   TestExplorer_ContextOverlayMode_ResolverPureAndCandidatesLocal
+--- PASS: TestExplorer_ContextOverlayMode_ResolverPureAndCandidatesLocal (0.00s)
+=== RUN   TestExplorer_ContextOverlayMode_NoAuthorityCssBackendOrBrowserTooling
+--- PASS: TestExplorer_ContextOverlayMode_NoAuthorityCssBackendOrBrowserTooling (0.00s)
+=== RUN   TestExplorer_ContextOverlayMode_SourceTestsDoNotClaimBrowserAcceptance
+--- PASS: TestExplorer_ContextOverlayMode_SourceTestsDoNotClaimBrowserAcceptance (0.00s)
+=== RUN   TestExplorer_ContextOverlayRecompose_RawRouteRemainsIsolated
+--- PASS: TestExplorer_ContextOverlayRecompose_RawRouteRemainsIsolated (0.00s)
+=== RUN   TestExplorer_ContextOverlayRecompose_StoresCandidatesByCardId
+--- PASS: TestExplorer_ContextOverlayRecompose_StoresCandidatesByCardId (0.00s)
+=== RUN   TestExplorer_ContextOverlayRecompose_IncrementsGenerationResetsAdapterAndSchedulesNormalPaint
+--- PASS: TestExplorer_ContextOverlayRecompose_IncrementsGenerationResetsAdapterAndSchedulesNormalPaint (0.00s)
+=== RUN   TestExplorer_ContextOverlayRecompose_CandidatesAppliedBeforeGraphStageCompose
+--- PASS: TestExplorer_ContextOverlayRecompose_CandidatesAppliedBeforeGraphStageCompose (0.00s)
+=== RUN   TestExplorer_ContextOverlayRecompose_StageOutputStillFeedsEngineNodeGeometry
+--- PASS: TestExplorer_ContextOverlayRecompose_StageOutputStillFeedsEngineNodeGeometry (0.00s)
+=== RUN   TestExplorer_ContextOverlayRecompose_AdapterReceivesCandidateAdjustedFootprints
+--- PASS: TestExplorer_ContextOverlayRecompose_AdapterReceivesCandidateAdjustedFootprints (0.00s)
+=== RUN   TestExplorer_ContextOverlayRecompose_PlatformModulesRemainUnchangedByContract
+--- PASS: TestExplorer_ContextOverlayRecompose_PlatformModulesRemainUnchangedByContract (0.00s)
+=== RUN   TestExplorer_ContextOverlayRecompose_AuthorityCssSentinelAndBrowserAutomationRemainUntouched
+--- PASS: TestExplorer_ContextOverlayRecompose_AuthorityCssSentinelAndBrowserAutomationRemainUntouched (0.00s)
+=== RUN   TestExplorer_ContextOverlayRuntime_OverlayEnabledOnlyForExplicitMode
+--- PASS: TestExplorer_ContextOverlayRuntime_OverlayEnabledOnlyForExplicitMode (0.00s)
+=== RUN   TestExplorer_ContextOverlayRuntime_MeasurementCallbackOnlyExplicitMode
+--- PASS: TestExplorer_ContextOverlayRuntime_MeasurementCallbackOnlyExplicitMode (0.00s)
+=== RUN   TestExplorer_ContextOverlayRuntime_DiagnosticsBufferGatedAndShaped
+--- PASS: TestExplorer_ContextOverlayRuntime_DiagnosticsBufferGatedAndShaped (0.00s)
+=== RUN   TestExplorer_ContextOverlayRuntime_DiagnosticEventsAreForwarded
+--- PASS: TestExplorer_ContextOverlayRuntime_DiagnosticEventsAreForwarded (0.00s)
+=== RUN   TestExplorer_ContextOverlayRuntime_InvalidOverlayDoesNotFallbackSilently
+--- PASS: TestExplorer_ContextOverlayRuntime_InvalidOverlayDoesNotFallbackSilently (0.00s)
+=== RUN   TestExplorer_ContextOverlayRuntime_NoSentinelOrBrowserAutomationIntroduced
+--- PASS: TestExplorer_ContextOverlayRuntime_NoSentinelOrBrowserAutomationIntroduced (0.00s)
+=== RUN   TestExplorer_ContextOverlayRuntime_PlatformModulesRemainUnwiredToDiagnosticsBuffer
+--- PASS: TestExplorer_ContextOverlayRuntime_PlatformModulesRemainUnwiredToDiagnosticsBuffer (0.00s)
+=== RUN   TestExplorer_ContextOverlayRuntime_AuthorityAndCssRemainUnreferenced
+--- PASS: TestExplorer_ContextOverlayRuntime_AuthorityAndCssRemainUnreferenced (0.00s)
+=== RUN   TestExplorer_ContextOverlayRuntime_ManualBrowserValidationStillRequired
+--- PASS: TestExplorer_ContextOverlayRuntime_ManualBrowserValidationStillRequired (0.00s)
+=== RUN   TestExplorer_FootprintMeasurementAdapter_LoadsAfterPolicyAndSink
+--- PASS: TestExplorer_FootprintMeasurementAdapter_LoadsAfterPolicyAndSink (0.00s)
+=== RUN   TestExplorer_FootprintMeasurementAdapter_PublicSurfaceAndMethods
+--- PASS: TestExplorer_FootprintMeasurementAdapter_PublicSurfaceAndMethods (0.00s)
+=== RUN   TestExplorer_FootprintMeasurementAdapter_DormantAndCreatesOneSinkSession
+--- PASS: TestExplorer_FootprintMeasurementAdapter_DormantAndCreatesOneSinkSession (0.00s)
+=== RUN   TestExplorer_FootprintMeasurementAdapter_RegisterResolvedFootprintForwardsAndCaches
+--- PASS: TestExplorer_FootprintMeasurementAdapter_RegisterResolvedFootprintForwardsAndCaches (0.00s)
+=== RUN   TestExplorer_FootprintMeasurementAdapter_NormalisesOverlayFacts
+--- PASS: TestExplorer_FootprintMeasurementAdapter_NormalisesOverlayFacts (0.00s)
+=== RUN   TestExplorer_FootprintMeasurementAdapter_UnregisteredCardDoesNotCallSinkRecord
+--- PASS: TestExplorer_FootprintMeasurementAdapter_UnregisteredCardDoesNotCallSinkRecord (0.00s)
+=== RUN   TestExplorer_FootprintMeasurementAdapter_SequenceAndAttemptCounters
+--- PASS: TestExplorer_FootprintMeasurementAdapter_SequenceAndAttemptCounters (0.00s)
+=== RUN   TestExplorer_FootprintMeasurementAdapter_ResetDestroyAndDelegation
+--- PASS: TestExplorer_FootprintMeasurementAdapter_ResetDestroyAndDelegation (0.00s)
+=== RUN   TestExplorer_FootprintMeasurementAdapter_CallbackForwarding
+--- PASS: TestExplorer_FootprintMeasurementAdapter_CallbackForwarding (0.00s)
+=== RUN   TestExplorer_FootprintMeasurementAdapter_NoForbiddenRuntimeAccess
+--- PASS: TestExplorer_FootprintMeasurementAdapter_NoForbiddenRuntimeAccess (0.00s)
+=== RUN   TestExplorer_FootprintMeasurementAdapter_NotWiredToActiveConsumers
+--- PASS: TestExplorer_FootprintMeasurementAdapter_NotWiredToActiveConsumers (0.01s)
+=== RUN   TestExplorer_FootprintMeasurementAdapter_PreservationSourcesUntouched
+--- PASS: TestExplorer_FootprintMeasurementAdapter_PreservationSourcesUntouched (0.00s)
+=== RUN   TestExplorer_FootprintMeasurement_LoadsAfterFootprintPolicy
+--- PASS: TestExplorer_FootprintMeasurement_LoadsAfterFootprintPolicy (0.00s)
+=== RUN   TestExplorer_FootprintMeasurement_PublicSurfaceAndMethods
+--- PASS: TestExplorer_FootprintMeasurement_PublicSurfaceAndMethods (0.00s)
+=== RUN   TestExplorer_FootprintMeasurement_ClassificationStringsAndActions
+--- PASS: TestExplorer_FootprintMeasurement_ClassificationStringsAndActions (0.00s)
+=== RUN   TestExplorer_FootprintMeasurement_RecordMeasurementDecisionRules
+--- PASS: TestExplorer_FootprintMeasurement_RecordMeasurementDecisionRules (0.00s)
+=== RUN   TestExplorer_FootprintMeasurement_BoundedRecomposeStateMachine
+--- PASS: TestExplorer_FootprintMeasurement_BoundedRecomposeStateMachine (0.00s)
+=== RUN   TestExplorer_FootprintMeasurement_ResetDestroyAndAggregateResults
+--- PASS: TestExplorer_FootprintMeasurement_ResetDestroyAndAggregateResults (0.00s)
+=== RUN   TestExplorer_FootprintMeasurement_DiagnosticsAndCallbacks
+--- PASS: TestExplorer_FootprintMeasurement_DiagnosticsAndCallbacks (0.00s)
+=== RUN   TestExplorer_FootprintMeasurement_NoForbiddenRuntimeAccess
+--- PASS: TestExplorer_FootprintMeasurement_NoForbiddenRuntimeAccess (0.00s)
+=== RUN   TestExplorer_FootprintMeasurement_NotWiredToActiveConsumers
+--- PASS: TestExplorer_FootprintMeasurement_NotWiredToActiveConsumers (0.00s)
+=== RUN   TestExplorer_FootprintMeasurement_PreservationSourcesUntouched
+--- PASS: TestExplorer_FootprintMeasurement_PreservationSourcesUntouched (0.00s)
+=== RUN   TestExplorer_GraphNodeActionCardContract_EllipsisButtonGatedByRegistry
+--- PASS: TestExplorer_GraphNodeActionCardContract_EllipsisButtonGatedByRegistry (0.00s)
+=== RUN   TestExplorer_GraphNodeActionCardContract_DelegatesToMenuAndStopsDragStart
+--- PASS: TestExplorer_GraphNodeActionCardContract_DelegatesToMenuAndStopsDragStart (0.00s)
+=== RUN   TestExplorer_GraphNodeActionCardContract_DoesNotConstructMenuDom
+--- PASS: TestExplorer_GraphNodeActionCardContract_DoesNotConstructMenuDom (0.00s)
+=== RUN   TestExplorer_GraphNodeActionCardContract_ContextRendererDoesNotOwnMenuOrActions
+--- PASS: TestExplorer_GraphNodeActionCardContract_ContextRendererDoesNotOwnMenuOrActions (0.00s)
+=== RUN   TestExplorer_GraphNodeActionCardContract_AuthorityModulesDoNotRenderEllipsis
+--- PASS: TestExplorer_GraphNodeActionCardContract_AuthorityModulesDoNotRenderEllipsis (0.00s)
+=== RUN   TestExplorer_GraphNodeActionMenu_LoadedAfterRegistry
+--- PASS: TestExplorer_GraphNodeActionMenu_LoadedAfterRegistry (0.00s)
+=== RUN   TestExplorer_GraphNodeActionMenu_PublicSurfaceAndActionResolution
+--- PASS: TestExplorer_GraphNodeActionMenu_PublicSurfaceAndActionResolution (0.00s)
+=== RUN   TestExplorer_GraphNodeActionMenu_RendersPortalNotInsideCard
+--- PASS: TestExplorer_GraphNodeActionMenu_RendersPortalNotInsideCard (0.00s)
+=== RUN   TestExplorer_GraphNodeActionMenu_NoCytoscapeDependency
+--- PASS: TestExplorer_GraphNodeActionMenu_NoCytoscapeDependency (0.00s)
+=== RUN   TestExplorer_GraphNodeActionPointerEvents_CssPinsTransparentOverlayAndCard
+--- PASS: TestExplorer_GraphNodeActionPointerEvents_CssPinsTransparentOverlayAndCard (0.00s)
+=== RUN   TestExplorer_GraphNodeActionPointerEvents_CssPinsOnlyEllipsisAndMenuSurfaceAuto
+--- PASS: TestExplorer_GraphNodeActionPointerEvents_CssPinsOnlyEllipsisAndMenuSurfaceAuto (0.00s)
+=== RUN   TestExplorer_GraphNodeActionPointerEvents_CssAndIndexAreLoaded
+--- PASS: TestExplorer_GraphNodeActionPointerEvents_CssAndIndexAreLoaded (0.00s)
+=== RUN   TestExplorer_GraphNodeActionPointerEvents_OverlayBaselineStillTransparent
+--- PASS: TestExplorer_GraphNodeActionPointerEvents_OverlayBaselineStillTransparent (0.00s)
+=== RUN   TestExplorer_GraphNodeActionRegistry_LoadedAfterPlatformPrerequisites
+--- PASS: TestExplorer_GraphNodeActionRegistry_LoadedAfterPlatformPrerequisites (0.00s)
+=== RUN   TestExplorer_GraphNodeActionRegistry_PublicSurfaceAndSemantics
+--- PASS: TestExplorer_GraphNodeActionRegistry_PublicSurfaceAndSemantics (0.00s)
+=== RUN   TestExplorer_GraphNodeActionRegistry_IsPurePlatformNoDomOrCyAccess
+--- PASS: TestExplorer_GraphNodeActionRegistry_IsPurePlatformNoDomOrCyAccess (0.00s)
+=== RUN   TestExplorer_GraphNodeActionRegistry_TestOnlyFixtureIsOnlyRegistration
+--- PASS: TestExplorer_GraphNodeActionRegistry_TestOnlyFixtureIsOnlyRegistration (0.00s)
+PASS
+ok  	github.com/accept-io/midas/internal/httpapi	0.608s

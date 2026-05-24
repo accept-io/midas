@@ -28,6 +28,11 @@ func (s *stubAuditRepo) Append(_ context.Context, ev *audit.AuditEvent) error {
 	return nil
 }
 
+func (s *stubAuditRepo) AppendBatch(_ context.Context, events []*audit.AuditEvent) error {
+	s.events = append(s.events, events...)
+	return nil
+}
+
 func (s *stubAuditRepo) ListByEnvelopeID(_ context.Context, envelopeID string) ([]*audit.AuditEvent, error) {
 	var out []*audit.AuditEvent
 	for _, e := range s.events {
