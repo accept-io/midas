@@ -21,21 +21,22 @@ func d37o16ContextRenderer(t *testing.T) string {
 	return readD37o16(t, "assets/js/graph/context/context-cytoscape-renderer.js")
 }
 
-func TestExplorer_ContextOverlayRuntime_OverlayEnabledOnlyForExplicitMode(t *testing.T) {
+func TestExplorer_ContextOverlayRuntime_OverlayEnabledByDefaultWithRawOptOut(t *testing.T) {
 	js := d37o16ContextRenderer(t)
 	for _, want := range []string{
 		"var contextHtmlOverlayMode = _isContextHtmlOverlayMode();",
 		"overlayEnabled: contextHtmlOverlayMode ? true : false",
 		"Protected raw route contract: overlayEnabled: false",
-		"`contextOverlay=html-cards`",
+		"`?contextOverlay=raw`",
+		"default presentation for `/explorer#services`",
 	} {
 		if !strings.Contains(js, want) {
-			t.Fatalf("D37o-overlap-16: conditional overlayEnabled contract missing %q", want)
+			t.Fatalf("D41g-followup: default HTML-card overlay contract missing %q", want)
 		}
 	}
 }
 
-func TestExplorer_ContextOverlayRuntime_MeasurementCallbackOnlyExplicitMode(t *testing.T) {
+func TestExplorer_ContextOverlayRuntime_MeasurementCallbackOnlyHtmlCardMode(t *testing.T) {
 	js := d37o16ContextRenderer(t)
 	for _, want := range []string{
 		"onMeasurementsChange: contextHtmlOverlayMode ? function (measurements)",
@@ -43,7 +44,7 @@ func TestExplorer_ContextOverlayRuntime_MeasurementCallbackOnlyExplicitMode(t *t
 		"_contextOverlayAdapter.recordOverlayMeasurement(key, w, h, 'overlay-measure')",
 	} {
 		if !strings.Contains(js, want) {
-			t.Fatalf("D37o-overlap-16: explicit overlay measurement callback missing %q", want)
+			t.Fatalf("D41g-followup: HTML-card overlay measurement callback missing %q", want)
 		}
 	}
 	if strings.Contains(js, "_recordContextOverlayMeasurement(k, m.width, m.height);\n          }") &&

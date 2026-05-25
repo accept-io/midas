@@ -700,7 +700,9 @@
       "Bash(grep -E \"^--- FAIL:|^FAIL\\\\s|^FAIL$\" \"C:/Users/phil/AppData/Local/Temp/claude/c--Users-phil-dev-accept-midas/c65bb3c9-1592-4a67-909d-8c5861b0aad4/tasks/bwbk0bx3u.output\")",
       "Bash(grep -cE \"^--- FAIL:|^FAIL\\\\s|^FAIL$\" \"C:/Users/phil/AppData/Local/Temp/claude/c--Users-phil-dev-accept-midas/c65bb3c9-1592-4a67-909d-8c5861b0aad4/tasks/bv7p18p7q.output\")",
       "Bash(awk -F: '$2 > 0 {printf \"%4d  %s\\\\n\", $2, $1}')",
-      "Bash(grep -rE \"--layout-\" internal/httpapi/explorer/assets/css/)"
+      "Bash(grep -rE \"--layout-\" internal/httpapi/explorer/assets/css/)",
+      "Bash(awk '$1==\"D\"')",
+      "Bash(awk -F/ '{print $1\"/\"$2}')"
     ],
     "additionalDirectories": [
       "\\tmp"

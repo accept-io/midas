@@ -26,9 +26,10 @@ func TestExplorer_ContextOverlayMode_ParserExistsAndRecognisesHtmlCards(t *testi
 	for _, want := range []string{
 		"var OVERLAY_QUERY_PARAM = 'contextOverlay';",
 		"var OVERLAY_MODE_HTML_CARDS = 'html-cards';",
+		"var OVERLAY_MODE_RAW = 'raw';",
 		"function _readContextOverlayMode()",
 		"function _isContextHtmlOverlayMode()",
-		"return _readContextOverlayMode() === OVERLAY_MODE_HTML_CARDS;",
+		"return _readContextOverlayMode() !== OVERLAY_MODE_RAW;",
 		"function _isUnsupportedContextOverlayMode()",
 	} {
 		if !strings.Contains(js, want) {
@@ -37,23 +38,25 @@ func TestExplorer_ContextOverlayMode_ParserExistsAndRecognisesHtmlCards(t *testi
 	}
 }
 
-func TestExplorer_ContextOverlayMode_RawSpatialRoutePreserved(t *testing.T) {
+func TestExplorer_ContextOverlayMode_HtmlCardsDefaultAndRawOptOutPreserved(t *testing.T) {
 	js := d37o14ContextRenderer(t)
 	for _, want := range []string{
 		"var LAYOUT_QUERY_PARAM = 'contextLayout';",
 		"var LAYOUT_MODE_SPATIAL = 'spatial';",
 		"function _isSpatialMode()",
+		"`?contextOverlay=raw`",
+		"HTML cards are now the",
+		"default presentation for `/explorer#services`",
 		"overlayEnabled: false",
-		"raw Cytoscape mode",
-		"Absence of `contextOverlay`",
+		"raw cy graph inspection",
 	} {
 		if !strings.Contains(js, want) {
-			t.Errorf("D37o-overlap-14: protected raw route contract missing %q", want)
+			t.Errorf("D41g-followup: HTML-card default / raw opt-out contract missing %q", want)
 		}
 	}
 	if strings.Index(js, "overlayEnabled: false") < 0 ||
 		strings.Index(js, "_ensureContextOverlayAdapter(cards)") < 0 {
-		t.Fatalf("D37o-overlap-14: expected raw overlay flag and adapter scaffold markers")
+		t.Fatalf("D41g-followup: expected raw overlay flag and adapter scaffold markers")
 	}
 }
 
@@ -82,7 +85,7 @@ func TestExplorer_ContextOverlayMode_InvalidModeHasDiagnosticNotSilentFallback(t
 	}
 }
 
-func TestExplorer_ContextOverlayMode_AdapterSessionOnlyExplicitOverlayPath(t *testing.T) {
+func TestExplorer_ContextOverlayMode_AdapterSessionOnlyHtmlCardPath(t *testing.T) {
 	js := d37o14ContextRenderer(t)
 	for _, want := range []string{
 		"function _ensureContextOverlayAdapter(cards)",
@@ -96,6 +99,22 @@ func TestExplorer_ContextOverlayMode_AdapterSessionOnlyExplicitOverlayPath(t *te
 		if !strings.Contains(js, want) {
 			t.Errorf("D37o-overlap-14: adapter lifecycle scaffold missing %q", want)
 		}
+	}
+}
+
+func TestExplorer_ContextOverlayMode_DefaultServicesRouteUsesHtmlCards(t *testing.T) {
+	js := d37o14ContextRenderer(t)
+	for _, want := range []string{
+		"return _readContextOverlayMode() !== OVERLAY_MODE_RAW;",
+		"return !!(mode && mode !== OVERLAY_MODE_HTML_CARDS && mode !== OVERLAY_MODE_RAW);",
+		"default presentation for `/explorer#services`",
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("D41g-followup: /explorer#services must default to HTML-card overlay mode; missing %q", want)
+		}
+	}
+	if strings.Contains(js, "return _readContextOverlayMode() === OVERLAY_MODE_HTML_CARDS;") {
+		t.Fatalf("D41g-followup: overlay mode must not require explicit contextOverlay=html-cards")
 	}
 }
 

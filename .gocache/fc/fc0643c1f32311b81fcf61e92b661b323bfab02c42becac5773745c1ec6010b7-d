@@ -1,0 +1,64 @@
+=== RUN   TestExplorer_ContextOverlayMode_ParserExistsAndRecognisesHtmlCards
+--- PASS: TestExplorer_ContextOverlayMode_ParserExistsAndRecognisesHtmlCards (0.00s)
+=== RUN   TestExplorer_ContextOverlayMode_HtmlCardsDefaultAndRawOptOutPreserved
+--- PASS: TestExplorer_ContextOverlayMode_HtmlCardsDefaultAndRawOptOutPreserved (0.00s)
+=== RUN   TestExplorer_ContextOverlayMode_ExplicitModeSeparateFromSpatialLayout
+--- PASS: TestExplorer_ContextOverlayMode_ExplicitModeSeparateFromSpatialLayout (0.00s)
+=== RUN   TestExplorer_ContextOverlayMode_InvalidModeHasDiagnosticNotSilentFallback
+--- PASS: TestExplorer_ContextOverlayMode_InvalidModeHasDiagnosticNotSilentFallback (0.00s)
+=== RUN   TestExplorer_ContextOverlayMode_AdapterSessionOnlyHtmlCardPath
+--- PASS: TestExplorer_ContextOverlayMode_AdapterSessionOnlyHtmlCardPath (0.00s)
+=== RUN   TestExplorer_ContextOverlayMode_DefaultServicesRouteUsesHtmlCards
+--- PASS: TestExplorer_ContextOverlayMode_DefaultServicesRouteUsesHtmlCards (0.00s)
+=== RUN   TestExplorer_ContextOverlayMode_RegistersFootprintsBeforeEngineMount
+--- PASS: TestExplorer_ContextOverlayMode_RegistersFootprintsBeforeEngineMount (0.00s)
+=== RUN   TestExplorer_ContextOverlayMode_MeasurementCallbackShapeDormant
+--- PASS: TestExplorer_ContextOverlayMode_MeasurementCallbackShapeDormant (0.00s)
+=== RUN   TestExplorer_ContextOverlayMode_RecomposeHandlerOwnedByContext
+--- PASS: TestExplorer_ContextOverlayMode_RecomposeHandlerOwnedByContext (0.00s)
+=== RUN   TestExplorer_ContextOverlayMode_ResolverPureAndCandidatesLocal
+--- PASS: TestExplorer_ContextOverlayMode_ResolverPureAndCandidatesLocal (0.00s)
+=== RUN   TestExplorer_ContextOverlayMode_NoAuthorityCssBackendOrBrowserTooling
+--- PASS: TestExplorer_ContextOverlayMode_NoAuthorityCssBackendOrBrowserTooling (0.00s)
+=== RUN   TestExplorer_ContextOverlayMode_SourceTestsDoNotClaimBrowserAcceptance
+--- PASS: TestExplorer_ContextOverlayMode_SourceTestsDoNotClaimBrowserAcceptance (0.00s)
+=== RUN   TestExplorer_ContextOverlayRuntime_OverlayEnabledByDefaultWithRawOptOut
+--- PASS: TestExplorer_ContextOverlayRuntime_OverlayEnabledByDefaultWithRawOptOut (0.00s)
+=== RUN   TestExplorer_ContextOverlayRuntime_MeasurementCallbackOnlyHtmlCardMode
+--- PASS: TestExplorer_ContextOverlayRuntime_MeasurementCallbackOnlyHtmlCardMode (0.00s)
+=== RUN   TestExplorer_ContextOverlayRuntime_DiagnosticsBufferGatedAndShaped
+--- PASS: TestExplorer_ContextOverlayRuntime_DiagnosticsBufferGatedAndShaped (0.00s)
+=== RUN   TestExplorer_ContextOverlayRuntime_DiagnosticEventsAreForwarded
+--- PASS: TestExplorer_ContextOverlayRuntime_DiagnosticEventsAreForwarded (0.00s)
+=== RUN   TestExplorer_ContextOverlayRuntime_InvalidOverlayDoesNotFallbackSilently
+--- PASS: TestExplorer_ContextOverlayRuntime_InvalidOverlayDoesNotFallbackSilently (0.00s)
+=== RUN   TestExplorer_ContextOverlayRuntime_NoSentinelOrBrowserAutomationIntroduced
+--- PASS: TestExplorer_ContextOverlayRuntime_NoSentinelOrBrowserAutomationIntroduced (0.00s)
+=== RUN   TestExplorer_ContextOverlayRuntime_PlatformModulesRemainUnwiredToDiagnosticsBuffer
+--- PASS: TestExplorer_ContextOverlayRuntime_PlatformModulesRemainUnwiredToDiagnosticsBuffer (0.00s)
+=== RUN   TestExplorer_ContextOverlayRuntime_AuthorityAndCssRemainUnreferenced
+--- PASS: TestExplorer_ContextOverlayRuntime_AuthorityAndCssRemainUnreferenced (0.00s)
+=== RUN   TestExplorer_ContextOverlayRuntime_ManualBrowserValidationStillRequired
+--- PASS: TestExplorer_ContextOverlayRuntime_ManualBrowserValidationStillRequired (0.00s)
+=== RUN   TestExplorer_StrategicDefault_ContextRendererActiveByDefault
+--- PASS: TestExplorer_StrategicDefault_ContextRendererActiveByDefault (0.02s)
+=== RUN   TestExplorer_StrategicDefault_ContextLayoutSpatialByDefault
+--- PASS: TestExplorer_StrategicDefault_ContextLayoutSpatialByDefault (0.00s)
+=== RUN   TestExplorer_StrategicDefault_ContextOverlayHtmlCardsByDefault
+--- PASS: TestExplorer_StrategicDefault_ContextOverlayHtmlCardsByDefault (0.00s)
+=== RUN   TestExplorer_StrategicDefault_ModeLegacySentinelDeclared
+--- PASS: TestExplorer_StrategicDefault_ModeLegacySentinelDeclared (0.00s)
+=== RUN   TestExplorer_StrategicDefault_LayoutModeFlowSentinelDeclared
+--- PASS: TestExplorer_StrategicDefault_LayoutModeFlowSentinelDeclared (0.00s)
+=== RUN   TestExplorer_StrategicDefault_LayoutModeFlowExposedOnConstants
+--- PASS: TestExplorer_StrategicDefault_LayoutModeFlowExposedOnConstants (0.01s)
+=== RUN   TestExplorer_StrategicDefault_OverlayModeRawExposedOnConstants
+--- PASS: TestExplorer_StrategicDefault_OverlayModeRawExposedOnConstants (0.00s)
+=== RUN   TestExplorer_StrategicDefault_AuthorityFactoryStillRegistersUnconditionally
+--- PASS: TestExplorer_StrategicDefault_AuthorityFactoryStillRegistersUnconditionally (0.00s)
+=== RUN   TestExplorer_StrategicDefault_DrawerInitialLensRemainsContext
+--- PASS: TestExplorer_StrategicDefault_DrawerInitialLensRemainsContext (0.00s)
+=== RUN   TestExplorer_StrategicDefault_ExplicitStrategicFlagStillCompatible
+--- PASS: TestExplorer_StrategicDefault_ExplicitStrategicFlagStillCompatible (0.00s)
+PASS
+ok  	github.com/accept-io/midas/internal/httpapi	1.485s

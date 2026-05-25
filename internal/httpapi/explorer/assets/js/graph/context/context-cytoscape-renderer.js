@@ -205,12 +205,11 @@
   // card objects. Reset on every spatial paint.
   var _engineByCardId  = {};
 
-  // D37o-overlap-14 — Explicit Context HTML-overlay scaffold state.
+  // D37o-overlap-14 / D41g-followup — Context HTML-overlay state.
   //
-  // This is deliberately inert unless the operator passes
-  // `contextOverlay=html-cards`. The protected raw route
-  // (`contextRenderer=strategic&contextLayout=spatial`) does not create
-  // an adapter session and continues to mount the engine with
+  // HTML-card overlay is the default presentation on `/explorer#services`.
+  // The protected raw route (`contextOverlay=raw`) does not create an
+  // adapter session and continues to mount the engine with
   // `overlayEnabled: false`.
   var _contextOverlayAdapter = null;
   var _contextOverlayRenderGeneration = 0;
@@ -296,8 +295,15 @@
     return '';
   }
 
+  // D41g — Strategic Context is the default Explorer renderer.
+  // `_isStrategicMode()` is true unless the operator explicitly
+  // opts out via `?contextRenderer=legacy`. The empty default
+  // (no `?contextRenderer=` query) yields strategic, which is
+  // what `/explorer#services` receives. The legacy/native SVG
+  // renderer remains reachable via the explicit MODE_LEGACY
+  // sentinel for engineering / regression triage.
   function _isStrategicMode() {
-    return _readActivationMode() === MODE_STRATEGIC;
+    return _readActivationMode() !== MODE_LEGACY;
   }
 
   function _isLegacyMode() {
@@ -318,6 +324,12 @@
 
   var LAYOUT_QUERY_PARAM = 'contextLayout';
   var LAYOUT_MODE_SPATIAL = 'spatial';
+  // D41g — `flow` is the explicit opt-out for the document-flow
+  // (non-spatial) layout. The empty default yields spatial, which
+  // is what `/explorer#services` receives. The flow / banded
+  // foundation remains reachable via `?contextLayout=flow` for
+  // engineering / regression triage.
+  var LAYOUT_MODE_FLOW    = 'flow';
 
   function _readLayoutMode() {
     try {
@@ -334,18 +346,21 @@
   }
 
   function _isSpatialMode() {
-    return _readLayoutMode() === LAYOUT_MODE_SPATIAL;
+    return _readLayoutMode() !== LAYOUT_MODE_FLOW;
   }
 
   // ── Context overlay presentation mode (D37o-overlap-14) ───────────
   //
   // Layout and presentation are separate axes. `contextLayout=spatial`
   // selects graph-stage placement; `contextOverlay=html-cards` is the
-  // future HTML-card presentation opt-in. Absence of `contextOverlay`
-  // means protected raw Cytoscape mode.
+  // HTML-card presentation. D41g-followup — HTML cards are now the
+  // default presentation for `/explorer#services`; raw Cytoscape
+  // remains reachable via `?contextOverlay=raw` for engineering /
+  // regression triage.
 
   var OVERLAY_QUERY_PARAM = 'contextOverlay';
   var OVERLAY_MODE_HTML_CARDS = 'html-cards';
+  var OVERLAY_MODE_RAW = 'raw';
 
   function _readContextOverlayMode() {
     try {
@@ -362,12 +377,12 @@
   }
 
   function _isContextHtmlOverlayMode() {
-    return _readContextOverlayMode() === OVERLAY_MODE_HTML_CARDS;
+    return _readContextOverlayMode() !== OVERLAY_MODE_RAW;
   }
 
   function _isUnsupportedContextOverlayMode() {
     var mode = _readContextOverlayMode();
-    return !!(mode && mode !== OVERLAY_MODE_HTML_CARDS);
+    return !!(mode && mode !== OVERLAY_MODE_HTML_CARDS && mode !== OVERLAY_MODE_RAW);
   }
 
   function _hasGraphStage() {
@@ -2207,7 +2222,8 @@
   //     `renderer.buildNodeCardElement(spec)`;
   //   • `keyForNode`, `selectionAdapter`, `cameraAdapter`,
   //     `getSafeArea`, `onMeasurementsChange`;
-  //   • `overlayEnabled: false` (raw cy graph inspection mode);
+  //   • `overlayEnabled`, defaulting to HTML overlay unless
+  //     `contextOverlay=raw` opts into raw cy graph inspection mode;
   //   • `nodeStyleOverride` carrying the five connector visual-class
   //     edge styles + raw-node-visibility entries.
   function _renderSpatialCytoscape(layout, cards, connectors, stage, byId, painter) {
@@ -3487,11 +3503,17 @@
     // camera has not yet been created.
     getCamera:           getCamera,
     _constants: {
-      RENDERER_ID:    RENDERER_ID,
-      QUERY_PARAM:    QUERY_PARAM,
-      MODE_STRATEGIC: MODE_STRATEGIC,
-      MODE_LEGACY:    MODE_LEGACY,
-      MOUNT_CLASS:    MOUNT_CLASS,
+      RENDERER_ID:        RENDERER_ID,
+      QUERY_PARAM:        QUERY_PARAM,
+      MODE_STRATEGIC:     MODE_STRATEGIC,
+      MODE_LEGACY:        MODE_LEGACY,
+      LAYOUT_QUERY_PARAM: LAYOUT_QUERY_PARAM,
+      LAYOUT_MODE_SPATIAL: LAYOUT_MODE_SPATIAL,
+      LAYOUT_MODE_FLOW:   LAYOUT_MODE_FLOW,
+      OVERLAY_QUERY_PARAM: OVERLAY_QUERY_PARAM,
+      OVERLAY_MODE_HTML_CARDS: OVERLAY_MODE_HTML_CARDS,
+      OVERLAY_MODE_RAW:   OVERLAY_MODE_RAW,
+      MOUNT_CLASS:        MOUNT_CLASS,
     },
   };
 
