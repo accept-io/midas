@@ -9,9 +9,51 @@ Versioned releases will follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+_No unreleased entries pending. Items below have been promoted to the v1.1.0-rc.1 release candidate._
+
+---
+
+## [1.1.0-rc.1] — 2026-05-25
+
+Release candidate advancing the v1 line. Suitable for evaluation and validation while release hardening continues. Runtime governance, control-plane, evidence, and Explorer capabilities are being stabilised; graph UI surfaces continue to evolve.
+
+### Added
+
+- **Strategic Context graph as the default Explorer services route.** `/explorer#services` now loads the Cytoscape-backed Context graph with spatial layout by default. The legacy SVG renderer remains reachable via `?contextRenderer=legacy`; document-flow layout via `?contextLayout=flow`.
+- **Cytoscape vendor asset bundled** in the repository so deployed environments load the graph renderer without external CDN dependencies.
+- **In-app User Guide** at `/help/`, with a context-help button from the Explorer toolbar.
+- **Runtime Evidence API** — four read-only endpoints under `/v1/evidence/*` (audit-event chain per envelope, cross-envelope search, integrity verification, composed evidence packet).
+- **Governance Coverage** read model and `/v1/coverage` projection over `GOVERNANCE_CONDITION_DETECTED` and `GOVERNANCE_COVERAGE_GAP` audit events.
+- **AI Systems** — first-class catalogue with versioning, bindings to capabilities, and lifecycle endpoints.
+- **Escalation Targets** — governed, versioned escalation routing with the four `role` / `agent` / `surface` / `external` kinds.
+- **FailModePolicy** — first-class structural entity with apply / approve / deprecate endpoints, hierarchical resolution (Surface override → BusinessService default → deployment default), three enforcement states (`evidence_only` / `dry_run` / `enforced`), and audit-chain encoding.
+- **Drift Definitions** and detector lifecycle endpoints (`submit` / `approve` / `reject` / `deprecate` / `retire`); drift observations and series.
+- **Authority Graph workbench** — canvas-edge tab pattern (Details / Authority / Evidence) and shared graph platform substrate (`GraphViewport`, `graph-cytoscape-engine`, `graph-camera-bus`, `graph-lens-registry`, `graph-selection-bridge`).
+- **Layout-intent spacing tokens** (`--layout-page-margin`, `--layout-section-gap`, `--layout-card-padding`, `--layout-element-gap`, `--layout-inline-gap`, `--layout-tight-gap`) applied across primary Explorer views.
+- **OpenAPI contract regression coverage** — bidirectional pin between Go runtime constants and the OpenAPI spec across 23 enum pairs.
+
+### Changed
+
+- **OpenAPI `outcome` enum corrected.** The `EvaluateResponse.outcome` enum is now `[accept, escalate, reject, request_clarification]`, matching the Go runtime and the database `outcome` CHECK constraint. Strict-schema clients should re-validate against the spec.
+- **OpenAPI `Grant.status` enum corrected.** The spec-only `expired` value has been removed; the enum is now `[active, suspended, revoked]`, aligned with `authority.GrantStatus` and `GrantLifecycleResponse.status`.
+- **Authority graph migrated** to the shared `GraphViewport` platform; Authority right-rail content moved to the Workbench tabs.
+- **Capabilities and Drift catalogue** views gained the canonical 24px page margin (previously flush against the page edge).
+- **`process_id` required** on `/v1/evaluate` in enforced structural mode.
+- **Helm chart and image-tag references** aligned to the release candidate.
+
 ### Removed
 
-- Inference subsystem removed. If you previously enabled `MIDAS_INFERENCE_ENABLED`, remove it. MIDAS v1 requires explicit structural configuration via control-plane apply, and `process_id` is required on evaluation requests.
+- **Inference subsystem removed.** If you previously enabled `MIDAS_INFERENCE_ENABLED`, remove it. MIDAS v1 requires explicit structural configuration via control-plane apply, and `process_id` is required on evaluation requests.
+
+### Security
+
+- The repository uses GitHub security tooling — security policy, security advisories, private vulnerability reporting, Dependabot alerts, code scanning alerts, and secret scanning alerts — as the canonical security posture for this release candidate.
+- Auth and IAM surfaces (Local IAM bootstrap, OIDC role mapping, bearer-token authenticator, scoped-permission control-plane gates) remain in place; no regressions in the auth boundary in this RC.
+
+### Notes
+
+- This is a release candidate, not a final stable release. Graph UI surfaces remain in active iteration; the evaluation contract (`/v1/evaluate`), envelope shape, audit-chain integrity, FailModePolicy resolution, and control-plane apply path are the stable surfaces in this RC.
+- The next stable cut will retire the legacy Context SVG renderer and complete the remaining UI polish; the engineering opt-out flags (`?contextRenderer=legacy`, `?contextLayout=flow`) bridge the gap.
 
 ---
 

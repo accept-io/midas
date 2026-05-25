@@ -8,11 +8,11 @@
 #     -f charts/midas/values-production.yaml \
 #     --set secret.existingSecret=midas-secrets \
 #     --set image.repository=your-registry/midas \
-#     --set image.tag=1.0.2
+#     --set image.tag=1.1.0-rc.1
 
 image:
   # Pin to a specific release. Required for production deployments.
-  tag: "1.0.2"
+  tag: "1.1.0-rc.1"
 
 midas:
   server:

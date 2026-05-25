@@ -1,7 +1,7 @@
 openapi: "3.1.0"
 info:
   title: MIDAS API
-  version: "1.0.0"
+  version: "1.1.0-rc.1"
   description: >
     Authority governance engine for autonomous decisions.
     Every evaluation produces exactly one outcome and one tamper-evident audit envelope.

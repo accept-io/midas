@@ -4,6 +4,8 @@
 
 MIDAS determines whether an automated agent is within authority to perform a consequential action. Every evaluation produces exactly one outcome and one tamper-evident audit envelope — capturing what was requested, what authority was resolved, and why the outcome was reached.
 
+> **Current release candidate: v1.1.0-rc.1** — intended for evaluation while MIDAS is under active development. The runtime governance contract (`/v1/evaluate`), envelope shape, audit-chain integrity, FailModePolicy resolution, and control-plane apply path are the stable surfaces; Explorer graph UI surfaces remain in active iteration. The v1.0.x tags are historical early releases.
+
 ---
 
 ## Explorer

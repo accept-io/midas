@@ -49,7 +49,7 @@ kubectl create secret generic midas-secrets \
 
 helm install midas charts/midas \
   --set image.repository=your-registry/midas \
-  --set image.tag=1.0.2 \
+  --set image.tag=1.1.0-rc.1 \
   --set secret.existingSecret=midas-secrets
 ```
 
@@ -129,7 +129,7 @@ kubectl create secret generic midas-secrets \
 helm install midas charts/midas \
   --set secret.existingSecret=midas-secrets \
   --set image.repository=your-registry/midas \
-  --set image.tag=1.0.2
+  --set image.tag=1.1.0-rc.1
 ```
 
 ### Option 2 — Inline Secret (evaluation/dev installs only)
@@ -236,7 +236,7 @@ To run MIDAS locally without Postgres or authentication:
 ```bash
 helm install midas charts/midas \
   --set image.repository=your-registry/midas \
-  --set image.tag=1.0.2 \
+  --set image.tag=1.1.0-rc.1 \
   --set midas.profile=dev \
   --set midas.store.backend=memory \
   --set midas.auth.mode=open \
@@ -270,7 +270,7 @@ helm install midas charts/midas \
   -f charts/midas/values-production.yaml \
   --set secret.existingSecret=midas-secrets \
   --set image.repository=your-registry/midas \
-  --set image.tag=1.0.2
+  --set image.tag=1.1.0-rc.1
 ```
 
 ## Replica count
