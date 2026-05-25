@@ -5,7 +5,7 @@
      endpoint yet; demo state is clearly badged.
      ────────────────────────────────────────────────────────────────────── */
 
-  .records-view { padding: 24px; }
+  .records-view { padding: var(--layout-page-margin); }
 
   .records-page-header {
     display: flex;
@@ -47,14 +47,17 @@
     display: grid;
     grid-template-columns: repeat(6, 1fr);
     gap: 16px;
-    margin-bottom: 24px;
+    margin-bottom: var(--layout-section-gap);
   }
   .records-metric {
     background: var(--surface-container-low);
     border: 1px solid rgba(255,255,255,0.05);
     border-left: 2px solid var(--outline-variant);
     border-radius: 4px;
-    padding: 14px 16px;
+    /* SKIP per D38e: 14px vertical intentionally off-grid to preserve
+       the dense metric-tile height that the catalogue card family
+       converged on. Horizontal migrated to the card-padding token. */
+    padding: 14px var(--layout-card-padding);
   }
   .records-metric-label {
     font-size: 9px;
@@ -109,7 +112,7 @@
   .records-grid {
     display: grid;
     grid-template-columns: 2fr 1fr;
-    gap: 24px;
+    gap: var(--layout-section-gap);
     align-items: start;
   }
 
@@ -722,7 +725,7 @@
   }
 
   .records-coverage-section {
-    margin-top: 24px;
+    margin-top: var(--layout-section-gap);
   }
   .records-coverage-section .section-title {
     margin-bottom: 8px;

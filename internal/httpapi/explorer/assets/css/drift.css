@@ -13,7 +13,10 @@
      ────────────────────────────────────────────────────────────── */
 
   .drift-overview {
-    padding: 0;
+    /* D38e — page margin restored. Previously padding:0 left the
+       drift heatmap flush against the page edge; now matches the
+       other top-level views via the canonical page-margin token. */
+    padding: var(--layout-page-margin);
   }
 
   /* ── Catalogue header — Drift entry-point button row ─────────────── */

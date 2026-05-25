@@ -13,7 +13,10 @@
   .capabilities-subview { display: none; }
   .capabilities-subview.active { display: block; }
 
-  .capabilities-catalogue { padding: 0; }
+  /* D38e — page margin restored. Previously padding:0 left
+     catalogue cards flush against the page edge; now matches the
+     other top-level views via the canonical page-margin token. */
+  .capabilities-catalogue { padding: var(--layout-page-margin); }
   .capabilities-catalogue-header { margin-bottom: 18px; }
   .capabilities-catalogue-title {
     font-size: 22px;
@@ -53,7 +56,10 @@
     background: var(--surface-container);
     border: 1px solid var(--outline-variant);
     border-radius: 6px;
-    padding: 14px 16px;
+    /* SKIP per D38e: 14px vertical intentionally off-grid to preserve
+       the dense catalogue-card height that Records/Services/Capabilities
+       converged on. Horizontal migrated to the card-padding token. */
+    padding: 14px var(--layout-card-padding);
     cursor: pointer;
     transition: background 0.12s, border-color 0.12s;
     text-align: left;

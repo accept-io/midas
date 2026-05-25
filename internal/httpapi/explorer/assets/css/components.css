@@ -238,7 +238,8 @@
     gap: 10px;
   }
 
-  .btn-row { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+  /* SKIP per D38e: 14px margin-top intentionally off-grid; not migrated. */
+  .btn-row { display: flex; gap: var(--layout-inline-gap); margin-top: 14px; flex-wrap: wrap; }
   .btn {
     padding: 9px 18px;
     border-radius: 4px;

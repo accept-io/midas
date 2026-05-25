@@ -159,3 +159,109 @@
   color: var(--on-surface-variant, #94a3b8);
   background: rgba(255, 255, 255, 0.03);
 }
+
+/* D40b - Context inspector content.
+   Rules below style the body content produced by
+   _renderGraphInspectorInspectorContent in the Context provider.
+   They do not modify the platform panel chrome above. */
+
+.midas-graph-viewport .context-graph-inspector-content[data-context-graph-inspector-content="inspector"] {
+  padding: var(--layout-card-padding);
+  display: flex;
+  flex-direction: column;
+  gap: var(--layout-element-gap);
+}
+
+.midas-graph-viewport .context-graph-inspector-section {
+  margin: 0;
+}
+
+.midas-graph-viewport .context-graph-inspector-section-title {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--on-surface-variant);
+  font-weight: 500;
+  margin-bottom: var(--layout-inline-gap);
+}
+
+.midas-graph-viewport .context-graph-inspector-facts {
+  display: grid;
+  grid-template-columns: 90px 1fr;
+  row-gap: 6px;
+  column-gap: var(--layout-element-gap);
+  align-items: baseline;
+  margin: 0;
+}
+
+.midas-graph-viewport .context-graph-inspector-facts dt {
+  font-size: 12px;
+  color: var(--on-surface-variant);
+  margin: 0;
+}
+
+.midas-graph-viewport .context-graph-inspector-facts dd {
+  font-size: 13px;
+  color: var(--on-surface);
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  min-width: 0;
+  margin: 0;
+}
+
+.midas-graph-viewport .context-graph-inspector-value-mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.midas-graph-viewport .context-graph-inspector-value-muted {
+  color: var(--on-surface-variant);
+  font-style: italic;
+}
+
+.midas-graph-viewport .context-graph-inspector-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--layout-tight-gap);
+  padding: 2px 7px;
+  border-radius: var(--radius-tight);
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.midas-graph-viewport .context-graph-inspector-badge[data-status="active"] {
+  background: rgba(78, 222, 163, 0.15);
+  color: var(--secondary);
+}
+
+.midas-graph-viewport .context-graph-inspector-badge[data-status="inactive"],
+.midas-graph-viewport .context-graph-inspector-badge[data-status="deprecated"] {
+  background: var(--surface-container);
+  color: var(--on-surface-variant);
+}
+
+.midas-graph-viewport .context-graph-inspector-badge[data-status="warning"],
+.midas-graph-viewport .context-graph-inspector-badge[data-status="drift"] {
+  background: rgba(255, 180, 171, 0.15);
+  color: var(--error);
+}
+
+.midas-graph-viewport .context-graph-inspector-badge-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-pip);
+  background: currentColor;
+}
+
+.midas-graph-viewport .context-graph-inspector-note {
+  font-size: 12px;
+  color: var(--on-surface-variant);
+  line-height: 1.55;
+  padding: var(--layout-inline-gap) var(--layout-element-gap);
+  background: var(--bg);
+  border-left: 2px solid var(--outline-variant);
+  border-radius: 0 var(--radius-tight) var(--radius-tight) 0;
+  margin: 0;
+}

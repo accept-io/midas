@@ -693,11 +693,278 @@
       suffix + '; it anchors the selected graph area and nearby evidence signals.';
   }
 
+  var CONTEXT_GRAPH_INSPECTOR_FACTS_BY_KIND = Object.freeze({
+    business_service: [
+      { label: 'ID',           value: 'id',                 mono: true },
+      { label: 'Owner',        detail: 'owner' },
+      { label: 'Service type', detail: 'service_type' },
+      { label: 'Regulatory',   detail: 'regulatory_scope' },
+      { label: 'Fail mode',    value: 'fail_mode' },
+    ],
+    related_business_service: [
+      { label: 'ID',           value: 'id',                 mono: true },
+      { label: 'Relationship', detail: 'relationship' },
+      { label: 'Target',       detail: 'target_id',         mono: true },
+    ],
+    capability: [
+      { label: 'ID',           value: 'id',                 mono: true },
+      { label: 'Owner',        detail: 'owner' },
+    ],
+    process: [
+      { label: 'ID',           value: 'id',                 mono: true },
+      { label: 'Owner',        detail: 'owner' },
+      { label: 'Service',      detail: 'business_service_id', mono: true },
+    ],
+    decision_surface: [
+      { label: 'ID',           value: 'id',                 mono: true },
+      { label: 'Version',      detail: 'version',           mono: true },
+      { label: 'Profiles',     metric: 'profile_count',     count: true },
+      { label: 'Grants',       metric: 'grant_count',       count: true },
+      { label: 'Agents',       metric: 'agent_count',       count: true },
+      { label: 'AI bindings',  detail: 'ai_binding_count',  count: true },
+      { label: 'Fail mode',    value: 'fail_mode' },
+    ],
+    ai_system: [
+      { label: 'ID',           value: 'id',                 mono: true },
+      { label: 'Vendor',       detail: 'vendor' },
+      { label: 'Type',         detail: 'system_type' },
+      { label: 'Version',      value: 'ai_system_version',  mono: true },
+    ],
+    ai_system_binding: [
+      { label: 'ID',           value: 'id',                 mono: true },
+      { label: 'AI system',    value: 'ai_system_ref',      mono: true },
+      { label: 'Scope',        value: 'scope_ref',          mono: true },
+      { label: 'Role',         detail: 'role' },
+    ],
+    authority_summary: [
+      { label: 'Surfaces',     metric: 'surface_count',        count: true },
+      { label: 'Profiles',     metric: 'active_profile_count', count: true },
+      { label: 'Grants',       metric: 'active_grant_count',   count: true },
+      { label: 'Agents',       metric: 'active_agent_count',   count: true },
+    ],
+    coverage: [
+      { label: 'Surfaces',     metric: 'surface_count',                   count: true },
+      { label: 'Direct AI',    metric: 'surfaces_with_direct_ai_binding', count: true },
+      { label: 'Scoped AI',    metric: 'surfaces_with_scoped_ai_binding', count: true },
+      { label: 'No binding',   metric: 'surfaces_with_no_ai_binding',     count: true },
+      { label: 'Has gap',      value: 'has_gap' },
+    ],
+  });
+
   function _renderGraphInspectorInspectorContent(card) {
     var root = _newGraphInspectorContent('inspector');
-    root.appendChild(_newGraphInspectorParagraph(_buildNodeSummary(card)));
-    root.appendChild(_newGraphInspectorFactList(_keyFacts(card)));
+    root.appendChild(_newContextGraphInspectorCoreFacts(card));
+    var note = _newContextGraphInspectorNote(card);
+    if (note) root.appendChild(note);
     return root;
+  }
+
+  function _newContextGraphInspectorCoreFacts(card) {
+    var section = document.createElement('section');
+    section.className = 'context-graph-inspector-section';
+
+    var title = document.createElement('div');
+    title.className = 'context-graph-inspector-section-title';
+    title.textContent = 'Core facts';
+    section.appendChild(title);
+
+    var dl = document.createElement('dl');
+    dl.className = 'context-graph-inspector-facts';
+    dl.setAttribute('data-context-graph-inspector-facts', '');
+
+    var statusNode = _contextGraphInspectorStatusNode(card);
+    if (statusNode) _appendContextGraphInspectorFact(dl, 'Status', statusNode);
+
+    var rows = CONTEXT_GRAPH_INSPECTOR_FACTS_BY_KIND[(card && card.kind) || ''] || [
+      { label: 'ID', value: 'id', mono: true },
+    ];
+    for (var i = 0; i < rows.length; i++) {
+      var spec = rows[i];
+      _appendContextGraphInspectorFact(dl, spec.label, _contextGraphInspectorFactNode(card, spec));
+    }
+
+    section.appendChild(dl);
+    return section;
+  }
+
+  function _appendContextGraphInspectorFact(dl, label, valueNode) {
+    var dt = document.createElement('dt');
+    dt.textContent = _text(label, '');
+    var dd = document.createElement('dd');
+    if (valueNode && valueNode.nodeType) dd.appendChild(valueNode);
+    else dd.textContent = _text(valueNode, '');
+    dl.appendChild(dt);
+    dl.appendChild(dd);
+  }
+
+  function _contextGraphInspectorFactNode(card, spec) {
+    var value = _contextGraphInspectorFactValue(card, spec);
+    var missingText = spec && spec.count ? 'None' : '\u2014';
+    return _formatContextGraphInspectorValue(value, {
+      mono: !!(spec && spec.mono),
+      count: !!(spec && spec.count),
+      missingText: missingText,
+    });
+  }
+
+  function _contextGraphInspectorFactValue(card, spec) {
+    if (!spec) return null;
+    if (spec.detail) return _detailRaw(card, spec.detail);
+    if (spec.metric) {
+      var metricValue = _metricValue(card, spec.metric);
+      if (metricValue != null) return metricValue;
+      return _detailRaw(card, spec.metric);
+    }
+    if (spec.value === 'id') return _sourceNodeId(card);
+    if (spec.value === 'fail_mode') {
+      return _detailRaw(card, 'fail_mode_policy_id') ? 'Override' : 'Inherited';
+    }
+    if (spec.value === 'ai_system_version') {
+      return _detailRaw(card, 'active_version_label') || _detailRaw(card, 'active_version');
+    }
+    if (spec.value === 'ai_system_ref') {
+      return _detailRaw(card, 'ai_system_name') || _detailRaw(card, 'ai_system_id');
+    }
+    if (spec.value === 'scope_ref') {
+      return _detailRaw(card, 'scope_label') || _detailRaw(card, 'scope_id');
+    }
+    if (spec.value === 'has_gap') {
+      var hasGap = _metricValue(card, 'has_gap');
+      if (hasGap == null) hasGap = _detailRaw(card, 'has_gap');
+      return hasGap;
+    }
+    return null;
+  }
+
+  function _contextGraphInspectorStatusNode(card) {
+    if (!card || card.kind === 'authority_summary') return null;
+    var status = _detailRaw(card, 'status');
+    if (!status && card.kind === 'coverage') status = _badgeText(card);
+    if (!status && card.kind === 'related_business_service') status = _badgeText(card);
+    if (!status && card.state && typeof card.state === 'string') status = card.state;
+    if (!status) return _newContextGraphInspectorMutedValue('\u2014');
+    var normalised = _normaliseContextGraphInspectorStatus(status);
+    if (!normalised) return _newContextGraphInspectorMutedValue('\u2014');
+    var badge = document.createElement('span');
+    badge.className = 'context-graph-inspector-badge';
+    badge.setAttribute('data-status', normalised);
+    var dot = document.createElement('span');
+    dot.className = 'context-graph-inspector-badge-dot';
+    badge.appendChild(dot);
+    badge.appendChild(document.createTextNode(_capitaliseContextGraphInspectorStatus(normalised)));
+    return badge;
+  }
+
+  function _normaliseContextGraphInspectorStatus(value) {
+    var s = _text(value, '').toLowerCase().replace(/[^a-z]+/g, '_').replace(/^_+|_+$/g, '');
+    if (!s) return '';
+    if (s === 'coverage_ok') return 'active';
+    if (s === 'coverage_gap' || s === 'coverage_warn') return 'warning';
+    if (s === 'fmp_inherited' || s === 'fmp_override' || s === 'ai_bound') return 'active';
+    if (s === 'ai_warn') return 'warning';
+    if (s === 'warn') return 'warning';
+    if (s === 'deprecated') return 'deprecated';
+    if (s === 'drift') return 'drift';
+    if (s === 'inactive') return 'inactive';
+    return 'active';
+  }
+
+  function _capitaliseContextGraphInspectorStatus(value) {
+    var s = _text(value, '');
+    if (!s) return '';
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  }
+
+  function _formatContextGraphInspectorValue(value, options) {
+    options = options || {};
+    if (_contextGraphInspectorValueMissing(value, options.count)) {
+      return _newContextGraphInspectorMutedValue(options.missingText || '\u2014');
+    }
+    var text;
+    if (typeof value === 'number') text = value.toLocaleString();
+    else if (typeof value === 'boolean') text = value ? 'Yes' : 'No';
+    else if (Array.isArray(value)) text = value.length.toLocaleString() + ' item' + (value.length === 1 ? '' : 's');
+    else text = _text(value, '');
+    var span = document.createElement('span');
+    if (options.mono) span.className = 'context-graph-inspector-value-mono';
+    span.textContent = text;
+    return span;
+  }
+
+  function _contextGraphInspectorValueMissing(value, count) {
+    if (value == null) return true;
+    if (typeof value === 'string' && value.trim() === '') return true;
+    if (count && typeof value === 'number' && value === 0) return true;
+    return false;
+  }
+
+  function _newContextGraphInspectorMutedValue(text) {
+    var span = document.createElement('span');
+    span.className = 'context-graph-inspector-value-muted';
+    span.textContent = text || '\u2014';
+    return span;
+  }
+
+  function _newContextGraphInspectorNote(card) {
+    var description = _detailRaw(card, 'description');
+    if (!description && card && card.kind === 'related_business_service') {
+      description = _contextGraphInspectorMetaDescription(card);
+    }
+    description = _text(description, '');
+    if (!description) return null;
+
+    var section = document.createElement('section');
+    section.className = 'context-graph-inspector-section';
+    var title = document.createElement('div');
+    title.className = 'context-graph-inspector-section-title';
+    title.textContent = 'Note';
+    section.appendChild(title);
+    var p = document.createElement('p');
+    p.className = 'context-graph-inspector-note';
+    p.textContent = _truncateContextGraphInspectorNote(description);
+    section.appendChild(p);
+    return section;
+  }
+
+  function _truncateContextGraphInspectorNote(text) {
+    var s = _text(text, '');
+    if (s.length <= 140) return s;
+    return s.slice(0, 137).replace(/\s+\S*$/, '') + '\u2026';
+  }
+
+  function _contextGraphInspectorMetaDescription(card) {
+    if (!card || !Array.isArray(card.meta)) return '';
+    for (var i = 0; i < card.meta.length; i++) {
+      var row = card.meta[i];
+      if (!row) continue;
+      if (row.description) return row.description;
+      if (row.text) return row.text;
+      if (row.label && i > 0) return row.label;
+    }
+    return '';
+  }
+
+  function _sourceNodeId(card) {
+    if (card && card.sourceNodeRef && card.sourceNodeRef.id) return card.sourceNodeRef.id;
+    var id = _text(card && card.id, '');
+    var idx = id.indexOf(':');
+    return idx >= 0 ? id.slice(idx + 1) : id;
+  }
+
+  function _detailRaw(card, key) {
+    if (!card || !card.details || typeof card.details !== 'object') return null;
+    if (!Object.prototype.hasOwnProperty.call(card.details, key)) return null;
+    return card.details[key];
+  }
+
+  function _metricValue(card, key) {
+    if (!card || !Array.isArray(card.metrics)) return null;
+    for (var i = 0; i < card.metrics.length; i++) {
+      var m = card.metrics[i];
+      if (!m) continue;
+      if (m.id === key || m.key === key || m.name === key) return m.value;
+    }
+    return null;
   }
 
   function _renderGraphInspectorContextContent(card) {

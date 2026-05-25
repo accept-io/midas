@@ -123,6 +123,25 @@
     --space-5: 24px;
     --space-6: 32px;
 
+    /* D38d — Layout-intent tokens. Six intent-named aliases for
+       the --space-* primitives above. Component CSS should reach
+       for these rather than raw --space-N or raw pixel values so
+       the spacing language remains intent-oriented (page margin,
+       card padding, element gap) rather than measurement-oriented
+       (24px, 16px, 12px). Each token maps directly to an existing
+       primitive; no new pixel values are introduced. Responsive
+       overrides (page margin reduced on tablet / phone) are
+       deferred to a later tranche aligned with the responsive
+       design proposal. Today every token resolves to its primitive
+       at every breakpoint. Theme-neutral; not overridden in the
+       light block below. */
+    --layout-page-margin:   var(--space-5);  /* 24px */
+    --layout-section-gap:   var(--space-5);  /* 24px */
+    --layout-card-padding:  var(--space-4);  /* 16px */
+    --layout-element-gap:   var(--space-3);  /* 12px */
+    --layout-inline-gap:    var(--space-2);  /* 8px  */
+    --layout-tight-gap:     var(--space-1);  /* 4px  */
+
     /* D27j-ui-theme-4b — Governance Map semantic identity tokens.
        These are graph-object identity colours, deliberately separate
        from interaction tokens (--primary, --secondary, --error). The
