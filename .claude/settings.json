@@ -702,7 +702,9 @@
       "Bash(awk -F: '$2 > 0 {printf \"%4d  %s\\\\n\", $2, $1}')",
       "Bash(grep -rE \"--layout-\" internal/httpapi/explorer/assets/css/)",
       "Bash(awk '$1==\"D\"')",
-      "Bash(awk -F/ '{print $1\"/\"$2}')"
+      "Bash(awk -F/ '{print $1\"/\"$2}')",
+      "Bash(curl -s --max-time 5 http://localhost:8080/readyz)",
+      "Bash(curl -s -X POST http://localhost:8080/v1/evaluate -H 'Content-Type: application/json' -d '{ *)"
     ],
     "additionalDirectories": [
       "\\tmp"

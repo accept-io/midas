@@ -174,7 +174,10 @@
     var div = document.createElement('div');
     div.className = 'authority-graph-overlay authority-graph-overlay-' + kind;
     div.setAttribute('role', kind === 'error' ? 'alert' : 'status');
-    div.innerHTML = '<div class="authority-graph-overlay-inner">' + _escHtml(message) + '</div>';
+    var inner = document.createElement('div');
+    inner.className = 'authority-graph-overlay-inner';
+    inner.textContent = message;
+    div.replaceChildren(inner);
     canvas.appendChild(div);
   }
 

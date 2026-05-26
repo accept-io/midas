@@ -646,9 +646,15 @@
     if (!canvas) return;
     var div = document.createElement('div');
     div.className = 'governance-map-empty';
-    div.innerHTML =
-      '<div class="gmap-empty-title">' + _escHtml(message) + '</div>' +
-      '<div>Service id: <code>' + _escHtml(bsId || '') + '</code></div>';
+    var title = document.createElement('div');
+    title.className = 'gmap-empty-title';
+    title.textContent = message;
+    var service = document.createElement('div');
+    service.appendChild(document.createTextNode('Service id: '));
+    var code = document.createElement('code');
+    code.textContent = bsId || '';
+    service.appendChild(code);
+    div.replaceChildren(title, service);
     canvas.appendChild(div);
     if (typeof ctx.setDetailsName === 'function') ctx.setDetailsName('No node selected');
     if (typeof ctx.setDetailsFields === 'function') ctx.setDetailsFields([]);
@@ -665,9 +671,12 @@
     if (!canvas) return;
     var div = document.createElement('div');
     div.className = 'governance-map-error';
-    div.innerHTML =
-      '<div class="gmap-empty-title">Governance map unavailable</div>' +
-      '<div>' + _escHtml(message) + '</div>';
+    var title = document.createElement('div');
+    title.className = 'gmap-empty-title';
+    title.textContent = 'Governance map unavailable';
+    var body = document.createElement('div');
+    body.textContent = message;
+    div.replaceChildren(title, body);
     canvas.appendChild(div);
   }
 

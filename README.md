@@ -9,6 +9,9 @@ MIDAS determines whether an automated agent is within authority to perform a con
 ---
 
 ## Product Preview
+Explore the live MIDAS demo environment:
+
+https://midas.accept.io/explorer
 
 MIDAS includes a graph-native Explorer for visualising runtime governance, authority delegation, operational context, evidence, drift, and decision topology.
 

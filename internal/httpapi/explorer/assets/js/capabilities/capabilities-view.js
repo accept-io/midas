@@ -186,7 +186,10 @@
         (c.description || '').toLowerCase().indexOf(q) >= 0;
     });
     if (filtered.length === 0) {
-      list.innerHTML = '<div class="capabilities-no-match">No capabilities match “' + _escHtml(q) + '”</div>';
+      var empty = document.createElement('div');
+      empty.className = 'capabilities-no-match';
+      empty.textContent = 'No capabilities match “' + q + '”';
+      list.replaceChildren(empty);
       return;
     }
 

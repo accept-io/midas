@@ -234,7 +234,10 @@
         (bs.id || '').toLowerCase().indexOf(q) >= 0;
     });
     if (filtered.length === 0) {
-      list.innerHTML = '<div class="scenario-no-results">No services match “' + _escHtml(q) + '”</div>';
+      var empty = document.createElement('div');
+      empty.className = 'scenario-no-results';
+      empty.textContent = 'No services match “' + q + '”';
+      list.replaceChildren(empty);
       return;
     }
 
