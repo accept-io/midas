@@ -78,35 +78,42 @@ Then open [http://localhost:8080/explorer](http://localhost:8080/explorer) and s
 > Before exposing MIDAS to a network, set `MIDAS_AUTH_MODE=required` and configure `MIDAS_AUTH_TOKENS`. See [Authentication](#authentication).
 
 ### First API evaluation
+### First API evaluation
 
-MIDAS v1 evaluates against explicitly declared structure. Pre-create the
-structural entities (BusinessService, Capability, Process, Surface, Profile,
-Grant, Agent) with `POST /v1/controlplane/apply`, then call `/v1/evaluate`
-with an explicit `process_id`. MIDAS validates that the process exists, the
-surface exists, and the surface belongs to the process; the request fails
-with 400 if any check fails.
+MIDAS v1 evaluates against explicitly declared structure. The default
+`docker compose up --build` flow seeds a complete demo chain
+(BusinessService → Process → Surface → Profile → Grant → Agent), so a
+fresh checkout can call `/v1/evaluate` immediately against a seeded
+surface. Below, we use the seeded Credit Assessment surface:
 
 ```bash
 curl -s -X POST http://localhost:8080/v1/evaluate \
   -H "Content-Type: application/json" \
   -d '{
-    "surface_id":     "surf-loan-auto-approval",
-    "process_id":     "proc-loan-standard",
-    "agent_id":       "agent-credit-001",
+    "surface_id":     "surf-v2-credit-assess",
+    "process_id":     "proc-credit-assessment",
+    "agent_id":       "agent-v2-evaluator",
     "confidence":     0.91,
-    "consequence":    {"type": "monetary", "amount": 4500, "currency": "GBP"},
-    "context":        {"customer_id": "C-8821", "risk_band": "low"},
+    "consequence":    {"type": "risk_rating", "risk_rating": "low"},
+    "context":        {"customer_id": "C-8821"},
     "request_id":     "req-demo-001",
     "request_source": "lending-service"
-  }' | jq .
+  }'
+```
+
+Expected response:
+
+```json
+{"outcome":"accept","reason":"WITHIN_AUTHORITY","envelope_id":"...","explanation":"Request is within granted authority and may proceed.","policy_mode":"noop","audit_status":"recorded"}
 ```
 
 Retrieve the full governance record:
 
 ```bash
-curl http://localhost:8080/v1/decisions/request/req-demo-001?source=lending-service | jq .
+curl http://localhost:8080/v1/decisions/request/req-demo-001?source=lending-service
 ```
 
+For an end-to-end Postgres walkthrough including control-plane apply, surface approval, profile authoring, and grant binding, see [docs/guides/quickstart-first-evaluation.md](docs/guides/quickstart-first-evaluation.md).
 ---
 
 ## Authority Model
