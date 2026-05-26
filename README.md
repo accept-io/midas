@@ -29,13 +29,15 @@ MIDAS includes a graph-native Explorer for visualising runtime governance, autho
 
 ## Explorer
 
-An interactive developer sandbox is available at:
+Explorer is MIDAS’s graph-native visibility surface for runtime governance. It is intended to be used in governed environments to inspect authority, context, evidence, drift, and decision topology.
 
-```
+An interactive local sandbox is available at:
+
 http://localhost:8080/explorer
-```
 
-Open it in a browser. Demo scenarios (accept, escalate, reject, request clarification) are pre-loaded and ready to run. Sign in with **demo / demo** in default mode. Explorer runs on an isolated in-memory store — requests sent through it never touch the configured backend. It is a **developer tool only** — do not expose it in production.
+Open it in a browser. Demo scenarios are pre-loaded and ready to run. Sign in with **demo / demo** in default local mode.
+
+For production use, Explorer should be deployed only with appropriate authentication, configured data stores, intentional demo-data settings, and environment controls. Do not expose an unauthenticated local/demo Explorer instance publicly.
 
 ---
 
