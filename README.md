@@ -8,6 +8,22 @@ MIDAS determines whether an automated agent is within authority to perform a con
 
 ---
 
+## Product Preview
+
+MIDAS includes a graph-native Explorer for visualising runtime governance, authority delegation, operational context, evidence, drift, and decision topology.
+
+<p align="center">
+  <img src="docs/images/midas-authority-graph.png" width="1400" alt="MIDAS Authority Graph">
+  <br/>
+  <em>Authority Graph: governed decision surfaces, authority relationships, fail-mode visibility, and runtime governance topology.</em>
+</p>
+
+<p align="center">
+  <img src="docs/images/midas-context-graph.png" width="1400" alt="MIDAS Context Graph">
+  <br/>
+  <em>Context Graph: operational relationships, evidence flow, governance signals, and runtime context topology.</em>
+</p>
+
 ## Explorer
 
 An interactive developer sandbox is available at:
