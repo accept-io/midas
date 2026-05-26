@@ -46,20 +46,13 @@ omitting `process_id` returns HTTP 400. In **permissive** mode (the default),
 curl -s -X POST http://localhost:8080/v1/evaluate \
   -H "Content-Type: application/json" \
   -d '{
-    "surface_id":     "surf-loan-auto-approval",
-    "process_id":     "proc-loan-standard",
-    "agent_id":       "agent-credit-001",
+    "surface_id":     "surf-v2-credit-assess",
+    "process_id":     "proc-credit-assessment",
+    "agent_id":       "agent-v2-evaluator",
     "confidence":     0.91,
-    "consequence": {
-      "type":     "monetary",
-      "amount":   4500,
-      "currency": "GBP"
-    },
-    "context": {
-      "customer_id": "C-8821",
-      "risk_band":   "low"
-    },
-    "request_id":     "req-loan-00512",
+    "consequence":    {"type": "risk_rating", "risk_rating": "low"},
+    "context":        {"customer_id": "C-8821"},
+    "request_id":     "req-credit-00512",
     "request_source": "lending-service"
   }'
 ```

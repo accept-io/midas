@@ -116,18 +116,12 @@ structural mode) and the surface must already exist.
 curl -s -X POST http://localhost:8080/v1/evaluate \
   -H "Content-Type: application/json" \
   -d '{
-    "surface_id":     "surf-loan-auto-approval",
-    "agent_id":       "agent-credit-001",
+    "surface_id":     "surf-v2-credit-assess",
+    "process_id":     "proc-credit-assessment",
+    "agent_id":       "agent-v2-evaluator",
     "confidence":     0.91,
-    "consequence": {
-      "type":     "monetary",
-      "amount":   4500,
-      "currency": "GBP"
-    },
-    "context": {
-      "customer_id": "C-8821",
-      "risk_band":   "low"
-    },
+    "consequence":    {"type": "risk_rating", "risk_rating": "low"},
+    "context":        {"customer_id": "C-8821"},
     "request_id":     "req-gs-001",
     "request_source": "getting-started"
   }' | jq .
@@ -220,24 +214,18 @@ The envelope contains the verbatim request snapshot, the resolved authority chai
 
 ## Try an escalation
 
-Submit a request with confidence below the threshold to trigger an escalation:
+Submit a request whose consequence exceeds the profile's threshold to trigger an escalation. The seeded `profile-v2-credit-assess` permits up to `risk_rating: medium`, so a `high` rating escalates:
 
 ```bash
 curl -s -X POST http://localhost:8080/v1/evaluate \
   -H "Content-Type: application/json" \
   -d '{
-    "surface_id":     "surf-loan-auto-approval",
-    "agent_id":       "agent-credit-001",
-    "confidence":     0.60,
-    "consequence": {
-      "type":     "monetary",
-      "amount":   4500,
-      "currency": "GBP"
-    },
-    "context": {
-      "customer_id": "C-8822",
-      "risk_band":   "medium"
-    },
+    "surface_id":     "surf-v2-credit-assess",
+    "process_id":     "proc-credit-assessment",
+    "agent_id":       "agent-v2-evaluator",
+    "confidence":     0.91,
+    "consequence":    {"type": "risk_rating", "risk_rating": "high"},
+    "context":        {"customer_id": "C-8822"},
     "request_id":     "req-gs-002",
     "request_source": "getting-started"
   }' | jq .
@@ -248,7 +236,7 @@ Expected response:
 ```json
 {
   "outcome":     "escalate",
-  "reason":      "CONFIDENCE_BELOW_THRESHOLD",
+  "reason":      "CONSEQUENCE_EXCEEDS_LIMIT",
   "envelope_id": "<uuid>"
 }
 ```
