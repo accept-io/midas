@@ -175,6 +175,40 @@ func TestValidate_DispatcherEnabled_KafkaPartialSASL_Invalid(t *testing.T) {
 	}
 }
 
+func TestValidate_DispatcherEnabled_KafkaLiteralSecretRefPassword_Invalid(t *testing.T) {
+	cfg := bootstrap.AppConfig{
+		Dispatcher: bootstrap.DispatcherConfig{
+			Enabled:      true,
+			Publisher:    bootstrap.PublisherTypeKafka,
+			BatchSize:    50,
+			PollInterval: 1 * time.Second,
+			MaxBackoff:   10 * time.Second,
+		},
+		Kafka: bootstrap.KafkaConfig{
+			Brokers:       []string{"evh-midas-test.servicebus.windows.net:9093"},
+			RequiredAcks:  -1,
+			TLSEnabled:    true,
+			SASLMechanism: "plain",
+			SASLUsername:  "$ConnectionString",
+			SASLPassword:  "secretref:eventhubs-send-connection-string",
+		},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for literal secretref SASL password")
+	}
+	if !errors.Is(err, bootstrap.ErrInvalidConfig) {
+		t.Errorf("expected ErrInvalidConfig, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "resolved secret value") {
+		t.Fatalf("wrong error: %v", err)
+	}
+	if strings.Contains(err.Error(), "eventhubs-send-connection-string") {
+		t.Fatalf("error leaked secret reference name: %v", err)
+	}
+}
+
 func TestValidate_DispatcherEnabled_KafkaNoBrokers_Invalid(t *testing.T) {
 	cfg := bootstrap.AppConfig{
 		Dispatcher: bootstrap.DispatcherConfig{

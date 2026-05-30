@@ -509,6 +509,11 @@ func main() {
 			"publisher", cfg.Dispatcher.Publisher,
 			"batch_size", cfg.Dispatcher.BatchSize,
 			"poll_interval", cfg.Dispatcher.PollInterval.D().String(),
+			"kafka_brokers", cfg.Kafka.Brokers,
+			"kafka_tls_enabled", cfg.Kafka.TLSEnabled,
+			"kafka_sasl_mechanism", cfg.Kafka.SASLMechanism,
+			"kafka_sasl_username_present", cfg.Kafka.SASLUsername != "",
+			"kafka_sasl_password_present", cfg.Kafka.SASLPassword != "",
 		)
 	}
 

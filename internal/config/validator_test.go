@@ -384,6 +384,28 @@ func TestValidateSemantic_KafkaEventHubsStyleAuthValid(t *testing.T) {
 	}
 }
 
+func TestValidateSemantic_KafkaSASLPasswordLiteralSecretRefInvalid(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Dispatcher.Enabled = true
+	cfg.Dispatcher.Publisher = "kafka"
+	cfg.Kafka.Brokers = []string{"evh-midas-test.servicebus.windows.net:9093"}
+	cfg.Kafka.TLSEnabled = true
+	cfg.Kafka.SASLMechanism = "plain"
+	cfg.Kafka.SASLUsername = "$ConnectionString"
+	cfg.Kafka.SASLPassword = "secretref:eventhubs-send-connection-string"
+
+	err := ValidateSemantic(cfg)
+	if err == nil {
+		t.Fatal("want error: literal secretref value in SASL password")
+	}
+	if !strings.Contains(err.Error(), "resolved secret value") {
+		t.Fatalf("wrong error: %v", err)
+	}
+	if strings.Contains(err.Error(), "eventhubs-send-connection-string") {
+		t.Fatalf("error leaked secret reference name: %v", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Headless conflict validation
 // ---------------------------------------------------------------------------

@@ -309,6 +309,12 @@ func ValidateSemantic(cfg Config) error {
 			"required when kafka.sasl_password is set",
 		})
 	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(cfg.Kafka.SASLPassword)), "secretref:") {
+		errs = append(errs, ValidationError{
+			"kafka.sasl_password",
+			"must be the resolved secret value, not a literal secretref reference",
+		})
+	}
 	if strings.TrimSpace(cfg.Kafka.SASLMechanism) != "" {
 		if strings.TrimSpace(cfg.Kafka.SASLUsername) == "" || cfg.Kafka.SASLPassword == "" {
 			errs = append(errs, ValidationError{

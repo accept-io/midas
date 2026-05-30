@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	kafkago "github.com/segmentio/kafka-go"
+	"github.com/segmentio/kafka-go/sasl/plain"
 )
 
 func TestNewKafkaPublisher_LocalKafkaNoTLSOrSASL(t *testing.T) {
@@ -57,6 +58,19 @@ func TestNewKafkaPublisher_EventHubsStyleTLSAndPlainSASL(t *testing.T) {
 	}
 	if transport.SASL == nil {
 		t.Fatal("expected SASL mechanism")
+	}
+	mechanism, ok := transport.SASL.(plain.Mechanism)
+	if !ok {
+		t.Fatalf("SASL mechanism type: got %T, want plain.Mechanism", transport.SASL)
+	}
+	if mechanism.Name() != "PLAIN" {
+		t.Fatalf("SASL mechanism name: got %q, want PLAIN", mechanism.Name())
+	}
+	if mechanism.Username != "$ConnectionString" {
+		t.Fatalf("SASL username: got %q, want $ConnectionString", mechanism.Username)
+	}
+	if mechanism.Password != "secret-value" {
+		t.Fatal("SASL password was not preserved on the mechanism")
 	}
 }
 

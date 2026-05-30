@@ -129,6 +129,12 @@ func (c AppConfig) Validate() error {
 				ErrInvalidConfig,
 			)
 		}
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(c.Kafka.SASLPassword)), "secretref:") {
+			return fmt.Errorf(
+				"%w: kafka SASL password must be the resolved secret value, not a literal secretref reference",
+				ErrInvalidConfig,
+			)
+		}
 		if strings.TrimSpace(c.Kafka.SASLMechanism) != "" &&
 			(c.Kafka.SASLUsername == "" || c.Kafka.SASLPassword == "") {
 			return fmt.Errorf(
