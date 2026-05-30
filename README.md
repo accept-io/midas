@@ -27,6 +27,26 @@ MIDAS includes a graph-native Explorer for visualising runtime governance, autho
   <em>Context Graph: operational relationships, evidence flow, governance signals, and runtime context topology.</em>
 </p>
 
+## Current platform status
+
+MIDAS now provides a governed runtime path for evaluating agentic decisions through `/v1/evaluate`. The runtime persists operational envelopes, tamper-evident audit events, transactional outbox intent, and idempotency state in Postgres before returning governed success.
+
+The repository includes the core evidence needed for controlled pilot and recoverable production evaluation: runtime metrics, class-aware failure semantics, `audit_status` on governed success, FailModePolicy governance, Prometheus alert rules, a Grafana dashboard, incident drill checklists, Docker/Postgres backup and restore verification, a p999-capable sustained-load harness, and Docker/Postgres outbox dispatcher validation.
+
+This supports MIDAS readiness Level 1 and repository-level Level 2 evidence for a single-node Docker/Postgres recoverable-inline deployment shape, where authentication, persistent storage, monitoring, backup/restore, and operational ownership are in place.
+
+MIDAS does not currently claim Bank Tier 1 inline readiness. It does not yet prove active-active resilience, RPO/RTO targets, multi-replica shared-Postgres scaling, production p999 SLOs, or payments-inline suitability. Higher readiness levels require additional deployment-specific validation.
+
+See:
+
+- [Runtime Readiness Level Model](docs/architecture/runtime-service-tier-model.md)
+- [Runtime readiness guide](docs/operations/runtime-readiness.md)
+- [Performance guide](docs/operations/performance.md)
+- [Backup and restore guide](docs/operations/backup-restore.md)
+- [Observability assets](deploy/observability/README.md)
+
+---
+
 ## Explorer
 
 Explorer is MIDAS’s graph-native visibility surface for runtime governance. It is intended to be used in governed environments to inspect authority, context, evidence, drift, and decision topology.
@@ -82,7 +102,6 @@ Then open [http://localhost:8080/explorer](http://localhost:8080/explorer) and s
 > **⚠️** Auth mode defaults to `open` for local development.
 > Before exposing MIDAS to a network, set `MIDAS_AUTH_MODE=required` and configure `MIDAS_AUTH_TOKENS`. See [Authentication](#authentication).
 
-### First API evaluation
 ### First API evaluation
 
 MIDAS v1 evaluates against explicitly declared structure. The default
