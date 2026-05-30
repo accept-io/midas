@@ -76,6 +76,9 @@ than unbounded access to the runtime primary.
 The formal decision is recorded in
 [ADR-0003: Runtime versus Explorer Database Boundary](../adr/0003-runtime-explorer-database-boundary.md).
 
+Runtime readiness-level terminology and production-readiness claim standards are
+defined in [MIDAS Runtime Readiness Level Model](runtime-service-tier-model.md).
+
 ## Core concepts
 
 ### Decision surface

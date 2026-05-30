@@ -27,7 +27,7 @@ It is **not**:
 - a production certification document,
 - a multi-tenant or active-active operations runbook.
 
-For deeper architectural context see [docs/architecture/architecture.md](../architecture/architecture.md). For the deployment-config reference see [docs/operations/deployment.md](deployment.md). For benchmark mechanics see [docs/operations/performance.md](performance.md).
+For deeper architectural context see [docs/architecture/architecture.md](../architecture/architecture.md). For runtime readiness-level terminology and production-readiness claim standards see [docs/architecture/runtime-service-tier-model.md](../architecture/runtime-service-tier-model.md). For the deployment-config reference see [docs/operations/deployment.md](deployment.md). For benchmark mechanics see [docs/operations/performance.md](performance.md).
 
 ---
 
