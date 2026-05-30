@@ -3,6 +3,7 @@ package bootstrap_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -127,6 +128,53 @@ func TestValidate_DispatcherEnabled_KafkaWithBrokers_Valid(t *testing.T) {
 	}
 }
 
+func TestValidate_DispatcherEnabled_KafkaEventHubsAuth_Valid(t *testing.T) {
+	cfg := bootstrap.AppConfig{
+		Dispatcher: bootstrap.DispatcherConfig{
+			Enabled:      true,
+			Publisher:    bootstrap.PublisherTypeKafka,
+			BatchSize:    50,
+			PollInterval: 1 * time.Second,
+			MaxBackoff:   10 * time.Second,
+		},
+		Kafka: bootstrap.KafkaConfig{
+			Brokers:       []string{"evh-midas-test.servicebus.windows.net:9093"},
+			RequiredAcks:  -1,
+			TLSEnabled:    true,
+			SASLMechanism: "plain",
+			SASLUsername:  "$ConnectionString",
+			SASLPassword:  "secret-value",
+		},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected valid Event Hubs-style kafka config, got error: %v", err)
+	}
+}
+
+func TestValidate_DispatcherEnabled_KafkaPartialSASL_Invalid(t *testing.T) {
+	cfg := bootstrap.AppConfig{
+		Dispatcher: bootstrap.DispatcherConfig{
+			Enabled:      true,
+			Publisher:    bootstrap.PublisherTypeKafka,
+			BatchSize:    50,
+			PollInterval: 1 * time.Second,
+			MaxBackoff:   10 * time.Second,
+		},
+		Kafka: bootstrap.KafkaConfig{
+			Brokers:      []string{"broker1:9092"},
+			RequiredAcks: -1,
+			SASLPassword: "secret-value",
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for partial SASL config")
+	}
+	if strings.Contains(err.Error(), "secret-value") {
+		t.Fatalf("error leaked SASL password: %v", err)
+	}
+}
+
 func TestValidate_DispatcherEnabled_KafkaNoBrokers_Invalid(t *testing.T) {
 	cfg := bootstrap.AppConfig{
 		Dispatcher: bootstrap.DispatcherConfig{
@@ -185,6 +233,10 @@ func TestLoadAppConfig_Defaults(t *testing.T) {
 		"MIDAS_KAFKA_CLIENT_ID",
 		"MIDAS_KAFKA_REQUIRED_ACKS",
 		"MIDAS_KAFKA_WRITE_TIMEOUT",
+		"MIDAS_KAFKA_TLS_ENABLED",
+		"MIDAS_KAFKA_SASL_MECHANISM",
+		"MIDAS_KAFKA_SASL_USERNAME",
+		"MIDAS_KAFKA_SASL_PASSWORD",
 	)
 
 	cfg, err := bootstrap.LoadAppConfig()
@@ -231,6 +283,31 @@ func TestLoadAppConfig_DispatcherEnabled_KafkaBrokers(t *testing.T) {
 	}
 	if len(cfg.Kafka.Brokers) != 2 {
 		t.Errorf("expected 2 brokers, got %d: %v", len(cfg.Kafka.Brokers), cfg.Kafka.Brokers)
+	}
+}
+
+func TestLoadAppConfig_KafkaEventHubsAuth(t *testing.T) {
+	t.Setenv("MIDAS_KAFKA_BROKERS", "evh-midas-test.servicebus.windows.net:9093")
+	t.Setenv("MIDAS_KAFKA_TLS_ENABLED", "true")
+	t.Setenv("MIDAS_KAFKA_SASL_MECHANISM", "plain")
+	t.Setenv("MIDAS_KAFKA_SASL_USERNAME", "$ConnectionString")
+	t.Setenv("MIDAS_KAFKA_SASL_PASSWORD", "secret-value")
+
+	cfg, err := bootstrap.LoadAppConfig()
+	if err != nil {
+		t.Fatalf("LoadAppConfig: unexpected error: %v", err)
+	}
+	if !cfg.Kafka.TLSEnabled {
+		t.Error("expected TLS enabled")
+	}
+	if cfg.Kafka.SASLMechanism != "plain" {
+		t.Errorf("expected SASL mechanism plain, got %q", cfg.Kafka.SASLMechanism)
+	}
+	if cfg.Kafka.SASLUsername != "$ConnectionString" {
+		t.Errorf("expected Event Hubs username, got %q", cfg.Kafka.SASLUsername)
+	}
+	if cfg.Kafka.SASLPassword != "secret-value" {
+		t.Error("expected SASL password to load from env")
 	}
 }
 

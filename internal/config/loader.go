@@ -407,6 +407,46 @@ func applyEnvOverrides(cfg *Config, sources map[string]Source, getenv func(strin
 		cfg.Kafka.Brokers = brokers
 		markEnv("kafka")
 	}
+	if v := getenv("MIDAS_KAFKA_CLIENT_ID"); v != "" {
+		cfg.Kafka.ClientID = strings.TrimSpace(v)
+		markEnv("kafka")
+	}
+	if v := getenv("MIDAS_KAFKA_REQUIRED_ACKS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || (n != -1 && n != 0 && n != 1) {
+			return fmt.Errorf("MIDAS_KAFKA_REQUIRED_ACKS must be -1, 0, or 1")
+		}
+		cfg.Kafka.RequiredAcks = n
+		markEnv("kafka")
+	}
+	if v := getenv("MIDAS_KAFKA_WRITE_TIMEOUT"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d < 0 {
+			return fmt.Errorf("MIDAS_KAFKA_WRITE_TIMEOUT must be a non-negative Go duration")
+		}
+		cfg.Kafka.WriteTimeout = Duration(d)
+		markEnv("kafka")
+	}
+	if v := getenv("MIDAS_KAFKA_TLS_ENABLED"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("MIDAS_KAFKA_TLS_ENABLED must be a boolean")
+		}
+		cfg.Kafka.TLSEnabled = b
+		markEnv("kafka")
+	}
+	if v := getenv("MIDAS_KAFKA_SASL_MECHANISM"); v != "" {
+		cfg.Kafka.SASLMechanism = strings.ToLower(strings.TrimSpace(v))
+		markEnv("kafka")
+	}
+	if v := getenv("MIDAS_KAFKA_SASL_USERNAME"); v != "" {
+		cfg.Kafka.SASLUsername = strings.TrimSpace(v)
+		markEnv("kafka")
+	}
+	if v := getenv("MIDAS_KAFKA_SASL_PASSWORD"); v != "" {
+		cfg.Kafka.SASLPassword = v
+		markEnv("kafka")
+	}
 
 	return nil
 }

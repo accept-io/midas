@@ -42,7 +42,7 @@ A profile carries:
 |-------|---------|
 | `confidence_threshold` | Minimum confidence score for autonomous execution (`[0.0, 1.0]`) |
 | `consequence_threshold` | Maximum consequence value (monetary amount or risk rating) |
-| `consequence_type` | How to interpret the consequence: `monetary` or `risk_rating` |
+| `consequence_type` | How to interpret the consequence: `monetary` or `risk_rating`; control-plane `financial` is accepted as a compatibility alias for monetary thresholds |
 | `policy_reference` | Which policy bundle applies (if any) |
 | `escalation_mode` | How escalations are handled: `auto` or `manual` |
 | `fail_mode` | Behaviour on policy errors: `open` (continue) or `closed` (escalate) |

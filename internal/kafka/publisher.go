@@ -2,9 +2,12 @@ package kafka
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
+	"strings"
 
 	kafkago "github.com/segmentio/kafka-go"
+	"github.com/segmentio/kafka-go/sasl/plain"
 
 	"github.com/accept-io/midas/internal/dispatch"
 )
@@ -29,6 +32,8 @@ type KafkaPublisher struct {
 //   - RequiredAcks  → kafka.Writer.RequiredAcks
 //   - WriteTimeout  → kafka.Writer.WriteTimeout (applied when > 0)
 //   - ClientID      → kafka.Transport.ClientID (Transport is set on the Writer)
+//   - TLSEnabled    → kafka.Transport.TLS
+//   - SASL plain    → kafka.Transport.SASL
 //
 // The returned publisher is safe for concurrent use. Call Close when the
 // publisher is no longer needed to flush pending writes and release resources.
@@ -36,12 +41,37 @@ func NewKafkaPublisher(cfg KafkaConfig) (*KafkaPublisher, error) {
 	if len(cfg.Brokers) == 0 {
 		return nil, fmt.Errorf("kafka: at least one broker address is required")
 	}
+	if cfg.SASLUsername != "" && cfg.SASLPassword == "" {
+		return nil, fmt.Errorf("kafka: SASL password is required when username is set")
+	}
+	if cfg.SASLPassword != "" && cfg.SASLUsername == "" {
+		return nil, fmt.Errorf("kafka: SASL username is required when password is set")
+	}
+	if cfg.SASLMechanism != "" && (cfg.SASLUsername == "" || cfg.SASLPassword == "") {
+		return nil, fmt.Errorf("kafka: SASL username and password are required when mechanism is set")
+	}
 
 	// ClientID is carried on the Transport, not on Writer directly. A Transport
 	// value with ClientID set is created unconditionally so the writer always
 	// identifies itself to the broker, even when ClientID is empty string.
 	transport := &kafkago.Transport{
 		ClientID: cfg.ClientID,
+	}
+	if cfg.TLSEnabled {
+		transport.TLS = &tls.Config{
+			MinVersion: tls.VersionTLS12,
+		}
+	}
+	if cfg.SASLUsername != "" || cfg.SASLPassword != "" || cfg.SASLMechanism != "" {
+		switch strings.ToLower(strings.TrimSpace(cfg.SASLMechanism)) {
+		case "plain":
+			transport.SASL = plain.Mechanism{
+				Username: cfg.SASLUsername,
+				Password: cfg.SASLPassword,
+			}
+		default:
+			return nil, fmt.Errorf("kafka: unsupported SASL mechanism %q (supported: plain)", cfg.SASLMechanism)
+		}
 	}
 
 	w := &kafkago.Writer{

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // noDiscovery is a LoadOptions SearchPaths value that prevents automatic file
@@ -188,6 +189,66 @@ func TestLoad_KafkaBrokersFromEnv(t *testing.T) {
 	}
 	if len(result.Config.Kafka.Brokers) != 2 {
 		t.Errorf("kafka.brokers: want 2, got %d", len(result.Config.Kafka.Brokers))
+	}
+}
+
+func TestLoad_KafkaAuthAndTuningFromEnv(t *testing.T) {
+	result, err := Load(LoadOptions{
+		SearchPaths: noDiscovery,
+		EnvOverride: env(
+			"MIDAS_KAFKA_BROKERS", "broker1:9092",
+			"MIDAS_KAFKA_CLIENT_ID", "midas-test",
+			"MIDAS_KAFKA_REQUIRED_ACKS", "1",
+			"MIDAS_KAFKA_WRITE_TIMEOUT", "10s",
+			"MIDAS_KAFKA_TLS_ENABLED", "true",
+			"MIDAS_KAFKA_SASL_MECHANISM", "plain",
+			"MIDAS_KAFKA_SASL_USERNAME", "$ConnectionString",
+			"MIDAS_KAFKA_SASL_PASSWORD", "secret-value",
+		),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := result.Config.Kafka
+	if cfg.ClientID != "midas-test" {
+		t.Errorf("kafka.client_id: want midas-test, got %q", cfg.ClientID)
+	}
+	if cfg.RequiredAcks != 1 {
+		t.Errorf("kafka.required_acks: want 1, got %d", cfg.RequiredAcks)
+	}
+	if got := cfg.WriteTimeout.D(); got != 10*time.Second {
+		t.Errorf("kafka.write_timeout: want 10s, got %s", got)
+	}
+	if !cfg.TLSEnabled {
+		t.Error("kafka.tls_enabled: want true")
+	}
+	if cfg.SASLMechanism != "plain" {
+		t.Errorf("kafka.sasl_mechanism: want plain, got %q", cfg.SASLMechanism)
+	}
+	if cfg.SASLUsername != "$ConnectionString" {
+		t.Errorf("kafka.sasl_username: want $ConnectionString, got %q", cfg.SASLUsername)
+	}
+	if cfg.SASLPassword != "secret-value" {
+		t.Error("kafka.sasl_password: env value was not loaded")
+	}
+	if result.Sources["kafka"] != SourceEnv {
+		t.Errorf("kafka source: want env, got %s", result.Sources["kafka"])
+	}
+}
+
+func TestLoad_KafkaInvalidAcksDoesNotLeakPassword(t *testing.T) {
+	_, err := Load(LoadOptions{
+		SearchPaths: noDiscovery,
+		EnvOverride: env(
+			"MIDAS_KAFKA_REQUIRED_ACKS", "2",
+			"MIDAS_KAFKA_SASL_PASSWORD", "do-not-print",
+		),
+	})
+	if err == nil {
+		t.Fatal("expected invalid required acks error")
+	}
+	if strings.Contains(err.Error(), "do-not-print") {
+		t.Fatalf("error leaked SASL password: %v", err)
 	}
 }
 

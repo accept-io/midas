@@ -196,6 +196,7 @@ func ValidateStructural(cfg Config) error {
 //   - each token entry must have non-empty token and principal fields
 //   - dispatcher.enabled=true requires a real publisher (not "none" or "")
 //   - dispatcher.publisher=kafka requires at least one broker
+//   - kafka SASL config must be complete and use a supported mechanism
 func ValidateSemantic(cfg Config) error {
 	var errs ValidationErrors
 
@@ -293,6 +294,35 @@ func ValidateSemantic(cfg Config) error {
 					`required when dispatcher.publisher is "kafka"`,
 				})
 			}
+		}
+	}
+
+	if strings.TrimSpace(cfg.Kafka.SASLUsername) != "" && cfg.Kafka.SASLPassword == "" {
+		errs = append(errs, ValidationError{
+			"kafka.sasl_password",
+			"required when kafka.sasl_username is set",
+		})
+	}
+	if cfg.Kafka.SASLPassword != "" && strings.TrimSpace(cfg.Kafka.SASLUsername) == "" {
+		errs = append(errs, ValidationError{
+			"kafka.sasl_username",
+			"required when kafka.sasl_password is set",
+		})
+	}
+	if strings.TrimSpace(cfg.Kafka.SASLMechanism) != "" {
+		if strings.TrimSpace(cfg.Kafka.SASLUsername) == "" || cfg.Kafka.SASLPassword == "" {
+			errs = append(errs, ValidationError{
+				"kafka.sasl_username",
+				"username and password are required when kafka.sasl_mechanism is set",
+			})
+		}
+		switch strings.ToLower(strings.TrimSpace(cfg.Kafka.SASLMechanism)) {
+		case "plain":
+		default:
+			errs = append(errs, ValidationError{
+				"kafka.sasl_mechanism",
+				fmt.Sprintf(`unsupported mechanism %q (supported: "plain")`, cfg.Kafka.SASLMechanism),
+			})
 		}
 	}
 

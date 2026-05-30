@@ -64,6 +64,18 @@ type KafkaConfig struct {
 
 	// WriteTimeout bounds the per-message publish call. Zero means no timeout.
 	WriteTimeout time.Duration
+
+	// TLSEnabled enables TLS for broker connections.
+	TLSEnabled bool
+
+	// SASLMechanism configures SASL authentication. Supported value: "plain".
+	SASLMechanism string
+
+	// SASLUsername is the SASL username.
+	SASLUsername string
+
+	// SASLPassword is the SASL password. Do not log this value.
+	SASLPassword string
 }
 
 // AppConfig is the top-level runtime configuration for a MIDAS process.
@@ -105,6 +117,32 @@ func (c AppConfig) Validate() error {
 				ErrInvalidConfig,
 			)
 		}
+		if c.Kafka.SASLUsername != "" && c.Kafka.SASLPassword == "" {
+			return fmt.Errorf(
+				"%w: kafka SASL password is required when username is set",
+				ErrInvalidConfig,
+			)
+		}
+		if c.Kafka.SASLPassword != "" && c.Kafka.SASLUsername == "" {
+			return fmt.Errorf(
+				"%w: kafka SASL username is required when password is set",
+				ErrInvalidConfig,
+			)
+		}
+		if strings.TrimSpace(c.Kafka.SASLMechanism) != "" &&
+			(c.Kafka.SASLUsername == "" || c.Kafka.SASLPassword == "") {
+			return fmt.Errorf(
+				"%w: kafka SASL username and password are required when mechanism is set",
+				ErrInvalidConfig,
+			)
+		}
+		if strings.TrimSpace(c.Kafka.SASLMechanism) != "" &&
+			strings.ToLower(strings.TrimSpace(c.Kafka.SASLMechanism)) != "plain" {
+			return fmt.Errorf(
+				"%w: unsupported kafka SASL mechanism %q (supported: plain)",
+				ErrInvalidConfig, c.Kafka.SASLMechanism,
+			)
+		}
 		return nil
 
 	default:
@@ -131,6 +169,10 @@ func (c AppConfig) Validate() error {
 //	MIDAS_KAFKA_CLIENT_ID          string (default: "midas")
 //	MIDAS_KAFKA_REQUIRED_ACKS      int    (default: -1)
 //	MIDAS_KAFKA_WRITE_TIMEOUT      string (default: ""; zero means no timeout)
+//	MIDAS_KAFKA_TLS_ENABLED        bool   (default: false)
+//	MIDAS_KAFKA_SASL_MECHANISM     string (supported: "plain")
+//	MIDAS_KAFKA_SASL_USERNAME      string
+//	MIDAS_KAFKA_SASL_PASSWORD      string
 func LoadAppConfig() (AppConfig, error) {
 	cfg := AppConfig{
 		Dispatcher: DispatcherConfig{
@@ -227,6 +269,27 @@ func LoadAppConfig() (AppConfig, error) {
 			)
 		}
 		cfg.Kafka.WriteTimeout = d
+	}
+
+	if v := os.Getenv("MIDAS_KAFKA_TLS_ENABLED"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return AppConfig{}, fmt.Errorf(
+				"%w: MIDAS_KAFKA_TLS_ENABLED must be a boolean (true/false): %v",
+				ErrInvalidConfig, err,
+			)
+		}
+		cfg.Kafka.TLSEnabled = b
+	}
+
+	if v := os.Getenv("MIDAS_KAFKA_SASL_MECHANISM"); v != "" {
+		cfg.Kafka.SASLMechanism = strings.ToLower(strings.TrimSpace(v))
+	}
+	if v := os.Getenv("MIDAS_KAFKA_SASL_USERNAME"); v != "" {
+		cfg.Kafka.SASLUsername = strings.TrimSpace(v)
+	}
+	if v := os.Getenv("MIDAS_KAFKA_SASL_PASSWORD"); v != "" {
+		cfg.Kafka.SASLPassword = v
 	}
 
 	return cfg, nil

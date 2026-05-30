@@ -329,6 +329,61 @@ func TestValidateSemantic_DispatcherKafkaValid(t *testing.T) {
 	}
 }
 
+func TestValidateSemantic_KafkaSASLPartialConfig(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Kafka.SASLUsername = "$ConnectionString"
+	err := ValidateSemantic(cfg)
+	if err == nil {
+		t.Fatal("want error: SASL username without password")
+	}
+	if strings.Contains(err.Error(), "$ConnectionString") {
+		t.Fatalf("error should not echo username/secret-like values: %v", err)
+	}
+
+	cfg = DefaultConfig()
+	cfg.Kafka.SASLPassword = "secret-value"
+	err = ValidateSemantic(cfg)
+	if err == nil {
+		t.Fatal("want error: SASL password without username")
+	}
+	if strings.Contains(err.Error(), "secret-value") {
+		t.Fatalf("error leaked SASL password: %v", err)
+	}
+}
+
+func TestValidateSemantic_KafkaUnsupportedSASLMechanism(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Kafka.SASLMechanism = "scram-sha-256"
+	cfg.Kafka.SASLUsername = "user"
+	cfg.Kafka.SASLPassword = "secret-value"
+
+	err := ValidateSemantic(cfg)
+	if err == nil {
+		t.Fatal("want error: unsupported SASL mechanism")
+	}
+	if !strings.Contains(err.Error(), "unsupported mechanism") {
+		t.Fatalf("wrong error: %v", err)
+	}
+	if strings.Contains(err.Error(), "secret-value") {
+		t.Fatalf("error leaked SASL password: %v", err)
+	}
+}
+
+func TestValidateSemantic_KafkaEventHubsStyleAuthValid(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Dispatcher.Enabled = true
+	cfg.Dispatcher.Publisher = "kafka"
+	cfg.Kafka.Brokers = []string{"evh-midas-test.servicebus.windows.net:9093"}
+	cfg.Kafka.TLSEnabled = true
+	cfg.Kafka.SASLMechanism = "plain"
+	cfg.Kafka.SASLUsername = "$ConnectionString"
+	cfg.Kafka.SASLPassword = "secret-value"
+
+	if err := ValidateSemantic(cfg); err != nil {
+		t.Fatalf("valid Event Hubs-style kafka config failed: %v", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Headless conflict validation
 // ---------------------------------------------------------------------------

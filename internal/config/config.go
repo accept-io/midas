@@ -383,4 +383,12 @@ type KafkaConfig struct {
 	RequiredAcks int `yaml:"required_acks"`
 	// WriteTimeout bounds the per-message publish call. Zero means no timeout.
 	WriteTimeout Duration `yaml:"write_timeout"`
+	// TLSEnabled enables TLS for Kafka broker connections.
+	TLSEnabled bool `yaml:"tls_enabled"`
+	// SASLMechanism configures SASL authentication. Supported value: "plain".
+	SASLMechanism string `yaml:"sasl_mechanism"`
+	// SASLUsername is the SASL username, for Event Hubs usually "$ConnectionString".
+	SASLUsername string `yaml:"sasl_username"`
+	// SASLPassword is intentionally env-only; do not load it from config files.
+	SASLPassword string `yaml:"-"`
 }

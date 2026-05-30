@@ -68,10 +68,14 @@ func BuildDispatcher(cfg AppConfig, repo outbox.Repository) (*DispatcherWiring, 
 	switch cfg.Dispatcher.Publisher {
 	case PublisherTypeKafka:
 		kCfg := kafka.KafkaConfig{
-			Brokers:      cfg.Kafka.Brokers,
-			ClientID:     cfg.Kafka.ClientID,
-			RequiredAcks: kafka.RequiredAcks(cfg.Kafka.RequiredAcks),
-			WriteTimeout: cfg.Kafka.WriteTimeout,
+			Brokers:       cfg.Kafka.Brokers,
+			ClientID:      cfg.Kafka.ClientID,
+			RequiredAcks:  kafka.RequiredAcks(cfg.Kafka.RequiredAcks),
+			WriteTimeout:  cfg.Kafka.WriteTimeout,
+			TLSEnabled:    cfg.Kafka.TLSEnabled,
+			SASLMechanism: cfg.Kafka.SASLMechanism,
+			SASLUsername:  cfg.Kafka.SASLUsername,
+			SASLPassword:  cfg.Kafka.SASLPassword,
 		}
 
 		pub, err := kafka.NewKafkaPublisher(kCfg)

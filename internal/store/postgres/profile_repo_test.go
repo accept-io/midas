@@ -128,6 +128,18 @@ func TestProfileRepo_Create_PersistsAndRoundTrips(t *testing.T) {
 	}
 }
 
+func TestProfileRepo_ConsequenceTypePersistenceMapping(t *testing.T) {
+	if got := persistedConsequenceType(value.ConsequenceTypeMonetary); got != value.ConsequenceType("financial") {
+		t.Fatalf("persistedConsequenceType(monetary): want financial, got %q", got)
+	}
+	if got := domainConsequenceType(value.ConsequenceType("financial")); got != value.ConsequenceTypeMonetary {
+		t.Fatalf("domainConsequenceType(financial): want monetary, got %q", got)
+	}
+	if got := persistedConsequenceType(value.ConsequenceTypeRiskRating); got != value.ConsequenceTypeRiskRating {
+		t.Fatalf("persistedConsequenceType(risk_rating): want risk_rating, got %q", got)
+	}
+}
+
 // TestProfileRepo_Create_RejectsEmptyEscalationMode pins the regression
 // directly. With an empty EscalationMode (the Go zero value) Postgres'
 // chk_profiles_escalation_mode CHECK must reject the row. If this test

@@ -86,8 +86,9 @@ func profileApplyIntegrationBundle() []parser.ParsedDocument {
 					Authority: types.ProfileAuthority{
 						DecisionConfidenceThreshold: 0.85,
 						ConsequenceThreshold: types.ConsequenceThreshold{
-							Type:       "risk_rating",
-							RiskRating: "high",
+							Type:     "monetary",
+							Amount:   1000,
+							Currency: "GBP",
 						},
 					},
 					Policy: types.ProfilePolicy{
@@ -194,5 +195,9 @@ func TestApplyProfile_PostgresPersistsWithEscalationModeAuto(t *testing.T) {
 	if got.FailMode != authority.FailModeClosed {
 		t.Errorf("FailMode: want %q, got %q",
 			authority.FailModeClosed, got.FailMode)
+	}
+	if got.ConsequenceThreshold.Type != "monetary" {
+		t.Errorf("ConsequenceThreshold.Type: want %q after round-trip, got %q",
+			"monetary", got.ConsequenceThreshold.Type)
 	}
 }

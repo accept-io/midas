@@ -27,6 +27,10 @@ At-least-once delivery: if MIDAS crashes after publishing but before marking the
 | `MIDAS_KAFKA_CLIENT_ID` | `midas` | Client identifier sent to the broker for observability |
 | `MIDAS_KAFKA_REQUIRED_ACKS` | `-1` | Acknowledgement level: `-1` = all in-sync replicas, `0` = none, `1` = leader only |
 | `MIDAS_KAFKA_WRITE_TIMEOUT` | _(none)_ | Per-message publish timeout. Zero means no timeout. Go duration string |
+| `MIDAS_KAFKA_TLS_ENABLED` | `false` | Enable TLS for broker connections. Required for Azure Event Hubs Kafka endpoints |
+| `MIDAS_KAFKA_SASL_MECHANISM` | _(none)_ | SASL mechanism. Supported value: `plain` |
+| `MIDAS_KAFKA_SASL_USERNAME` | _(none)_ | SASL username. For Azure Event Hubs, use `$ConnectionString` |
+| `MIDAS_KAFKA_SASL_PASSWORD` | _(none)_ | SASL password. For Azure Event Hubs, use the send connection string from a secret |
 
 Example:
 
@@ -36,9 +40,22 @@ export MIDAS_DISPATCHER_PUBLISHER=kafka
 export MIDAS_KAFKA_BROKERS=broker1:9092,broker2:9092
 ```
 
+Azure Event Hubs Kafka-compatible example:
+
+```bash
+export MIDAS_DISPATCHER_ENABLED=true
+export MIDAS_DISPATCHER_PUBLISHER=kafka
+export MIDAS_KAFKA_BROKERS=evh-midas-test.servicebus.windows.net:9093
+export MIDAS_KAFKA_TLS_ENABLED=true
+export MIDAS_KAFKA_SASL_MECHANISM=plain
+export MIDAS_KAFKA_SASL_USERNAME='$ConnectionString'
+export MIDAS_KAFKA_SASL_PASSWORD='<secretref-or-secret-value>'
+```
+
 Startup validation:
 - `MIDAS_DISPATCHER_ENABLED=false` — all publisher and Kafka fields are ignored.
 - `MIDAS_DISPATCHER_ENABLED=true` + `publisher=kafka` + empty `MIDAS_KAFKA_BROKERS` — MIDAS fails at startup.
+- SASL username and password must be configured together; unsupported SASL mechanisms fail at startup.
 
 ### Events published
 

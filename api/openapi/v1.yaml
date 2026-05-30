@@ -2607,13 +2607,21 @@ components:
         Typed value object representing an authority profile's
         consequence threshold. Exactly one variant is populated
         based on type — monetary (amount + currency) or risk_rating
-        (risk_rating). Mirrors authority.Consequence.
+        (risk_rating). monetary is the canonical control-plane/API
+        value for amount/currency thresholds; financial is accepted as
+        a compatibility alias in control-plane Profile bundle input and
+        is persisted as the Postgres storage value. Profile reads and
+        graph projections use the canonical monetary form.
       required:
         - type
       properties:
         type:
           type: string
-          description: Either "monetary" or "risk_rating".
+          enum: [monetary, financial, risk_rating]
+          description: >
+            monetary is canonical, financial is a compatibility alias for
+            control-plane Profile bundle input, and risk_rating uses the
+            risk_rating field.
         amount:
           type: number
         currency:
@@ -4737,7 +4745,12 @@ paths:
           application/yaml:
             schema:
               type: string
-              description: Multi-document YAML stream of control-plane resources.
+              description: >
+                Multi-document YAML stream of control-plane resources.
+                Profile spec.authority.consequence_threshold.type accepts
+                monetary (canonical amount/currency threshold), financial
+                (compatibility alias persisted as the Postgres storage value),
+                or risk_rating.
       responses:
         "200":
           description: Bundle applied (may contain per-resource validation errors)
@@ -4798,6 +4811,12 @@ paths:
           application/yaml:
             schema:
               type: string
+              description: >
+                Multi-document YAML stream of control-plane resources.
+                Profile spec.authority.consequence_threshold.type accepts
+                monetary (canonical amount/currency threshold), financial
+                (compatibility alias persisted as the Postgres storage value),
+                or risk_rating.
       responses:
         "200":
           description: Plan computed

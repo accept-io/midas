@@ -30,6 +30,19 @@ type KafkaConfig struct {
 	// WriteTimeout bounds each WriteMessages call. Zero means no per-write
 	// timeout; context cancellation remains the only deadline in that case.
 	WriteTimeout time.Duration
+
+	// TLSEnabled enables TLS on broker connections. Azure Event Hubs Kafka
+	// endpoints require TLS.
+	TLSEnabled bool
+
+	// SASLMechanism configures SASL authentication. Supported value: "plain".
+	SASLMechanism string
+
+	// SASLUsername is the SASL username. Azure Event Hubs uses "$ConnectionString".
+	SASLUsername string
+
+	// SASLPassword is the SASL password or connection string. Do not log it.
+	SASLPassword string
 }
 
 // RequiredAcks mirrors the kafka-go RequiredAcks type with named constants.

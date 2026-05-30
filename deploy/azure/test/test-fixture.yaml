@@ -1,0 +1,119 @@
+# Dedicated Azure test fixture for MIDAS.
+# This is explicit non-demo data for the isolated test environment.
+
+apiVersion: midas.accept.io/v1
+kind: BusinessService
+metadata:
+  id: bs-d41b-validation
+  name: D41b Validation Service
+spec:
+  description: Dedicated MIDAS Azure test-environment validation service.
+  service_type: internal
+  status: active
+  owner_id: midas-validation
+---
+apiVersion: midas.accept.io/v1
+kind: Capability
+metadata:
+  id: cap-d41b-validation
+  name: D41b Validation Capability
+spec:
+  description: Controlled test capability for governed evaluation validation.
+  status: active
+  owner: midas-validation
+---
+apiVersion: midas.accept.io/v1
+kind: BusinessServiceCapability
+metadata:
+  id: bsc-d41b-validation
+spec:
+  business_service_id: bs-d41b-validation
+  capability_id: cap-d41b-validation
+---
+apiVersion: midas.accept.io/v1
+kind: Process
+metadata:
+  id: proc-d41b-validation
+  name: D41b Validation Process
+spec:
+  description: Controlled validation process for /v1/evaluate tests.
+  status: active
+  owner: midas-validation
+  business_service_id: bs-d41b-validation
+---
+apiVersion: midas.accept.io/v1
+kind: Surface
+metadata:
+  id: surf-d41b-evaluate
+  name: D41b Evaluate Surface
+  labels:
+    env: midas-test
+    tranche: D41b
+spec:
+  description: Low-criticality recoverable validation surface.
+  domain: validation
+  category: operational
+  risk_tier: low
+  status: active
+  decision_type: operational
+  reversibility_class: reversible
+  minimum_confidence: 0.80
+  business_owner: midas-validation
+  technical_owner: midas-platform
+  process_id: proc-d41b-validation
+  required_context:
+    fields:
+      - name: validation_case
+        type: string
+        required: false
+        description: Test case identifier.
+  consequence_types:
+    - id: validation-gbp
+      name: Validation GBP
+      measure_type: financial
+  audit_retention_hours: 720
+  subject_required: false
+---
+apiVersion: midas.accept.io/v1
+kind: Agent
+metadata:
+  id: agent-d41b-evaluator
+  name: D41b Test Evaluator
+spec:
+  type: automation
+  runtime:
+    model: midas-test-driver
+    version: "1.0.0"
+    provider: accept-validation
+  status: active
+---
+apiVersion: midas.accept.io/v1
+kind: Profile
+metadata:
+  id: profile-d41b-evaluate
+  name: D41b Evaluate Profile
+spec:
+  surface_id: surf-d41b-evaluate
+  authority:
+    decision_confidence_threshold: 0.85
+    consequence_threshold:
+      type: monetary
+      amount: 1000
+      currency: GBP
+  policy:
+    fail_mode: closed
+  lifecycle:
+    status: active
+    effective_from: "2026-05-30T00:00:00Z"
+    version: 1
+---
+apiVersion: midas.accept.io/v1
+kind: Grant
+metadata:
+  id: grant-d41b-evaluator
+spec:
+  agent_id: agent-d41b-evaluator
+  profile_id: profile-d41b-evaluate
+  granted_by: midas-validation
+  effective_from: "2026-05-30T00:00:00Z"
+  status: active

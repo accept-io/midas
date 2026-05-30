@@ -327,7 +327,7 @@ func (r *ProfileRepo) Create(ctx context.Context, p *authority.AuthorityProfile)
 		nullableTime(p.EffectiveUntil),
 		nullableTime(p.RetiredAt),
 		p.ConfidenceThreshold,
-		p.ConsequenceThreshold.Type,
+		persistedConsequenceType(p.ConsequenceThreshold.Type),
 		nullableAmount(p.ConsequenceThreshold),
 		nullableCurrency(p.ConsequenceThreshold),
 		nullableRiskRating(p.ConsequenceThreshold),
@@ -391,7 +391,7 @@ func (r *ProfileRepo) Update(ctx context.Context, p *authority.AuthorityProfile)
 		nullableTime(p.EffectiveUntil),
 		nullableTime(p.RetiredAt),
 		p.ConfidenceThreshold,
-		p.ConsequenceThreshold.Type,
+		persistedConsequenceType(p.ConsequenceThreshold.Type),
 		nullableAmount(p.ConsequenceThreshold),
 		nullableCurrency(p.ConsequenceThreshold),
 		nullableRiskRating(p.ConsequenceThreshold),
@@ -484,7 +484,7 @@ func scanProfileRow(row profileScanner) (*authority.AuthorityProfile, error) {
 	}
 
 	p.ConsequenceThreshold = authority.Consequence{
-		Type: consequenceType,
+		Type: domainConsequenceType(consequenceType),
 	}
 
 	if consequenceAmount.Valid {
@@ -530,3 +530,17 @@ func scanProfileRows(rows *sql.Rows) (*authority.AuthorityProfile, error) {
 }
 
 var _ authority.ProfileRepository = (*ProfileRepo)(nil)
+
+func persistedConsequenceType(t value.ConsequenceType) value.ConsequenceType {
+	if t == value.ConsequenceTypeMonetary {
+		return value.ConsequenceType("financial")
+	}
+	return t
+}
+
+func domainConsequenceType(t value.ConsequenceType) value.ConsequenceType {
+	if t == value.ConsequenceType("financial") {
+		return value.ConsequenceTypeMonetary
+	}
+	return t
+}

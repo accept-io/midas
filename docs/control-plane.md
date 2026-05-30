@@ -135,7 +135,10 @@ spec:
 
 > **Profile review semantics.** As with Surfaces, the apply path always persists newly-applied Profiles in `review` status regardless of `lifecycle.status` in the document. Approve via `POST /v1/controlplane/profiles/{id}/approve` to bring a Profile from `review` to `active`.
 
-Consequence threshold types: `monetary`, `data_access`, `risk_rating`.
+Consequence threshold types: `monetary`, `financial`, `risk_rating`.
+`monetary` is the canonical control-plane value for amount/currency
+thresholds. `financial` is accepted as a compatibility alias and is the
+Postgres persistence value. Both forms require `amount` and `currency`.
 
 For `risk_rating` type, use `risk_rating` instead of `amount`:
 

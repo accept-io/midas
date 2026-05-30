@@ -913,16 +913,10 @@ func SeedDemo(ctx context.Context, repos *store.Repositories) error {
 
 	// --- Profile (standard — merchant payment) ---
 	//
-	// Consequence type: risk_rating. The domain enum and the Postgres
-	// schema constraint chk_profiles_consequence_type only intersect on
-	// 'risk_rating' — the domain's other constant (monetary) is not
-	// accepted by the schema's CHECK, which uses 'financial'. Reconciling
-	// that naming mismatch is a separate cross-cutting refactor; the demo
-	// seed uses the value that's valid in BOTH the domain code and the
-	// schema so it can be re-applied against Postgres on every startup
-	// without violating chk_profiles_consequence_type. RiskRatingHigh
-	// fits the merchant-payment-authorisation narrative (high-impact
-	// transactional decision).
+	// Consequence type: risk_rating. Monetary thresholds are represented as
+	// "monetary" in the domain/API and persisted as "financial"; this demo
+	// profile uses risk_rating because it fits the merchant-payment-
+	// authorisation narrative (high-impact transactional decision).
 
 	if err := ensureProfile(ctx, repos.Profiles, &authority.AuthorityProfile{
 		ID:          "profile-v2-standard",

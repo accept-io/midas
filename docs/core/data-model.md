@@ -157,7 +157,7 @@ Profiles are **versioned** so governance changes remain traceable.
 | surface_id | text | Associated decision surface |
 | name | text | Profile name |
 | confidence_threshold | double | Minimum confidence required |
-| consequence_type | text | monetary or risk_rating |
+| consequence_type | text | financial or risk_rating. The control-plane API accepts monetary as the canonical amount/currency value and persists it as financial. |
 | consequence_amount | double | Monetary threshold |
 | consequence_currency | text | Currency for monetary threshold |
 | consequence_risk_rating | text | Risk rating threshold |

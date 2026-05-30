@@ -116,7 +116,7 @@ func mapProfileDocumentToAuthorityProfile(doc types.ProfileDocument, now time.Ti
 
 func mapConsequenceThreshold(ct types.ConsequenceThreshold) (authority.Consequence, error) {
 	switch strings.TrimSpace(ct.Type) {
-	case "monetary":
+	case "monetary", "financial":
 		return authority.Consequence{
 			Type:     value.ConsequenceTypeMonetary,
 			Amount:   ct.Amount,
@@ -135,7 +135,7 @@ func mapConsequenceThreshold(ct types.ConsequenceThreshold) (authority.Consequen
 		// No consequence threshold specified; return zero value.
 		return authority.Consequence{}, nil
 	default:
-		return authority.Consequence{}, fmt.Errorf("unrecognised consequence threshold type %q", ct.Type)
+		return authority.Consequence{}, fmt.Errorf("unrecognised consequence threshold type %q; accepted values are monetary, financial, risk_rating", ct.Type)
 	}
 }
 

@@ -792,10 +792,14 @@ func toBootstrapAppConfig(cfg config.Config) bootstrap.AppConfig {
 			MaxBackoff:   cfg.Dispatcher.MaxBackoff.D(),
 		},
 		Kafka: bootstrap.KafkaConfig{
-			Brokers:      cfg.Kafka.Brokers,
-			ClientID:     cfg.Kafka.ClientID,
-			RequiredAcks: cfg.Kafka.RequiredAcks,
-			WriteTimeout: cfg.Kafka.WriteTimeout.D(),
+			Brokers:       cfg.Kafka.Brokers,
+			ClientID:      cfg.Kafka.ClientID,
+			RequiredAcks:  cfg.Kafka.RequiredAcks,
+			WriteTimeout:  cfg.Kafka.WriteTimeout.D(),
+			TLSEnabled:    cfg.Kafka.TLSEnabled,
+			SASLMechanism: cfg.Kafka.SASLMechanism,
+			SASLUsername:  cfg.Kafka.SASLUsername,
+			SASLPassword:  cfg.Kafka.SASLPassword,
 		},
 	}
 }

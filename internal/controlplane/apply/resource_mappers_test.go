@@ -8,6 +8,7 @@ import (
 	"github.com/accept-io/midas/internal/agent"
 	"github.com/accept-io/midas/internal/authority"
 	"github.com/accept-io/midas/internal/controlplane/types"
+	"github.com/accept-io/midas/internal/value"
 )
 
 // TestMapAgentType_ValidDocTypes verifies that all recognised document-layer
@@ -239,5 +240,50 @@ func TestMapProfileDocumentToAuthorityProfile_DefaultsEscalationModeAuto(t *test
 	}
 	if p.EscalationMode == "" {
 		t.Errorf("EscalationMode is empty — would fail chk_profiles_escalation_mode on apply")
+	}
+}
+
+func TestMapProfileDocumentToAuthorityProfile_ConsequenceThresholdTypes(t *testing.T) {
+	now := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+
+	makeDoc := func(kind string) types.ProfileDocument {
+		return types.ProfileDocument{
+			APIVersion: types.APIVersionV1,
+			Kind:       types.KindProfile,
+			Metadata: types.DocumentMetadata{
+				ID:   "profile-mapper-consequence-test",
+				Name: "Mapper Consequence Test Profile",
+			},
+			Spec: types.ProfileSpec{
+				SurfaceID: "surf-mapper-consequence-test",
+				Authority: types.ProfileAuthority{
+					DecisionConfidenceThreshold: 0.85,
+					ConsequenceThreshold: types.ConsequenceThreshold{
+						Type:     kind,
+						Amount:   1000,
+						Currency: "GBP",
+					},
+				},
+				Policy: types.ProfilePolicy{
+					Reference: "rego://test/mapper-consequence",
+					FailMode:  "closed",
+				},
+			},
+		}
+	}
+
+	for _, kind := range []string{"monetary", "financial"} {
+		t.Run(kind, func(t *testing.T) {
+			p, err := mapProfileDocumentToAuthorityProfile(makeDoc(kind), now, "tester", 1)
+			if err != nil {
+				t.Fatalf("mapProfileDocumentToAuthorityProfile: %v", err)
+			}
+			if p.ConsequenceThreshold.Type != value.ConsequenceTypeMonetary {
+				t.Errorf("ConsequenceThreshold.Type: want %q, got %q", value.ConsequenceTypeMonetary, p.ConsequenceThreshold.Type)
+			}
+			if p.ConsequenceThreshold.Amount != 1000 || p.ConsequenceThreshold.Currency != "GBP" {
+				t.Errorf("ConsequenceThreshold amount/currency not preserved: %+v", p.ConsequenceThreshold)
+			}
+		})
 	}
 }

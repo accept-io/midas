@@ -23,12 +23,15 @@ var (
 	// digits, dots, hyphens, and underscores.
 	IDFormat = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
-	ValidRiskTiers        = []string{"low", "medium", "high"}
-	ValidStatuses         = []string{"active", "inactive", "deprecated"}
-	ValidGrantStatuses    = []string{"active", "suspended", "revoked", "expired"}
-	ValidFailModes        = []string{"open", "closed"}
-	ValidAgentTypes       = []string{"llm_agent", "workflow", "automation", "copilot", "rpa"}
-	ValidConsequenceTypes = []string{"monetary", "risk_rating"}
+	ValidRiskTiers     = []string{"low", "medium", "high"}
+	ValidStatuses      = []string{"active", "inactive", "deprecated"}
+	ValidGrantStatuses = []string{"active", "suspended", "revoked", "expired"}
+	ValidFailModes     = []string{"open", "closed"}
+	ValidAgentTypes    = []string{"llm_agent", "workflow", "automation", "copilot", "rpa"}
+	// ValidConsequenceTypes is the external control-plane vocabulary. "monetary"
+	// is the canonical API value; "financial" is accepted as a compatibility
+	// alias for the Postgres persistence value.
+	ValidConsequenceTypes = []string{"monetary", "financial", "risk_rating"}
 	ValidServiceTypes     = []string{"customer_facing", "internal", "technical"}
 
 	// ValidAISystemStatuses mirrors the chk_ai_systems_status CHECK list.
@@ -564,10 +567,10 @@ func validateProfile(doc types.ProfileDocument) []types.ValidationError {
 		}
 
 		switch ct.Type {
-		case "monetary":
+		case "monetary", "financial":
 			if ct.Amount < 0 {
 				errs = append(errs, fieldErr(doc, "spec.authority.consequence_threshold.amount",
-					"must be non-negative for monetary type"))
+					"must be non-negative for monetary/financial type"))
 			}
 			if strings.TrimSpace(ct.Currency) == "" {
 				errs = append(errs, requiredFieldErr(doc, "spec.authority.consequence_threshold.currency"))

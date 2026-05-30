@@ -404,12 +404,33 @@ The following environment variables control outbox dispatch.
 | `MIDAS_KAFKA_CLIENT_ID`       | `midas`  | Client identifier sent to the broker for observability. |
 | `MIDAS_KAFKA_REQUIRED_ACKS`   | `-1`     | Acknowledgement level: `-1` = all in-sync replicas, `0` = none, `1` = leader only. |
 | `MIDAS_KAFKA_WRITE_TIMEOUT`   | _(none)_ | Per-message publish timeout. Zero means no timeout. Go duration string. |
+| `MIDAS_KAFKA_TLS_ENABLED`     | `false`  | Enable TLS for Kafka broker connections. Required for Azure Event Hubs Kafka endpoints. |
+| `MIDAS_KAFKA_SASL_MECHANISM`  | _(none)_ | SASL mechanism. Supported value: `plain`. |
+| `MIDAS_KAFKA_SASL_USERNAME`   | _(none)_ | SASL username. For Azure Event Hubs, use `$ConnectionString`. |
+| `MIDAS_KAFKA_SASL_PASSWORD`   | _(none)_ | SASL password. For Azure Event Hubs, use the send connection string from a secret. Do not log or commit it. |
 
 **Configuration invariants**:
 - `MIDAS_DISPATCHER_ENABLED=false`: all publisher and Kafka fields are ignored. Valid in any environment.
 - `MIDAS_DISPATCHER_ENABLED=true` + `MIDAS_DISPATCHER_PUBLISHER=kafka` + non-empty `MIDAS_KAFKA_BROKERS`: dispatcher runs.
 - `MIDAS_DISPATCHER_ENABLED=true` + no publisher or `publisher=none`: MIDAS fails at startup.
 - `MIDAS_DISPATCHER_ENABLED=true` + `publisher=kafka` + empty `MIDAS_KAFKA_BROKERS`: MIDAS fails at startup.
+- SASL username and password must be provided together. Unsupported SASL mechanisms fail at startup.
+- MIDAS publishes to the topic stored on each outbox row. There is no global topic override; create broker topics matching MIDAS logical topics such as `midas.decisions`.
+
+Azure Event Hubs Kafka example:
+
+```bash
+MIDAS_DISPATCHER_ENABLED=true
+MIDAS_DISPATCHER_PUBLISHER=kafka
+MIDAS_KAFKA_BROKERS=evh-midas-test.servicebus.windows.net:9093
+MIDAS_KAFKA_CLIENT_ID=midas-test
+MIDAS_KAFKA_REQUIRED_ACKS=-1
+MIDAS_KAFKA_WRITE_TIMEOUT=10s
+MIDAS_KAFKA_TLS_ENABLED=true
+MIDAS_KAFKA_SASL_MECHANISM=plain
+MIDAS_KAFKA_SASL_USERNAME='$ConnectionString'
+MIDAS_KAFKA_SASL_PASSWORD=<secretref-or-secret-value>
+```
 
 ### Local Docker/Postgres validation
 

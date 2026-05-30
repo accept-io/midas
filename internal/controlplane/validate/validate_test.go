@@ -757,6 +757,22 @@ func TestValidateProfile_ConsequenceThreshold_Monetary(t *testing.T) {
 		}
 	})
 
+	t.Run("valid financial compatibility alias", func(t *testing.T) {
+		doc := validProfileDoc
+		doc.Spec.Authority.ConsequenceThreshold = types.ConsequenceThreshold{
+			Type:     "financial",
+			Amount:   10000,
+			Currency: "USD",
+		}
+
+		errs := validateProfile(doc)
+		for _, err := range errs {
+			if strings.Contains(err.Field, "consequence_threshold") {
+				t.Errorf("valid financial threshold should not error, got: %v", err)
+			}
+		}
+	})
+
 	t.Run("negative monetary amount", func(t *testing.T) {
 		doc := validProfileDoc
 		doc.Spec.Authority.ConsequenceThreshold = types.ConsequenceThreshold{
