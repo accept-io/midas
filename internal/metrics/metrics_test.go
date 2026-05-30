@@ -46,6 +46,9 @@ func TestNewRuntimeMetrics_BundleIsComplete(t *testing.T) {
 	if m.Attribution == nil {
 		t.Fatal("Attribution: want non-nil")
 	}
+	if m.Outbox == nil {
+		t.Fatal("Outbox: want non-nil")
+	}
 	if m.Handler == nil {
 		t.Fatal("Handler: want non-nil")
 	}
@@ -73,6 +76,14 @@ func TestScrape_ContainsAllMetricNames(t *testing.T) {
 	m.Transactions.IncrementTransactionError("evaluation", "begin")
 	m.Attribution.RecordDuration(runtimeattr.StageAuditAppend, 3*time.Millisecond)
 	m.Attribution.AddCount(runtimeattr.CountAuditAppend, 2)
+	m.Outbox.RecordClaimDuration(2 * time.Millisecond)
+	m.Outbox.RecordPublishDuration("midas.decisions", 4*time.Millisecond)
+	m.Outbox.RecordMarkPublishedDuration(1 * time.Millisecond)
+	m.Outbox.AddClaimed(3)
+	m.Outbox.AddPublished(2)
+	m.Outbox.IncrementPublishFailure("midas.decisions", "publish_error")
+	m.Outbox.IncrementMarkPublishedFailure()
+	m.Outbox.ObserveBatchSize(3)
 
 	expectedNames := []string{
 		"midas_evaluation_duration_seconds",
@@ -85,6 +96,14 @@ func TestScrape_ContainsAllMetricNames(t *testing.T) {
 		"midas_store_transaction_errors_total",
 		"midas_evaluation_stage_duration_seconds",
 		"midas_evaluation_stage_events_total",
+		"midas_outbox_claim_duration_seconds",
+		"midas_outbox_publish_duration_seconds",
+		"midas_outbox_mark_published_duration_seconds",
+		"midas_outbox_claimed_total",
+		"midas_outbox_published_total",
+		"midas_outbox_publish_failures_total",
+		"midas_outbox_mark_published_failures_total",
+		"midas_outbox_batch_size_observed",
 	}
 
 	rr := httptest.NewRecorder()
@@ -96,6 +115,44 @@ func TestScrape_ContainsAllMetricNames(t *testing.T) {
 	for _, name := range expectedNames {
 		if !strings.Contains(scrape, name) {
 			t.Errorf("scrape output missing metric %q", name)
+		}
+	}
+}
+
+func TestOutboxDispatchRecorder_ScrapesBoundedLabels(t *testing.T) {
+	m := NewRuntimeMetrics()
+	m.Outbox.RecordClaimDuration(2 * time.Millisecond)
+	m.Outbox.RecordPublishDuration("midas.decisions", 3*time.Millisecond)
+	m.Outbox.RecordMarkPublishedDuration(4 * time.Millisecond)
+	m.Outbox.AddClaimed(5)
+	m.Outbox.AddPublished(4)
+	m.Outbox.IncrementPublishFailure("midas.decisions", "publish_error")
+	m.Outbox.IncrementMarkPublishedFailure()
+	m.Outbox.ObserveBatchSize(5)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	m.Handler.ServeHTTP(rr, req)
+	body, _ := io.ReadAll(rr.Body)
+	scrape := string(body)
+
+	for _, want := range []string{
+		`midas_outbox_claim_duration_seconds_count 1`,
+		`midas_outbox_publish_duration_seconds_count{topic="midas.decisions"} 1`,
+		`midas_outbox_mark_published_duration_seconds_count 1`,
+		`midas_outbox_claimed_total 5`,
+		`midas_outbox_published_total 4`,
+		`midas_outbox_publish_failures_total{error_class="publish_error",topic="midas.decisions"} 1`,
+		`midas_outbox_mark_published_failures_total 1`,
+		`midas_outbox_batch_size_observed_count 1`,
+	} {
+		if !strings.Contains(scrape, want) {
+			t.Errorf("scrape missing %q:\n%s", want, scrape)
+		}
+	}
+	for _, forbidden := range []string{"event_id", "request_id", "envelope_id", "dispatcher_instance_id", "batch_id", "postgresql://"} {
+		if strings.Contains(scrape, forbidden) {
+			t.Errorf("outbox dispatch scrape contains forbidden content %q:\n%s", forbidden, scrape)
 		}
 	}
 }

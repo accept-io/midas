@@ -1,9 +1,12 @@
 package dispatch_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -70,6 +73,54 @@ func (p *fakePublisher) Publish(_ context.Context, msg dispatch.Message) error {
 	}
 	p.published = append(p.published, msg)
 	return nil
+}
+
+type fakeRecorder struct {
+	claimDurations         int
+	publishDurations       int
+	markPublishedDurations int
+	claimed                int
+	published              int
+	publishFailures        int
+	markPublishedFailures  int
+	batchSizes             []int
+	topics                 []string
+	errorClasses           []string
+}
+
+func (r *fakeRecorder) RecordClaimDuration(time.Duration) {
+	r.claimDurations++
+}
+
+func (r *fakeRecorder) RecordPublishDuration(topic string, _ time.Duration) {
+	r.publishDurations++
+	r.topics = append(r.topics, topic)
+}
+
+func (r *fakeRecorder) RecordMarkPublishedDuration(time.Duration) {
+	r.markPublishedDurations++
+}
+
+func (r *fakeRecorder) AddClaimed(n int) {
+	r.claimed += n
+}
+
+func (r *fakeRecorder) AddPublished(n int) {
+	r.published += n
+}
+
+func (r *fakeRecorder) IncrementPublishFailure(topic string, errorClass string) {
+	r.publishFailures++
+	r.topics = append(r.topics, topic)
+	r.errorClasses = append(r.errorClasses, errorClass)
+}
+
+func (r *fakeRecorder) IncrementMarkPublishedFailure() {
+	r.markPublishedFailures++
+}
+
+func (r *fakeRecorder) ObserveBatchSize(n int) {
+	r.batchSizes = append(r.batchSizes, n)
 }
 
 // ---------------------------------------------------------------------------
@@ -263,6 +314,95 @@ func TestDispatcher_MultipleEvents_ProcessedInOrder(t *testing.T) {
 		if ev.PublishedAt == nil {
 			t.Errorf("expected event %q to be marked published", ev.ID)
 		}
+	}
+}
+
+func TestDispatcher_RecordsClaimPublishAndMarkMetrics(t *testing.T) {
+	ev1 := mustEvent(t, outbox.EventDecisionCompleted, "env-metrics-a")
+	ev2 := mustEvent(t, outbox.EventDecisionEscalated, "env-metrics-b")
+	repo := &fakeRepo{events: []*outbox.OutboxEvent{ev1, ev2}}
+	pub := &fakePublisher{}
+	rec := &fakeRecorder{}
+
+	d := newDispatcher(t, repo, pub, shortIntervalConfig()).WithRecorder(rec)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	d.Run(ctx)
+
+	if rec.claimDurations == 0 {
+		t.Fatal("expected claim duration to be recorded")
+	}
+	if rec.claimed != 2 {
+		t.Fatalf("claimed total: want 2, got %d", rec.claimed)
+	}
+	if rec.publishDurations != 2 {
+		t.Fatalf("publish durations: want 2, got %d", rec.publishDurations)
+	}
+	if rec.markPublishedDurations != 2 {
+		t.Fatalf("mark-published durations: want 2, got %d", rec.markPublishedDurations)
+	}
+	if rec.published != 2 {
+		t.Fatalf("published total: want 2, got %d", rec.published)
+	}
+	if len(rec.batchSizes) == 0 || rec.batchSizes[0] != 2 {
+		t.Fatalf("first observed batch size: want 2, got %v", rec.batchSizes)
+	}
+	if rec.publishFailures != 0 || rec.markPublishedFailures != 0 {
+		t.Fatalf("unexpected failures recorded: publish=%d mark=%d", rec.publishFailures, rec.markPublishedFailures)
+	}
+}
+
+func TestDispatcher_RecordsPublishFailureClass(t *testing.T) {
+	ev := mustEvent(t, outbox.EventDecisionCompleted, "env-publish-failure")
+	repo := &fakeRepo{events: []*outbox.OutboxEvent{ev}}
+	pub := &fakePublisher{publishErr: context.DeadlineExceeded}
+	rec := &fakeRecorder{}
+
+	d := newDispatcher(t, repo, pub, shortIntervalConfig()).WithRecorder(rec)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+
+	d.Run(ctx)
+
+	if rec.publishFailures == 0 {
+		t.Fatal("expected publish failure metric to be recorded")
+	}
+	if len(rec.errorClasses) == 0 || rec.errorClasses[0] != "context_deadline" {
+		t.Fatalf("error class: want context_deadline, got %v", rec.errorClasses)
+	}
+	if rec.published != 0 {
+		t.Fatalf("published total: want 0 after publish failure, got %d", rec.published)
+	}
+}
+
+func TestDispatcher_DoesNotInfoLogPerEventSuccess(t *testing.T) {
+	ev1 := mustEvent(t, outbox.EventDecisionCompleted, "env-log-a")
+	ev2 := mustEvent(t, outbox.EventDecisionEscalated, "env-log-b")
+	repo := &fakeRepo{events: []*outbox.OutboxEvent{ev1, ev2}}
+	pub := &fakePublisher{}
+	d := newDispatcher(t, repo, pub, shortIntervalConfig())
+
+	var buf bytes.Buffer
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	defer slog.SetDefault(oldLogger)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	d.Run(ctx)
+
+	logs := buf.String()
+	if !strings.Contains(logs, "outbox_batch_dispatched") {
+		t.Fatalf("expected batch-level info log, got:\n%s", logs)
+	}
+	if strings.Contains(logs, "outbox_event_dispatched") {
+		t.Fatalf("per-event success log must not be emitted at info level:\n%s", logs)
+	}
+	if !strings.Contains(logs, "dispatcher_instance_id=") || !strings.Contains(logs, "batch_id=") {
+		t.Fatalf("expected dispatcher and batch correlation fields, got:\n%s", logs)
 	}
 }
 

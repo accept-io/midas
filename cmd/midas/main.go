@@ -489,6 +489,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	if wiring.Dispatcher != nil && runtimeMetrics != nil {
+		wiring.Dispatcher.WithRecorder(runtimeMetrics.Outbox)
+	}
 
 	// --- Lifecycle ---
 

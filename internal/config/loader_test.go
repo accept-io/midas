@@ -272,6 +272,52 @@ func TestLoad_InvalidDispatcherEnabled(t *testing.T) {
 	}
 }
 
+func TestLoad_DispatcherTuningFromEnv(t *testing.T) {
+	result, err := Load(LoadOptions{
+		SearchPaths: noDiscovery,
+		EnvOverride: env(
+			"MIDAS_DISPATCHER_BATCH_SIZE", "250",
+			"MIDAS_DISPATCHER_POLL_INTERVAL", "500ms",
+			"MIDAS_DISPATCHER_MAX_BACKOFF", "8s",
+		),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Config.Dispatcher.BatchSize != 250 {
+		t.Errorf("dispatcher.batch_size: want 250, got %d", result.Config.Dispatcher.BatchSize)
+	}
+	if got := result.Config.Dispatcher.PollInterval.D(); got != 500*time.Millisecond {
+		t.Errorf("dispatcher.poll_interval: want 500ms, got %s", got)
+	}
+	if got := result.Config.Dispatcher.MaxBackoff.D(); got != 8*time.Second {
+		t.Errorf("dispatcher.max_backoff: want 8s, got %s", got)
+	}
+	if result.Sources["dispatcher"] != SourceEnv {
+		t.Errorf("dispatcher source: want env, got %s", result.Sources["dispatcher"])
+	}
+}
+
+func TestLoad_DispatcherPollIntervalMalformed(t *testing.T) {
+	_, err := Load(LoadOptions{
+		SearchPaths: noDiscovery,
+		EnvOverride: env("MIDAS_DISPATCHER_POLL_INTERVAL", "fast"),
+	})
+	if err == nil {
+		t.Error("want parse error for non-duration MIDAS_DISPATCHER_POLL_INTERVAL")
+	}
+}
+
+func TestLoad_DispatcherMaxBackoffNonPositive(t *testing.T) {
+	_, err := Load(LoadOptions{
+		SearchPaths: noDiscovery,
+		EnvOverride: env("MIDAS_DISPATCHER_MAX_BACKOFF", "0s"),
+	})
+	if err == nil {
+		t.Error("want parse error for non-positive MIDAS_DISPATCHER_MAX_BACKOFF")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Postgres pool env vars
 // ---------------------------------------------------------------------------

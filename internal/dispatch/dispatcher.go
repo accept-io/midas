@@ -2,7 +2,10 @@ package dispatch
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/accept-io/midas/internal/outbox"
@@ -17,10 +20,14 @@ import (
 // re-claimed on the next poll and re-published. Consumer-side idempotency
 // is assumed.
 type Dispatcher struct {
-	repo      DispatcherRepo
-	publisher Publisher
-	cfg       DispatcherConfig
+	repo       DispatcherRepo
+	publisher  Publisher
+	cfg        DispatcherConfig
+	recorder   Recorder
+	instanceID string
 }
+
+var dispatcherInstanceSeq atomic.Uint64
 
 // NewDispatcher constructs a Dispatcher. All arguments must be non-nil and
 // DispatcherConfig.BatchSize and DispatcherConfig.PollInterval must be
@@ -42,10 +49,22 @@ func NewDispatcher(repo DispatcherRepo, publisher Publisher, cfg DispatcherConfi
 		cfg.MaxBackoff = cfg.PollInterval
 	}
 	return &Dispatcher{
-		repo:      repo,
-		publisher: publisher,
-		cfg:       cfg,
+		repo:       repo,
+		publisher:  publisher,
+		cfg:        cfg,
+		recorder:   noopRecorder{},
+		instanceID: newDispatcherInstanceID(),
 	}, nil
+}
+
+// WithRecorder wires an optional metrics recorder into the dispatcher.
+func (d *Dispatcher) WithRecorder(rec Recorder) *Dispatcher {
+	if rec == nil {
+		d.recorder = noopRecorder{}
+		return d
+	}
+	d.recorder = rec
+	return d
 }
 
 // Run starts the dispatch loop and blocks until ctx is cancelled. It returns
@@ -57,6 +76,7 @@ func NewDispatcher(repo DispatcherRepo, publisher Publisher, cfg DispatcherConfi
 //	go dispatcher.Run(ctx)
 func (d *Dispatcher) Run(ctx context.Context) {
 	slog.Info("outbox_dispatcher_started",
+		"dispatcher_instance_id", d.instanceID,
 		"batch_size", d.cfg.BatchSize,
 		"poll_interval", d.cfg.PollInterval,
 		"max_backoff", d.cfg.MaxBackoff,
@@ -75,6 +95,7 @@ func (d *Dispatcher) Run(ctx context.Context) {
 		processed, err := d.poll(ctx)
 		if err != nil {
 			slog.Error("outbox_dispatcher_poll_error",
+				"dispatcher_instance_id", d.instanceID,
 				"error", err,
 				"backoff", backoff,
 			)
@@ -114,23 +135,33 @@ func (d *Dispatcher) Run(ctx context.Context) {
 // merely claimed). A return value of zero means the queue was empty or all
 // publishes failed; the caller should sleep before the next poll.
 func (d *Dispatcher) poll(ctx context.Context) (int, error) {
+	batchID := newBatchID()
+	claimStart := time.Now()
 	events, err := d.repo.ClaimUnpublished(ctx, d.cfg.BatchSize)
+	d.recorder.RecordClaimDuration(time.Since(claimStart))
 	if err != nil {
 		return 0, err
 	}
+	d.recorder.AddClaimed(len(events))
+	d.recorder.ObserveBatchSize(len(events))
 	if len(events) == 0 {
 		return 0, nil
 	}
 
 	published := 0
 	for _, ev := range events {
-		if d.dispatch(ctx, ev) {
+		if d.dispatch(ctx, batchID, ev) {
 			published++
 		}
 	}
 
 	if published > 0 {
-		slog.Info("outbox_batch_dispatched", "count", published, "claimed", len(events))
+		slog.Info("outbox_batch_dispatched",
+			"dispatcher_instance_id", d.instanceID,
+			"batch_id", batchID,
+			"count", published,
+			"claimed", len(events),
+		)
 	}
 
 	return published, nil
@@ -143,14 +174,20 @@ func (d *Dispatcher) poll(ctx context.Context) (int, error) {
 // Errors at each stage are logged but never propagated: a publish failure leaves
 // the row unpublished for the next poll cycle; a mark-published failure after a
 // successful publish is logged and accepted as a potential duplicate (at-least-once).
-func (d *Dispatcher) dispatch(ctx context.Context, ev *outbox.OutboxEvent) bool {
+func (d *Dispatcher) dispatch(ctx context.Context, batchID string, ev *outbox.OutboxEvent) bool {
 	msg := eventToMessage(ev)
 
-	if err := d.publisher.Publish(ctx, msg); err != nil {
+	publishStart := time.Now()
+	err := d.publisher.Publish(ctx, msg)
+	d.recorder.RecordPublishDuration(ev.Topic, time.Since(publishStart))
+	if err != nil {
+		d.recorder.IncrementPublishFailure(ev.Topic, classifyError(err))
 		// Publish failures are transient: the row remains unpublished and will
 		// be re-claimed on the next poll cycle. WARN rather than ERROR because
 		// a degraded broker is expected to recover.
 		slog.Warn("outbox_publish_failed",
+			"dispatcher_instance_id", d.instanceID,
+			"batch_id", batchID,
 			"event_id", ev.ID,
 			"event_type", ev.EventType,
 			"aggregate_type", ev.AggregateType,
@@ -160,13 +197,20 @@ func (d *Dispatcher) dispatch(ctx context.Context, ev *outbox.OutboxEvent) bool 
 		)
 		return false
 	}
+	d.recorder.AddPublished(1)
 
-	if err := d.repo.MarkPublished(ctx, ev.ID); err != nil {
+	markStart := time.Now()
+	err = d.repo.MarkPublished(ctx, ev.ID)
+	d.recorder.RecordMarkPublishedDuration(time.Since(markStart))
+	if err != nil {
+		d.recorder.IncrementMarkPublishedFailure()
 		// The message was delivered to the broker but the database write failed.
 		// The row will be re-claimed and re-published (at-least-once delivery).
 		// Consumers must tolerate duplicates. WARN because this is recoverable
 		// and expected under at-least-once semantics.
 		slog.Warn("outbox_mark_published_failed",
+			"dispatcher_instance_id", d.instanceID,
+			"batch_id", batchID,
 			"event_id", ev.ID,
 			"event_type", ev.EventType,
 			"aggregate_type", ev.AggregateType,
@@ -179,7 +223,9 @@ func (d *Dispatcher) dispatch(ctx context.Context, ev *outbox.OutboxEvent) bool 
 		return true
 	}
 
-	slog.Info("outbox_event_dispatched",
+	slog.Debug("outbox_event_dispatched",
+		"dispatcher_instance_id", d.instanceID,
+		"batch_id", batchID,
 		"event_id", ev.ID,
 		"event_type", ev.EventType,
 		"aggregate_type", ev.AggregateType,
@@ -187,6 +233,27 @@ func (d *Dispatcher) dispatch(ctx context.Context, ev *outbox.OutboxEvent) bool 
 		"topic", ev.Topic,
 	)
 	return true
+}
+
+func newDispatcherInstanceID() string {
+	return fmt.Sprintf("dispatcher-%d-%d", time.Now().UTC().UnixNano(), dispatcherInstanceSeq.Add(1))
+}
+
+func newBatchID() string {
+	return fmt.Sprintf("batch-%d", time.Now().UTC().UnixNano())
+}
+
+func classifyError(err error) string {
+	switch {
+	case err == nil:
+		return "none"
+	case errors.Is(err, context.Canceled):
+		return "context_canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "context_deadline"
+	default:
+		return "publish_error"
+	}
 }
 
 // eventToMessage converts an outbox row into the broker-agnostic Message type.

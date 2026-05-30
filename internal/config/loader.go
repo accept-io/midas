@@ -340,6 +340,22 @@ func applyEnvOverrides(cfg *Config, sources map[string]Source, getenv func(strin
 		cfg.Dispatcher.BatchSize = n
 		markEnv("dispatcher")
 	}
+	if v := getenv("MIDAS_DISPATCHER_POLL_INTERVAL"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d <= 0 {
+			return fmt.Errorf("config: MIDAS_DISPATCHER_POLL_INTERVAL must be a positive Go duration (e.g. 2s): %q", v)
+		}
+		cfg.Dispatcher.PollInterval = Duration(d)
+		markEnv("dispatcher")
+	}
+	if v := getenv("MIDAS_DISPATCHER_MAX_BACKOFF"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d <= 0 {
+			return fmt.Errorf("config: MIDAS_DISPATCHER_MAX_BACKOFF must be a positive Go duration (e.g. 30s): %q", v)
+		}
+		cfg.Dispatcher.MaxBackoff = Duration(d)
+		markEnv("dispatcher")
+	}
 
 	// Local IAM
 	if v := getenv("MIDAS_LOCAL_IAM_ENABLED"); v != "" {

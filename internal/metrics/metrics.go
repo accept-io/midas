@@ -20,6 +20,10 @@
 //     internal/runtimeattr
 //   - attr_count:        runtime attribution count constants from
 //     internal/runtimeattr
+//   - topic:             MIDAS logical outbox topics
+//     (midas.decisions/surfaces/profiles/grants)
+//   - error_class:       bounded dispatcher error classes
+//     (context_canceled/context_deadline/publish_error)
 //
 // Request IDs, surface IDs, agent IDs, payloads, DSNs, tokens, tenant
 // identifiers, and any caller-supplied free text are deliberately NOT used
@@ -37,6 +41,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/accept-io/midas/internal/decision"
+	"github.com/accept-io/midas/internal/dispatch"
 	"github.com/accept-io/midas/internal/outbox"
 	"github.com/accept-io/midas/internal/runtimeattr"
 	"github.com/accept-io/midas/internal/store"
@@ -60,6 +65,7 @@ type RuntimeMetrics struct {
 	Evaluation   decision.EvaluationRecorder
 	Transactions store.TransactionRecorder
 	Attribution  runtimeattr.Recorder
+	Outbox       dispatch.Recorder
 	Handler      http.Handler
 
 	mu               sync.Mutex
@@ -76,6 +82,7 @@ func NewRuntimeMetrics() *RuntimeMetrics {
 	eval := newEvaluationRecorder(reg)
 	tx := newTransactionRecorder(reg)
 	attr := newAttributionRecorder(reg)
+	outboxDispatch := newOutboxDispatchRecorder(reg)
 
 	handler := promhttp.HandlerFor(reg, promhttp.HandlerOpts{
 		ErrorHandling: promhttp.ContinueOnError,
@@ -86,6 +93,7 @@ func NewRuntimeMetrics() *RuntimeMetrics {
 		Evaluation:   eval,
 		Transactions: tx,
 		Attribution:  attr,
+		Outbox:       outboxDispatch,
 		Handler:      handler,
 	}
 }
@@ -268,6 +276,118 @@ func (r *attributionRecorder) AddCount(name runtimeattr.Count, n int64) {
 }
 
 var _ runtimeattr.Recorder = (*attributionRecorder)(nil)
+
+// ---------------------------------------------------------------------------
+// Outbox dispatcher recorder
+// ---------------------------------------------------------------------------
+
+var outboxBatchSizeBuckets = []float64{0, 1, 5, 10, 25, 50, 100, 250, 500, 1000}
+
+type outboxDispatchRecorder struct {
+	claimDuration         prometheus.Histogram
+	publishDuration       *prometheus.HistogramVec
+	markPublishedDuration prometheus.Histogram
+	claimed               prometheus.Counter
+	published             prometheus.Counter
+	publishFailures       *prometheus.CounterVec
+	markPublishedFailures prometheus.Counter
+	batchSize             prometheus.Histogram
+}
+
+func newOutboxDispatchRecorder(reg prometheus.Registerer) *outboxDispatchRecorder {
+	r := &outboxDispatchRecorder{
+		claimDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name:    "midas_outbox_claim_duration_seconds",
+			Help:    "Latency of one outbox claim query in seconds.",
+			Buckets: latencyBuckets,
+		}),
+		publishDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "midas_outbox_publish_duration_seconds",
+			Help:    "Broker publish latency for one outbox event in seconds, labelled by bounded logical topic.",
+			Buckets: latencyBuckets,
+		}, []string{"topic"}),
+		markPublishedDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name:    "midas_outbox_mark_published_duration_seconds",
+			Help:    "Latency of one outbox mark-published database update in seconds.",
+			Buckets: latencyBuckets,
+		}),
+		claimed: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "midas_outbox_claimed_total",
+			Help: "Total number of outbox rows claimed by the dispatcher.",
+		}),
+		published: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "midas_outbox_published_total",
+			Help: "Total number of outbox rows successfully acknowledged by the broker.",
+		}),
+		publishFailures: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "midas_outbox_publish_failures_total",
+			Help: "Total number of outbox publish failures, labelled by bounded logical topic and error class.",
+		}, []string{"topic", "error_class"}),
+		markPublishedFailures: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "midas_outbox_mark_published_failures_total",
+			Help: "Total number of mark-published failures after broker publish acknowledgement.",
+		}),
+		batchSize: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name:    "midas_outbox_batch_size_observed",
+			Help:    "Observed number of rows returned by each outbox claim attempt.",
+			Buckets: outboxBatchSizeBuckets,
+		}),
+	}
+	reg.MustRegister(
+		r.claimDuration,
+		r.publishDuration,
+		r.markPublishedDuration,
+		r.claimed,
+		r.published,
+		r.publishFailures,
+		r.markPublishedFailures,
+		r.batchSize,
+	)
+	return r
+}
+
+func (r *outboxDispatchRecorder) RecordClaimDuration(d time.Duration) {
+	r.claimDuration.Observe(d.Seconds())
+}
+
+func (r *outboxDispatchRecorder) RecordPublishDuration(topic string, d time.Duration) {
+	r.publishDuration.WithLabelValues(topic).Observe(d.Seconds())
+}
+
+func (r *outboxDispatchRecorder) RecordMarkPublishedDuration(d time.Duration) {
+	r.markPublishedDuration.Observe(d.Seconds())
+}
+
+func (r *outboxDispatchRecorder) AddClaimed(n int) {
+	if n <= 0 {
+		return
+	}
+	r.claimed.Add(float64(n))
+}
+
+func (r *outboxDispatchRecorder) AddPublished(n int) {
+	if n <= 0 {
+		return
+	}
+	r.published.Add(float64(n))
+}
+
+func (r *outboxDispatchRecorder) IncrementPublishFailure(topic string, errorClass string) {
+	r.publishFailures.WithLabelValues(topic, errorClass).Inc()
+}
+
+func (r *outboxDispatchRecorder) IncrementMarkPublishedFailure() {
+	r.markPublishedFailures.Inc()
+}
+
+func (r *outboxDispatchRecorder) ObserveBatchSize(n int) {
+	if n < 0 {
+		return
+	}
+	r.batchSize.Observe(float64(n))
+}
+
+var _ dispatch.Recorder = (*outboxDispatchRecorder)(nil)
 
 // ---------------------------------------------------------------------------
 // Database pool collector
