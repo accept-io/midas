@@ -1,6 +1,6 @@
 # Performance — reference inline-evaluation benchmarks
 
-This document describes the reference benchmarks for the inline `/v1/evaluate` path. They exist to give operators and contributors a reproducible way to measure latency, throughput, and tail behaviour against a real Postgres backend before making any tier-readiness claim.
+This document describes the reference benchmarks for the inline `/v1/evaluate` path. They exist to give operators and contributors a reproducible way to measure latency, throughput, and tail behaviour against a real Postgres backend before making any readiness-level claim.
 
 Two benchmarks live in the repo:
 
@@ -9,7 +9,7 @@ Two benchmarks live in the repo:
 | `BenchmarkInlineEvaluate_Postgres` | `internal/decision` | core orchestrator + Postgres transaction path | HTTP, auth, middleware, JSON encode/decode |
 | `BenchmarkHTTPInlineEvaluate_Postgres` | `internal/httpapi` | full `/v1/evaluate` API path | external network, ingress, TLS, real deployment topology |
 
-Neither benchmark proves bank-Tier-1 readiness on its own. Both measure relative behaviour on the local hardware they run on. See "Important caveats" at the end of this document.
+Neither benchmark proves Bank Tier 1 readiness on its own. Both measure relative behaviour on the local hardware they run on. See "Important caveats" at the end of this document.
 
 ## `BenchmarkInlineEvaluate_Postgres` — direct orchestrator path
 
@@ -217,7 +217,9 @@ The harness:
 - scrapes `/metrics` for evaluation, transaction-stage, pool, and outbox backlog signals;
 - samples safe Postgres views such as `pg_stat_activity`, `pg_stat_database`,
   `pg_locks`, `pg_stat_bgwriter`, and `pg_stat_wal` when available;
-- emits newline-delimited JSON interval reports plus a final summary.
+- emits newline-delimited JSON interval reports plus a final summary, including
+  `p50`, `p95`, `p99`, `p999`, `max`, the latency sample count, and a p999
+  confidence label.
 
 Example local run:
 
@@ -242,6 +244,19 @@ Use `-token` when the target server runs with `MIDAS_AUTH_MODE=required`.
 Use `-rate` to impose a client-side request-rate cap. The JSON output keeps
 request latency, MIDAS metrics, and Postgres telemetry in separate fields so
 operators can avoid blending client observations with database-native signals.
+
+The sustained-load harness sorts observed request durations and selects
+percentiles with the existing floor-index convention: `idx = p * (n-1)`,
+clamped to the sample bounds. The `p999_confidence` field is deliberately
+plain-language:
+
+- fewer than 1,000 samples: p999 is low-confidence and not meaningful;
+- 1,000 to 9,999 samples: p999 is directional and tail-sensitive;
+- 10,000 or more samples: p999 is more useful, but still environment-specific.
+
+For p999 evidence, prefer at least a 5-minute target-shaped run. Shorter local
+runs can validate harness behaviour and find obvious tail problems, but should
+not be treated as readiness evidence for a real deployment.
 
 Interpretation guide:
 
@@ -269,9 +284,13 @@ Do **not** use them to:
 
 - claim p99 numbers in customer-facing materials,
 - size a production deployment without re-running on production-shaped infrastructure,
-- make tier-readiness claims on their own.
+- make readiness-level claims on their own.
 
-Capture benchmark results on at least one production-shaped staging environment before promoting MIDAS to Tier 1 or Tier 2.
+For Level 2, Docker/Postgres load evidence can be valid when Docker/Postgres is
+the intended recoverable production deployment shape and the other Level 2
+controls are in place. Capture benchmark results on production-shaped staging
+infrastructure before using them for Level 3 or higher claims, or whenever the
+target deployment differs from the local Docker/Postgres shape.
 
 ## Changing the matrix
 

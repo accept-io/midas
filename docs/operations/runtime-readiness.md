@@ -2,7 +2,7 @@
 
 **Audience**: platform operators evaluating MIDAS for a controlled pilot or progressing it toward production runtime governance.
 
-**Status**: controlled pilot readiness foundation — *not* bank Tier 1 ready.
+**Status**: controlled pilot readiness foundation — *not* Bank Tier 1 ready.
 
 This guide is a practical reference for the runtime controls MIDAS exposes today, how to interpret its metrics and benchmarks, and how to operate it during common incidents. It is not a HA architecture document and not a production certification document.
 
@@ -33,15 +33,22 @@ For deeper architectural context see [docs/architecture/architecture.md](../arch
 
 ## 2. Current readiness statement
 
-> MIDAS now has bounded Postgres connection-pool controls, Prometheus runtime metrics, HTTP panic recovery, a configurable per-handler timeout, and local reference benchmarks for both the direct orchestrator path and the full HTTP `/v1/evaluate` path. This supports controlled pilot evaluation and operational characterisation. **It does not establish bank Tier 1 readiness.**
+> MIDAS now has bounded Postgres connection-pool controls, Prometheus runtime metrics, HTTP panic recovery, a configurable per-handler timeout, and local reference benchmarks for both the direct orchestrator path and the full HTTP `/v1/evaluate` path. This supports controlled pilot evaluation and recoverable production-readiness assessment for single-node Docker/Postgres deployments when the Level 2 evidence pack is executed for that deployment shape. **It does not establish Bank Tier 1 readiness.**
 
 | Aspect | State |
 |---|---|
-| Current status | controlled pilot readiness foundation |
+| Current status | controlled pilot readiness foundation; repository-level Level 2 evidence path for recoverable Docker/Postgres deployments |
+| Single-node Docker/Postgres recoverable production | supported when auth, persistent storage, monitoring/alerts, backup/restore, audit verification, operational ownership, and accepted recovery posture are in place |
 | Single-replica Postgres-backed deployment | supported |
 | Multi-replica scaling against shared Postgres | unverified |
 | Failover / RPO / RTO evidence | none |
 | Active-active / regional resilience | not designed |
+
+Production capability is deployment-shape specific. A single-node
+Docker/Postgres deployment can be production-capable for recoverable workloads
+when authentication, persistent storage, backup/restore, monitoring, and
+operational ownership are in place. It is not HA and must not be described as
+Bank Tier 1 ready.
 
 ---
 
@@ -58,9 +65,15 @@ Bank service tiers, with indicative requirements:
 
 MIDAS today:
 
-- **Tier 3 evaluation appropriate** for inline `/v1/evaluate` use in a single-replica Postgres-backed pilot deployment where breaks are recoverable.
-- **Tier 1 inline use is not yet supported.** The operational evidence required (failover testing, RPO/RTO measurement, active-active design, end-to-end topology benchmarks) has not been produced.
-- **Drift analytics must not be computed on the inline path** for Tier 1 services. Inline evaluation must remain bounded, deterministic, and low-latency. See §12.
+- **Level 2 recoverable production inline can be appropriate** for Bank Tier 4,
+  low-criticality, or comparable non-critical internal workloads where the
+  business accepts single-node recovery.
+- **Bank Tier 3 use depends on impact and recovery tolerance.** Level 2 may be
+  appropriate for recoverable flows; Level 3 is the stronger target when the
+  workflow is material enough to require multi-replica validation, failover
+  drills, stronger p999 evidence, and migration rehearsal.
+- **Bank Tier 1 inline use is not yet supported.** The operational evidence required (failover testing, RPO/RTO measurement, active-active design, end-to-end topology benchmarks) has not been produced.
+- **Drift analytics must not be computed on the inline path** for Bank Tier 1 services. Inline evaluation must remain bounded, deterministic, and low-latency. See §12.
 
 ---
 
@@ -234,10 +247,15 @@ Each sub-benchmark reports (in addition to standard `ns/op`, `B/op`, `allocs/op`
 
 | Reported | Meaning |
 |---|---|
-| `p50_us`, `p95_us`, `p99_us` | Per-evaluation (or per-request) latency percentiles in microseconds, nearest-rank. |
+| `p50_us`, `p95_us`, `p99_us` | Per-evaluation (or per-request) latency percentiles in microseconds for benchmark tests. |
 | `max_us` | Worst observed latency. Noisy; useful only when it diverges from p99 by more than ~5×. |
 | `ops/sec` | Sustained throughput across the goroutine pool. |
 | `errors` | Non-200 responses (HTTP) or evaluation errors (direct). Benchmark `b.Fatalf`s if non-zero. |
+
+The sustained-load harness in `cmd/midas-loadtest` reports p999 as well as
+p50/p95/p99, the latency sample count, and a p999 confidence label. Treat p999
+as useful only when the run has enough samples and the environment is
+representative of the target deployment.
 
 ### Why benchtime matters
 
@@ -418,12 +436,19 @@ This section answers a single question: **for a service of a given tier, can MID
 
 ### Decision aid by service tier
 
+The tiers in this table are external bank service criticality tiers, not MIDAS
+readiness levels. Read "supported" here as structurally supportable for
+recoverable inline use after the applicable MIDAS readiness evidence exists.
+For Bank Tier 4 or comparable low-criticality production workloads, that
+evidence can be MIDAS Level 2. For Bank Tier 3, Level 2 or Level 3 depends on
+impact and recovery tolerance. Bank Tier 1 remains advisory-only today.
+
 | Tier | Inline `/v1/evaluate` today | Notes |
 |---|---|---|
 | **Tier 4** (low criticality / non-core) | ✅ Supported | F1's explicit fail-closed semantics are sufficient. Brief inability to make a governed decision is recoverable; ungoverned decisions are not desired. |
 | **Tier 3** (important but recoverable) | ✅ Supported | F1's class-aware status mapping plus the `audit_status` marker plus the chunk-1 audit trail give an operator the signals they need to triage and recover. The narrow fail-open exception (below) is documented and bounded. |
 | **Tier 2** (material service impact, strong recovery expected) | ⚠️ Conditional | Supported where the business process tolerates *brief* fail-closed behaviour during dependency outages. Run a controlled pilot first; characterise recovery time empirically against your Postgres topology before promoting. |
-| **Tier 1** (highest criticality; breaks intolerable) | ❌ Not yet | Per-surface FailModePolicy and explicit audit-chain encoding of governed degraded outcomes are shipped (see §11.5), but Tier 1 inline use also requires active-active / multi-region resilience, RPO < 1 minute / RTO < 2 hours, and failover-performance evidence — none of which MIDAS provides today. Run MIDAS in **advisory** mode for Tier 1 flows: the caller logs the request, calls MIDAS asynchronously, and reconciles outcomes out of band. |
+| **Bank Tier 1** (highest criticality; breaks intolerable) | ❌ Not yet | Per-surface FailModePolicy and explicit audit-chain encoding of governed degraded outcomes are shipped (see §11.5), but Bank Tier 1 inline use also requires active-active / multi-region resilience, RPO < 1 minute / RTO < 2 hours, and failover-performance evidence — none of which MIDAS provides today. Run MIDAS in **advisory** mode for Bank Tier 1 flows: the caller logs the request, calls MIDAS asynchronously, and reconciles outcomes out of band. |
 
 **F1 makes Tier 3 inline genuinely supported.** The previous "wait for the fail-mode design tranche" framing is no longer accurate — F1 *is* the fail-mode design tranche, and it ships. Tier 1 still requires further work; Tier 2 is a tier where pilot evidence (not policy gaps) is the gating constraint.
 
@@ -644,7 +669,7 @@ Concretely:
 - **Do** read precomputed signals (e.g. a precomputed risk flag keyed by surface or agent) on the inline path, *only if* the lookup is a single indexed read.
 - **Do** build drift analytics as a downstream consumer of the outbox stream or as a periodic batch over `audit_events` / `operational_envelopes`. Write the resulting flags back where the inline path can index-lookup them.
 
-The current MIDAS inline path honours this principle: every step is a primary-key read, a SHA-256, or a small SQL write inside a single transaction. That posture is the foundation for any tier-readiness claim and must be preserved.
+The current MIDAS inline path honours this principle: every step is a primary-key read, a SHA-256, or a small SQL write inside a single transaction. That posture is the foundation for any readiness-level claim and must be preserved.
 
 ---
 
@@ -661,8 +686,10 @@ A practical pre-promotion checklist for a controlled pilot:
 - [ ] `/metrics` scraped by Prometheus (or the deployment's metrics pipeline). Endpoint protected at the network/ingress layer.
 - [ ] `MIDAS_HTTP_HANDLER_TIMEOUT` set (default `30s` is appropriate for most pilots).
 - [ ] Structured logs collected; alerting on `midas_http_panic_recovered` (any rate > 0) and `evaluation_failed` (rate threshold).
-- [ ] Postgres backup procedure documented and tested.
-- [ ] Audit-chain verification plan documented (see §10).
+- [ ] Postgres backup/restore drill documented and tested (see
+      [backup-restore.md](backup-restore.md)).
+- [ ] Audit-chain verification plan documented (see §10 and
+      [backup-restore.md](backup-restore.md)).
 - [ ] At least one benchmark run on target-shaped infrastructure before promoting traffic; results captured.
 - [ ] Operational owner and on-call rotation assigned.
 - [ ] Fail-mode policy explicitly agreed for this deployment (see §11). For high-criticality flows, advisory-only is the safe default.
@@ -673,6 +700,11 @@ A practical pre-promotion checklist for a controlled pilot:
 
 **Can claim today** (under the operational caveats in this guide):
 
+- Repository-level Level 2 evidence path for a single-node Docker/Postgres
+  recoverable-inline deployment shape, covering alerts/runbooks,
+  backup/restore and audit verification, p999-capable sustained-load tooling,
+  and outbox dispatcher mechanics when the D40 evidence pack is executed for
+  the target deployment or an accepted equivalent environment.
 - Bounded Postgres connection-pool controls, with safe defaults and validation.
 - Prometheus runtime metrics for the inline evaluation and transaction paths, with low-cardinality labels.
 - HTTP panic recovery: 500 + JSON error body on any handler panic.
@@ -686,6 +718,9 @@ A practical pre-promotion checklist for a controlled pilot:
 **Cannot claim yet**:
 
 - Bank Tier 1 readiness for inline use.
+- Deployment-level Level 2 for a specific environment unless the required
+  evidence pack has been run successfully there or in an accepted equivalent
+  environment.
 - Active-active multi-region support.
 - RPO < 1 minute or RTO < 2 hours.
 - 99.95% availability under measurement.

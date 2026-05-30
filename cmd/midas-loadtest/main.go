@@ -62,12 +62,14 @@ type result struct {
 }
 
 type latencySummary struct {
-	Count  int           `json:"count"`
-	P50    time.Duration `json:"p50"`
-	P95    time.Duration `json:"p95"`
-	P99    time.Duration `json:"p99"`
-	Max    time.Duration `json:"max"`
-	Errors int64         `json:"errors"`
+	Count          int           `json:"count"`
+	P50            time.Duration `json:"p50"`
+	P95            time.Duration `json:"p95"`
+	P99            time.Duration `json:"p99"`
+	P999           time.Duration `json:"p999"`
+	P999Confidence string        `json:"p999_confidence"`
+	Max            time.Duration `json:"max"`
+	Errors         int64         `json:"errors"`
 }
 
 type intervalReport struct {
@@ -77,6 +79,8 @@ type intervalReport struct {
 	Successes   int64              `json:"successes"`
 	Errors      int64              `json:"errors"`
 	OpsPerSec   float64            `json:"ops_per_sec"`
+	LatencyN    int                `json:"latency_samples"`
+	P999Quality string             `json:"p999_confidence"`
 	LatencyMS   map[string]float64 `json:"latency_ms"`
 	Metrics     map[string]float64 `json:"midas_metrics,omitempty"`
 	Postgres    map[string]float64 `json:"postgres,omitempty"`
@@ -314,17 +318,20 @@ func emitReport(ctx context.Context, w io.Writer, db *sql.DB, client *http.Clien
 	metrics, metricsErr := scrapeMetrics(ctx, client, cfg.MetricsURL)
 	pg, pgErr := collectPostgresTelemetry(ctx, db)
 	report := intervalReport{
-		Kind:       kind,
-		ElapsedSec: elapsed,
-		Requests:   int(successes + errs),
-		Successes:  successes,
-		Errors:     errs,
-		OpsPerSec:  float64(successes) / elapsed,
+		Kind:        kind,
+		ElapsedSec:  elapsed,
+		Requests:    int(successes + errs),
+		Successes:   successes,
+		Errors:      errs,
+		OpsPerSec:   float64(successes) / elapsed,
+		LatencyN:    summary.Count,
+		P999Quality: summary.P999Confidence,
 		LatencyMS: map[string]float64{
-			"p50": toMillis(summary.P50),
-			"p95": toMillis(summary.P95),
-			"p99": toMillis(summary.P99),
-			"max": toMillis(summary.Max),
+			"p50":  toMillis(summary.P50),
+			"p95":  toMillis(summary.P95),
+			"p99":  toMillis(summary.P99),
+			"p999": toMillis(summary.P999),
+			"max":  toMillis(summary.Max),
 		},
 		Metrics:  metrics,
 		Postgres: pg,
@@ -479,12 +486,25 @@ func summarize(durations []time.Duration, errs int64) latencySummary {
 		return sorted[idx]
 	}
 	return latencySummary{
-		Count:  len(sorted),
-		P50:    pick(0.50),
-		P95:    pick(0.95),
-		P99:    pick(0.99),
-		Max:    sorted[len(sorted)-1],
-		Errors: errs,
+		Count:          len(sorted),
+		P50:            pick(0.50),
+		P95:            pick(0.95),
+		P99:            pick(0.99),
+		P999:           pick(0.999),
+		P999Confidence: p999Confidence(len(sorted)),
+		Max:            sorted[len(sorted)-1],
+		Errors:         errs,
+	}
+}
+
+func p999Confidence(samples int) string {
+	switch {
+	case samples < 1000:
+		return "low: fewer than 1000 samples; p999 is not meaningful"
+	case samples < 10000:
+		return "directional: 1000-9999 samples; p999 is tail-sensitive"
+	default:
+		return "useful: 10000+ samples; still environment-specific"
 	}
 }
 

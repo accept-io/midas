@@ -61,7 +61,7 @@ go_goroutines 12
 	}
 }
 
-func TestSummarizeLatency(t *testing.T) {
+func TestSummarizeLatency_IncludesP999AndConfidence(t *testing.T) {
 	got := summarize([]time.Duration{
 		10 * time.Millisecond,
 		20 * time.Millisecond,
@@ -69,8 +69,27 @@ func TestSummarizeLatency(t *testing.T) {
 		40 * time.Millisecond,
 		50 * time.Millisecond,
 	}, 2)
-	if got.Count != 5 || got.P50 != 30*time.Millisecond || got.P95 != 40*time.Millisecond || got.P99 != 40*time.Millisecond || got.Max != 50*time.Millisecond || got.Errors != 2 {
+	if got.Count != 5 || got.P50 != 30*time.Millisecond || got.P95 != 40*time.Millisecond || got.P99 != 40*time.Millisecond || got.P999 != 40*time.Millisecond || got.Max != 50*time.Millisecond || got.Errors != 2 {
 		t.Fatalf("unexpected summary: %#v", got)
+	}
+	if !strings.HasPrefix(got.P999Confidence, "low:") {
+		t.Fatalf("unexpected p999 confidence: %q", got.P999Confidence)
+	}
+}
+
+func TestP999ConfidenceThresholds(t *testing.T) {
+	for _, tc := range []struct {
+		samples int
+		prefix  string
+	}{
+		{samples: 999, prefix: "low:"},
+		{samples: 1000, prefix: "directional:"},
+		{samples: 9999, prefix: "directional:"},
+		{samples: 10000, prefix: "useful:"},
+	} {
+		if got := p999Confidence(tc.samples); !strings.HasPrefix(got, tc.prefix) {
+			t.Fatalf("p999Confidence(%d)=%q, want prefix %q", tc.samples, got, tc.prefix)
+		}
 	}
 }
 

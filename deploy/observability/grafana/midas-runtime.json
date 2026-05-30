@@ -1,0 +1,192 @@
+{
+  "uid": "midas-runtime",
+  "title": "MIDAS Runtime",
+  "tags": ["midas", "runtime", "governance"],
+  "schemaVersion": 37,
+  "version": 1,
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "label": "Datasource",
+        "current": { "selected": true, "text": "Prometheus", "value": "Prometheus" },
+        "hide": 0
+      }
+    ]
+  },
+  "annotations": { "list": [] },
+  "panels": [
+
+    {
+      "id": 100, "type": "row", "title": "1. Evaluation overview",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }, "collapsed": false
+    },
+    {
+      "id": 101, "type": "timeseries", "title": "Evaluation latency p50 / p95 / p99",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["max"] } },
+      "targets": [
+        { "refId": "p50", "expr": "histogram_quantile(0.50, sum by (le) (rate(midas_evaluation_duration_seconds_bucket[5m])))", "legendFormat": "p50" },
+        { "refId": "p95", "expr": "histogram_quantile(0.95, sum by (le) (rate(midas_evaluation_duration_seconds_bucket[5m])))", "legendFormat": "p95" },
+        { "refId": "p99", "expr": "histogram_quantile(0.99, sum by (le) (rate(midas_evaluation_duration_seconds_bucket[5m])))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "id": 102, "type": "timeseries", "title": "Outcomes (req/s by outcome)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] } },
+      "targets": [
+        { "refId": "A", "expr": "sum by (outcome) (rate(midas_evaluation_outcomes_total[5m]))", "legendFormat": "{{outcome}}" }
+      ]
+    },
+
+    {
+      "id": 200, "type": "row", "title": "2. Transaction stages",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 }, "collapsed": false
+    },
+    {
+      "id": 201, "type": "timeseries", "title": "Transaction stage p99 latency (by stage)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["max"] } },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.99, sum by (le, stage) (rate(midas_store_transaction_stage_duration_seconds_bucket{result=\"commit\"}[5m])))", "legendFormat": "{{stage}}" }
+      ]
+    },
+    {
+      "id": 202, "type": "timeseries", "title": "Transaction commits / rollbacks / errors (req/s)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] } },
+      "targets": [
+        { "refId": "commits", "expr": "sum(rate(midas_store_transaction_commits_total[5m]))", "legendFormat": "commits" },
+        { "refId": "rollbacks", "expr": "sum(rate(midas_store_transaction_rollbacks_total[5m]))", "legendFormat": "rollbacks" },
+        { "refId": "errors_begin", "expr": "sum(rate(midas_store_transaction_errors_total{stage=\"begin\"}[5m]))", "legendFormat": "errors:begin" },
+        { "refId": "errors_commit", "expr": "sum(rate(midas_store_transaction_errors_total{stage=\"commit\"}[5m]))", "legendFormat": "errors:commit" },
+        { "refId": "errors_panic", "expr": "sum(rate(midas_store_transaction_errors_total{stage=\"panic\"}[5m]))", "legendFormat": "errors:panic" }
+      ]
+    },
+
+    {
+      "id": 300, "type": "row", "title": "3. Postgres connection pool",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 }, "collapsed": false
+    },
+    {
+      "id": 301, "type": "timeseries", "title": "Pool connections (open / in-use / idle / max)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 19 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["max"] } },
+      "targets": [
+        { "refId": "open",   "expr": "sum(midas_database_pool_open_connections)",   "legendFormat": "open" },
+        { "refId": "in_use", "expr": "sum(midas_database_pool_in_use_connections)", "legendFormat": "in-use" },
+        { "refId": "idle",   "expr": "sum(midas_database_pool_idle_connections)",   "legendFormat": "idle" },
+        { "refId": "max",    "expr": "sum(midas_database_pool_max_open_connections)", "legendFormat": "max" }
+      ]
+    },
+    {
+      "id": 302, "type": "timeseries", "title": "Pool wait (count rate, duration rate)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 19 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] } },
+      "targets": [
+        { "refId": "wait_count",   "expr": "sum(rate(midas_database_pool_wait_count_total[5m]))",            "legendFormat": "wait count rate (waits/s)" },
+        { "refId": "wait_seconds", "expr": "sum(rate(midas_database_pool_wait_duration_seconds_total[5m]))", "legendFormat": "wait duration rate (sec/s)" }
+      ]
+    },
+
+    {
+      "id": 400, "type": "row", "title": "4. Transactional outbox",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 }, "collapsed": false
+    },
+    {
+      "id": 401, "type": "stat", "title": "Outbox unpublished (count)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 28 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 100 },
+            { "color": "red", "value": 1000 }
+          ] }
+        }, "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "background" },
+      "targets": [ { "refId": "A", "expr": "midas_outbox_unpublished_total" } ]
+    },
+    {
+      "id": 402, "type": "stat", "title": "Outbox oldest unpublished age",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 28 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 300 },
+            { "color": "red", "value": 1800 }
+          ] }
+        }, "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "background" },
+      "targets": [ { "refId": "A", "expr": "midas_outbox_oldest_unpublished_age_seconds" } ]
+    },
+    {
+      "id": 403, "type": "timeseries", "title": "Outbox stats collection errors (rate)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 28 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [ { "refId": "A", "expr": "sum(rate(midas_outbox_stats_collection_errors_total[5m]))", "legendFormat": "errors/s" } ]
+    },
+
+    {
+      "id": 500, "type": "row", "title": "5. Failure breakdown",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 36 }, "collapsed": false
+    },
+    {
+      "id": 501, "type": "timeseries", "title": "Failures by correctness_class (req/s)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 37 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] } },
+      "targets": [ { "refId": "A", "expr": "sum by (correctness_class) (rate(midas_evaluation_failures_total[5m]))", "legendFormat": "{{correctness_class}}" } ]
+    },
+    {
+      "id": 502, "type": "timeseries", "title": "Failures by failure_kind (req/s)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 37 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] } },
+      "targets": [ { "refId": "A", "expr": "sum by (failure_kind) (rate(midas_evaluation_failures_total[5m]))", "legendFormat": "{{failure_kind}}" } ]
+    },
+
+    {
+      "id": 600, "type": "row", "title": "6. Handler safety (log-derived signals)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 45 }, "collapsed": false
+    },
+    {
+      "id": 601, "type": "text", "title": "Handler-safety alerting requires a log→metric pipeline",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 46 },
+      "options": {
+        "mode": "markdown",
+        "content": "### Handler-safety signals are log events, not Prometheus metrics\n\nThe MIDAS runtime emits two operator-critical events via structured logs only:\n\n- `midas_http_panic_recovered` (ERROR) — a handler panic was recovered; **always a defect**.\n- `midas_http_timeout` (WARN) — a request exceeded `MIDAS_HTTP_HANDLER_TIMEOUT`; leading indicator of saturation.\n\nTo dashboard or alert on these, wire a log→metric pipeline (Loki recording rule, Vector + Prometheus exporter, Datadog log parser, etc.) and create derived metrics, e.g. `midas_log_http_panic_recovered_total`, `midas_log_http_timeout_total`.\n\nThe `transactions:errors:panic` series in **section 2** provides **partial** coverage: panics inside the transaction wrapper land there. Panics in pre-orchestrator middleware (auth, JSON decode) do not.\n\nSee [`runtime-readiness.md` §9 D/E](../../docs/operations/runtime-readiness.md) and the commented templates at the end of [`deploy/observability/prometheus/rules.yaml`](../prometheus/rules.yaml)."
+      }
+    }
+  ]
+}

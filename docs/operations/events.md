@@ -411,6 +411,25 @@ The following environment variables control outbox dispatch.
 - `MIDAS_DISPATCHER_ENABLED=true` + no publisher or `publisher=none`: MIDAS fails at startup.
 - `MIDAS_DISPATCHER_ENABLED=true` + `publisher=kafka` + empty `MIDAS_KAFKA_BROKERS`: MIDAS fails at startup.
 
+### Local Docker/Postgres validation
+
+The repository's Docker/Postgres environment can validate the transactional
+outbox repository and dispatcher mechanics without adding a local broker. The
+integration test below uses the real Postgres `outbox_events` table and an
+in-process publisher that acknowledges messages immediately:
+
+```bash
+docker compose up -d postgres
+
+DATABASE_URL="postgresql://midas:midas@127.0.0.1:5432/midas?sslmode=disable" \
+  go test ./internal/store/postgres -run "OutboxDispatcher|Outbox|Store|Transaction" -count=1
+```
+
+This proves that unpublished rows can be claimed, passed to a publisher, marked
+published, and drained after dispatcher restart. It does not prove Kafka
+availability, broker acknowledgement behaviour, consumer idempotency,
+multi-dispatcher safety, or Kubernetes leader election.
+
 ---
 
 ## Consumer guidance

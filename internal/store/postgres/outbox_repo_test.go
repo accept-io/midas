@@ -439,13 +439,16 @@ func TestOutboxRepo_ClaimUnpublished_OrderedByCreatedAtThenID(t *testing.T) {
 
 	ev1 := mustNewOutboxEvent(t, outbox.EventDecisionCompleted, "envelope", "claim-order-1", "midas.decisions", "k1", json.RawMessage(`{}`))
 	ev2 := mustNewOutboxEvent(t, outbox.EventDecisionEscalated, "envelope", "claim-order-2", "midas.decisions", "k2", json.RawMessage(`{}`))
+	ev2.CreatedAt = ev1.CreatedAt.Add(time.Millisecond)
 
 	t.Cleanup(func() {
 		cleanupOutboxEventByID(t, ev1.ID)
 		cleanupOutboxEventByID(t, ev2.ID)
 	})
 
-	// Insert in order; created_at will be slightly different due to time.Now().
+	// Insert in order with deterministic created_at values. If the timestamps
+	// collapse to the same database precision, the repo correctly falls back to
+	// ordering by ID, which would make this fixture nondeterministic.
 	if err := repo.Append(ctx, ev1); err != nil {
 		t.Fatalf("Append ev1: %v", err)
 	}

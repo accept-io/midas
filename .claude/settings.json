@@ -704,10 +704,17 @@
       "Bash(awk '$1==\"D\"')",
       "Bash(awk -F/ '{print $1\"/\"$2}')",
       "Bash(curl -s --max-time 5 http://localhost:8080/readyz)",
-      "Bash(curl -s -X POST http://localhost:8080/v1/evaluate -H 'Content-Type: application/json' -d '{ *)"
+      "Bash(curl -s -X POST http://localhost:8080/v1/evaluate -H 'Content-Type: application/json' -d '{ *)",
+      "Bash(mkdir -p deploy/observability/prometheus deploy/observability/grafana && ls deploy/observability/)",
+      "Bash(command -v promtool)",
+      "Bash(cp /tmp/d40k_lint_test.go internal/httpapi/_d40k_lint_tmp/lint_test.go)",
+      "Bash(sed -i 's|package httpapi_test|package d40k_lint_tmp|' internal/httpapi/_d40k_lint_tmp/lint_test.go)",
+      "Bash(command -v pg_dump)",
+      "Bash(command -v psql)"
     ],
     "additionalDirectories": [
-      "\\tmp"
+      "\\tmp",
+      "C:\\Users\\phil\\dev\\accept\\midas\\deploy\\observability"
     ]
   }
 }

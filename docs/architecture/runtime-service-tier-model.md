@@ -54,12 +54,20 @@ not replace bank service criticality tiers. When this document refers to Bank
 Tier 1, Bank Tier 2, or Bank Tier 3 services, it is mapping MIDAS use to an
 external business criticality model.
 
+Level 2 is a production-capable readiness level for recoverable workloads. It
+does not require Kubernetes, managed Postgres, multi-replica deployment, or
+active-active resilience. A single-node Docker/Postgres deployment can satisfy
+Level 2 when the workload is recoverable, Postgres data is persisted,
+authentication is enabled, monitoring and alerting are configured,
+backup/restore has been tested, audit verification is available, and the
+business accepts the recovery posture.
+
 | MIDAS readiness level | Name | Meaning |
 |---|---|---|
 | Level 0 | Local/demo | Local development, demo data, memory or local Postgres, not production. |
 | Level 1 | Controlled pilot | Authenticated, Postgres-backed, bounded deployment for recoverable workloads. |
-| Level 2 | Recoverable inline | Inline use for important but recoverable workloads with monitoring and runbooks. |
-| Level 3 | Material-service inline | Conditional inline use for material services with stronger performance, failover, backup, and operational evidence. |
+| Level 2 | Recoverable production inline | Recoverable production inline use for low-criticality or recoverable workloads, including controlled single-node Docker/Postgres deployments. |
+| Level 3 | Material-service inline | Conditional inline use for material services with multi-replica validation, stronger p999, failover/restore, dispatcher HA/replay, migration, and operational evidence. |
 | Level 4 | Critical-service advisory | Highest-criticality services may use MIDAS only in advisory, asynchronous, or reconciliation mode. |
 | Level 5 | Critical-service inline candidate | Architecture and controls are plausibly capable of highest-criticality inline use, but validation is incomplete. |
 | Level 6 | Critical-service inline proven | Fully evidenced for highest-criticality inline use on target-shaped infrastructure. |
@@ -74,7 +82,8 @@ them interchangeably.
 |---|---|---|
 | Bank Tier 1, for example payments execution | Level 4 advisory only today. Inline use is not currently a MIDAS claim. | Level 6 is required before a Bank Tier 1 service can claim inline-proven use: target-shaped p95/p99/p999, HA/failover, RPO/RTO, audit restore verification, idempotency after failover, backpressure, runbooks, security sign-off, and operational drills. |
 | Bank Tier 2, for example a material commercial lending workflow | Level 3 only after required evidence. | Multi-replica validation, failover evidence, p999 measurement, restore drills, migration rehearsal, and runbooks for unknown outcomes. |
-| Bank Tier 3, for example important but recoverable customer onboarding | Level 2 or Level 3 depending on impact and recovery tolerance. | Sustained load, alerting, backup/restore, audit verification, and fail-mode approval for the specific flow. |
+| Bank Tier 3, for example important but recoverable customer onboarding | Level 2 or Level 3 depending on impact and recovery tolerance. Level 2 is appropriate only when fail-closed/manual recovery posture is accepted. | Sustained load, alerting, backup/restore, audit verification, outbox posture, and fail-mode approval for the specific flow; Level 3 evidence when material-service controls are required. |
+| Bank Tier 4 or comparable low-criticality recoverable production workloads | Level 2 recoverable inline may be appropriate when the single-node or equivalent recovery posture is accepted. | Auth, persistent Postgres/storage, monitoring and alerts, tested backup/restore, audit verification, operational ownership, and accepted recovery expectations. |
 | Operational reporting | Explorer/read-model use, not runtime inline. | Read isolation, query limits, projection freshness, and access controls before production scale. |
 | Local/demo scenarios | Level 0 only. | None; must not be represented as production evidence. |
 | Explorer-only investigation use | Production-useful only when authenticated and isolated from runtime write pressure. | Read replicas/projections, bounded queries, operator access controls, and freshness signalling. |
@@ -86,7 +95,9 @@ is used to permit action inline.
 
 ## 5. Current MIDAS claim
 
-Current repository posture supports a controlled-pilot foundation.
+Current repository posture supports a controlled-pilot foundation and is being
+advanced toward a repository-level Level 2 evidence pack for the single-node
+Docker/Postgres recoverable-inline deployment shape.
 
 MIDAS can currently claim:
 
@@ -97,18 +108,28 @@ MIDAS can currently claim:
 - runtime metrics for evaluation latency, failures, transaction stages, pool
   pressure, and outbox backlog;
 - documented runtime and Explorer database boundaries;
-- controlled-pilot operational guidance.
+- controlled-pilot operational guidance;
+- a D40 evidence path intended to support repository-level Level 2 validation
+  for Docker/Postgres deployments: alerts/runbooks, backup/restore and audit
+  verification, p999-capable sustained-load tooling, and outbox dispatcher
+  mechanics, when those artefacts are executed successfully for the target
+  deployment shape.
 
 MIDAS cannot currently claim:
 
 - Bank Tier 1 inline readiness for payments or other highest-criticality
   services;
+- deployment-level Level 2 for a specific environment unless the required
+  evidence pack has been run successfully there or in an accepted equivalent
+  environment;
 - active-active readiness;
 - explicit RPO/RTO achievement;
 - production p999 SLO evidence;
 - multi-replica shared-Postgres capacity as proven;
 - database failover behaviour as proven;
-- audit-chain verification after restore as proven;
+- audit-chain verification after restore for a specific deployment unless that
+  restore drill has been run successfully there or in an accepted equivalent
+  environment;
 - zero-downtime migration discipline as proven;
 - Redis/cache readiness for governed runtime truth.
 
@@ -122,7 +143,7 @@ production SLO evidence and must not be used for Bank Tier 1 inline claims.
 |---|---|---|---|
 | Level 0 | Demo/local | No | Responses are for development and demos only. |
 | Level 1 | Controlled pilot inline for recoverable flows | No | Business impact must be recoverable; operators must monitor and retain evidence. |
-| Level 2 | Recoverable inline | No | Inline use requires Postgres, auth, metrics, backup, and runbooks. |
+| Level 2 | Recoverable production inline | No | Single-node Docker/Postgres is acceptable when persistent storage, auth, monitoring/alerts, backup/restore, audit verification, and recovery acceptance are in place. |
 | Level 3 | Conditional inline for material services | No | Requires stronger load, failover, p999, restore, and incident evidence. |
 | Level 4 | Advisory for highest-criticality services | No | MIDAS may advise or reconcile; it must not be the blocking execution authority. |
 | Level 5 | Critical-service inline candidate | No | Candidate posture only; validation gaps remain. |
@@ -138,7 +159,7 @@ be treated as governed inline approval.
 |---|---|---|---|
 | Level 0 | Local smoke run, demo data, basic docs. | Auth, HA, backups, production SLOs. | Developer can run and inspect MIDAS locally. |
 | Level 1 | Postgres backing, auth required, metrics enabled, bounded pilot traffic, local benchmark baseline, basic backup plan, incident owner. | Multi-replica proof, failover proof, p999, active-active. | Controlled pilot can run with recoverable impact and monitored evidence. |
-| Level 2 | Sustained load on target-like single-replica deployment, alerting, runbooks, backup/restore exercise, audit verification plan, outbox backlog handling. | Highest-criticality inline use, active-active, full DR proof. | Important but recoverable inline flow has measured latency and operational response. |
+| Level 2 | Sustained load for the intended deployment shape, including Docker/Postgres when that is the intended production shape; persistent storage; alerting; runbooks; backup/restore exercise; audit verification; outbox posture; operational owner; accepted recovery expectations. | Multi-replica proof, HA/RPO/RTO guarantees, active-active, full DR proof, highest-criticality inline use. | Recoverable production inline flow has measured latency, durable evidence, monitoring, and documented recovery accepted by the business. |
 | Level 3 | Multi-replica shared-Postgres validation, p999 measurement, dispatcher-on tests where used, failover drill, restore drill, migration rehearsal, security review. | Bank Tier 1 inline sign-off and long-running production-like evidence. | Material service can tolerate and recover from proven failure modes. |
 | Level 4 | Advisory contract, reconciliation workflow, evidence review process, delayed-action handling, access controls. | Inline blocking approval for highest-criticality execution. | Highest-criticality service can use MIDAS without depending on it for immediate execution. |
 | Level 5 | HA topology, RPO/RTO target tests, p999 and soak testing, audit restore verification, idempotency under failover, admission control, zero-downtime migration discipline. | Final operational sign-off and repeated production-like drills. | Architecture is a plausible inline candidate, pending proof completion. |
@@ -172,7 +193,7 @@ These are target standards for readiness advancement, not current MIDAS claims.
 |---|---|---|---|---|
 | Level 0 | Best effort | None | None | Local/demo only. |
 | Level 1 | Pilot availability agreed by pilot owner | Documented backup posture | Manual recovery acceptable | Recoverable workload only. |
-| Level 2 | Production-supporting availability target defined by operator | Restore point documented and tested | Recovery runbook tested | Brief fail-closed behaviour acceptable by business agreement. |
+| Level 2 | Recoverable production availability target defined by operator | Restore point documented and tested | Recovery runbook tested | Single-node non-HA posture is acceptable when fail-closed/manual recovery is accepted by the business. |
 | Level 3 | Material-service target, commonly near Bank Tier 2 business expectations | Explicit, tested | Explicit, tested | Failover and restore evidence required. |
 | Level 4 | Advisory path must not block highest-criticality execution | Advisory evidence loss tolerance defined | Reconciliation window defined | MIDAS is not inline authority. |
 | Level 5 | Candidate for highest-criticality target | Near-zero or formally accepted data-loss target | Formal target tested | Must include DB and app failover. |
@@ -185,8 +206,8 @@ Performance evidence must become more realistic as readiness levels advance.
 | Evidence type | Where it fits |
 |---|---|
 | Local smoke benchmark | Level 0 and Level 1 regression signal. |
-| Sustained local load | Level 1 and Level 2 diagnostic signal, not production SLO evidence. |
-| Target-shaped single-replica load | Required before Level 2 inline claims. |
+| Sustained Docker/Postgres load | Level 1 diagnostic signal and Level 2 evidence when Docker/Postgres is the intended single-node deployment shape. |
+| Target-shaped single-replica load | Required before Level 2 inline claims for non-local or non-Docker/Postgres target deployment shapes. |
 | Multi-replica shared-Postgres load | Required before Level 3 and above. |
 | p999 measurement | Required before material-service and critical-service inline candidate claims. |
 | Soak testing | Required before Level 3 and above. |
@@ -317,7 +338,7 @@ Expected artefacts:
 | Advancement | Required proof |
 |---|---|
 | Level 0 to Level 1 | Auth required, Postgres backing, metrics enabled, basic benchmark, bounded pilot scope, operational owner. |
-| Level 1 to Level 2 | Sustained load, runbooks, backup plan, alerting, audit verification plan, outbox backlog response. |
+| Level 1 to Level 2 | Sustained load for the intended deployment shape, persistent storage, runbooks, tested backup/restore, alerting, audit verification, outbox posture, operational owner, and accepted recovery expectations. |
 | Level 2 to Level 3 | Multi-replica validation, p999 measurement, dispatcher HA/replay where used, failover and restore drills, migration rehearsal. |
 | Level 3 to Level 4 | Advisory contract, reconciliation workflow, evidence review, delayed-action handling, access control sign-off. |
 | Level 4 to Level 5 | HA topology, RPO/RTO proof, p999 and soak tests, audit restore verification, idempotency after failover, backpressure, security review. |

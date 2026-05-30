@@ -1,0 +1,476 @@
+# MIDAS runtime Prometheus alerting rules — D40k.
+#
+# Source of truth for the runbook entries these rules implement:
+#   docs/operations/runtime-readiness.md §9 (entries A–H)
+#
+# Source of truth for the canonical metric names used here:
+#   internal/metrics/metrics.go
+#
+# Conventions:
+#   - severity: critical|warning|info
+#   - service: midas
+#   - runbook: link or anchor into runtime-readiness.md §9
+#   - All thresholds below are STARTING DEFAULTS sized off the D38i local
+#     baseline (HTTP p99 ~65ms at concurrency 8, ~239ms at concurrency 16).
+#     Operators MUST re-tune against their own target-shaped baseline before
+#     paging on these in production.
+#
+# Coverage of runbook entries A–H:
+#   A. Evaluation failures rising         → groups: governance_integrity, consistency
+#   B. Evaluation latency rising          → group: latency
+#   C. Transaction rollbacks/errors rising→ group: transaction
+#   D. Handler timeouts                   → group: safety_log_derived (NOT a Prometheus metric today)
+#   E. Panic recovered                    → group: safety_log_derived (NOT a Prometheus metric today)
+#   F. Idempotency conflicts              → group: idempotency
+#   G. Postgres unavailable / readiness   → groups: postgres_unavailable, pool
+#   H. Outbox backlog suspected           → group: outbox
+
+groups:
+
+  # ---------------------------------------------------------------------------
+  # Runbook A — Evaluation failures rising
+  # ---------------------------------------------------------------------------
+  # The MIDAS runtime classifies every typed failure into one of 5
+  # correctness_class values. governance_integrity is the most serious:
+  # the audit substrate could not record the decision. ANY sustained rate
+  # is a page. consistency typically indicates a control-plane regression
+  # after a recent apply.
+
+  - name: midas_runtime_governance_integrity
+    rules:
+      - alert: MIDASGovernanceIntegrityFailure
+        expr: |
+          sum(rate(midas_evaluation_failures_total{correctness_class="governance_integrity"}[5m])) > 0
+        for: 1m
+        labels:
+          severity: critical
+          service: midas
+          runbook: runtime-readiness.md#A-evaluation-failures-rising
+        annotations:
+          summary: "MIDAS governance integrity failure (envelope/audit append failed)"
+          description: |
+            One or more /v1/evaluate calls failed because the audit substrate
+            could not record the decision. The request was not evaluated and no
+            envelope was written. This is always a system issue — never a
+            tuning issue.
+
+            Likely failure_kind: envelope_persistence | audit_append.
+
+            First checks:
+              - /readyz on each replica
+              - midas_store_transaction_errors_total{stage="commit|begin"}
+              - Postgres reachability and disk
+              - Recent control-plane applies
+
+      - alert: MIDASEvaluationFailureRateHigh
+        expr: |
+          (
+            sum(rate(midas_evaluation_failures_total[5m]))
+            /
+            clamp_min(
+              sum(rate(midas_evaluation_outcomes_total[5m]))
+              + sum(rate(midas_evaluation_failures_total[5m])),
+              1
+            )
+          ) > 0.01
+        for: 10m
+        labels:
+          severity: warning
+          service: midas
+          runbook: runtime-readiness.md#A-evaluation-failures-rising
+        annotations:
+          summary: "MIDAS evaluation failure rate >1% over 10m"
+          description: |
+            Sustained non-success rate above 1% across all /v1/evaluate calls.
+            Group on `correctness_class` for a tier-aware first cut:
+              - governance_integrity → system-tier (see critical alert above)
+              - consistency          → control-plane regression
+              - resource             → degradation-eligible dependency outage
+              - input                → client-side defect (see idempotency alert)
+
+  - name: midas_runtime_consistency
+    rules:
+      - alert: MIDASConsistencyFailures
+        expr: |
+          sum(rate(midas_evaluation_failures_total{correctness_class="consistency"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: midas
+          runbook: runtime-readiness.md#A-evaluation-failures-rising
+        annotations:
+          summary: "MIDAS consistency-class failures sustained (possible control-plane regression)"
+          description: |
+            Authority resolution, envelope state transitions, or resolve-review
+            consistency failed. This typically follows a recent control-plane
+            apply. Inspect recent applies; revert the offending change or
+            re-approve the affected resource.
+
+            Likely failure_kind: authority_resolution | invalid_transition |
+            resolve_review.
+
+  # ---------------------------------------------------------------------------
+  # Runbook B — Evaluation latency rising
+  # ---------------------------------------------------------------------------
+  # Tiered alerts on end-to-end latency. Pair with the transaction-stage
+  # alerts (group: transaction) to localise to begin vs callback vs commit.
+
+  - name: midas_runtime_latency
+    rules:
+      - alert: MIDASEvaluationP99LatencyHigh
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (le) (rate(midas_evaluation_duration_seconds_bucket[5m]))
+          ) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+          service: midas
+          runbook: runtime-readiness.md#B-evaluation-latency-rising
+        annotations:
+          summary: "MIDAS /v1/evaluate p99 > 500ms (10m)"
+          description: |
+            End-to-end committed-evaluation p99 above 500ms for 10 minutes.
+            Compare with midas_store_transaction_duration_seconds p99:
+              - both rise together → Postgres / pool pressure
+              - only evaluation rises → application-side
+            Then localise via midas_store_transaction_stage_duration_seconds:
+              - stage=begin rising  → pool acquisition / DB accept / network
+              - stage=commit rising → durable write / WAL / fsync pressure
+            Do NOT raise the handler timeout as a primary fix.
+
+      - alert: MIDASEvaluationP99LatencyCritical
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (le) (rate(midas_evaluation_duration_seconds_bucket[5m]))
+          ) > 2.0
+        for: 5m
+        labels:
+          severity: critical
+          service: midas
+          runbook: runtime-readiness.md#B-evaluation-latency-rising
+        annotations:
+          summary: "MIDAS /v1/evaluate p99 > 2s (5m) — approaching handler timeout"
+          description: |
+            p99 within reach of the default 30s handler timeout means a
+            sustained slowdown is converting fast-fail into slow-fail.
+            Take traffic off the affected replica or scale Postgres.
+
+      - alert: MIDASTransactionCommitP99LatencyHigh
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (le) (
+              rate(
+                midas_store_transaction_stage_duration_seconds_bucket{stage="commit", result="commit"}[5m]
+              )
+            )
+          ) > 0.2
+        for: 10m
+        labels:
+          severity: warning
+          service: midas
+          runbook: runtime-readiness.md#B-evaluation-latency-rising
+        annotations:
+          summary: "MIDAS transaction commit p99 > 200ms (10m)"
+          description: |
+            Postgres durable-commit pressure (WAL/fsync). Cache infrastructure
+            (Redis read models) does not reduce transaction commits, WAL/fsync,
+            audit rows, outbox rows, or envelope writes — address Postgres
+            directly.
+
+  # ---------------------------------------------------------------------------
+  # Runbook C — Transaction rollbacks / errors rising
+  # ---------------------------------------------------------------------------
+  # Commit-stage errors are the most operationally serious; begin-stage
+  # errors usually mean DB/pool/network. Panic stage indicates a code defect.
+
+  - name: midas_runtime_transaction
+    rules:
+      - alert: MIDASTransactionCommitErrors
+        expr: |
+          sum(rate(midas_store_transaction_errors_total{stage="commit"}[5m])) > 0
+        for: 2m
+        labels:
+          severity: critical
+          service: midas
+          runbook: runtime-readiness.md#C-transaction-rollbacks-errors-rising
+        annotations:
+          summary: "MIDAS transaction commit errors observed"
+          description: |
+            Post-decision durable write failed. Governed success was prevented
+            by this — the runtime correctly fails closed, but the affected
+            requests were not evaluated. Likely causes: Postgres disk full,
+            replication conflict, schema drift, recent migration.
+
+      - alert: MIDASTransactionBeginErrors
+        expr: |
+          sum(rate(midas_store_transaction_errors_total{stage="begin"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+          service: midas
+          runbook: runtime-readiness.md#C-transaction-rollbacks-errors-rising
+        annotations:
+          summary: "MIDAS transaction begin errors sustained (pool/network/DB)"
+          description: |
+            Transaction begin is failing. This is upstream of the orchestrator
+            and usually means pool exhaustion, network partition, or Postgres
+            unreachable. Cross-reference with the pool and Postgres-unavailable
+            alerts.
+
+      - alert: MIDASTransactionPanic
+        expr: |
+          sum(rate(midas_store_transaction_errors_total{stage="panic"}[5m])) > 0
+        for: 1m
+        labels:
+          severity: critical
+          service: midas
+          runbook: runtime-readiness.md#E-panic-recovered
+        annotations:
+          summary: "MIDAS transaction panic recovered — always a defect"
+          description: |
+            A panic was recovered inside the transaction wrapper. Always a
+            bug, never an operational tuning issue. Capture the stack from
+            the corresponding evaluation_failed log line and file a defect.
+
+      - alert: MIDASTransactionRollbackDivergence
+        expr: |
+          (
+            sum(rate(midas_store_transaction_rollbacks_total[10m]))
+            -
+            sum(rate(midas_evaluation_failures_total[10m]))
+          ) > 0.1
+        for: 15m
+        labels:
+          severity: warning
+          service: midas
+          runbook: runtime-readiness.md#C-transaction-rollbacks-errors-rising
+        annotations:
+          summary: "MIDAS rollback rate exceeds failure rate (possible missed wrap)"
+          description: |
+            Rollbacks should track the failure-kind counter. Sustained
+            divergence (rollback without a matching failure) suggests a
+            code path is rolling back without going through the typed
+            failure-classification surface. Likely a missed wrap.
+
+  # ---------------------------------------------------------------------------
+  # Runbook G — Postgres unavailable / readiness fails (part 1: pool)
+  # ---------------------------------------------------------------------------
+  # Pool wait pressure is a leading indicator of saturation. Pair with the
+  # transaction-stage alerts to distinguish pool acquisition from WAL/fsync.
+
+  - name: midas_runtime_pool
+    rules:
+      - alert: MIDASPoolWaitPressure
+        expr: |
+          sum(rate(midas_database_pool_wait_count_total[5m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+          service: midas
+          runbook: runtime-readiness.md#B-evaluation-latency-rising
+        annotations:
+          summary: "MIDAS Postgres pool wait observed for 10m"
+          description: |
+            Requests are waiting for a database connection. This places pool
+            acquisition on the latency path. Compare the wait-duration rate
+            with the commit p99 — if commit is flat and waits are rising,
+            pool sizing (not WAL/fsync) is the bottleneck.
+
+      - alert: MIDASPoolSaturation
+        expr: |
+          (
+            avg(midas_database_pool_in_use_connections)
+            /
+            avg(midas_database_pool_max_open_connections)
+          ) > 0.9
+        for: 5m
+        labels:
+          severity: critical
+          service: midas
+          runbook: runtime-readiness.md#G-postgres-unavailable-readiness-fails
+        annotations:
+          summary: "MIDAS Postgres pool >90% utilised for 5m"
+          description: |
+            Pool in-use connections sustained near the configured ceiling.
+            New requests will queue or time out. Apply backpressure upstream,
+            raise MAX_OPEN_CONNS within the capacity rule
+            (replicas × max_open_conns ≤ Postgres max_connections − headroom),
+            or remove a replica to free Postgres connection budget.
+
+  # ---------------------------------------------------------------------------
+  # Runbook G — Postgres unavailable / readiness fails (part 2: failure kind)
+  # ---------------------------------------------------------------------------
+  # envelope_persistence failures are the typed signal that the database
+  # write path is failing. They are governance_integrity class and so the
+  # critical alert above also fires; this alert names the specific kind
+  # for faster triage.
+
+  - name: midas_runtime_postgres_unavailable
+    rules:
+      - alert: MIDASEnvelopePersistenceFailures
+        expr: |
+          sum(rate(midas_evaluation_failures_total{failure_kind="envelope_persistence"}[5m])) > 0
+        for: 2m
+        labels:
+          severity: critical
+          service: midas
+          runbook: runtime-readiness.md#G-postgres-unavailable-readiness-fails
+        annotations:
+          summary: "MIDAS envelope persistence failures (Postgres unavailable / DB write failing)"
+          description: |
+            Envelope writes are failing. /readyz on the affected replica
+            should already be returning 503. Load balancer should be removing
+            the replica from rotation. Verify Postgres reachability and the
+            connection budget; consult the deployment's Postgres failover
+            runbook if appropriate.
+
+      - alert: MIDASAuditAppendFailures
+        expr: |
+          sum(rate(midas_evaluation_failures_total{failure_kind="audit_append"}[5m])) > 0
+        for: 2m
+        labels:
+          severity: critical
+          service: midas
+          runbook: runtime-readiness.md#A-evaluation-failures-rising
+        annotations:
+          summary: "MIDAS audit append failures — tamper-evident chain at risk"
+          description: |
+            The hash-chained audit append failed. Even one is a system issue —
+            the audit chain is the integrity anchor for every governed
+            decision. Confirm the audit_events table is reachable and that
+            no DDL is in progress.
+
+  # ---------------------------------------------------------------------------
+  # Runbook F — Idempotency conflicts
+  # ---------------------------------------------------------------------------
+  # These are client-side defects, not MIDAS issues. They indicate a caller
+  # reusing (request_source, request_id) with a *different* body. Page softly:
+  # a small sustained rate suggests a misbehaving client and warrants
+  # contacting the calling team.
+
+  - name: midas_runtime_idempotency
+    rules:
+      - alert: MIDASIdempotencyConflictsSustained
+        expr: |
+          sum(rate(midas_evaluation_failures_total{failure_kind="idempotency_conflict"}[15m])) > 0.1
+        for: 15m
+        labels:
+          severity: warning
+          service: midas
+          runbook: runtime-readiness.md#F-idempotency-conflicts
+        annotations:
+          summary: "MIDAS idempotency conflicts sustained — likely calling-system defect"
+          description: |
+            A caller is reusing (request_source, request_id) with a different
+            body. Distinguish replay (same hash → no 409) from conflict
+            (different hash → 409). Conflicts are caller-side: regenerate
+            request_id on logically new requests; retries must replay the
+            EXACT original body. Do not loosen idempotency.
+
+  # ---------------------------------------------------------------------------
+  # Runbook H — Outbox backlog suspected
+  # ---------------------------------------------------------------------------
+  # Oldest unpublished age is the better paging signal than backlog count
+  # alone (per runtime-readiness §6). Tiered: 5m warning, 30m critical.
+
+  - name: midas_runtime_outbox
+    rules:
+      - alert: MIDASOutboxBacklogAgeWarning
+        expr: midas_outbox_oldest_unpublished_age_seconds > 300
+        for: 5m
+        labels:
+          severity: warning
+          service: midas
+          runbook: runtime-readiness.md#H-outbox-backlog-suspected
+        annotations:
+          summary: "MIDAS outbox oldest unpublished event > 5m"
+          description: |
+            The oldest unpublished outbox row is over 5 minutes old. The
+            dispatcher or downstream broker may be falling behind. Check
+            dispatcher liveness and broker connectivity. Outbox rows are
+            still written transactionally with the envelope — governed
+            success is not affected, but downstream consumers are seeing
+            stale facts.
+
+      - alert: MIDASOutboxBacklogAgeCritical
+        expr: midas_outbox_oldest_unpublished_age_seconds > 1800
+        for: 5m
+        labels:
+          severity: critical
+          service: midas
+          runbook: runtime-readiness.md#H-outbox-backlog-suspected
+        annotations:
+          summary: "MIDAS outbox oldest unpublished event > 30m"
+          description: |
+            Sustained backlog age over 30 minutes. The dispatcher is likely
+            wedged or the downstream broker is unavailable. At-least-once
+            semantics make restarting the dispatcher safe.
+
+      - alert: MIDASOutboxStatsCollectionErrors
+        expr: |
+          sum(rate(midas_outbox_stats_collection_errors_total[5m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+          service: midas
+          runbook: runtime-readiness.md#H-outbox-backlog-suspected
+        annotations:
+          summary: "MIDAS cannot scrape outbox backlog metrics"
+          description: |
+            The /metrics scrape callback could not read outbox aggregate
+            state. The backlog alerts above will go stale until this
+            recovers. Likely cause: Postgres unavailable for the metric
+            query path.
+
+  # ---------------------------------------------------------------------------
+  # Runbook D + E — Handler timeout + Panic recovered (log-derived)
+  # ---------------------------------------------------------------------------
+  # IMPORTANT: midas_http_timeout and midas_http_panic_recovered are
+  # *structured-log events* in the MIDAS runtime (internal/httpapi/safety.go),
+  # NOT Prometheus metrics. Alerting on them requires a log→metric pipeline
+  # (Loki + recording rule, Vector + Prometheus exporter, Datadog log
+  # parser, etc.).
+  #
+  # The transaction-panic alert above (group: transaction, stage="panic")
+  # provides partial coverage: it fires when a panic occurs INSIDE the
+  # transaction wrapper. A panic in pre-orchestrator middleware (auth,
+  # JSON decode) bypasses the transaction stage counter but still emits
+  # the slog event.
+  #
+  # The templates below assume an operator has emitted log-derived counters
+  # midas_log_http_panic_recovered_total and midas_log_http_timeout_total.
+  # Uncomment and rename after wiring your pipeline.
+  #
+  # - name: midas_runtime_safety_log_derived
+  #   rules:
+  #     - alert: MIDASHTTPPanicRecovered
+  #       expr: sum(rate(midas_log_http_panic_recovered_total[5m])) > 0
+  #       for: 1m
+  #       labels:
+  #         severity: critical
+  #         service: midas
+  #         runbook: runtime-readiness.md#E-panic-recovered
+  #       annotations:
+  #         summary: "MIDAS HTTP panic recovered — always a defect"
+  #         description: |
+  #           A handler panic was recovered. Always a bug, never an
+  #           operational tuning issue. See log event
+  #           midas_http_panic_recovered for stack + request_id.
+  #
+  #     - alert: MIDASHTTPHandlerTimeouts
+  #       expr: sum(rate(midas_log_http_timeout_total[5m])) > 0.01
+  #       for: 5m
+  #       labels:
+  #         severity: warning
+  #         service: midas
+  #         runbook: runtime-readiness.md#D-handler-timeouts
+  #       annotations:
+  #         summary: "MIDAS handler timeouts sustained"
+  #         description: |
+  #           Handlers are exceeding MIDAS_HTTP_HANDLER_TIMEOUT. Identify
+  #           the underlying cause via the latency + pool + transaction
+  #           alerts; do not raise the timeout as a primary fix.
