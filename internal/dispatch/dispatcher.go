@@ -130,10 +130,11 @@ func (d *Dispatcher) Run(ctx context.Context) {
 	}
 }
 
-// poll claims one batch of unpublished events, publishes each, and marks
-// published ones. Returns the number of events successfully published (not
-// merely claimed). A return value of zero means the queue was empty or all
-// publishes failed; the caller should sleep before the next poll.
+// poll claims one batch of unpublished events, publishes them grouped by topic,
+// and marks successfully acknowledged rows. Returns the number of events
+// successfully published to the broker (not merely claimed). A return value of
+// zero means the queue was empty or all publishes failed; the caller should
+// sleep before the next poll.
 func (d *Dispatcher) poll(ctx context.Context) (int, error) {
 	batchID := newBatchID()
 	claimStart := time.Now()
@@ -149,10 +150,8 @@ func (d *Dispatcher) poll(ctx context.Context) (int, error) {
 	}
 
 	published := 0
-	for _, ev := range events {
-		if d.dispatch(ctx, batchID, ev) {
-			published++
-		}
+	for _, group := range groupByTopic(events) {
+		published += d.dispatchGroup(ctx, batchID, group)
 	}
 
 	if published > 0 {
@@ -167,20 +166,142 @@ func (d *Dispatcher) poll(ctx context.Context) (int, error) {
 	return published, nil
 }
 
-// dispatch publishes a single outbox event and, on success, marks it published.
-// Returns true if the event was successfully published to the broker (regardless
-// of whether MarkPublished succeeded). Returns false if the publish failed.
+// dispatchGroup publishes one topic-homogeneous group and marks successfully
+// published rows in one batch where the repository supports it. Returns the
+// number of events successfully acknowledged by the broker, regardless of
+// whether marking them published succeeds.
 //
 // Errors at each stage are logged but never propagated: a publish failure leaves
 // the row unpublished for the next poll cycle; a mark-published failure after a
 // successful publish is logged and accepted as a potential duplicate (at-least-once).
-func (d *Dispatcher) dispatch(ctx context.Context, batchID string, ev *outbox.OutboxEvent) bool {
-	msg := eventToMessage(ev)
+func (d *Dispatcher) dispatchGroup(ctx context.Context, batchID string, events []*outbox.OutboxEvent) int {
+	if len(events) == 0 {
+		return 0
+	}
+
+	topic := events[0].Topic
+	msgs := make([]Message, len(events))
+	for i, ev := range events {
+		msgs[i] = eventToMessage(ev)
+	}
 
 	publishStart := time.Now()
-	err := d.publisher.Publish(ctx, msg)
-	d.recorder.RecordPublishDuration(ev.Topic, time.Since(publishStart))
+	result, err := d.publishBatch(ctx, msgs)
+	d.recorder.RecordPublishDuration(topic, time.Since(publishStart))
 	if err != nil {
+		d.logPublishFailures(batchID, events, result, err)
+	}
+	if len(result.Successful) == 0 {
+		return 0
+	}
+	d.recorder.AddPublished(len(result.Successful))
+
+	publishedIDs := make([]string, 0, len(result.Successful))
+	for _, idx := range result.Successful {
+		if idx < 0 || idx >= len(events) {
+			continue
+		}
+		publishedIDs = append(publishedIDs, events[idx].ID)
+	}
+
+	markStart := time.Now()
+	affected, err := d.markPublishedBatch(ctx, publishedIDs)
+	d.recorder.RecordMarkPublishedDuration(time.Since(markStart))
+	if err != nil {
+		d.recorder.IncrementMarkPublishedFailure()
+		// The message was delivered to the broker but the database write failed.
+		// The row will be re-claimed and re-published (at-least-once delivery).
+		// Consumers must tolerate duplicates. WARN because this is recoverable
+		// and expected under at-least-once semantics.
+		slog.Warn("outbox_mark_published_failed",
+			"dispatcher_instance_id", d.instanceID,
+			"batch_id", batchID,
+			"topic", topic,
+			"count", len(publishedIDs),
+			"error", err,
+		)
+		return len(result.Successful)
+	}
+	if affected != int64(len(publishedIDs)) {
+		d.recorder.IncrementMarkPublishedFailure()
+		slog.Warn("outbox_mark_published_mismatch",
+			"dispatcher_instance_id", d.instanceID,
+			"batch_id", batchID,
+			"topic", topic,
+			"expected_count", len(publishedIDs),
+			"affected_count", affected,
+		)
+	}
+
+	slog.Debug("outbox_batch_marked_published",
+		"dispatcher_instance_id", d.instanceID,
+		"batch_id", batchID,
+		"topic", topic,
+		"count", len(publishedIDs),
+	)
+	return len(result.Successful)
+}
+
+func (d *Dispatcher) publishBatch(ctx context.Context, msgs []Message) (PublishBatchResult, error) {
+	if len(msgs) == 0 {
+		return PublishBatchResult{}, nil
+	}
+	if p, ok := d.publisher.(BatchPublisher); ok {
+		return p.PublishBatch(ctx, msgs)
+	}
+
+	result := PublishBatchResult{
+		Successful: make([]int, 0, len(msgs)),
+	}
+	var firstErr error
+	for i, msg := range msgs {
+		if err := d.publisher.Publish(ctx, msg); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			result.Failed = append(result.Failed, PublishBatchFailure{Index: i, Err: err})
+			continue
+		}
+		result.Successful = append(result.Successful, i)
+	}
+	return result, firstErr
+}
+
+func (d *Dispatcher) markPublishedBatch(ctx context.Context, ids []string) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	if repo, ok := d.repo.(BatchMarker); ok {
+		return repo.MarkPublishedBatch(ctx, ids)
+	}
+
+	var affected int64
+	for _, id := range ids {
+		if err := d.repo.MarkPublished(ctx, id); err != nil {
+			return affected, err
+		}
+		affected++
+	}
+	return affected, nil
+}
+
+func (d *Dispatcher) logPublishFailures(batchID string, events []*outbox.OutboxEvent, result PublishBatchResult, batchErr error) {
+	failures := result.Failed
+	if len(failures) == 0 && batchErr != nil {
+		failures = make([]PublishBatchFailure, len(events))
+		for i := range events {
+			failures[i] = PublishBatchFailure{Index: i, Err: batchErr}
+		}
+	}
+	for _, failure := range failures {
+		if failure.Index < 0 || failure.Index >= len(events) {
+			continue
+		}
+		ev := events[failure.Index]
+		err := failure.Err
+		if err == nil {
+			err = batchErr
+		}
 		d.recorder.IncrementPublishFailure(ev.Topic, classifyError(err))
 		// Publish failures are transient: the row remains unpublished and will
 		// be re-claimed on the next poll cycle. WARN rather than ERROR because
@@ -195,44 +316,27 @@ func (d *Dispatcher) dispatch(ctx context.Context, batchID string, ev *outbox.Ou
 			"topic", ev.Topic,
 			"error", err,
 		)
-		return false
 	}
-	d.recorder.AddPublished(1)
+}
 
-	markStart := time.Now()
-	err = d.repo.MarkPublished(ctx, ev.ID)
-	d.recorder.RecordMarkPublishedDuration(time.Since(markStart))
-	if err != nil {
-		d.recorder.IncrementMarkPublishedFailure()
-		// The message was delivered to the broker but the database write failed.
-		// The row will be re-claimed and re-published (at-least-once delivery).
-		// Consumers must tolerate duplicates. WARN because this is recoverable
-		// and expected under at-least-once semantics.
-		slog.Warn("outbox_mark_published_failed",
-			"dispatcher_instance_id", d.instanceID,
-			"batch_id", batchID,
-			"event_id", ev.ID,
-			"event_type", ev.EventType,
-			"aggregate_type", ev.AggregateType,
-			"aggregate_id", ev.AggregateID,
-			"topic", ev.Topic,
-			"error", err,
-		)
-		// Return true: the broker received the message. The dispatcher should
-		// not sleep as if the queue was empty; there may be more events to send.
-		return true
+func groupByTopic(events []*outbox.OutboxEvent) [][]*outbox.OutboxEvent {
+	if len(events) == 0 {
+		return nil
+	}
+	order := make([]string, 0, len(events))
+	groups := make(map[string][]*outbox.OutboxEvent, len(events))
+	for _, ev := range events {
+		if _, ok := groups[ev.Topic]; !ok {
+			order = append(order, ev.Topic)
+		}
+		groups[ev.Topic] = append(groups[ev.Topic], ev)
 	}
 
-	slog.Debug("outbox_event_dispatched",
-		"dispatcher_instance_id", d.instanceID,
-		"batch_id", batchID,
-		"event_id", ev.ID,
-		"event_type", ev.EventType,
-		"aggregate_type", ev.AggregateType,
-		"aggregate_id", ev.AggregateID,
-		"topic", ev.Topic,
-	)
-	return true
+	out := make([][]*outbox.OutboxEvent, 0, len(order))
+	for _, topic := range order {
+		out = append(out, groups[topic])
+	}
+	return out
 }
 
 func newDispatcherInstanceID() string {

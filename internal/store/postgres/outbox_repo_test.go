@@ -322,6 +322,72 @@ func TestOutboxRepo_MarkPublished_NotFound(t *testing.T) {
 	}
 }
 
+func TestOutboxRepo_MarkPublishedBatch(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	repo, err := NewOutboxRepo(db)
+	if err != nil {
+		t.Fatalf("NewOutboxRepo: %v", err)
+	}
+
+	ev1 := mustNewOutboxEvent(t, outbox.EventDecisionCompleted, "envelope", "outbox-test-batch-mark-1", "midas.decisions", "k-batch-mark-1", json.RawMessage(`{}`))
+	ev2 := mustNewOutboxEvent(t, outbox.EventDecisionEscalated, "envelope", "outbox-test-batch-mark-2", "midas.decisions", "k-batch-mark-2", json.RawMessage(`{}`))
+	t.Cleanup(func() {
+		cleanupOutboxEventByID(t, ev1.ID)
+		cleanupOutboxEventByID(t, ev2.ID)
+	})
+
+	if err := repo.AppendBatch(ctx, []*outbox.OutboxEvent{ev1, ev2}); err != nil {
+		t.Fatalf("AppendBatch: %v", err)
+	}
+
+	affected, err := repo.MarkPublishedBatch(ctx, []string{ev1.ID, ev2.ID})
+	if err != nil {
+		t.Fatalf("MarkPublishedBatch: %v", err)
+	}
+	if affected != 2 {
+		t.Fatalf("affected rows: want 2, got %d", affected)
+	}
+
+	claimed, err := repo.ClaimUnpublished(ctx, 100)
+	if err != nil {
+		t.Fatalf("ClaimUnpublished: %v", err)
+	}
+	for _, ev := range claimed {
+		if ev.ID == ev1.ID || ev.ID == ev2.ID {
+			t.Fatalf("event %q should not be claimed after MarkPublishedBatch", ev.ID)
+		}
+	}
+}
+
+func TestOutboxRepo_MarkPublishedBatch_UnknownIDReturnsAffectedCount(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	repo, err := NewOutboxRepo(db)
+	if err != nil {
+		t.Fatalf("NewOutboxRepo: %v", err)
+	}
+
+	ev := mustNewOutboxEvent(t, outbox.EventDecisionCompleted, "envelope", "outbox-test-batch-mark-known", "midas.decisions", "k-batch-mark-known", json.RawMessage(`{}`))
+	t.Cleanup(func() { cleanupOutboxEventByID(t, ev.ID) })
+
+	if err := repo.Append(ctx, ev); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	affected, err := repo.MarkPublishedBatch(ctx, []string{ev.ID, "nonexistent-id-outbox-batch-test"})
+	if err != nil {
+		t.Fatalf("MarkPublishedBatch: %v", err)
+	}
+	if affected != 1 {
+		t.Fatalf("affected rows: want 1 for one known ID, got %d", affected)
+	}
+}
+
 func TestOutboxRepo_TransactionRollbackLeavesNoRow(t *testing.T) {
 	db := openTestDB(t)
 	defer db.Close()

@@ -95,6 +95,11 @@ These values **must** be supplied for a functional production deployment:
 | `midas.observability.logFormat` | `json` | Log format: `json` or `text` |
 | `midas.dev.seedDemoData` | `false` | Seed demonstration surfaces and agents at startup |
 | `midas.dev.seedDemoUser` | `false` | Create a `demo/demo` Local IAM user at startup. **Never enable in production** |
+| `midas.dispatcher.enabled` | `false` | Start the outbox dispatcher goroutine |
+| `midas.dispatcher.publisher` | `none` | Publisher backend; use `kafka` when enabled |
+| `midas.dispatcher.batchSize` | `100` | Maximum outbox rows claimed per poll cycle; not broker publish batching |
+| `midas.dispatcher.pollInterval` | `2s` | Sleep between empty-queue poll cycles |
+| `midas.dispatcher.maxBackoff` | `30s` | Maximum exponential backoff after consecutive poll errors |
 | `secret.existingSecret` | `""` | Name of an existing Secret; see [Secret configuration](#secret-configuration) |
 | `resources.requests.cpu` | `100m` | CPU request |
 | `resources.requests.memory` | `128Mi` | Memory request |
@@ -210,6 +215,10 @@ Operational interpretation:
 - Rising `midas_outbox_unpublished_total` or oldest unpublished age means the
   dispatcher/downstream path is behind. It does not by itself prove
   `/v1/evaluate` response latency is outbox-publication-bound.
+- Dispatcher `batchSize` controls how many outbox rows are claimed per poll and
+  now bounds each topic-group publish batch and mark-published update. D40f-b
+  does not add durable claim leases or concurrent dispatcher workers; those
+  remain later throughput tranches.
 - Redis/read-model caching does not reduce governed transaction commits, WAL,
   audit rows, outbox rows, or envelope writes.
 

@@ -3,6 +3,7 @@ package kafka
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -21,7 +22,9 @@ import (
 // Publish blocks until the broker acknowledges receipt according to the
 // RequiredAcks setting or until ctx is cancelled.
 type KafkaPublisher struct {
-	writer *kafkago.Writer
+	writer        *kafkago.Writer
+	writeMessages func(ctx context.Context, msgs ...kafkago.Message) error
+	closeWriter   func() error
 }
 
 // NewKafkaPublisher constructs a KafkaPublisher from cfg. cfg.Brokers must be
@@ -85,7 +88,11 @@ func NewKafkaPublisher(cfg KafkaConfig) (*KafkaPublisher, error) {
 		w.WriteTimeout = cfg.WriteTimeout
 	}
 
-	return &KafkaPublisher{writer: w}, nil
+	return &KafkaPublisher{
+		writer:        w,
+		writeMessages: w.WriteMessages,
+		closeWriter:   w.Close,
+	}, nil
 }
 
 // Publish sends msg to the Kafka topic named in msg.Topic. It blocks until the
@@ -94,26 +101,90 @@ func NewKafkaPublisher(cfg KafkaConfig) (*KafkaPublisher, error) {
 // A non-nil error means the message may or may not have been delivered. The
 // dispatcher will leave the outbox row unpublished and retry on the next cycle.
 func (p *KafkaPublisher) Publish(ctx context.Context, msg dispatch.Message) error {
-	km := kafkago.Message{
-		Topic:   msg.Topic,
-		Key:     msg.Key,
-		Value:   msg.Value,
-		Headers: toKafkaHeaders(msg.Headers),
-	}
-
-	if err := p.writer.WriteMessages(ctx, km); err != nil {
+	if err := p.write(ctx, toKafkaMessage(msg)); err != nil {
 		return fmt.Errorf("kafka: publish to topic %q: %w", msg.Topic, err)
 	}
 	return nil
 }
 
+// PublishBatch sends msgs to Kafka with one WriteMessages call. kafka-go
+// exposes partial failures as kafka.WriteErrors; those are mapped back to input
+// indexes so the dispatcher can mark only acknowledged messages as published.
+// For non-partial errors, success cannot be determined, so every message is
+// left unconfirmed for retry.
+func (p *KafkaPublisher) PublishBatch(ctx context.Context, msgs []dispatch.Message) (dispatch.PublishBatchResult, error) {
+	result := dispatch.PublishBatchResult{}
+	if len(msgs) == 0 {
+		return result, nil
+	}
+
+	kmsgs := make([]kafkago.Message, len(msgs))
+	for i, msg := range msgs {
+		kmsgs[i] = toKafkaMessage(msg)
+	}
+
+	err := p.write(ctx, kmsgs...)
+	if err == nil {
+		result.Successful = make([]int, len(msgs))
+		for i := range msgs {
+			result.Successful[i] = i
+		}
+		return result, nil
+	}
+
+	var writeErrs kafkago.WriteErrors
+	if errors.As(err, &writeErrs) && len(writeErrs) == len(msgs) {
+		for i, writeErr := range writeErrs {
+			if writeErr == nil {
+				result.Successful = append(result.Successful, i)
+				continue
+			}
+			result.Failed = append(result.Failed, dispatch.PublishBatchFailure{Index: i, Err: writeErr})
+		}
+		return result, fmt.Errorf("kafka: publish batch: %w", err)
+	}
+
+	result.Failed = make([]dispatch.PublishBatchFailure, len(msgs))
+	for i := range msgs {
+		result.Failed[i] = dispatch.PublishBatchFailure{Index: i, Err: err}
+	}
+	return result, fmt.Errorf("kafka: publish batch: %w", err)
+}
+
 // Close flushes any pending writes and closes the underlying Kafka connection.
 // It should be called when the publisher is no longer needed.
 func (p *KafkaPublisher) Close() error {
-	if err := p.writer.Close(); err != nil {
+	closeFn := p.closeWriter
+	if closeFn == nil && p.writer != nil {
+		closeFn = p.writer.Close
+	}
+	if closeFn == nil {
+		return nil
+	}
+	if err := closeFn(); err != nil {
 		return fmt.Errorf("kafka: close writer: %w", err)
 	}
 	return nil
+}
+
+func (p *KafkaPublisher) write(ctx context.Context, msgs ...kafkago.Message) error {
+	writeFn := p.writeMessages
+	if writeFn == nil && p.writer != nil {
+		writeFn = p.writer.WriteMessages
+	}
+	if writeFn == nil {
+		return fmt.Errorf("kafka: writer is not configured")
+	}
+	return writeFn(ctx, msgs...)
+}
+
+func toKafkaMessage(msg dispatch.Message) kafkago.Message {
+	return kafkago.Message{
+		Topic:   msg.Topic,
+		Key:     msg.Key,
+		Value:   msg.Value,
+		Headers: toKafkaHeaders(msg.Headers),
+	}
 }
 
 // toKafkaHeaders converts dispatch.Header slice to kafka-go's Header slice.
@@ -133,3 +204,4 @@ func toKafkaHeaders(headers []dispatch.Header) []kafkago.Header {
 
 // Ensure KafkaPublisher satisfies the Publisher interface at compile time.
 var _ dispatch.Publisher = (*KafkaPublisher)(nil)
+var _ dispatch.BatchPublisher = (*KafkaPublisher)(nil)

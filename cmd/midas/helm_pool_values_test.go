@@ -34,6 +34,32 @@ func TestHelmChart_RendersPostgresPoolConfigKeys(t *testing.T) {
 	}
 }
 
+func TestHelmChart_ExposesDispatcherTuningValues(t *testing.T) {
+	values := readChartFile(t, "../../charts/midas/values.yaml")
+	for _, want := range []string{
+		"batchSize: 100",
+		`pollInterval: "2s"`,
+		`maxBackoff: "30s"`,
+	} {
+		if !strings.Contains(values, want) {
+			t.Fatalf("values.yaml must expose %q", want)
+		}
+	}
+}
+
+func TestHelmChart_RendersDispatcherTuningConfigKeys(t *testing.T) {
+	configMap := readChartFile(t, "../../charts/midas/templates/configmap.yaml")
+	for _, want := range []string{
+		"batch_size: {{ .Values.midas.dispatcher.batchSize }}",
+		`poll_interval: {{ .Values.midas.dispatcher.pollInterval | quote }}`,
+		`max_backoff: {{ .Values.midas.dispatcher.maxBackoff | quote }}`,
+	} {
+		if !strings.Contains(configMap, want) {
+			t.Fatalf("configmap.yaml must render %q", want)
+		}
+	}
+}
+
 func TestHelmChart_DocumentsHighWritePoolGuidance(t *testing.T) {
 	readme := readChartFile(t, "../../charts/midas/README.md")
 	for _, want := range []string{

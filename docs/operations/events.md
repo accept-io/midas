@@ -392,9 +392,9 @@ The following environment variables control outbox dispatch.
 |-----------------------------------|----------|-------------|
 | `MIDAS_DISPATCHER_ENABLED`        | `false`  | Set to `true` to start the dispatcher. |
 | `MIDAS_DISPATCHER_PUBLISHER`      | `none`   | Publisher backend. Valid values: `kafka`. Required when enabled. |
-| `MIDAS_DISPATCHER_BATCH_SIZE`     | `100`    | Maximum outbox rows claimed per poll cycle. Must be a positive integer. |
-| `MIDAS_DISPATCHER_POLL_INTERVAL`  | `2s`     | Sleep between poll cycles when the queue is empty. Go duration string. |
-| `MIDAS_DISPATCHER_MAX_BACKOFF`    | `30s`    | Upper bound for exponential backoff on consecutive poll errors. Go duration string. |
+| `MIDAS_DISPATCHER_BATCH_SIZE`     | `100`    | Maximum outbox rows claimed per poll cycle. This does not batch broker publishes. |
+| `MIDAS_DISPATCHER_POLL_INTERVAL`  | `2s`     | Active runtime config for sleep between empty-queue poll cycles. Go duration string. |
+| `MIDAS_DISPATCHER_MAX_BACKOFF`    | `30s`    | Active runtime config for exponential backoff upper bound after consecutive poll errors. Go duration string. |
 
 ### Kafka
 
@@ -416,6 +416,15 @@ The following environment variables control outbox dispatch.
 - `MIDAS_DISPATCHER_ENABLED=true` + `publisher=kafka` + empty `MIDAS_KAFKA_BROKERS`: MIDAS fails at startup.
 - SASL username and password must be provided together. Unsupported SASL mechanisms fail at startup.
 - MIDAS publishes to the topic stored on each outbox row. There is no global topic override; create broker topics matching MIDAS logical topics such as `midas.decisions`.
+
+D40f-b adds batch publish and batch mark-published. The dispatcher groups a
+claimed batch by outbox topic, publishes each topic group with one Kafka batch
+write, and marks successfully acknowledged rows with one database update.
+Delivery remains at-least-once: failed or unconfirmed messages stay unpublished
+for retry, and duplicates remain possible after broker acknowledgement if MIDAS
+crashes before `published_at` is written. Durable claim leases are still
+deferred to D40f-c, bounded dispatcher concurrency is deferred to D40f-d, and
+`MIDAS_KAFKA_REQUIRED_ACKS=-1` remains unchanged.
 
 Azure Event Hubs Kafka example:
 

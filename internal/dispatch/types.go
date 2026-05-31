@@ -29,6 +29,30 @@ type Publisher interface {
 	Publish(ctx context.Context, msg Message) error
 }
 
+// BatchPublisher is implemented by publishers that can acknowledge multiple
+// messages in one broker write. Implementations must report per-message success
+// when the broker/client exposes partial write results. If success cannot be
+// determined for a failed batch, Successful must be empty so the dispatcher
+// leaves every row unpublished for retry.
+type BatchPublisher interface {
+	PublishBatch(ctx context.Context, msgs []Message) (PublishBatchResult, error)
+}
+
+// PublishBatchResult reports the message indexes acknowledged by the broker and
+// the indexes that failed. Indexes refer to the msgs slice passed to
+// BatchPublisher.PublishBatch.
+type PublishBatchResult struct {
+	Successful []int
+	Failed     []PublishBatchFailure
+}
+
+// PublishBatchFailure records a bounded per-message batch failure. Err is kept
+// for logs/error classification only and must not be used as a metric label.
+type PublishBatchFailure struct {
+	Index int
+	Err   error
+}
+
 // DispatcherRepo is the persistence interface required by the Dispatcher.
 // It is a strict subset of outbox.Repository extended with claiming semantics.
 type DispatcherRepo interface {
@@ -44,6 +68,13 @@ type DispatcherRepo interface {
 	// MarkPublished sets published_at to now for the given event ID.
 	// Returns an error if the event does not exist or the update fails.
 	MarkPublished(ctx context.Context, id string) error
+}
+
+// BatchMarker is implemented by repositories that can mark multiple outbox rows
+// as published in one database statement. The returned count is the number of
+// rows affected by the update.
+type BatchMarker interface {
+	MarkPublishedBatch(ctx context.Context, ids []string) (int64, error)
 }
 
 // Message is the broker-agnostic envelope that Publisher implementations

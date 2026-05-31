@@ -209,6 +209,9 @@ Roles: `platform.admin`, `platform.operator`, `platform.viewer`, `governance.app
 | `MIDAS_LOG_LEVEL` | `info` | `info` or `debug` |
 | `MIDAS_EXPLORER_ENABLED` | _(auto)_ | `true` enables Explorer UI. Auto-enabled in memory mode. |
 | `MIDAS_DISPATCHER_ENABLED` | `false` | `true` starts the Kafka outbox dispatcher |
+| `MIDAS_DISPATCHER_BATCH_SIZE` | `100` | Outbox rows claimed per poll cycle and upper bound for topic-group publish/mark batches |
+| `MIDAS_DISPATCHER_POLL_INTERVAL` | `2s` | Active runtime sleep between empty-queue poll cycles |
+| `MIDAS_DISPATCHER_MAX_BACKOFF` | `30s` | Active runtime maximum backoff after consecutive poll errors |
 | `MIDAS_KAFKA_BROKERS` | _(none)_ | Comma-separated `host:port`. Required when dispatcher enabled. |
 
 Full variable reference: [docs/operations/deployment.md](docs/operations/deployment.md).

@@ -21,8 +21,10 @@ import (
 
 // fakeRepo is an in-memory DispatcherRepo for unit tests.
 type fakeRepo struct {
-	events       []*outbox.OutboxEvent
-	publishedIDs []string
+	events           []*outbox.OutboxEvent
+	publishedIDs     []string
+	markBatchIDs     [][]string
+	affectedOverride *int64
 
 	claimErr       error
 	markPublishErr error
@@ -59,6 +61,31 @@ func (r *fakeRepo) MarkPublished(_ context.Context, id string) error {
 	return errors.New("outbox: event not found: " + id)
 }
 
+func (r *fakeRepo) MarkPublishedBatch(_ context.Context, ids []string) (int64, error) {
+	if r.markPublishErr != nil {
+		return 0, r.markPublishErr
+	}
+	copied := append([]string(nil), ids...)
+	r.markBatchIDs = append(r.markBatchIDs, copied)
+
+	now := time.Now().UTC()
+	var affected int64
+	for _, id := range ids {
+		for _, ev := range r.events {
+			if ev.ID == id {
+				ev.PublishedAt = &now
+				r.publishedIDs = append(r.publishedIDs, id)
+				affected++
+				break
+			}
+		}
+	}
+	if r.affectedOverride != nil {
+		return *r.affectedOverride, nil
+	}
+	return affected, nil
+}
+
 // fakePublisher records published messages and can be configured to fail.
 type fakePublisher struct {
 	published  []dispatch.Message
@@ -73,6 +100,51 @@ func (p *fakePublisher) Publish(_ context.Context, msg dispatch.Message) error {
 	}
 	p.published = append(p.published, msg)
 	return nil
+}
+
+type fakeBatchPublisher struct {
+	fakePublisher
+	publishedBatches [][]dispatch.Message
+	batchErr         error
+	batchFailures    map[int]error
+	failKeys         map[string]error
+	batchCallCount   atomic.Int64
+}
+
+func (p *fakeBatchPublisher) PublishBatch(_ context.Context, msgs []dispatch.Message) (dispatch.PublishBatchResult, error) {
+	p.batchCallCount.Add(1)
+	copied := append([]dispatch.Message(nil), msgs...)
+	p.publishedBatches = append(p.publishedBatches, copied)
+
+	if p.batchErr != nil {
+		result := dispatch.PublishBatchResult{
+			Failed: make([]dispatch.PublishBatchFailure, len(msgs)),
+		}
+		for i := range msgs {
+			result.Failed[i] = dispatch.PublishBatchFailure{Index: i, Err: p.batchErr}
+		}
+		return result, p.batchErr
+	}
+
+	result := dispatch.PublishBatchResult{
+		Successful: make([]int, 0, len(msgs)),
+	}
+	for i, msg := range msgs {
+		if err := p.batchFailures[i]; err != nil {
+			result.Failed = append(result.Failed, dispatch.PublishBatchFailure{Index: i, Err: err})
+			continue
+		}
+		if err := p.failKeys[string(msg.Key)]; err != nil {
+			result.Failed = append(result.Failed, dispatch.PublishBatchFailure{Index: i, Err: err})
+			continue
+		}
+		result.Successful = append(result.Successful, i)
+		p.published = append(p.published, msg)
+	}
+	if len(result.Failed) > 0 {
+		return result, result.Failed[0].Err
+	}
+	return result, nil
 }
 
 type fakeRecorder struct {
@@ -317,11 +389,68 @@ func TestDispatcher_MultipleEvents_ProcessedInOrder(t *testing.T) {
 	}
 }
 
+func TestDispatcher_BatchPublisherAndBatchMarker(t *testing.T) {
+	ev1 := mustEvent(t, outbox.EventDecisionCompleted, "env-batch-a")
+	ev2 := mustEvent(t, outbox.EventDecisionEscalated, "env-batch-b")
+	ev3 := mustEvent(t, outbox.EventDecisionReviewResolved, "env-batch-c")
+	repo := &fakeRepo{events: []*outbox.OutboxEvent{ev1, ev2, ev3}}
+	pub := &fakeBatchPublisher{}
+
+	d := newDispatcher(t, repo, pub, shortIntervalConfig())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	d.Run(ctx)
+
+	if got := pub.batchCallCount.Load(); got != 1 {
+		t.Fatalf("PublishBatch calls: want 1, got %d", got)
+	}
+	if len(pub.publishedBatches) != 1 || len(pub.publishedBatches[0]) != 3 {
+		t.Fatalf("published batches: want one batch of 3, got %#v", pub.publishedBatches)
+	}
+	if len(repo.markBatchIDs) != 1 || len(repo.markBatchIDs[0]) != 3 {
+		t.Fatalf("MarkPublishedBatch calls: want one batch of 3 IDs, got %#v", repo.markBatchIDs)
+	}
+	for _, ev := range []*outbox.OutboxEvent{ev1, ev2, ev3} {
+		if ev.PublishedAt == nil {
+			t.Fatalf("expected event %q to be marked published", ev.ID)
+		}
+	}
+}
+
+func TestDispatcher_GroupsBatchPublishesByTopic(t *testing.T) {
+	ev1 := mustEvent(t, outbox.EventDecisionCompleted, "env-topic-a")
+	ev2 := mustEvent(t, outbox.EventSurfaceApproved, "surface-topic-b")
+	ev2.Topic = "midas.surfaces"
+	ev3 := mustEvent(t, outbox.EventDecisionEscalated, "env-topic-c")
+	repo := &fakeRepo{events: []*outbox.OutboxEvent{ev1, ev2, ev3}}
+	pub := &fakeBatchPublisher{}
+
+	d := newDispatcher(t, repo, pub, shortIntervalConfig())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	d.Run(ctx)
+
+	if got := pub.batchCallCount.Load(); got != 2 {
+		t.Fatalf("PublishBatch calls: want 2 topic groups, got %d", got)
+	}
+	if len(pub.publishedBatches) != 2 {
+		t.Fatalf("published batch count: want 2, got %d", len(pub.publishedBatches))
+	}
+	if len(pub.publishedBatches[0]) != 2 || pub.publishedBatches[0][0].Topic != "midas.decisions" || pub.publishedBatches[0][1].Topic != "midas.decisions" {
+		t.Fatalf("first topic group should contain two decision events, got %#v", pub.publishedBatches[0])
+	}
+	if len(pub.publishedBatches[1]) != 1 || pub.publishedBatches[1][0].Topic != "midas.surfaces" {
+		t.Fatalf("second topic group should contain one surface event, got %#v", pub.publishedBatches[1])
+	}
+}
+
 func TestDispatcher_RecordsClaimPublishAndMarkMetrics(t *testing.T) {
 	ev1 := mustEvent(t, outbox.EventDecisionCompleted, "env-metrics-a")
 	ev2 := mustEvent(t, outbox.EventDecisionEscalated, "env-metrics-b")
 	repo := &fakeRepo{events: []*outbox.OutboxEvent{ev1, ev2}}
-	pub := &fakePublisher{}
+	pub := &fakeBatchPublisher{}
 	rec := &fakeRecorder{}
 
 	d := newDispatcher(t, repo, pub, shortIntervalConfig()).WithRecorder(rec)
@@ -337,11 +466,11 @@ func TestDispatcher_RecordsClaimPublishAndMarkMetrics(t *testing.T) {
 	if rec.claimed != 2 {
 		t.Fatalf("claimed total: want 2, got %d", rec.claimed)
 	}
-	if rec.publishDurations != 2 {
-		t.Fatalf("publish durations: want 2, got %d", rec.publishDurations)
+	if rec.publishDurations != 1 {
+		t.Fatalf("publish durations: want 1 topic batch, got %d", rec.publishDurations)
 	}
-	if rec.markPublishedDurations != 2 {
-		t.Fatalf("mark-published durations: want 2, got %d", rec.markPublishedDurations)
+	if rec.markPublishedDurations != 1 {
+		t.Fatalf("mark-published durations: want 1 batch, got %d", rec.markPublishedDurations)
 	}
 	if rec.published != 2 {
 		t.Fatalf("published total: want 2, got %d", rec.published)
@@ -357,7 +486,7 @@ func TestDispatcher_RecordsClaimPublishAndMarkMetrics(t *testing.T) {
 func TestDispatcher_RecordsPublishFailureClass(t *testing.T) {
 	ev := mustEvent(t, outbox.EventDecisionCompleted, "env-publish-failure")
 	repo := &fakeRepo{events: []*outbox.OutboxEvent{ev}}
-	pub := &fakePublisher{publishErr: context.DeadlineExceeded}
+	pub := &fakeBatchPublisher{batchErr: context.DeadlineExceeded}
 	rec := &fakeRecorder{}
 
 	d := newDispatcher(t, repo, pub, shortIntervalConfig()).WithRecorder(rec)
@@ -375,6 +504,86 @@ func TestDispatcher_RecordsPublishFailureClass(t *testing.T) {
 	}
 	if rec.published != 0 {
 		t.Fatalf("published total: want 0 after publish failure, got %d", rec.published)
+	}
+}
+
+func TestDispatcher_PartialBatchPublishMarksOnlySuccessfulRows(t *testing.T) {
+	ev1 := mustEvent(t, outbox.EventDecisionCompleted, "env-partial-a")
+	ev2 := mustEvent(t, outbox.EventDecisionEscalated, "env-partial-b")
+	ev3 := mustEvent(t, outbox.EventDecisionReviewResolved, "env-partial-c")
+	repo := &fakeRepo{events: []*outbox.OutboxEvent{ev1, ev2, ev3}}
+	pub := &fakeBatchPublisher{
+		failKeys: map[string]error{string(ev2.EventKey): errors.New("broker rejected message")},
+	}
+	rec := &fakeRecorder{}
+
+	d := newDispatcher(t, repo, pub, shortIntervalConfig()).WithRecorder(rec)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	d.Run(ctx)
+
+	if ev1.PublishedAt == nil || ev3.PublishedAt == nil {
+		t.Fatal("expected successful batch messages to be marked published")
+	}
+	if ev2.PublishedAt != nil {
+		t.Fatal("expected failed batch message to remain unpublished")
+	}
+	if rec.published != 2 {
+		t.Fatalf("published total: want 2 successful events, got %d", rec.published)
+	}
+	if rec.publishFailures == 0 {
+		t.Fatal("expected publish failure metric for failed message")
+	}
+}
+
+func TestDispatcher_BatchMarkMismatchWarnsAndRecordsFailure(t *testing.T) {
+	ev1 := mustEvent(t, outbox.EventDecisionCompleted, "env-mismatch-a")
+	ev2 := mustEvent(t, outbox.EventDecisionEscalated, "env-mismatch-b")
+	affected := int64(1)
+	repo := &fakeRepo{
+		events:           []*outbox.OutboxEvent{ev1, ev2},
+		affectedOverride: &affected,
+	}
+	pub := &fakeBatchPublisher{}
+	rec := &fakeRecorder{}
+	d := newDispatcher(t, repo, pub, shortIntervalConfig()).WithRecorder(rec)
+
+	var buf bytes.Buffer
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	defer slog.SetDefault(oldLogger)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	d.Run(ctx)
+
+	logs := buf.String()
+	if !strings.Contains(logs, "outbox_mark_published_mismatch") {
+		t.Fatalf("expected mark-published mismatch warning, got:\n%s", logs)
+	}
+	if rec.markPublishedFailures == 0 {
+		t.Fatal("expected mark-published failure metric on affected-count mismatch")
+	}
+}
+
+func TestDispatcher_SerialPublishFallbackStillWorks(t *testing.T) {
+	ev1 := mustEvent(t, outbox.EventDecisionCompleted, "env-fallback-a")
+	ev2 := mustEvent(t, outbox.EventDecisionEscalated, "env-fallback-b")
+	repo := &fakeRepo{events: []*outbox.OutboxEvent{ev1, ev2}}
+	pub := &fakePublisher{}
+
+	d := newDispatcher(t, repo, pub, shortIntervalConfig())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	d.Run(ctx)
+
+	if got := pub.callCount.Load(); got != 2 {
+		t.Fatalf("serial Publish calls: want 2, got %d", got)
+	}
+	if len(repo.markBatchIDs) != 1 || len(repo.markBatchIDs[0]) != 2 {
+		t.Fatalf("batch marker should still be used after serial publish fallback, got %#v", repo.markBatchIDs)
 	}
 }
 

@@ -49,3 +49,6 @@ data:
     dispatcher:
       enabled: {{ .Values.midas.dispatcher.enabled }}
       publisher: {{ .Values.midas.dispatcher.publisher | quote }}
+      batch_size: {{ .Values.midas.dispatcher.batchSize }}
+      poll_interval: {{ .Values.midas.dispatcher.pollInterval | quote }}
+      max_backoff: {{ .Values.midas.dispatcher.maxBackoff | quote }}

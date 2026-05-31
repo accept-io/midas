@@ -20,9 +20,9 @@ At-least-once delivery: if MIDAS crashes after publishing but before marking the
 |----------|---------|-------------|
 | `MIDAS_DISPATCHER_ENABLED` | `false` | Set to `true` to start the outbox dispatcher |
 | `MIDAS_DISPATCHER_PUBLISHER` | `none` | Publisher backend. Only valid value when enabled: `kafka` |
-| `MIDAS_DISPATCHER_BATCH_SIZE` | `100` | Outbox rows per poll cycle |
-| `MIDAS_DISPATCHER_POLL_INTERVAL` | `2s` | Sleep between poll cycles (Go duration string) |
-| `MIDAS_DISPATCHER_MAX_BACKOFF` | `30s` | Maximum backoff on consecutive errors |
+| `MIDAS_DISPATCHER_BATCH_SIZE` | `100` | Maximum outbox rows claimed per poll cycle; this is not broker publish batching |
+| `MIDAS_DISPATCHER_POLL_INTERVAL` | `2s` | Active runtime config for sleep between empty-queue poll cycles (Go duration string) |
+| `MIDAS_DISPATCHER_MAX_BACKOFF` | `30s` | Active runtime config for maximum backoff on consecutive poll errors |
 | `MIDAS_KAFKA_BROKERS` | _(none)_ | Comma-separated `host:port` broker addresses. Required when publisher is `kafka` |
 | `MIDAS_KAFKA_CLIENT_ID` | `midas` | Client identifier sent to the broker for observability |
 | `MIDAS_KAFKA_REQUIRED_ACKS` | `-1` | Acknowledgement level: `-1` = all in-sync replicas, `0` = none, `1` = leader only |
@@ -56,6 +56,15 @@ Startup validation:
 - `MIDAS_DISPATCHER_ENABLED=false` — all publisher and Kafka fields are ignored.
 - `MIDAS_DISPATCHER_ENABLED=true` + `publisher=kafka` + empty `MIDAS_KAFKA_BROKERS` — MIDAS fails at startup.
 - SASL username and password must be configured together; unsupported SASL mechanisms fail at startup.
+
+D40f-b publishes each claimed topic group with one Kafka batch write and marks
+successfully acknowledged rows with one batch database update. Delivery remains
+at-least-once: failed or unconfirmed messages stay unpublished for retry, and a
+crash after broker acknowledgement but before `published_at` is written may
+produce duplicates. `MIDAS_DISPATCHER_BATCH_SIZE` now has direct throughput
+impact because it bounds the publish/mark batch size. Durable claim leases are
+still deferred to D40f-c, and bounded dispatcher concurrency is deferred to
+D40f-d. `MIDAS_KAFKA_REQUIRED_ACKS=-1` remains the recommended durable default.
 
 ### Events published
 

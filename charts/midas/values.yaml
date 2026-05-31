@@ -133,6 +133,14 @@ midas:
     enabled: false
     # publisher: "none" or "kafka"
     publisher: "none"
+    # batchSize: maximum outbox rows claimed per poll cycle.
+    # This does not enable broker publish batching; rows are still published
+    # one at a time until the D40f-b batching tranche lands.
+    batchSize: 100
+    # pollInterval: sleep between poll cycles when the queue is empty.
+    pollInterval: "2s"
+    # maxBackoff: maximum exponential backoff after consecutive poll errors.
+    maxBackoff: "30s"
 
 # ---------------------------------------------------------------------------
 # Secret configuration

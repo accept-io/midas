@@ -239,6 +239,35 @@ func (r *OutboxRepo) MarkPublished(ctx context.Context, id string) error {
 	return nil
 }
 
+// MarkPublishedBatch sets published_at to the current UTC time for the given
+// event IDs using a single UPDATE. It returns the number of rows affected. An
+// empty ID slice is a no-op.
+func (r *OutboxRepo) MarkPublishedBatch(ctx context.Context, ids []string) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	now := time.Now().UTC()
+	args := make([]any, 0, len(ids)+1)
+	args = append(args, now)
+	placeholders := make([]string, 0, len(ids))
+	for i, id := range ids {
+		args = append(args, id)
+		placeholders = append(placeholders, fmt.Sprintf("$%d", i+2))
+	}
+
+	q := `UPDATE outbox_events SET published_at = $1 WHERE id IN (` + strings.Join(placeholders, ",") + `)`
+	res, err := r.db.ExecContext(ctx, q, args...)
+	if err != nil {
+		return 0, fmt.Errorf("outbox: mark published batch: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("outbox: batch rows affected: %w", err)
+	}
+	return n, nil
+}
+
 func scanOutboxRows(rows *sql.Rows) ([]*outbox.OutboxEvent, error) {
 	var out []*outbox.OutboxEvent
 	for rows.Next() {

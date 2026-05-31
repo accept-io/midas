@@ -177,6 +177,35 @@ func (p *recordingPublisher) Publish(ctx context.Context, _ dispatch.Message) er
 	return nil
 }
 
+func (p *recordingPublisher) PublishBatch(ctx context.Context, msgs []dispatch.Message) (dispatch.PublishBatchResult, error) {
+	select {
+	case <-ctx.Done():
+		return dispatch.PublishBatchResult{}, ctx.Err()
+	default:
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	result := dispatch.PublishBatchResult{
+		Successful: make([]int, 0, len(msgs)),
+	}
+	var firstErr error
+	for i := range msgs {
+		if p.maxSuccess > 0 && p.count >= p.maxSuccess {
+			err := fmt.Errorf("d40g test publisher paused after %d successes", p.maxSuccess)
+			if firstErr == nil {
+				firstErr = err
+			}
+			result.Failed = append(result.Failed, dispatch.PublishBatchFailure{Index: i, Err: err})
+			continue
+		}
+		p.count++
+		result.Successful = append(result.Successful, i)
+	}
+	return result, firstErr
+}
+
 func (p *recordingPublisher) Count() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()

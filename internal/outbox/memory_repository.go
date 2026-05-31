@@ -120,6 +120,33 @@ func (r *MemoryRepository) MarkPublished(_ context.Context, id string) error {
 	return fmt.Errorf("outbox: event %q not found", id)
 }
 
+// MarkPublishedBatch sets PublishedAt on all matching event IDs and returns the
+// number of events updated. Unknown IDs are ignored so callers can compare the
+// affected count with the requested count.
+func (r *MemoryRepository) MarkPublishedBatch(_ context.Context, ids []string) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	wanted := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		wanted[id] = struct{}{}
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	now := time.Now().UTC()
+	var affected int64
+	for _, ev := range r.events {
+		if _, ok := wanted[ev.ID]; ok {
+			ev.PublishedAt = &now
+			affected++
+		}
+	}
+	return affected, nil
+}
+
 // All returns a snapshot of every event in the repository, published or not.
 // Used in tests to assert the full set of appended events.
 func (r *MemoryRepository) All(_ context.Context) []*OutboxEvent {
