@@ -2,6 +2,9 @@
 
 Deploys [Accept MIDAS](https://github.com/accept-io/midas) — an AI agent authority governance engine — on Kubernetes.
 
+For a reviewer-friendly end-to-end walkthrough, see
+[`docs/getting-started/kubernetes.md`](../../docs/getting-started/kubernetes.md).
+
 ## What this chart deploys
 
 - A single MIDAS `Deployment` (one replica by default)
@@ -17,9 +20,12 @@ MIDAS does not require Kubernetes API access or any RBAC permissions. No `Servic
 
 - Helm 3.x
 - Kubernetes 1.24+
-- A MIDAS container image built from the [repository Dockerfile](https://github.com/accept-io/midas/blob/main/Dockerfile) and pushed to a registry accessible from your cluster
+- A MIDAS container image built from the [repository Dockerfile](https://github.com/accept-io/midas/blob/main/Dockerfile) and available to your cluster
 
-> **Note:** No official public container image is currently published. Build and push the image yourself using the Dockerfile in the repository root, then set `image.repository` and `image.tag` accordingly.
+> **Note:** No official public container image is currently published. For kind,
+> build locally and load the image into kind. For other clusters, build and push
+> the image yourself using the Dockerfile in the repository root, then set
+> `image.repository` and `image.tag` accordingly.
 
 - A Postgres database provisioned and reachable from the cluster
 - A Kubernetes Secret containing at minimum `DATABASE_URL` and `AUTH_TOKENS` (see [Secret configuration](#secret-configuration))
@@ -78,6 +84,10 @@ These values **must** be supplied for a functional production deployment:
 | `image.tag` | `""` (Chart.appVersion) | Image tag; pin this for production |
 | `image.pullPolicy` | `IfNotPresent` | Kubernetes image pull policy |
 | `replicaCount` | `1` | Number of replicas. See [Replica count](#replica-count) |
+| `podSecurityContext.runAsNonRoot` | `true` | Run the pod as a non-root user |
+| `podSecurityContext.runAsUser` | `65532` | Numeric non-root UID for the MIDAS distroless image |
+| `podSecurityContext.runAsGroup` | `65532` | Numeric non-root GID for the MIDAS distroless image |
+| `podSecurityContext.seccompProfile.type` | `RuntimeDefault` | Use the Kubernetes runtime default seccomp profile |
 | `service.type` | `ClusterIP` | Kubernetes Service type |
 | `service.port` | `8080` | Service port |
 | `midas.profile` | `production` | Runtime profile: `dev` or `production` |
@@ -238,7 +248,63 @@ tok-abc123|svc:payments-engine|platform.operator;tok-xyz789|svc:audit-bot|platfo
 
 Available roles: `platform.admin`, `platform.operator`, `platform.viewer`.
 
+## Metrics
+
+MIDAS serves Prometheus-format runtime metrics at `/metrics` by default. The
+current chart does not expose separate Helm values for `MIDAS_METRICS_ENABLED`
+or `MIDAS_METRICS_PATH`; it relies on the runtime defaults unless operators
+provide environment overrides outside the chart.
+
+The chart does not create a Prometheus `ServiceMonitor`. Import the standalone
+observability assets from [`deploy/observability`](../../deploy/observability)
+into the monitoring stack you operate.
+
+## Pod security context
+
+The chart renders a numeric non-root pod security context by default:
+
+```yaml
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+```
+
+These numeric IDs are required so Kubernetes can verify the MIDAS distroless
+image runs as non-root. The container security context remains hardened with
+`allowPrivilegeEscalation: false`, `readOnlyRootFilesystem: true`, and all Linux
+capabilities dropped.
+
+## Dispatcher and Kafka-compatible publishing
+
+The dispatcher is disabled by default:
+
+```yaml
+midas:
+  dispatcher:
+    enabled: false
+    publisher: "none"
+```
+
+The chart renders dispatcher tuning values into `midas.yaml`
+(`batch_size`, `poll_interval`, and `max_backoff`). Enabling Kafka-compatible
+publishing also requires broker configuration supplied through MIDAS environment
+variables or a future chart enhancement; the current chart does not create Kafka
+or Event Hubs resources and does not expose broker/SASL/TLS values directly.
+
 ## Local evaluation
+
+For a tested local kind path, see
+[`docs/getting-started/kubernetes.md`](../../docs/getting-started/kubernetes.md).
+That walkthrough builds `midas-api:kind-test`, loads it with
+`kind load docker-image`, and installs with:
+
+```bash
+--set image.repository=docker.io/library/midas-api \
+--set image.tag=kind-test
+```
 
 To run MIDAS locally without Postgres or authentication:
 
@@ -257,18 +323,21 @@ This runs MIDAS in memory-backed, open-auth mode. **Suitable for local evaluatio
 
 ## Explorer
 
-The MIDAS Explorer is an in-browser governance sandbox. It requires `headless: false` and `localIam.enabled: true`.
+The MIDAS Explorer is an in-browser governance sandbox. The chart is headless by
+default, so `/explorer` returns 404 unless Explorer is explicitly enabled.
 
-To enable Explorer (overrides production defaults):
+To make the Explorer route available, use the Helm value names below:
 
 ```yaml
 midas:
   server:
     headless: false
     explorerEnabled: true
-  localIam:
-    enabled: true
 ```
+
+The Helm value is camelCase: `midas.server.explorerEnabled`. The rendered
+`midas.yaml` key is `explorer_enabled`, but `midas.server.explorer_enabled` is
+not a chart value.
 
 ## Production example
 
@@ -301,11 +370,66 @@ The default is one replica. Do not increase `replicaCount` without considering:
 
 MIDAS provides distinct endpoints for liveness and readiness. The liveness probe intentionally does not check the database — a Postgres outage should not cause pod restarts.
 
+## Service access and smoke tests
+
+For release name `midas`, the Service name is `midas`:
+
+```bash
+kubectl port-forward svc/midas 8080:8080 -n <namespace>
+```
+
+Then check the runtime:
+
+```bash
+curl -i http://localhost:8080/healthz
+curl -i http://localhost:8080/readyz
+curl -i http://localhost:8080/metrics
+```
+
+When `midas.auth.mode=required`, unauthenticated data-plane calls should be
+rejected:
+
+```bash
+curl -i -X POST http://localhost:8080/v1/evaluate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "surface_id": "surf-v2-credit-assess",
+    "process_id": "proc-credit-assessment",
+    "agent_id": "agent-v2-evaluator",
+    "confidence": 0.91,
+    "consequence": {"type": "risk_rating", "risk_rating": "low"},
+    "request_id": "req-chart-unauth-001",
+    "request_source": "chart-smoke"
+  }'
+```
+
+Expected: `401 Unauthorized`.
+
+For an authenticated first evaluation using seeded demo data, follow the
+quickstart in
+[`docs/getting-started/kubernetes.md`](../../docs/getting-started/kubernetes.md#10-optional-authenticated-evaluation).
+
+## Uninstall
+
+```bash
+helm uninstall midas -n <namespace>
+```
+
+If you created the namespace only for MIDAS:
+
+```bash
+kubectl delete namespace <namespace>
+```
+
+If you used `secret.existingSecret`, that Secret is operator-managed and should
+be deleted explicitly when no longer needed. Chart-managed Secrets are annotated
+with `helm.sh/resource-policy: keep`.
+
 ## Limitations and current scope
 
 - **No ingress** — add an Ingress resource separately if external access is required
 - **No TLS termination** — terminate TLS at an ingress controller or load balancer; set `midas.localIam.secureCookies=true` when doing so. Production-profile deployments enforce this via config validation.
 - **No HPA** — autoscaling is not configured
-- **No Prometheus ServiceMonitor** — metrics endpoint is not yet part of the MIDAS feature set
+- **No Prometheus ServiceMonitor** — `/metrics` is served by MIDAS, but the chart does not create monitor resources
 - **No bundled database** — provision Postgres externally
 - **No multi-environment overlays** — use separate `values-*.yaml` files per environment

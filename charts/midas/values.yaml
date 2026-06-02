@@ -37,6 +37,18 @@ fullnameOverride: ""
 podAnnotations: {}
 
 # ---------------------------------------------------------------------------
+# Pod security context
+# ---------------------------------------------------------------------------
+# Numeric non-root IDs are required by Kubernetes for images with a named
+# non-root user, including the MIDAS distroless image.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+# ---------------------------------------------------------------------------
 # Service
 # ---------------------------------------------------------------------------
 service:
@@ -134,8 +146,8 @@ midas:
     # publisher: "none" or "kafka"
     publisher: "none"
     # batchSize: maximum outbox rows claimed per poll cycle.
-    # This does not enable broker publish batching; rows are still published
-    # one at a time until the D40f-b batching tranche lands.
+    # This also bounds each topic-group broker publish batch and
+    # mark-published update.
     batchSize: 100
     # pollInterval: sleep between poll cycles when the queue is empty.
     pollInterval: "2s"

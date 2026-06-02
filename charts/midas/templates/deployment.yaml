@@ -27,9 +27,7 @@ spec:
       # MIDAS does not require Kubernetes API access or RBAC permissions.
       automountServiceAccountToken: false
       securityContext:
-        runAsNonRoot: true
-        seccompProfile:
-          type: RuntimeDefault
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
         - name: midas
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"

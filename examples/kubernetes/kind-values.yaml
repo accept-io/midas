@@ -1,0 +1,85 @@
+# Example values for local kind/minikube-style MIDAS evaluation.
+#
+# This file uses only values supported by charts/midas/values.yaml. It does not
+# create Postgres, Ingress, TLS, ServiceMonitor, Kafka, or cloud-provider
+# resources. Create the referenced Secret before installing:
+#
+#   kubectl create namespace midas
+#   kubectl create secret generic midas-secrets \
+#     --namespace midas \
+#     --from-literal=DATABASE_URL='<postgresql-url>' \
+#     --from-literal=AUTH_TOKENS='<operator-token>|svc:reviewer|platform.operator'
+#
+# The validated kind path builds `midas-api:kind-test` locally and loads it into
+# the kind cluster. Kubernetes resolves that image as docker.io/library/midas-api
+# with tag kind-test.
+
+replicaCount: 1
+
+image:
+  repository: docker.io/library/midas-api
+  tag: kind-test
+  pullPolicy: IfNotPresent
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+service:
+  # ClusterIP is suitable for kubectl port-forward.
+  type: ClusterIP
+  port: 8080
+
+midas:
+  profile: production
+
+  server:
+    # Keep the quickstart API-only. Set headless=false and explorerEnabled=true
+    # only when intentionally evaluating the browser Explorer.
+    headless: true
+    explorerEnabled: false
+
+  store:
+    # The chart expects an external PostgreSQL-compatible database.
+    backend: postgres
+    maxOpenConns: 10
+    maxIdleConns: 5
+    connMaxLifetime: "30m"
+    connMaxIdleTime: "5m"
+
+  auth:
+    # Required auth lets reviewers verify unauthenticated /v1/evaluate returns
+    # 401 and authenticated calls require a bearer token.
+    mode: required
+
+  dev:
+    # Seed deterministic demo governance data so the optional authenticated
+    # /v1/evaluate smoke test in docs/getting-started/kubernetes.md has known
+    # Surface, Process, Agent, Profile, and Grant IDs.
+    seedDemoData: true
+    seedDemoUser: false
+
+  dispatcher:
+    # Keep event publishing off for the local quickstart. Enabling it requires
+    # Kafka-compatible broker configuration supplied outside this chart.
+    enabled: false
+    publisher: "none"
+    batchSize: 100
+    pollInterval: "2s"
+    maxBackoff: "30s"
+
+secret:
+  # The chart maps DATABASE_URL -> MIDAS_DATABASE_URL and
+  # AUTH_TOKENS -> MIDAS_AUTH_TOKENS from this Secret.
+  existingSecret: midas-secrets
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi

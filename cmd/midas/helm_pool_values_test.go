@@ -60,6 +60,35 @@ func TestHelmChart_RendersDispatcherTuningConfigKeys(t *testing.T) {
 	}
 }
 
+func TestHelmChart_RendersNumericPodSecurityContext(t *testing.T) {
+	values := readChartFile(t, "../../charts/midas/values.yaml")
+	for _, want := range []string{
+		"podSecurityContext:",
+		"runAsNonRoot: true",
+		"runAsUser: 65532",
+		"runAsGroup: 65532",
+		"type: RuntimeDefault",
+	} {
+		if !strings.Contains(values, want) {
+			t.Fatalf("values.yaml must expose %q", want)
+		}
+	}
+
+	deployment := readChartFile(t, "../../charts/midas/templates/deployment.yaml")
+	for _, want := range []string{
+		"securityContext:",
+		"{{- toYaml .Values.podSecurityContext | nindent 8 }}",
+		"allowPrivilegeEscalation: false",
+		"readOnlyRootFilesystem: true",
+		"capabilities:",
+		"drop:",
+	} {
+		if !strings.Contains(deployment, want) {
+			t.Fatalf("deployment.yaml must render %q", want)
+		}
+	}
+}
+
 func TestHelmChart_DocumentsHighWritePoolGuidance(t *testing.T) {
 	readme := readChartFile(t, "../../charts/midas/README.md")
 	for _, want := range []string{

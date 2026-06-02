@@ -138,6 +138,11 @@ curl http://localhost:8080/v1/decisions/request/req-demo-001?source=lending-serv
 ```
 
 For an end-to-end Postgres walkthrough including control-plane apply, surface approval, profile authoring, and grant binding, see [docs/guides/quickstart-first-evaluation.md](docs/guides/quickstart-first-evaluation.md).
+
+### Kubernetes / Helm
+
+MIDAS includes a Helm chart at [charts/midas](charts/midas). For a reviewer-friendly Kubernetes walkthrough, including required Secrets, external Postgres configuration, install, port-forwarding, health/readiness/metrics checks, and uninstall, see [docs/getting-started/kubernetes.md](docs/getting-started/kubernetes.md). The chart-local reference is [charts/midas/README.md](charts/midas/README.md).
+
 ---
 
 ## Authority Model

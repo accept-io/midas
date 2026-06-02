@@ -81,6 +81,12 @@ The schema is applied automatically on startup. There is no separate migration s
 
 ---
 
+## Option 4: Kubernetes / Helm
+
+MIDAS includes a Helm chart at [`charts/midas`](../charts/midas). For a Kubernetes quickstart covering required Secrets, external Postgres, Helm install, port-forwarding, `/healthz`, `/readyz`, `/metrics`, an auth check, optional first evaluation smoke test, and uninstall, see [docs/getting-started/kubernetes.md](getting-started/kubernetes.md).
+
+---
+
 ## Verify the server is running
 
 ```bash
