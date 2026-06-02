@@ -8,6 +8,37 @@ MIDAS determines whether an automated agent is within authority to perform a con
 
 ---
 
+## How MIDAS Is Used
+
+MIDAS is used at the point where an agent, automation, or AI-enabled service is about to make or recommend a consequential decision.
+
+The agent does not ask MIDAS to make the business decision. Instead, the agent calls MIDAS to check whether the proposed decision is within delegated authority. The agent submits a request to `/v1/evaluate` with:
+
+- the decision surface being used;
+- the agent identity;
+- the process context;
+- the confidence score;
+- the consequence being proposed;
+- any required decision context;
+- a request source and request ID for idempotency.
+
+MIDAS then resolves the applicable authority chain:
+
+```text
+Decision Surface → Authority Profile → Grant → Agent
+```
+
+The evaluation is deterministic and independent of any LLM provider, prompt, or orchestration framework. The agent may use an LLM, a rules engine, a workflow engine, or conventional application logic to propose an action. MIDAS evaluates that proposed action against explicit authority structures and returns one governed outcome:
+
+| Outcome | Meaning |
+|---|---|
+| `accept` | The proposed decision is within delegated authority and may proceed. |
+| `escalate` | The decision requires review because confidence, consequence, policy, or context exceeds the granted boundary. |
+| `reject` | The decision is not permitted. |
+| `request_clarification` | Required context is missing or insufficient. |
+
+Every evaluation records a tamper-evident evidence envelope and appends a transactional outbox event for downstream processing. This allows MIDAS to act as a deterministic runtime control point for autonomous decisions while preserving an auditable record of what was requested, what authority was resolved, and why the outcome was reached.
+
 ## Product Preview
 Explore the live MIDAS demo environment:
 
@@ -225,28 +256,29 @@ Full variable reference: [docs/operations/deployment.md](docs/operations/deploym
 
 ## Documentation
 
-| Document | Contents |
-|----------|----------|
-| [docs/getting-started.md](docs/getting-started.md) | Prerequisites, install paths, memory-mode first evaluation |
-| [docs/guides/quickstart-first-evaluation.md](docs/guides/quickstart-first-evaluation.md) | End-to-end Postgres walkthrough: `midas init quickstart` → Surface approval → Agent/Profile/Grant → Profile approval → `/v1/evaluate` |
-| [docs/explorer.md](docs/explorer.md) | Explorer sandbox: usage, endpoints, auth, envelope inspector |
-| [docs/control-plane.md](docs/control-plane.md) | Apply, plan, surface lifecycle, versioning |
-| [docs/core/authority-model.md](docs/core/authority-model.md) | Surfaces, profiles, grants, the authority chain |
-| [docs/core/runtime-evaluation.md](docs/core/runtime-evaluation.md) | Evaluate endpoint, outcomes, idempotency, audit |
-| [docs/core/envelope-integrity.md](docs/core/envelope-integrity.md) | Envelope structure, hash chain, integrity verification |
-| [docs/core/data-model.md](docs/core/data-model.md) | PostgreSQL schema reference |
-| [docs/guides/lifecycle-management.md](docs/guides/lifecycle-management.md) | Inferred structure lifecycle: promote and cleanup |
-| [docs/guides/authentication.md](docs/guides/authentication.md) | Local IAM, OIDC/SSO, and API bearer token authentication |
-| [docs/guides/rego-policies.md](docs/guides/rego-policies.md) | Policy behavior: NoOp default and future direction |
-| [docs/operations/runtime-readiness.md](docs/operations/runtime-readiness.md) | Operator runbook: pilot deployment, observability, incident response, benchmark interpretation, fail-mode guidance |
-| [docs/operations/deployment.md](docs/operations/deployment.md) | Surface lifecycle, Postgres pool, runtime metrics, runtime safety |
-| [docs/operations/performance.md](docs/operations/performance.md) | Reference inline-evaluation benchmarks (direct + HTTP) and interpretation |
-| [docs/operations/escalations.md](docs/operations/escalations.md) | Escalation outcomes, listing and resolving |
-| [docs/operations/events.md](docs/operations/events.md) | Outbox, dispatcher, Kafka, event contracts |
-| [docs/operations/integrations.md](docs/operations/integrations.md) | Kafka integration, SSO/OIDC |
-| [docs/api/http-api.md](docs/api/http-api.md) | Complete HTTP API reference |
-| [docs/architecture/architecture.md](docs/architecture/architecture.md) | Deep architecture overview |
-
+| Document                                                                                 | Contents                                                                                                                                                 |
+| ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [docs/getting-started.md](docs/getting-started.md)                                       | Prerequisites, install paths, memory-mode first evaluation                                                                                               |
+| [docs/getting-started/kubernetes.md](docs/getting-started/kubernetes.md)                 | Kubernetes and Helm quickstart: kind/minikube-style local validation, required Secrets, Helm install, smoke tests, optional Explorer mode, and uninstall |
+| [charts/midas/README.md](charts/midas/README.md)                                         | Helm chart reference: values, required Secrets, deployment options, probes, metrics, dispatcher settings, and limitations                                |
+| [docs/guides/quickstart-first-evaluation.md](docs/guides/quickstart-first-evaluation.md) | End-to-end Postgres walkthrough: `midas init quickstart` → Surface approval → Agent/Profile/Grant → Profile approval → `/v1/evaluate`                    |
+| [docs/explorer.md](docs/explorer.md)                                                     | Explorer sandbox: usage, endpoints, auth, envelope inspector                                                                                             |
+| [docs/control-plane.md](docs/control-plane.md)                                           | Apply, plan, surface lifecycle, versioning                                                                                                               |
+| [docs/core/authority-model.md](docs/core/authority-model.md)                             | Surfaces, profiles, grants, the authority chain                                                                                                          |
+| [docs/core/runtime-evaluation.md](docs/core/runtime-evaluation.md)                       | Evaluate endpoint, outcomes, idempotency, audit                                                                                                          |
+| [docs/core/envelope-integrity.md](docs/core/envelope-integrity.md)                       | Envelope structure, hash chain, integrity verification                                                                                                   |
+| [docs/core/data-model.md](docs/core/data-model.md)                                       | PostgreSQL schema reference                                                                                                                              |
+| [docs/guides/lifecycle-management.md](docs/guides/lifecycle-management.md)               | Inferred structure lifecycle: promote and cleanup                                                                                                        |
+| [docs/guides/authentication.md](docs/guides/authentication.md)                           | Local IAM, OIDC/SSO, and API bearer token authentication                                                                                                 |
+| [docs/guides/rego-policies.md](docs/guides/rego-policies.md)                             | Policy behavior: NoOp default and future direction                                                                                                       |
+| [docs/operations/runtime-readiness.md](docs/operations/runtime-readiness.md)             | Operator runbook: pilot deployment, observability, incident response, benchmark interpretation, fail-mode guidance                                       |
+| [docs/operations/deployment.md](docs/operations/deployment.md)                           | Surface lifecycle, Postgres pool, runtime metrics, runtime safety                                                                                        |
+| [docs/operations/performance.md](docs/operations/performance.md)                         | Reference inline-evaluation benchmarks (direct + HTTP) and interpretation                                                                                |
+| [docs/operations/escalations.md](docs/operations/escalations.md)                         | Escalation outcomes, listing and resolving                                                                                                               |
+| [docs/operations/events.md](docs/operations/events.md)                                   | Outbox, dispatcher, Kafka, event contracts                                                                                                               |
+| [docs/operations/integrations.md](docs/operations/integrations.md)                       | Kafka integration, SSO/OIDC                                                                                                                              |
+| [docs/api/http-api.md](docs/api/http-api.md)                                             | Complete HTTP API reference                                                                                                                              |
+| [docs/architecture/architecture.md](docs/architecture/architecture.md)                   | Deep architecture overview                                                                                                                               |
 ---
 
 ## License
