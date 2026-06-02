@@ -19,8 +19,9 @@ control-plane apply path. This guide shows how, end to end.
 - Calls `POST /v1/evaluate` and gets a successful outcome.
 
 The walkthrough uses [`surf-v2-credit-assess`](#why-this-surface) from
-the bundle. The same shape works for any of the bundle's Surfaces —
-substitute the IDs and owner strings appropriately.
+the bundle. The same shape works for any of the bundle's Surfaces if
+you substitute the Surface ID, Process ID, Profile ID, Grant ID, and
+owner strings appropriately.
 
 ## Prerequisites
 
@@ -44,6 +45,11 @@ Before starting, you need:
   hold `governance.approver` and your principal ID must match the
   Surface's `business_owner` or `technical_owner` — see
   [Approve a quickstart Surface](#3-approve-a-quickstart-surface).
+- **A policy posture that permits the example.** MIDAS uses the
+  `NoOpPolicyEvaluator` by default, which permits the policy step. If
+  you have configured a real policy evaluator, make sure the example
+  `spec.policy.reference` resolves to a policy that permits the sample
+  request.
 
 The examples below use `Authorization: Bearer $MIDAS_TOKEN` style
 headers consistent with the rest of MIDAS's API documentation. If you
@@ -101,7 +107,9 @@ If you'd rather walk through a different Surface, substitute one of:
 | `surf-v2-merchant-hv-pay` | `proc-merchant-payment-auth` | merchant-services |
 
 The walkthrough's Profile, Grant, and evaluate-call IDs reference
-`SURFACE_ID` so the rest of the steps work for any of them.
+`surf-v2-credit-assess` directly. If you choose a different Surface,
+change the Profile ID, Grant ID, Profile `surface_id`, evaluate
+`surface_id`, and evaluate `process_id` to match your chosen row.
 
 ## 3. Approve a quickstart Surface
 
@@ -110,6 +118,7 @@ curl -s -X POST \
   -H "Authorization: Bearer $MIDAS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
+    "submitted_by":  "cli:init-quickstart",
     "approver_id":   "user:admin",
     "approver_name": "Admin"
   }' \
@@ -166,6 +175,7 @@ spec:
       amount: 5000
       currency: GBP
   policy:
+    reference: noop://quickstart-credit-assess
     fail_mode: closed
   lifecycle:
     status: active
@@ -180,6 +190,7 @@ spec:
   agent_id:       agent-quickstart-demo
   profile_id:     profile-quickstart-credit-assess
   granted_by:     user:admin
+  granted_at:     "2026-01-01T00:00:00Z"
   effective_from: "2026-01-01T00:00:00Z"
   status:         active
 ```
@@ -190,14 +201,20 @@ Notes:
   set `spec.runtime.model` and `spec.runtime.provider`.
 - `spec.surface_id` on the Profile must match the Surface ID you
   approved in step 3.
+- `spec.policy.reference` is required by the control-plane Profile
+  validator. `noop://quickstart-credit-assess` is an example reference
+  string; the default `NoOpPolicyEvaluator` permits it, while a real
+  policy evaluator may interpret references differently.
 - `spec.lifecycle.status: active` is validated, but the apply path
   still persists the Profile in `review` regardless of this value.
   You will approve the Profile in step 6.
-- `spec.effective_from` on Grant is RFC3339; the value above places
-  the Grant in effect now.
+- `spec.granted_at` and `spec.effective_from` on Grant are required
+  RFC3339 timestamps. `granted_at` must be before or equal to
+  `effective_from`.
 
 If you picked a different Surface in step 2, change the Profile ID,
-the Grant ID, and the `surface_id` reference accordingly.
+the Grant ID, the `surface_id` reference, the policy reference, and
+the evaluate request's `surface_id` / `process_id` accordingly.
 
 ## 5. Apply the authority bundle
 
@@ -245,14 +262,16 @@ Expected response:
 {
   "profile_id":  "profile-quickstart-credit-assess",
   "version":     1,
+  "status":      "active",
   "approved_by": "user:admin"
 }
 ```
 
-`version: 1` matches the `lifecycle.version` declared in the YAML.
-Profile approval has a simpler policy than Surface approval — it
-checks only the lifecycle transition (`review` → `active`), so no
-owner-match is required.
+`version: 1` is the first persisted version assigned by the apply
+planner; it also matches the informational `lifecycle.version`
+declared in the YAML. Profile approval has a simpler policy than
+Surface approval — it checks only the lifecycle transition (`review`
+→ `active`), so no owner-match is required.
 
 ## 7. Call `/v1/evaluate`
 
@@ -262,6 +281,7 @@ curl -s -X POST \
   -H "Content-Type: application/json" \
   -d '{
     "surface_id":     "surf-v2-credit-assess",
+    "process_id":     "proc-credit-assessment",
     "agent_id":       "agent-quickstart-demo",
     "confidence":     0.91,
     "consequence": {
@@ -278,7 +298,9 @@ curl -s -X POST \
 The `confidence` (0.91) is above the Profile's
 `decision_confidence_threshold` (0.85). The `consequence.amount`
 (2500 GBP) is below the Profile's `consequence_threshold.amount`
-(5000 GBP). With a clean Surface/Profile/Grant chain, the evaluation
+(5000 GBP). The `process_id` matches the approved Surface's owning
+Process, which keeps the request valid when structural enforcement is
+enabled. With a clean Surface/Profile/Grant chain, the evaluation
 should produce a non-reject outcome and persist a governance envelope.
 
 The exact response fields depend on the policy evaluator wired in your
@@ -303,8 +325,10 @@ curl -s \
 | Evaluate returns `reject` with `NO_ACTIVE_GRANT` | No Grant exists for this Agent, or the Grant is not yet effective | Check the Grant was applied (step 5) and that `effective_from` is in the past |
 | Evaluate returns `reject` with `GRANT_PROFILE_SURFACE_MISMATCH` | The Agent's Grant points at a Profile bound to a different Surface | Verify Profile's `spec.surface_id` matches the request's `surface_id` and that the Grant references that Profile |
 | Evaluate returns `reject` with `AGENT_NOT_FOUND` | The Agent ID in the request doesn't match a persisted Agent | Check `agent_id` in the request matches the Agent applied in step 5 |
+| Evaluate returns `400` with `process_id is required` | Structural enforcement is enabled and the request omitted `process_id` | Include the Process ID for the Surface; for this walkthrough use `proc-credit-assessment` |
+| Evaluate returns `400` with an explicit structure validation error | The request's `process_id` does not match the Surface's configured Process | Check the Surface/Process table in step 2 and update the request |
 | Surface approval returns `403 forbidden` / `approval forbidden` | Approver lacks `platform.admin`, or lacks `governance.approver`, or `approver_id` doesn't match the Surface's owners | Authenticate as `platform.admin`, or supply an `approver_id` equal to the Surface's `business_owner` (`consumer-lending-team`) or `technical_owner` (`midas`) |
-| Apply returns validation errors on the authority bundle | A field is missing or has an invalid enum value | Re-check the YAML against the shapes in step 4; common mistakes: missing `spec.type` on Agent, missing `spec.lifecycle.effective_from` on Profile, missing `spec.effective_from` on Grant |
+| Apply returns validation errors on the authority bundle | A field is missing or has an invalid enum value | Re-check the YAML against the shapes in step 4; common mistakes: missing `spec.type` on Agent, missing `spec.policy.reference` on Profile, missing `spec.granted_at` or `spec.effective_from` on Grant |
 | `midas init quickstart` rejects with `store.backend=memory is not supported` | The CLI is configured against the memory backend | Set `MIDAS_STORE_BACKEND=postgres` and a valid `DATABASE_URL`, then re-run |
 | `midas init quickstart` reports "bundle already applied" | A previous run already applied the bundle | This is expected; the command refuses re-runs to avoid creating duplicate pending-review Surface and Profile versions. Use the apply path to evolve the platform from here |
 

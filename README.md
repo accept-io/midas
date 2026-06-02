@@ -8,6 +8,27 @@ MIDAS determines whether an automated agent is within authority to perform a con
 
 ---
 
+## Intended users and regulatory context
+
+MIDAS is intended for organisations that need governed, auditable control over autonomous or agentic decision-making. This is especially relevant in highly regulated sectors such as banking, insurance, pharmaceuticals, healthcare, public services, critical infrastructure, and other environments where automated decisions must be explainable, bounded, reviewable, and evidenced.
+
+The project is designed to support organisations that need to demonstrate runtime controls over AI-enabled or agentic systems. MIDAS does this by turning delegated authority into deterministic runtime checks, recording evidence for each governed decision, supporting human escalation paths, and emitting auditable events for downstream review and monitoring.
+
+MIDAS' purpose is to provide technical governance capabilities that can help organisations implement and evidence controls expected by emerging AI governance regimes. These include risk-based regulation, auditability, human oversight, traceability, operational monitoring, and accountability.
+
+Examples of relevant governance and regulatory contexts include the EU AI Act, which sets risk-based obligations for AI developers and deployers and includes requirements for areas such as risk management, technical documentation, logging, transparency, and human oversight for high-risk systems; and Singapore’s Model AI Governance Framework for Agentic AI, which provides guidance for deploying agents responsibly and emphasises continued human accountability.
+
+In practical terms, MIDAS is intended to help organisations answer operational governance questions such as:
+
+- Which agent or automated service is making this decision?
+- What authority has been granted to that agent?
+- Which decision surface is being used?
+- What confidence, consequence, and context were submitted?
+- Was the decision accepted, escalated, rejected, or sent back for clarification?
+- What evidence was recorded?
+- Can the decision be audited after the fact?
+- Can downstream governance, monitoring, and review processes consume events from the decision?
+
 ## How MIDAS Is Used
 
 MIDAS is used at the point where an agent, automation, or AI-enabled service is about to make or recommend a consequential decision.

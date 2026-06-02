@@ -24,26 +24,27 @@ Open [http://localhost:8080/explorer](http://localhost:8080/explorer) and sign i
 
 **Run without demo mode:**
 
-Bash/sh:
+`docker-compose.yml` does not pass host shell environment variables into
+the app service automatically, so pass overrides to the container:
+
 ```bash
-MIDAS_DEV_SEED_DEMO_DATA=false MIDAS_DEV_SEED_DEMO_USER=false docker compose up --build
+docker compose build midas
+docker compose run --rm --service-ports \
+  -e MIDAS_DEV_SEED_DEMO_DATA=false \
+  -e MIDAS_DEV_SEED_DEMO_USER=false \
+  midas
 ```
-
-PowerShell:
-```powershell
-$env:MIDAS_DEV_SEED_DEMO_DATA="false"; $env:MIDAS_DEV_SEED_DEMO_USER="false"; docker compose up --build
-```
-
-> These variables persist for the current shell session. Open a fresh shell (or unset the variables) to return to default demo behaviour.
 
 **Run with Postgres instead of the in-memory store:**
 
 ```bash
-docker run --rm -p 5432:5432 \
-  -e POSTGRES_DB=midas -e POSTGRES_USER=midas -e POSTGRES_PASSWORD=midas \
-  postgres:16-alpine
+docker compose up -d postgres
+docker compose build midas
 
-MIDAS_STORE_BACKEND=postgres DATABASE_URL=postgres://midas:midas@host.docker.internal:5432/midas?sslmode=disable docker compose up --build
+docker compose run --rm --service-ports \
+  -e MIDAS_STORE_BACKEND=postgres \
+  -e MIDAS_DATABASE_URL=postgres://midas:midas@postgres:5432/midas?sslmode=disable \
+  midas
 ```
 
 ---
@@ -62,17 +63,22 @@ Open [http://localhost:8080/explorer](http://localhost:8080/explorer) and sign i
 
 ## Option 3: External PostgreSQL
 
-MIDAS requires authentication in Postgres mode. Set `MIDAS_AUTH_TOKENS` or explicitly opt out for local development with `MIDAS_AUTH_MODE=open`.
+Postgres mode requires a database URL. Authentication is controlled
+separately: the default development profile uses `MIDAS_AUTH_MODE=open`,
+while production-style deployments should set `MIDAS_AUTH_MODE=required`
+and provide `MIDAS_AUTH_TOKENS`.
 
 ```bash
 export MIDAS_STORE_BACKEND=postgres
 export MIDAS_DATABASE_URL="postgresql://user:pass@host:5432/midas?sslmode=disable"
 
-# For production: set real tokens (format: token|principal-id|role1,role2)
-export MIDAS_AUTH_TOKENS="my-secret-token|user:admin|platform.admin"
-
 # For local development only:
-# export MIDAS_AUTH_MODE=open
+export MIDAS_AUTH_MODE=open
+
+# For production-style auth instead, use required mode and real tokens
+# (format: token|principal-id|role1,role2):
+# export MIDAS_AUTH_MODE=required
+# export MIDAS_AUTH_TOKENS="my-secret-token|user:admin|platform.admin"
 
 go run ./cmd/midas
 ```
@@ -93,7 +99,7 @@ MIDAS includes a Helm chart at [`charts/midas`](../charts/midas). For a Kubernet
 curl http://localhost:8080/healthz
 ```
 
-Expected:
+Typical response:
 
 ```json
 {"status":"ok","service":"midas"}
@@ -103,11 +109,14 @@ Expected:
 curl http://localhost:8080/readyz
 ```
 
-Expected:
+Typical response:
 
 ```json
 {"status":"ready","service":"midas"}
 ```
+
+If policy metadata is configured, `/healthz` and `/readyz` may include
+additional `policy_*` fields.
 
 ---
 
@@ -133,7 +142,7 @@ curl -s -X POST http://localhost:8080/v1/evaluate \
   }' | jq .
 ```
 
-Expected response:
+Expected response, abbreviated:
 
 ```json
 {
@@ -149,7 +158,8 @@ In production-style deployments, declare structural entities via
 `POST /v1/controlplane/apply` (BusinessService → Capability → Process →
 Surface, plus Agent, Profile, Grant, and BusinessServiceCapability links),
 then evaluate against the resulting IDs. The evaluation flow is identical
-to the memory-mode example above.
+to the memory-mode example above. If `MIDAS_AUTH_MODE=required`, include
+`Authorization: Bearer $MIDAS_TOKEN` on `/v1/*` calls.
 
 ```bash
 export MIDAS_STORE_BACKEND=postgres
@@ -195,7 +205,7 @@ Notes:
   survive the command's exit.
 - Re-running the command refuses cleanly via a preflight check on a
   bundle anchor capability, so it cannot accidentally accumulate
-  pending-review Surface or Profile versions.
+  duplicate quickstart structural content.
 
 This is a structural quickstart plus guided next steps — not a
 "one command from install to evaluation" path. Authority artefact
@@ -206,7 +216,8 @@ through quickstart, Surface approval, Agent/Profile/Grant authoring,
 Profile approval, and a successful `/v1/evaluate` call, see
 [docs/guides/quickstart-first-evaluation.md](guides/quickstart-first-evaluation.md).
 
-Retrieve the full governance envelope:
+Retrieve the full governance envelope. If auth is required, add the same
+`Authorization` header used for evaluation:
 
 ```bash
 curl -s \
@@ -237,7 +248,7 @@ curl -s -X POST http://localhost:8080/v1/evaluate \
   }' | jq .
 ```
 
-Expected response:
+Expected response, abbreviated:
 
 ```json
 {
@@ -247,13 +258,15 @@ Expected response:
 }
 ```
 
-List the pending escalation queue:
+List the pending escalation queue. If auth is required, add an
+`Authorization` header:
 
 ```bash
 curl -s http://localhost:8080/v1/escalations | jq .
 ```
 
-Resolve the escalation (use the `envelope_id` from the evaluate response):
+Resolve the escalation (use the `envelope_id` from the evaluate
+response). If auth is required, add an `Authorization` header:
 
 ```bash
 curl -s -X POST http://localhost:8080/v1/reviews \
@@ -270,17 +283,67 @@ curl -s -X POST http://localhost:8080/v1/reviews \
 
 ## Apply resources via the control plane
 
-When running with PostgreSQL you need to apply resources before evaluating. Create a YAML bundle:
+When running with PostgreSQL without demo data, apply resources before
+evaluating. Create a YAML bundle:
 
 ```yaml
+apiVersion: midas.accept.io/v1
+kind: BusinessService
+metadata:
+  id: bs-payments
+  name: Payments
+spec:
+  description: Payment processing service
+  service_type: customer_facing
+  status: active
+  owner_id: payments-team
+---
+apiVersion: midas.accept.io/v1
+kind: Capability
+metadata:
+  id: cap-payment-operations
+  name: Payment Operations
+spec:
+  description: Payment release and settlement operations
+  status: active
+  owner: payments-team
+---
+apiVersion: midas.accept.io/v1
+kind: BusinessServiceCapability
+metadata:
+  id: bsc-payments-payment-operations
+spec:
+  business_service_id: bs-payments
+  capability_id: cap-payment-operations
+---
+apiVersion: midas.accept.io/v1
+kind: Process
+metadata:
+  id: proc-payment-release
+  name: Payment Release
+spec:
+  description: Release approved payments
+  status: active
+  owner: payments-team
+  business_service_id: bs-payments
+---
 apiVersion: midas.accept.io/v1
 kind: Surface
 metadata:
   id: surf-payment-release
   name: Payment Release
 spec:
-  domain: payments
   description: Governs autonomous payment release decisions
+  domain: payments
+  category: financial
+  risk_tier: high
+  status: active
+  decision_type: operational
+  reversibility_class: conditionally_reversible
+  minimum_confidence: 0.80
+  business_owner: payments-governance
+  technical_owner: payments-platform-team
+  process_id: proc-payment-release
   required_context:
     fields:
       - name: account_id
@@ -294,9 +357,7 @@ metadata:
   name: Payments Automation Agent
 spec:
   type: automation
-  runtime:
-    model: payments-engine
-    version: "2.0.0"
+  status: active
 ---
 apiVersion: midas.accept.io/v1
 kind: Profile
@@ -314,6 +375,13 @@ spec:
   input_requirements:
     required_context:
       - account_id
+  policy:
+    reference: noop://payments/standard
+    fail_mode: closed
+  lifecycle:
+    status: active
+    effective_from: "2026-01-01T00:00:00Z"
+    version: 1
 ---
 apiVersion: midas.accept.io/v1
 kind: Grant
@@ -323,10 +391,13 @@ spec:
   agent_id:   agent-payments-prod
   profile_id: prof-payments-standard
   granted_by: user-platform-governance
+  granted_at: "2026-01-01T00:00:00Z"
+  effective_from: "2026-01-01T00:00:00Z"
   status: active
 ```
 
-Dry-run (plan) before applying:
+Dry-run (plan) before applying. If auth is required, add
+`-H "Authorization: Bearer $MIDAS_TOKEN"`:
 
 ```bash
 curl -s -X POST http://localhost:8080/v1/controlplane/plan \
@@ -334,7 +405,8 @@ curl -s -X POST http://localhost:8080/v1/controlplane/plan \
   --data-binary @bundle.yaml | jq .
 ```
 
-Apply the bundle:
+Apply the bundle. If auth is required, add the same Authorization
+header:
 
 ```bash
 curl -s -X POST http://localhost:8080/v1/controlplane/apply \
@@ -342,20 +414,55 @@ curl -s -X POST http://localhost:8080/v1/controlplane/apply \
   --data-binary @bundle.yaml | jq .
 ```
 
-Approve the surface (moves it from `review` to `active`):
+Approve the surface (moves it from `review` to `active`). The approver
+must be different from `submitted_by` unless `submitted_by` is omitted:
 
 ```bash
 curl -s -X POST \
   http://localhost:8080/v1/controlplane/surfaces/surf-payment-release/approve \
   -H "Content-Type: application/json" \
   -d '{
-    "submitted_by":  "user-platform-governance",
-    "approver_id":   "user-platform-governance",
+    "submitted_by":  "user-payments-author",
+    "approver_id":   "payments-governance",
     "approver_name": "Platform Governance Team"
   }' | jq .
 ```
 
-The surface is now `active` and its grants are eligible for evaluation.
+Approve the profile (moves it from `review` to `active`):
+
+```bash
+curl -s -X POST \
+  http://localhost:8080/v1/controlplane/profiles/prof-payments-standard/approve \
+  -H "Content-Type: application/json" \
+  -d '{
+    "version":     1,
+    "approved_by": "payments-governance"
+  }' | jq .
+```
+
+The Surface and Profile are now `active`, and the active Grant is
+eligible for evaluation.
+
+Evaluate against the applied IDs:
+
+```bash
+curl -s -X POST http://localhost:8080/v1/evaluate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "surface_id":     "surf-payment-release",
+    "process_id":     "proc-payment-release",
+    "agent_id":       "agent-payments-prod",
+    "confidence":     0.91,
+    "consequence": {
+      "type":     "monetary",
+      "amount":   2500,
+      "currency": "GBP"
+    },
+    "context":        {"account_id": "acct-123"},
+    "request_id":     "req-payments-001",
+    "request_source": "getting-started"
+  }' | jq .
+```
 
 ---
 
