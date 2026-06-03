@@ -1,0 +1,112 @@
+apiVersion: midas.accept.io/v1
+kind: BusinessService
+metadata:
+  id: bs-d40j-insurance-claims
+  name: Insurance Claims
+spec:
+  description: Example service for governed claims decisions.
+  service_type: customer_facing
+  status: active
+  owner_id: claims-team
+---
+apiVersion: midas.accept.io/v1
+kind: Capability
+metadata:
+  id: cap-d40j-claims-settlement
+  name: Claims Settlement
+spec:
+  description: Settle eligible insurance claims.
+  status: active
+  owner: claims-team
+---
+apiVersion: midas.accept.io/v1
+kind: BusinessServiceCapability
+metadata:
+  id: bsc-d40j-insurance-claims-settlement
+spec:
+  business_service_id: bs-d40j-insurance-claims
+  capability_id: cap-d40j-claims-settlement
+---
+apiVersion: midas.accept.io/v1
+kind: Process
+metadata:
+  id: proc-d40j-claim-settlement
+  name: Claim Settlement
+spec:
+  description: Governed process for settling a claim.
+  status: active
+  owner: claims-team
+  business_service_id: bs-d40j-insurance-claims
+---
+apiVersion: midas.accept.io/v1
+kind: Surface
+metadata:
+  id: surf-d40j-claim-settlement
+  name: Claim Settlement Authority
+spec:
+  description: Governs automated insurance claim settlement decisions.
+  domain: insurance
+  category: financial
+  risk_tier: high
+  status: active
+  decision_type: operational
+  reversibility_class: conditionally_reversible
+  minimum_confidence: 0.80
+  business_owner: claims-governance
+  technical_owner: claims-platform-team
+  process_id: proc-d40j-claim-settlement
+  required_context:
+    fields:
+      - name: claim_id
+        type: string
+        required: true
+      - name: policy_id
+        type: string
+        required: true
+---
+apiVersion: midas.accept.io/v1
+kind: Agent
+metadata:
+  id: agent-d40j-claims-evaluator
+  name: Claims Evaluator
+spec:
+  type: automation
+  status: active
+---
+apiVersion: midas.accept.io/v1
+kind: Profile
+metadata:
+  id: profile-d40j-claims-standard
+  name: Standard Claims Authority
+spec:
+  surface_id: surf-d40j-claim-settlement
+  authority:
+    decision_confidence_threshold: 0.85
+    consequence_threshold:
+      type: monetary
+      amount: 2500
+      currency: GBP
+  input_requirements:
+    required_context:
+      - claim_id
+      - policy_id
+  policy:
+    reference: noop://examples/d40j/claims-standard
+    fail_mode: closed
+  lifecycle:
+    status: active
+    effective_from: "2026-01-01T00:00:00Z"
+    version: 1
+---
+apiVersion: midas.accept.io/v1
+kind: Grant
+metadata:
+  id: grant-d40j-claims-standard
+  name: Claims Evaluator Grant
+spec:
+  agent_id: agent-d40j-claims-evaluator
+  profile_id: profile-d40j-claims-standard
+  granted_by: claims-governance
+  granted_at: "2026-01-01T00:00:00Z"
+  effective_from: "2026-01-01T00:00:00Z"
+  status: active

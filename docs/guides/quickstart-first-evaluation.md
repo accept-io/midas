@@ -336,6 +336,9 @@ curl -s \
 
 - [docs/control-plane.md](../control-plane.md) — full control-plane bundle
   format and apply semantics.
+- [docs/examples/control-plane.md](../examples/control-plane.md) —
+  self-contained example bundles for accepted, escalated, and
+  request-clarification outcomes.
 - [docs/api/http-api.md](../api/http-api.md) — full HTTP API reference,
   including evaluate response shape and approval endpoints.
 - [docs/architecture/architecture.md](../architecture/architecture.md) —

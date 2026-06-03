@@ -1,0 +1,112 @@
+apiVersion: midas.accept.io/v1
+kind: BusinessService
+metadata:
+  id: bs-d40j-banking-wire-review
+  name: Banking Wire Review
+spec:
+  description: Example service for governed wire-transfer decisions.
+  service_type: customer_facing
+  status: active
+  owner_id: wire-review-team
+---
+apiVersion: midas.accept.io/v1
+kind: Capability
+metadata:
+  id: cap-d40j-wire-risk-review
+  name: Wire Risk Review
+spec:
+  description: Review wire-transfer risk before release.
+  status: active
+  owner: wire-review-team
+---
+apiVersion: midas.accept.io/v1
+kind: BusinessServiceCapability
+metadata:
+  id: bsc-d40j-banking-wire-review
+spec:
+  business_service_id: bs-d40j-banking-wire-review
+  capability_id: cap-d40j-wire-risk-review
+---
+apiVersion: midas.accept.io/v1
+kind: Process
+metadata:
+  id: proc-d40j-wire-release
+  name: Wire Release
+spec:
+  description: Governed process for wire-transfer release.
+  status: active
+  owner: wire-review-team
+  business_service_id: bs-d40j-banking-wire-review
+---
+apiVersion: midas.accept.io/v1
+kind: Surface
+metadata:
+  id: surf-d40j-wire-confidence-review
+  name: Wire Confidence Review
+spec:
+  description: Governs wire-transfer approval when confidence must be high.
+  domain: banking
+  category: financial
+  risk_tier: high
+  status: active
+  decision_type: operational
+  reversibility_class: conditionally_reversible
+  minimum_confidence: 0.80
+  business_owner: wire-governance
+  technical_owner: wire-platform-team
+  process_id: proc-d40j-wire-release
+  required_context:
+    fields:
+      - name: account_id
+        type: string
+        required: true
+      - name: beneficiary_country
+        type: string
+        required: true
+---
+apiVersion: midas.accept.io/v1
+kind: Agent
+metadata:
+  id: agent-d40j-wire-evaluator
+  name: Wire Evaluator
+spec:
+  type: automation
+  status: active
+---
+apiVersion: midas.accept.io/v1
+kind: Profile
+metadata:
+  id: profile-d40j-wire-confidence
+  name: Wire High-Confidence Authority
+spec:
+  surface_id: surf-d40j-wire-confidence-review
+  authority:
+    decision_confidence_threshold: 0.90
+    consequence_threshold:
+      type: monetary
+      amount: 10000
+      currency: GBP
+  input_requirements:
+    required_context:
+      - account_id
+      - beneficiary_country
+  policy:
+    reference: noop://examples/d40j/wire-confidence
+    fail_mode: closed
+  lifecycle:
+    status: active
+    effective_from: "2026-01-01T00:00:00Z"
+    version: 1
+---
+apiVersion: midas.accept.io/v1
+kind: Grant
+metadata:
+  id: grant-d40j-wire-confidence
+  name: Wire Evaluator Grant
+spec:
+  agent_id: agent-d40j-wire-evaluator
+  profile_id: profile-d40j-wire-confidence
+  granted_by: wire-governance
+  granted_at: "2026-01-01T00:00:00Z"
+  effective_from: "2026-01-01T00:00:00Z"
+  status: active

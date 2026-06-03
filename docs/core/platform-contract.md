@@ -624,6 +624,7 @@ evidence packet for the returned `envelope_id`.
 | Need | Reference |
 | --- | --- |
 | First full apply/evaluate walkthrough | [First evaluation quickstart](../guides/quickstart-first-evaluation.md) |
+| Self-contained control-plane examples | [Control-plane example bundles](../examples/control-plane.md) |
 | Runtime outcomes and idempotency | [Runtime evaluation](runtime-evaluation.md) |
 | YAML plan/apply, lifecycle, versioning | [Control plane](../control-plane.md) |
 | Authority chain concepts | [Authority model](authority-model.md) |

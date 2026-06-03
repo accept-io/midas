@@ -1,0 +1,112 @@
+apiVersion: midas.accept.io/v1
+kind: BusinessService
+metadata:
+  id: bs-d40j-banking-payments
+  name: Banking Payments
+spec:
+  description: Example service for governed payment decisions.
+  service_type: customer_facing
+  status: active
+  owner_id: banking-payments-team
+---
+apiVersion: midas.accept.io/v1
+kind: Capability
+metadata:
+  id: cap-d40j-payment-approval
+  name: Payment Approval
+spec:
+  description: Approve low-risk payment release requests.
+  status: active
+  owner: banking-payments-team
+---
+apiVersion: midas.accept.io/v1
+kind: BusinessServiceCapability
+metadata:
+  id: bsc-d40j-banking-payments-approval
+spec:
+  business_service_id: bs-d40j-banking-payments
+  capability_id: cap-d40j-payment-approval
+---
+apiVersion: midas.accept.io/v1
+kind: Process
+metadata:
+  id: proc-d40j-payment-release
+  name: Payment Release
+spec:
+  description: Governed process for releasing approved payments.
+  status: active
+  owner: banking-payments-team
+  business_service_id: bs-d40j-banking-payments
+---
+apiVersion: midas.accept.io/v1
+kind: Surface
+metadata:
+  id: surf-d40j-low-risk-payment
+  name: Low-Risk Payment Approval
+spec:
+  description: Governs low-risk payment approval decisions.
+  domain: banking
+  category: financial
+  risk_tier: medium
+  status: active
+  decision_type: operational
+  reversibility_class: conditionally_reversible
+  minimum_confidence: 0.80
+  business_owner: banking-governance
+  technical_owner: payments-platform-team
+  process_id: proc-d40j-payment-release
+  required_context:
+    fields:
+      - name: account_id
+        type: string
+        required: true
+      - name: payment_reference
+        type: string
+        required: true
+---
+apiVersion: midas.accept.io/v1
+kind: Agent
+metadata:
+  id: agent-d40j-payment-evaluator
+  name: Payment Evaluator
+spec:
+  type: automation
+  status: active
+---
+apiVersion: midas.accept.io/v1
+kind: Profile
+metadata:
+  id: profile-d40j-low-risk-payment
+  name: Low-Risk Payment Authority
+spec:
+  surface_id: surf-d40j-low-risk-payment
+  authority:
+    decision_confidence_threshold: 0.85
+    consequence_threshold:
+      type: monetary
+      amount: 5000
+      currency: GBP
+  input_requirements:
+    required_context:
+      - account_id
+      - payment_reference
+  policy:
+    reference: noop://examples/d40j/low-risk-payment
+    fail_mode: closed
+  lifecycle:
+    status: active
+    effective_from: "2026-01-01T00:00:00Z"
+    version: 1
+---
+apiVersion: midas.accept.io/v1
+kind: Grant
+metadata:
+  id: grant-d40j-low-risk-payment
+  name: Payment Evaluator Grant
+spec:
+  agent_id: agent-d40j-payment-evaluator
+  profile_id: profile-d40j-low-risk-payment
+  granted_by: banking-governance
+  granted_at: "2026-01-01T00:00:00Z"
+  effective_from: "2026-01-01T00:00:00Z"
+  status: active

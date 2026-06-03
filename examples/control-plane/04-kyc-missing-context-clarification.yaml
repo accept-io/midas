@@ -1,0 +1,111 @@
+apiVersion: midas.accept.io/v1
+kind: BusinessService
+metadata:
+  id: bs-d40j-customer-onboarding
+  name: Customer Onboarding
+spec:
+  description: Example service for governed onboarding decisions.
+  service_type: customer_facing
+  status: active
+  owner_id: onboarding-team
+---
+apiVersion: midas.accept.io/v1
+kind: Capability
+metadata:
+  id: cap-d40j-kyc-verification
+  name: KYC Verification
+spec:
+  description: Verify customer onboarding evidence.
+  status: active
+  owner: onboarding-team
+---
+apiVersion: midas.accept.io/v1
+kind: BusinessServiceCapability
+metadata:
+  id: bsc-d40j-customer-onboarding-kyc
+spec:
+  business_service_id: bs-d40j-customer-onboarding
+  capability_id: cap-d40j-kyc-verification
+---
+apiVersion: midas.accept.io/v1
+kind: Process
+metadata:
+  id: proc-d40j-kyc-review
+  name: KYC Review
+spec:
+  description: Governed process for onboarding verification.
+  status: active
+  owner: onboarding-team
+  business_service_id: bs-d40j-customer-onboarding
+---
+apiVersion: midas.accept.io/v1
+kind: Surface
+metadata:
+  id: surf-d40j-kyc-context-check
+  name: KYC Context Check
+spec:
+  description: Governs customer onboarding decisions with required context.
+  domain: customer-onboarding
+  category: compliance
+  risk_tier: medium
+  status: active
+  decision_type: operational
+  reversibility_class: conditionally_reversible
+  minimum_confidence: 0.80
+  business_owner: onboarding-governance
+  technical_owner: onboarding-platform-team
+  process_id: proc-d40j-kyc-review
+  required_context:
+    fields:
+      - name: customer_id
+        type: string
+        required: true
+      - name: identity_document_reference
+        type: string
+        required: true
+---
+apiVersion: midas.accept.io/v1
+kind: Agent
+metadata:
+  id: agent-d40j-kyc-evaluator
+  name: KYC Evaluator
+spec:
+  type: automation
+  status: active
+---
+apiVersion: midas.accept.io/v1
+kind: Profile
+metadata:
+  id: profile-d40j-kyc-context
+  name: KYC Context Authority
+spec:
+  surface_id: surf-d40j-kyc-context-check
+  authority:
+    decision_confidence_threshold: 0.80
+    consequence_threshold:
+      type: risk_rating
+      risk_rating: medium
+  input_requirements:
+    required_context:
+      - customer_id
+      - identity_document_reference
+  policy:
+    reference: noop://examples/d40j/kyc-context
+    fail_mode: closed
+  lifecycle:
+    status: active
+    effective_from: "2026-01-01T00:00:00Z"
+    version: 1
+---
+apiVersion: midas.accept.io/v1
+kind: Grant
+metadata:
+  id: grant-d40j-kyc-context
+  name: KYC Evaluator Grant
+spec:
+  agent_id: agent-d40j-kyc-evaluator
+  profile_id: profile-d40j-kyc-context
+  granted_by: onboarding-governance
+  granted_at: "2026-01-01T00:00:00Z"
+  effective_from: "2026-01-01T00:00:00Z"
+  status: active

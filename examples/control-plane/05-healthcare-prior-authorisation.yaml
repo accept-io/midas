@@ -1,0 +1,111 @@
+apiVersion: midas.accept.io/v1
+kind: BusinessService
+metadata:
+  id: bs-d40j-healthcare-authorisation
+  name: Healthcare Prior Authorisation
+spec:
+  description: Example service for generic prior-authorisation decisions.
+  service_type: customer_facing
+  status: active
+  owner_id: authorisation-team
+---
+apiVersion: midas.accept.io/v1
+kind: Capability
+metadata:
+  id: cap-d40j-prior-authorisation
+  name: Prior Authorisation
+spec:
+  description: Review generic prior-authorisation requests.
+  status: active
+  owner: authorisation-team
+---
+apiVersion: midas.accept.io/v1
+kind: BusinessServiceCapability
+metadata:
+  id: bsc-d40j-healthcare-authorisation
+spec:
+  business_service_id: bs-d40j-healthcare-authorisation
+  capability_id: cap-d40j-prior-authorisation
+---
+apiVersion: midas.accept.io/v1
+kind: Process
+metadata:
+  id: proc-d40j-prior-authorisation
+  name: Prior Authorisation
+spec:
+  description: Governed process for generic prior-authorisation decisions.
+  status: active
+  owner: authorisation-team
+  business_service_id: bs-d40j-healthcare-authorisation
+---
+apiVersion: midas.accept.io/v1
+kind: Surface
+metadata:
+  id: surf-d40j-prior-authorisation
+  name: Prior Authorisation Decision
+spec:
+  description: Governs generic healthcare prior-authorisation decisions.
+  domain: healthcare
+  category: operational
+  risk_tier: medium
+  status: active
+  decision_type: operational
+  reversibility_class: conditionally_reversible
+  minimum_confidence: 0.80
+  business_owner: authorisation-governance
+  technical_owner: authorisation-platform-team
+  process_id: proc-d40j-prior-authorisation
+  required_context:
+    fields:
+      - name: case_reference
+        type: string
+        required: true
+      - name: requested_service_code
+        type: string
+        required: true
+---
+apiVersion: midas.accept.io/v1
+kind: Agent
+metadata:
+  id: agent-d40j-authorisation-evaluator
+  name: Prior Authorisation Evaluator
+spec:
+  type: automation
+  status: active
+---
+apiVersion: midas.accept.io/v1
+kind: Profile
+metadata:
+  id: profile-d40j-prior-authorisation
+  name: Prior Authorisation Authority
+spec:
+  surface_id: surf-d40j-prior-authorisation
+  authority:
+    decision_confidence_threshold: 0.85
+    consequence_threshold:
+      type: risk_rating
+      risk_rating: medium
+  input_requirements:
+    required_context:
+      - case_reference
+      - requested_service_code
+  policy:
+    reference: noop://examples/d40j/prior-authorisation
+    fail_mode: closed
+  lifecycle:
+    status: active
+    effective_from: "2026-01-01T00:00:00Z"
+    version: 1
+---
+apiVersion: midas.accept.io/v1
+kind: Grant
+metadata:
+  id: grant-d40j-prior-authorisation
+  name: Prior Authorisation Evaluator Grant
+spec:
+  agent_id: agent-d40j-authorisation-evaluator
+  profile_id: profile-d40j-prior-authorisation
+  granted_by: authorisation-governance
+  granted_at: "2026-01-01T00:00:00Z"
+  effective_from: "2026-01-01T00:00:00Z"
+  status: active
