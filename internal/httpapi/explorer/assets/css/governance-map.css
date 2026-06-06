@@ -1352,24 +1352,41 @@
   }
   .gmap-evidence-tray.is-expanded {
     /* Phase 2B Step 36 (D25b-fix) — expanded height bumped from 280
-       to 320 so the Drift tab's stacked content (controls + 4 tiles
-       + 110px chart + panel padding) fits without engaging an
-       internal scrollbar. The 40px increase pairs with removing
-       `overflow-y: auto` from the generic .gmap-evidence-tray-panel
-       rule below. List-heavy future tabs that genuinely need
+       to 230 so the compact Drift summary fits without the chart
+       title band while the graph remains primary. List-heavy future
+       tabs that genuinely need
        scrolling opt in via `.is-scrollable`. */
-    height: 320px;
+    height: 230px;
   }
   .gmap-evidence-tray-header {
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 8px 14px;
+    padding: 5px 10px;
     height: 36px;
     flex-shrink: 0;
     background: var(--surface-container-lowest);
     border-bottom: 1px solid var(--outline-variant);
     font-family: var(--font-display);
+    min-width: 0;
+    overflow: hidden;
+  }
+  .gmap-evidence-tray-header-left,
+  .gmap-evidence-tray-header-right {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    white-space: nowrap;
+  }
+  .gmap-evidence-tray-header-left {
+    flex: 1 1 280px;
+    overflow: hidden;
+  }
+  .gmap-evidence-tray-header-right {
+    flex: 1 1 280px;
+    justify-content: flex-end;
+    overflow: hidden;
   }
   .gmap-evidence-tray-title {
     font-size: 11px;
@@ -1379,7 +1396,9 @@
     color: var(--slate-300);
   }
   .gmap-evidence-tray-node {
+    font-family: var(--font-mono);
     font-size: 12px;
+    font-variant-numeric: tabular-nums;
     color: var(--slate-400);
     flex: 1 1 auto;
     min-width: 0;
@@ -1410,8 +1429,9 @@
     padding: 2px 8px;
     border: 1px dashed var(--outline-variant);
     border-radius: 999px;
-    background: rgba(173, 198, 255, 0.06);
+    background: var(--surface-container-low);
     cursor: help;
+    flex: 0 1 auto;
   }
   .gmap-evidence-tray-toggle {
     display: inline-flex;
@@ -1420,7 +1440,7 @@
     width: 28px;
     height: 22px;
     background: var(--surface-container-low);
-    border: 1px solid rgba(255,255,255,0.08);
+    border: 1px solid var(--outline-variant);
     border-radius: 4px;
     color: var(--slate-400);
     cursor: pointer;
@@ -1428,6 +1448,15 @@
     padding: 0;
     font-size: 14px;
     line-height: 1;
+  }
+  .gmap-evidence-tray-toggle-icon {
+    width: 14px;
+    height: 14px;
+    transform: rotate(180deg);
+    transition: transform 0.14s ease;
+  }
+  .gmap-evidence-tray-toggle[aria-expanded="true"] .gmap-evidence-tray-toggle-icon {
+    transform: rotate(0deg);
   }
   .gmap-evidence-tray-toggle:hover {
     background: var(--surface-container);
@@ -1447,36 +1476,61 @@
   }
   .gmap-evidence-tray-tabs {
     display: flex;
-    gap: 4px;
-    padding: 6px 14px 0;
-    border-bottom: 1px solid var(--outline-variant);
-    background: var(--surface-container-lowest);
-    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    padding: 0;
+    border-bottom: 0;
+    background: transparent;
+    flex: 0 0 auto;
+    min-width: 0;
+    overflow: hidden;
   }
   .gmap-evidence-tray-tab {
     background: transparent;
     color: var(--slate-400);
-    border: 1px solid transparent;
-    border-bottom: none;
-    padding: 6px 12px;
+    border: 0;
+    padding: 5px 8px 6px;
+    position: relative;
     font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    border-radius: 4px 4px 0 0;
+    border-radius: 0;
     cursor: pointer;
     font-family: inherit;
+    line-height: 1;
+    white-space: nowrap;
+  }
+  .gmap-evidence-tray-tab::after {
+    content: "";
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    bottom: 1px;
+    height: 2px;
+    background: transparent;
+  }
+  .gmap-evidence-tray-tab:not(.is-active) {
+    flex: 0 1 auto;
   }
   .gmap-evidence-tray-tab:hover:not(.is-active) {
     color: var(--slate-200);
-    background: var(--surface-container);
+    background: transparent;
+  }
+  .gmap-evidence-tray-tab:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 1px;
   }
   .gmap-evidence-tray-tab.is-active {
     color: var(--primary);
-    background: var(--surface-container-low);
-    border-color: var(--outline-variant);
-    border-bottom-color: var(--surface-container-low);
-    margin-bottom: -1px;
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+    font-weight: 650;
+  }
+  .gmap-evidence-tray-tab.is-active::after {
+    background: var(--primary);
   }
   /* Phase 2B Step 36 (D25b-fix) — vertical scrolling removed from
      the generic panel rule. The Drift tab's content fits in the
@@ -1487,7 +1541,28 @@
   .gmap-evidence-tray-panel {
     flex: 1 1 auto;
     min-height: 0;
-    padding: 12px 14px;
+    padding: 8px 10px;
+  }
+
+  @media (max-width: 980px) {
+    .gmap-evidence-tray-header {
+      gap: 8px;
+    }
+    .gmap-evidence-tray-tab:not(.is-active) {
+      max-width: 0;
+      opacity: 0;
+      overflow: hidden;
+      padding-left: 0;
+      padding-right: 0;
+      pointer-events: none;
+    }
+    .gmap-evidence-tray-demo-badge {
+      max-width: 0;
+      opacity: 0;
+      overflow: hidden;
+      padding-left: 0;
+      padding-right: 0;
+    }
   }
   .gmap-evidence-tray-panel.is-scrollable {
     overflow-y: auto;
@@ -2720,23 +2795,23 @@
     color: var(--on-surface);
   }
 
-  /* Tray tabs. Active tab uses primary fill; inactive stays muted. */
+  /* Tray tabs. Active tab uses text weight plus underline; inactive stays muted. */
   :root[data-theme="light"] .gmap-evidence-tray-tabs {
-    background: var(--surface-container-lowest);
-    border-bottom-color: var(--outline-variant);
+    background: transparent;
+    border-bottom-color: transparent;
   }
   :root[data-theme="light"] .gmap-evidence-tray-tab {
     color: var(--on-surface-variant);
   }
   :root[data-theme="light"] .gmap-evidence-tray-tab:hover:not(.is-active) {
     color: var(--on-surface);
-    background: var(--surface-container);
+    background: transparent;
   }
   :root[data-theme="light"] .gmap-evidence-tray-tab.is-active {
     color: var(--primary);
-    background: var(--surface-container-low);
-    border-color: var(--outline-variant);
-    border-bottom-color: var(--surface-container-low);
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
   }
 
   /* Tray empty / coming-soon / disclaimer. */

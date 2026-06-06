@@ -627,21 +627,33 @@
              render. -->
         <section id="gmap-evidence-tray" class="gmap-evidence-tray" aria-label="Drift Analytics tray">
           <div class="gmap-evidence-tray-header">
-            <span class="gmap-evidence-tray-title" data-drift-analytics-title>Drift Analytics</span>
-            <span class="gmap-evidence-tray-node" id="gmap-evidence-tray-node" data-drift-analytics-subtitle>Select a graph node to inspect runtime evidence.</span>
-            <span class="gmap-evidence-tray-demo-badge" data-drift-analytics-demo-badge hidden>DEMO DATA</span>
-            <span class="drift-analytics-severity-badge drift-analytics-severity-info" data-drift-analytics-severity-badge>Info</span>
-            <button type="button" id="gmap-evidence-tray-toggle" class="gmap-evidence-tray-toggle"
-                    aria-expanded="false" aria-controls="gmap-evidence-tray"
-                    aria-label="Expand Drift Analytics tray" title="Expand Drift Analytics tray"><span aria-hidden="true">&#x25B2;</span></button>
-          </div>
-          <div class="gmap-evidence-tray-body" id="gmap-evidence-tray-body">
+            <div class="gmap-evidence-tray-header-left">
+              <span class="gmap-evidence-tray-title" data-drift-analytics-title>DRIFT ANALYTICS</span>
+              <span class="gmap-evidence-tray-node" id="gmap-evidence-tray-node" data-drift-analytics-subtitle>Select a graph node to inspect runtime evidence.</span>
+            </div>
             <div class="gmap-evidence-tray-tabs" role="tablist">
               <button type="button" class="gmap-evidence-tray-tab" data-tab="overview" role="tab" aria-selected="false">Overview</button>
-              <button type="button" class="gmap-evidence-tray-tab is-active" data-tab="drift" role="tab" aria-selected="true">Drift</button>
+              <button type="button" class="gmap-evidence-tray-tab is-active" data-tab="drift" role="tab" aria-selected="true" aria-current="page">Drift</button>
               <button type="button" class="gmap-evidence-tray-tab" data-tab="evidence" role="tab" aria-selected="false">Evidence</button>
               <button type="button" class="gmap-evidence-tray-tab" data-tab="activity" role="tab" aria-selected="false">Activity</button>
             </div>
+            <div class="gmap-evidence-tray-header-right">
+              <span class="gmap-evidence-tray-demo-badge" data-drift-analytics-demo-badge hidden>DEMO DATA</span>
+              <button type="button" class="gmap-evidence-tray-open-analysis" data-drift-analysis-open disabled aria-disabled="true" aria-label="Open Drift Analysis" title="Open Drift Analysis">
+                <svg class="gmap-evidence-tray-open-analysis-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                  <path d="M6 3H3v3M10 3h3v3M6 13H3v-3M10 13h3v-3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"></path>
+                </svg>
+              </button>
+              <button type="button" id="gmap-evidence-tray-toggle" class="gmap-evidence-tray-toggle"
+                      aria-expanded="false" aria-controls="gmap-evidence-tray"
+                      aria-label="Expand letterbox" title="Expand letterbox">
+                <svg class="gmap-evidence-tray-toggle-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                  <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div class="gmap-evidence-tray-body" id="gmap-evidence-tray-body">
             <div class="gmap-evidence-tray-panel" id="gmap-evidence-tray-panel" role="tabpanel">
               <!-- The Drift tab body is owned by drift-analytics-panel
                    .js. The other tabs (Overview / Evidence / Activity)
@@ -659,8 +671,7 @@
                        inner header strip is kept for future per-
                        panel context if needed. -->
                 </div>
-                <div class="drift-series-list" data-drift-analytics-series-list role="list" aria-label="Drift series list"></div>
-                <div class="drift-series-chart" data-drift-analytics-chart aria-label="Drift signal time-series"></div>
+                <div class="drift-compact-summary" data-drift-compact-summary></div>
               </div>
             </div>
           </div>
@@ -1879,6 +1890,7 @@
      Loaded in dependency order so each module finds its peers at
      attach time. -->
 <script src="/explorer/assets/js/drift/drift-chart-formatters.js"></script>
+<script src="/explorer/assets/js/drift/drift-analytics-view-model.js"></script>
 <script src="/explorer/assets/js/drift/drift-chart-demo-adapter.js"></script>
 <script src="/explorer/assets/js/drift/drift-series-chart.js"></script>
 <script src="/explorer/assets/js/drift/drift-series-list.js"></script>

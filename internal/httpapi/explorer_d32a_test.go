@@ -776,8 +776,9 @@ func TestExplorer_D32aImpl2_AuthorityEndpointAccessIsScoped(t *testing.T) {
 // TestExplorer_D32aImpl2_LegacyEndpointsAbsent pins that the
 // pre-D31d endpoint URLs do not return anywhere in the Explorer
 // shell or its JS modules. The endpoints were renamed in D31d:
-//   /v1/authority-graph                 → /v1/graphs/context
-//   /v1/businessservices/{id}/governance-map → /v1/graphs/context
+//
+//	/v1/authority-graph                 → /v1/graphs/context
+//	/v1/businessservices/{id}/governance-map → /v1/graphs/context
 func TestExplorer_D32aImpl2_LegacyEndpointsAbsent(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
@@ -2468,74 +2469,75 @@ func TestExplorer_D32aImpl9_InspectorHookDispatchesToModule(t *testing.T) {
 
 // TestExplorer_D32aImpl9_IndexHtmlReducedBelowImpl8 pins index.html
 // below 7,500 lines. Successive ceilings:
-//   • D32a-impl-8 left it at ~8,030
-//   • D32a-impl-9 tray extraction brought it to ~7,065
-//   • D32b-impl-1 shell wiring added ~30 lines (~7,099)
-//   • D32b-impl-2 Service Workbench mode toolbar + Authority panels
+//   - D32a-impl-8 left it at ~8,030
+//   - D32a-impl-9 tray extraction brought it to ~7,065
+//   - D32b-impl-1 shell wiring added ~30 lines (~7,099)
+//   - D32b-impl-2 Service Workbench mode toolbar + Authority panels
 //     container + diagnostics/posture wiring added ~210 lines (~7,312)
-//   • D32b-impl-3 unified drawer registration + icon-only toolbar
+//   - D32b-impl-3 unified drawer registration + icon-only toolbar
 //     SVG markup + Authority drawer provider wiring added ~110 lines
 //     (~7,425), partially offset by removing the .authority-graph-
 //     panels overlay markup. The drawer LOGIC itself lives in a
 //     separate module (graph-drawer.js) — only the registrations
 //     are inline.
-//   • D32b-debug-1 — lens-race fix added ~14 lines of doc comments
+//   - D32b-debug-1 — lens-race fix added ~14 lines of doc comments
 //     plus the lens guard at the top of refreshGovernanceMap and the
 //     pre-seed of selectedGraphLens in setWorkbenchMode('authority')
 //     (~7,514). The fix prevents Context and Authority modes from
 //     rendering the same canvas — see the operator-reported bug pinned
 //     by TestExplorer_D32bDebug1_*.
+//
 // The 8,000-line ceiling from the D32a tranche prompt is enforced
 // here as a 7,685 ceiling so a future inline regression is loud
 // rather than silent.
-//   • D32h-fix-1 — bumped 7,550 → 7,650 (+100 headroom) to absorb the
+//   - D32h-fix-1 — bumped 7,550 → 7,650 (+100 headroom) to absorb the
 //     lens-aware bottom-workbench DOM addition (~58 lines: a sibling
 //     <section id="gmap-authority-workbench"> next to the existing
 //     #gmap-evidence-tray, with five-tab markup). The Drift Analytics
 //     tray was NOT removed; both lens trays now coexist and CSS routes
 //     visibility from body[data-graph-lens]. The Authority canvas
 //     itself, the inspector, and Context behaviour are untouched.
-//   • D33x-help-1 — bumped 7,650 → 7,660 (+10 headroom) for the
+//   - D33x-help-1 — bumped 7,650 → 7,660 (+10 headroom) for the
 //     toolbar Help button + two `<script>` tags loading the help
 //     modules. Both the button and the script-tag block are followed
 //     by single-line comments so the extraction discipline is
 //     preserved; the bump only accommodates the legitimate +5 lines.
-//   • D33x-list-mode — bumped 7,660 → 7,685 (+25 headroom) for the
+//   - D33x-list-mode — bumped 7,660 → 7,685 (+25 headroom) for the
 //     lens-aware Form / Records branch (`if (pocActive && lens ===
 //     'authority') poc.setViewMode('list')`) and the Authority-branch
 //     exit hook that returns the graph to spine layout when the
 //     operator clicks the Authority button while in List Mode. Both
 //     additions are defensive guards (typeof checks, try/catch) so
 //     they cannot regress Context Graph or non-PoC sessions.
-//   • D34b-context-cytoscape-html-overlay-card-parity-spike — bumped
+//   - D34b-context-cytoscape-html-overlay-card-parity-spike — bumped
 //     7,685 → 7,692 (+7 headroom) for the gated Context HTML-overlay
 //     spike: one `<link>` for its CSS, one `<script>` for its
 //     module, and a one-line annotated comment per asset. Module is
 //     self-gated on `?cytoscape=1&contextHtmlCards=1`; loading the
 //     script with the gate closed early-returns and exposes only
 //     `isActive`. Removable in four lines.
-//   • D35a-midas-graph-viewport-foundation — bumped 7,692 → 7,720
+//   - D35a-midas-graph-viewport-foundation — bumped 7,692 → 7,720
 //     (+28 headroom) for the additive `.midas-graph-viewport` +
 //     `.midas-graph-renderer-slot` wrapper around the graph DOM. The
 //     wrappers add: viewport open + heredoc comment (12 lines);
 //     renderer-slot open + heredoc comment (5 lines); slot close
-//     + viewport close-marker (2 lines); +4 lines for the extra
+//   - viewport close-marker (2 lines); +4 lines for the extra
 //     indentation produced by wrapping `.governance-map-canvas-scroll`
 //     two levels deeper. Removable by inverting the wrap.
-//   • D37h-authority-cytoscape-navigation-toolbar — bumped 7,720 →
+//   - D37h-authority-cytoscape-navigation-toolbar — bumped 7,720 →
 //     7,730 (+10 headroom) for the three new camera-cluster controls
 //     (zoom %, zoom-to-selected, reset-view) added inside
 //     `.gmap-camera-cluster`. Each control occupies one line; one
 //     annotation comment fronts the cluster. Removable in 4 lines if
 //     the camera/navigation tranche is reverted.
-//   • D37m-impl-1-authority-canvas-edge-context-tabs — bumped 7,730 →
+//   - D37m-impl-1-authority-canvas-edge-context-tabs — bumped 7,730 →
 //     7,750 (+20 headroom) for the static skeleton of the right-side
 //     canvas-edge tab strip + pane (three tab buttons, pane with
 //     header/body/footer; ~12 lines of markup), one annotation
 //     comment, plus one `<link>` and one `<script>` (with their
 //     annotation comments). Removable in ~16 lines if the tranche
 //     is reverted.
-//   • D37o-impl-2-context-strategic-renderer-skeleton — bumped 7,750
+//   - D37o-impl-2-context-strategic-renderer-skeleton — bumped 7,750
 //     → 7,770 (+20 headroom) for the strategic Context renderer
 //     wiring: one `<link>` for its CSS skeleton, three `<script>`
 //     tags for the D37o-impl-1 model modules (card / connector /
@@ -2670,16 +2672,17 @@ func TestExplorer_D32bImpl1_AuthorityModulesServedAndExposeNamespace(t *testing.
 // because it dispatches to those panels after a successful render.
 //
 // Required order:
-//   adapter → inspector → diagnostics-panel → surface-posture-panel → view
+//
+//	adapter → inspector → diagnostics-panel → surface-posture-panel → view
 func TestExplorer_D32bImpl1_AuthorityScriptsLoadedInOrder(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
 	body := performRequest(t, srv, http.MethodGet, "/explorer", nil).Body.String()
-	adapterTag    := `<script src="/explorer/assets/js/graph/authority/authority-graph-adapter.js"></script>`
-	inspectorTag  := `<script src="/explorer/assets/js/graph/authority/authority-graph-inspector.js"></script>`
+	adapterTag := `<script src="/explorer/assets/js/graph/authority/authority-graph-adapter.js"></script>`
+	inspectorTag := `<script src="/explorer/assets/js/graph/authority/authority-graph-inspector.js"></script>`
 	diagnosticsTag := `<script src="/explorer/assets/js/graph/authority/authority-diagnostics-panel.js"></script>`
-	postureTag    := `<script src="/explorer/assets/js/graph/authority/authority-surface-posture-panel.js"></script>`
-	viewTag       := `<script src="/explorer/assets/js/graph/authority/authority-graph-view.js"></script>`
+	postureTag := `<script src="/explorer/assets/js/graph/authority/authority-surface-posture-panel.js"></script>`
+	viewTag := `<script src="/explorer/assets/js/graph/authority/authority-graph-view.js"></script>`
 	for _, want := range []string{adapterTag, inspectorTag, diagnosticsTag, postureTag, viewTag} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("D32b-impl-2: missing <script> tag: %s", want)
@@ -2855,12 +2858,12 @@ func TestExplorer_D32bImpl1_AuthorityInspectorCoversRequiredFields(t *testing.T)
 		fields []string
 	}
 	required := []fieldSet{
-		{"business_service",  []string{"status", "owner", "service_type", "fail_mode_policy_id"}},
-		{"decision_surface",  []string{"version", "status", "process_id", "business_service_id", "effective_policy_source", "effective_policy_id", "inherits_bs_policy"}},
+		{"business_service", []string{"status", "owner", "service_type", "fail_mode_policy_id"}},
+		{"decision_surface", []string{"version", "status", "process_id", "business_service_id", "effective_policy_source", "effective_policy_id", "inherits_bs_policy"}},
 		{"authority_profile", []string{"version", "surface_id", "status", "validity_status", "confidence_threshold", "consequence_threshold", "escalation_mode", "escalation_target_id", "fail_mode"}},
-		{"authority_grant",   []string{"profile_id", "agent_id", "status", "validity_status", "capabilities", "constraints"}},
-		{"agent",             []string{"type", "owner", "model_version", "operational_state"}},
-		{"fail_mode_policy",  []string{"version", "status", "effective_date", "effective_until", "business_owner", "technical_owner", "origin", "managed", "rule_count_by_class"}},
+		{"authority_grant", []string{"profile_id", "agent_id", "status", "validity_status", "capabilities", "constraints"}},
+		{"agent", []string{"type", "owner", "model_version", "operational_state"}},
+		{"fail_mode_policy", []string{"version", "status", "effective_date", "effective_until", "business_owner", "technical_owner", "origin", "managed", "rule_count_by_class"}},
 		{"escalation_target", []string{"version", "kind", "handle", "status", "effective_date", "effective_until", "business_owner", "technical_owner"}},
 	}
 	for _, fs := range required {
@@ -3704,12 +3707,14 @@ func TestExplorer_D32bImpl2a_ToolbarLivesInsideVisibleWorkbenchToolbar(t *testin
 // across two surfaces:
 //
 // In-workbench toolbar reading order (D32b-impl-4):
-//   Back → Service · <name> → Search graph → Layers → Graph View menu
+//
+//	Back → Service · <name> → Search graph → Layers → Graph View menu
 //
 // Graph View menu reading order:
-//   .governance-map-toolbar-right opener → .graph-view-menu opener →
-//   Form / Records → Context Graph → Authority Graph →
-//   Knowledge Graph placeholder
+//
+//	.governance-map-toolbar-right opener → .graph-view-menu opener →
+//	Form / Records → Context Graph → Authority Graph →
+//	Knowledge Graph placeholder
 //
 // The menu is the LAST landmark in the workbench toolbar (right zone)
 // — Search and Layers sit in the centre group, Back + current-root in
@@ -3721,11 +3726,11 @@ func TestExplorer_D32bImpl2a_ToolbarReadingOrder(t *testing.T) {
 
 	// In-workbench reading order: back → current-root → search →
 	// layers → mode menu.
-	backIdx        := strings.Index(body, `id="gmap-back-button"`)
+	backIdx := strings.Index(body, `id="gmap-back-button"`)
 	currentRootIdx := strings.Index(body, `id="gmap-current-root"`)
-	searchIdx      := strings.Index(body, `id="gmap-search-input"`)
-	layersIdx      := strings.Index(body, `id="gmap-layers-button"`)
-	menuIdx        := strings.Index(body, `class="graph-view-menu"`)
+	searchIdx := strings.Index(body, `id="gmap-search-input"`)
+	layersIdx := strings.Index(body, `id="gmap-layers-button"`)
+	menuIdx := strings.Index(body, `class="graph-view-menu"`)
 	for _, p := range []struct {
 		name string
 		idx  int
@@ -3751,10 +3756,10 @@ func TestExplorer_D32bImpl2a_ToolbarReadingOrder(t *testing.T) {
 	// Graph View menu reading order: container → form → context →
 	// authority → knowledge.
 	toolbarRightIdx := strings.Index(body, `class="governance-map-toolbar-right"`)
-	formIdx         := strings.Index(body, `data-workbench-mode="form"`)
-	contextIdx      := strings.Index(body, `data-workbench-mode="context"`)
-	authorityIdx    := strings.Index(body, `data-workbench-mode="authority"`)
-	knowledgeIdx    := strings.Index(body, `data-workbench-mode="knowledge"`)
+	formIdx := strings.Index(body, `data-workbench-mode="form"`)
+	contextIdx := strings.Index(body, `data-workbench-mode="context"`)
+	authorityIdx := strings.Index(body, `data-workbench-mode="authority"`)
+	knowledgeIdx := strings.Index(body, `data-workbench-mode="knowledge"`)
 	for _, p := range []struct {
 		name string
 		idx  int
@@ -3955,9 +3960,9 @@ func TestExplorer_D32bImpl3_GraphDrawerModuleServedAndExposesNamespace(t *testin
 	// views can register against the drawer at load time.
 	body := performRequest(t, srv, http.MethodGet, "/explorer", nil).Body.String()
 	drawerTag := `<script src="/explorer/assets/js/graph/graph-drawer.js"></script>`
-	shellTag  := `<script src="/explorer/assets/js/graph/graph-shell.js"></script>`
+	shellTag := `<script src="/explorer/assets/js/graph/graph-shell.js"></script>`
 	drawerIdx := strings.Index(body, drawerTag)
-	shellIdx  := strings.Index(body, shellTag)
+	shellIdx := strings.Index(body, shellTag)
 	if drawerIdx < 0 || shellIdx < 0 {
 		t.Fatalf("D32b-impl-3: graph-drawer / graph-shell script tags missing (drawer=%d, shell=%d)", drawerIdx, shellIdx)
 	}
@@ -4286,13 +4291,24 @@ var d32eImpl1DriftModules = []struct {
 		},
 	},
 	{
+		path: "/explorer/assets/js/drift/drift-analytics-view-model.js",
+		ns:   "window.MIDASExplorerDriftAnalyticsViewModel",
+		contains: []string{
+			"normalise:",
+			"buildPoints:",
+			"demoValues64:",
+			"sourceClassification",
+			"authority-path-divergence",
+		},
+	},
+	{
 		path: "/explorer/assets/js/drift/drift-chart-demo-adapter.js",
 		ns:   "window.MIDASExplorerDriftChartAdapter",
 		contains: []string{
 			"fromServiceContext",
 			"fromGraphNode",
 			"isDemoData",
-			"isDemo: true",
+			"demo_derived",
 		},
 	},
 	{
@@ -4310,13 +4326,13 @@ var d32eImpl1DriftModules = []struct {
 	},
 	{
 		path: "/explorer/assets/js/drift/drift-series-list.js",
-		ns:   "window.MIDASExplorerDriftSeriesList",
+		ns:   "window.MIDASExplorerDriftContributionRail",
 		contains: []string{
 			"render:",
 			"clear:",
 			"aria-pressed",
-			"drift-series-row",
-			"drift-series-row-sev-",
+			"drift-contribution-row",
+			"data-drift-contribution-id",
 			"is-selected",
 		},
 	},
@@ -4329,8 +4345,9 @@ var d32eImpl1DriftModules = []struct {
 			"clear:",
 			"setExpanded:",
 			"setSelectedSeries:",
-			"data-drift-analytics-chart",
-			"data-drift-analytics-series-list",
+			"data-drift-compact-summary",
+			"Observed vs expected",
+			"Top contributor",
 		},
 	},
 }
@@ -4371,18 +4388,15 @@ func TestExplorer_D32eImpl1_DriftAnalyticsCSSServed(t *testing.T) {
 	css := rec.Body.String()
 	for _, want := range []string{
 		".drift-analytics-panel",
-		".drift-analytics-header",
-		".drift-analytics-severity-badge",
 		".drift-analytics-demo-badge",
-		".drift-series-list",
-		".drift-series-row",
-		".drift-series-row.is-selected",
-		".drift-series-chart",
-		".drift-series-chart-svg",
-		".drift-series-chart-actual",
-		".drift-series-chart-baseline",
-		".drift-series-chart-anomaly",
-		".drift-series-chart-axis-label",
+		".drift-compact-layout",
+		".drift-compact-score",
+		".drift-compact-status",
+		".drift-compact-chart",
+		".drift-compact-contributor",
+		".drift-compact-observed",
+		".drift-compact-expected",
+		".drift-compact-deviation",
 	} {
 		if !strings.Contains(css, want) {
 			t.Errorf("D32e-impl-1: drift-analytics.css must declare %q", want)
@@ -4398,7 +4412,8 @@ func TestExplorer_D32eImpl1_DriftAnalyticsCSSServed(t *testing.T) {
 // TestExplorer_D32eImpl1_DriftAnalyticsScriptOrder pins that the
 // drift script tags load in dependency order so namespaces resolve
 // at attach time:
-//   formatters → demo-adapter → series-chart → series-list → panel
+//
+//	formatters → demo-adapter → series-chart → series-list → panel
 func TestExplorer_D32eImpl1_DriftAnalyticsScriptOrder(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
@@ -4408,6 +4423,7 @@ func TestExplorer_D32eImpl1_DriftAnalyticsScriptOrder(t *testing.T) {
 	}
 	tags := []string{
 		tagFor("drift-chart-formatters"),
+		tagFor("drift-analytics-view-model"),
 		tagFor("drift-chart-demo-adapter"),
 		tagFor("drift-series-chart"),
 		tagFor("drift-series-list"),
@@ -4462,21 +4478,19 @@ func TestExplorer_D32eImpl1_DriftAnalyticsMountInTray(t *testing.T) {
 		t.Fatal("D32e-impl-1: tray title closing tag missing")
 	}
 	titleBlock := titleSlice[:closeIdx]
-	if !strings.Contains(titleBlock, "Drift Analytics") {
-		t.Errorf("D32e-impl-1: tray title must read \"Drift Analytics\", got %q", titleBlock)
+	if !strings.Contains(titleBlock, "DRIFT ANALYTICS") {
+		t.Errorf("D32e-impl-1: tray title must read \"DRIFT ANALYTICS\", got %q", titleBlock)
 	}
 	// The collapse/expand control aria-label + title still reference
 	// the tray-as-control idiom but with the new analytics name.
-	if !strings.Contains(body, `aria-label="Expand Drift Analytics tray"`) {
-		t.Error("D32e-impl-1: collapse/expand button must aria-label the new Drift Analytics tray")
+	if !strings.Contains(body, `aria-label="Expand letterbox"`) {
+		t.Error("D32e-impl-1: collapse/expand button must aria-label the compact letterbox")
 	}
-	// Three required data-* mount points must exist inside the
-	// Drift tab body.
+	// Required data-* mount points must exist inside the compact
+	// Drift tab body/header.
 	for _, want := range []string{
-		`data-drift-analytics-chart`,
-		`data-drift-analytics-series-list`,
+		`data-drift-compact-summary`,
 		`data-drift-analytics-demo-badge`,
-		`data-drift-analytics-severity-badge`,
 		`data-drift-analytics-title`,
 		`data-drift-analytics-subtitle`,
 	} {
@@ -4488,6 +4502,223 @@ func TestExplorer_D32eImpl1_DriftAnalyticsMountInTray(t *testing.T) {
 	// container element so the rich layout is visible on first paint.
 	if !strings.Contains(body, `class="drift-analytics-panel"`) {
 		t.Error("D32e-impl-1: Drift tab body must host .drift-analytics-panel container")
+	}
+	if !strings.Contains(body, `data-drift-analysis-open`) {
+		t.Error("D32e-impl-1: compact header must expose the disabled Open Drift Analysis affordance")
+	}
+	if !strings.Contains(body, `aria-label="Open Drift Analysis"`) {
+		t.Error("D32e-impl-1: compact header open affordance must expose an accessible label")
+	}
+	if strings.Contains(body, `<span>Open Drift Analysis</span>`) {
+		t.Error("D32e-impl-1: compact header open affordance must be icon-only")
+	}
+}
+
+func TestExplorer_D32eImpl1_LetterboxToggleUsesSafeSvgIcon(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	body := performRequest(t, srv, http.MethodGet, "/explorer", nil).Body.String()
+	toggleIdx := strings.Index(body, `id="gmap-evidence-tray-toggle"`)
+	if toggleIdx < 0 {
+		t.Fatal("D32e-impl-1: letterbox toggle missing")
+	}
+	toggleEnd := strings.Index(body[toggleIdx:], `</button>`)
+	if toggleEnd < 0 {
+		t.Fatal("D32e-impl-1: letterbox toggle closing tag missing")
+	}
+	toggleBlock := body[toggleIdx : toggleIdx+toggleEnd]
+	for _, want := range []string{
+		`id="gmap-evidence-tray-toggle"`,
+		`aria-label="Expand letterbox"`,
+		`title="Expand letterbox"`,
+		`class="gmap-evidence-tray-toggle-icon"`,
+		`<svg`,
+		`viewBox="0 0 16 16"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D32e-impl-1: letterbox toggle must contain %q", want)
+		}
+	}
+	js := getExplorerAsset(t, srv, "/explorer/assets/js/graph/context/context-evidence-tray.js")
+	for _, want := range []string{
+		"Collapse letterbox",
+		"Expand letterbox",
+		"gmapEvidenceTrayExpanded = !gmapEvidenceTrayExpanded",
+		"toggle.setAttribute('aria-expanded'",
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("D32e-impl-1: letterbox toggle behaviour must contain %q", want)
+		}
+	}
+	for _, bad := range []string{
+		"â–¼",
+		"â–²",
+		"▲",
+		"▼",
+		"glyph.textContent",
+	} {
+		if strings.Contains(toggleBlock, bad) || strings.Contains(js, bad) {
+			t.Errorf("D32e-impl-1: letterbox toggle must not contain fragile/corrupt glyph token %q", bad)
+		}
+	}
+}
+
+func TestExplorer_D32eImpl1_LetterboxHeaderConsolidatesTabs(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	body := performRequest(t, srv, http.MethodGet, "/explorer", nil).Body.String()
+	headerIdx := strings.Index(body, `class="gmap-evidence-tray-header"`)
+	if headerIdx < 0 {
+		t.Fatal("D32e-impl-1: consolidated tray header missing")
+	}
+	bodyIdx := strings.Index(body, `class="gmap-evidence-tray-body"`)
+	if bodyIdx < 0 {
+		t.Fatal("D32e-impl-1: tray body missing")
+	}
+	if headerIdx > bodyIdx {
+		t.Fatal("D32e-impl-1: tray header must precede body")
+	}
+	headerBlock := body[headerIdx:bodyIdx]
+	for _, want := range []string{
+		`class="gmap-evidence-tray-header-left"`,
+		`data-drift-analytics-title>DRIFT ANALYTICS`,
+		`id="gmap-evidence-tray-node"`,
+		`class="gmap-evidence-tray-tabs" role="tablist"`,
+		`class="gmap-evidence-tray-header-right"`,
+		`data-drift-analytics-demo-badge`,
+		`class="gmap-evidence-tray-open-analysis-icon"`,
+		`aria-label="Open Drift Analysis"`,
+		`title="Open Drift Analysis"`,
+	} {
+		if !strings.Contains(headerBlock, want) {
+			t.Errorf("D32e-impl-1: consolidated tray header must contain %q", want)
+		}
+	}
+	for _, bad := range []string{
+		`data-drift-analytics-severity-badge`,
+		`>WATCH<`,
+	} {
+		if strings.Contains(headerBlock, bad) {
+			t.Errorf("D32e-impl-1: consolidated tray header must not contain status chip token %q", bad)
+		}
+	}
+	for _, tab := range []string{"overview", "drift", "evidence", "activity"} {
+		want := `data-tab="` + tab + `"`
+		if strings.Count(headerBlock, want) != 1 {
+			t.Errorf("D32e-impl-1: consolidated tray header must contain exactly one %s tab", tab)
+		}
+	}
+	if strings.Count(headerBlock, `role="tab"`) != 4 {
+		t.Fatalf("D32e-impl-1: consolidated tray header must contain exactly four tab roles")
+	}
+	if !strings.Contains(headerBlock, `data-tab="drift" role="tab" aria-selected="true" aria-current="page"`) {
+		t.Error("D32e-impl-1: Drift tab must remain active/current on first paint")
+	}
+	trayJS := getExplorerAsset(t, srv, "/explorer/assets/js/graph/context/context-evidence-tray.js")
+	for _, want := range []string{
+		"setAttribute('aria-current', 'page')",
+		"removeAttribute('aria-current')",
+	} {
+		if !strings.Contains(trayJS, want) {
+			t.Errorf("D32e-impl-1: tray tab state must contain %q", want)
+		}
+	}
+	bodyOpenEnd := strings.Index(body[bodyIdx:], `id="gmap-evidence-tray-panel"`)
+	if bodyOpenEnd < 0 {
+		t.Fatal("D32e-impl-1: tray panel missing")
+	}
+	bodyBeforePanel := body[bodyIdx : bodyIdx+bodyOpenEnd]
+	if strings.Contains(bodyBeforePanel, `gmap-evidence-tray-tabs`) {
+		t.Error("D32e-impl-1: tabs must not render as a separate body row before the panel")
+	}
+}
+
+func TestExplorer_D32eImpl1_LetterboxTabsUseUnderlineActiveState(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	body := performRequest(t, srv, http.MethodGet, "/explorer", nil).Body.String()
+	headerIdx := strings.Index(body, `class="gmap-evidence-tray-header"`)
+	bodyIdx := strings.Index(body, `class="gmap-evidence-tray-body"`)
+	if headerIdx < 0 || bodyIdx < 0 || headerIdx > bodyIdx {
+		t.Fatal("D32e-impl-1: consolidated tray header/body missing or out of order")
+	}
+	headerBlock := body[headerIdx:bodyIdx]
+	for _, tab := range []string{"overview", "drift", "evidence", "activity"} {
+		if strings.Count(headerBlock, `data-tab="`+tab+`"`) != 1 {
+			t.Fatalf("D32e-impl-1: expected exactly one %s tab", tab)
+		}
+	}
+	if !strings.Contains(headerBlock, `data-tab="drift" role="tab" aria-selected="true" aria-current="page"`) {
+		t.Fatal("D32e-impl-1: Drift tab must remain active/current on first paint")
+	}
+
+	css := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+	ruleBody := func(selector string) string {
+		needle := selector + " {"
+		idx := strings.Index(css, needle)
+		if idx < 0 {
+			t.Fatalf("D32e-impl-1: CSS selector %q missing", selector)
+		}
+		start := idx + len(needle)
+		end := strings.Index(css[start:], "}")
+		if end < 0 {
+			t.Fatalf("D32e-impl-1: CSS selector %q has no closing brace", selector)
+		}
+		return css[start : start+end]
+	}
+
+	baseTab := ruleBody(".gmap-evidence-tray-tab")
+	tabUnderline := ruleBody(".gmap-evidence-tray-tab::after")
+	activeTab := ruleBody(".gmap-evidence-tray-tab.is-active")
+	activeUnderline := ruleBody(".gmap-evidence-tray-tab.is-active::after")
+	hoverTab := ruleBody(".gmap-evidence-tray-tab:hover:not(.is-active)")
+	lightActiveTab := ruleBody(`:root[data-theme="light"] .gmap-evidence-tray-tab.is-active`)
+	lightHoverTab := ruleBody(`:root[data-theme="light"] .gmap-evidence-tray-tab:hover:not(.is-active)`)
+
+	for _, want := range []string{
+		"border: 0;",
+		"border-radius: 0;",
+		"position: relative;",
+	} {
+		if !strings.Contains(baseTab, want) {
+			t.Errorf("D32e-impl-1: base tray tab style must contain %q", want)
+		}
+	}
+	for _, want := range []string{
+		"background: transparent;",
+		"border-color: transparent;",
+		"box-shadow: none;",
+		"font-weight: 650;",
+	} {
+		if !strings.Contains(activeTab, want) {
+			t.Errorf("D32e-impl-1: active tray tab style must contain %q", want)
+		}
+	}
+	if !strings.Contains(tabUnderline, "height: 2px;") {
+		t.Error("D32e-impl-1: tray tab underline must be 2px high")
+	}
+	if !strings.Contains(activeUnderline, "background: var(--primary);") {
+		t.Error("D32e-impl-1: active tray tab underline must use the primary token")
+	}
+	for _, block := range []struct {
+		name string
+		body string
+	}{
+		{"base tab", baseTab},
+		{"active tab", activeTab},
+		{"hover tab", hoverTab},
+		{"light active tab", lightActiveTab},
+		{"light hover tab", lightHoverTab},
+	} {
+		for _, bad := range []string{
+			"border-radius: 999px;",
+			"background: var(--surface-container",
+			"box-shadow: inset 0 -2px 0 var(--primary);",
+		} {
+			if strings.Contains(block.body, bad) {
+				t.Errorf("D32e-impl-1: %s must not retain old pill/button treatment %q", block.name, bad)
+			}
+		}
 	}
 }
 
@@ -4511,8 +4742,11 @@ func TestExplorer_D32eImpl1_TrayDriftTabDelegatesToAnalytics(t *testing.T) {
 	}
 	// The analytics layout must be restored if a previous tab switch
 	// overwrote the panel innerHTML.
-	if !strings.Contains(js, "data-drift-analytics-chart") {
-		t.Error("D32e-impl-1: Drift tab renderer must restore the data-drift-analytics-chart mount when missing")
+	if !strings.Contains(js, "data-drift-compact-summary") {
+		t.Error("D32e-impl-1: Drift tab renderer must restore the compact summary mount when missing")
+	}
+	if strings.Contains(js, "data-drift-analytics-series-list") || strings.Contains(js, "data-drift-analytics-chart") {
+		t.Error("D32e-impl-1: Drift tab renderer must not restore rich rail/chart mounts in the compact letterbox")
 	}
 }
 
@@ -4601,11 +4835,10 @@ func TestExplorer_D32eImpl1_ChartHasAccessibleLabel(t *testing.T) {
 	}
 }
 
-// TestExplorer_D32eImpl1_SeriesListIsKeyboardAccessible pins that
-// series rows are <button> elements with aria-pressed reflecting
-// selection. Severity is also conveyed via a text token alongside
-// colour (so colour is not the only severity indicator).
-func TestExplorer_D32eImpl1_SeriesListIsKeyboardAccessible(t *testing.T) {
+// TestExplorer_D32eImpl1_ContributionRailIsKeyboardAccessible pins
+// that contribution rows are <button> elements with aria-pressed
+// reflecting selection.
+func TestExplorer_D32eImpl1_ContributionRailIsKeyboardAccessible(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
 	js := getExplorerAsset(t, srv, "/explorer/assets/js/drift/drift-series-list.js")
@@ -4613,7 +4846,7 @@ func TestExplorer_D32eImpl1_SeriesListIsKeyboardAccessible(t *testing.T) {
 		`<button type="button"`,
 		`aria-pressed`,
 		`aria-label`,
-		`drift-series-row-sev-text`, // severity text label, not just colour
+		`data-drift-contribution-id`,
 	} {
 		if !strings.Contains(js, want) {
 			t.Errorf("D32e-impl-1: drift-series-list.js must emit %q for accessibility", want)
@@ -4623,15 +4856,15 @@ func TestExplorer_D32eImpl1_SeriesListIsKeyboardAccessible(t *testing.T) {
 
 // TestExplorer_D32eImpl1_DemoDataHonestlyLabelled pins the demo-data
 // labelling contract. The demo adapter must:
-//   • return isDemo: true on every series object it produces, and
-//   • surface a DEMO DATA badge that the panel module conditionally
+//   - return isDemo: true on every series object it produces, and
+//   - surface a DEMO DATA badge that the panel module conditionally
 //     reveals via the data-drift-analytics-demo-badge slot.
 func TestExplorer_D32eImpl1_DemoDataHonestlyLabelled(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
 	adapterJS := getExplorerAsset(t, srv, "/explorer/assets/js/drift/drift-chart-demo-adapter.js")
-	if !strings.Contains(adapterJS, "isDemo: true") {
-		t.Error("D32e-impl-1: demo adapter must tag every series with isDemo: true")
+	if !strings.Contains(adapterJS, "sourceClassification: 'demo_derived'") {
+		t.Error("D32e-impl-1: demo adapter must tag the view model with sourceClassification demo_derived")
 	}
 	panelJS := getExplorerAsset(t, srv, "/explorer/assets/js/drift/drift-analytics-panel.js")
 	if !strings.Contains(panelJS, "isDemoData") {
@@ -4692,14 +4925,347 @@ func TestExplorer_D32eImpl1_PanelSeverityAndDemoFlow(t *testing.T) {
 		WithExplorerEnabled(true)
 	js := getExplorerAsset(t, srv, "/explorer/assets/js/drift/drift-analytics-panel.js")
 	for _, want := range []string{
-		"_topSeverity",
-		"severityRank",
 		"_renderHeader",
-		"_renderChart",
-		"_renderList",
+		"_renderCompact",
+		"_compactChart",
+		"_topContribution",
+		"Observed vs expected",
 	} {
 		if !strings.Contains(js, want) {
 			t.Errorf("D32e-impl-1: drift-analytics-panel.js must include %q", want)
+		}
+	}
+	for _, bad := range []string{
+		"MIDASExplorerDriftContributionRail",
+		"MIDASExplorerDriftSeriesChart",
+		"_renderContributionRail",
+	} {
+		if strings.Contains(js, bad) {
+			t.Errorf("D32e-impl-1: compact letterbox panel must not mount rich renderer token %q", bad)
+		}
+	}
+}
+
+func TestExplorer_D32eImpl1_CompactLetterboxSummaryContract(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	body := performRequest(t, srv, http.MethodGet, "/explorer", nil).Body.String()
+	for _, want := range []string{
+		`data-drift-compact-summary`,
+		`data-drift-analysis-open`,
+		`aria-label="Open Drift Analysis"`,
+		`DRIFT ANALYTICS`,
+		`id="gmap-evidence-tray-node"`,
+		`data-drift-analytics-demo-badge`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("D32e-impl-1: compact letterbox markup must contain %q", want)
+		}
+	}
+	panel := getExplorerAsset(t, srv, "/explorer/assets/js/drift/drift-analytics-panel.js")
+	for _, want := range []string{
+		"Drift score",
+		"0.146",
+		"WATCH",
+		"0.006 below breach",
+		"Top contributor",
+		"Authority-path divergence",
+		"49%",
+		"of current drift",
+		"Last 30 days",
+		"Observed vs expected",
+		"Observed",
+		"Expected (declared baseline)",
+		"&middot;",
+		"Next:",
+		"Escalation-rate deviation",
+		"26%",
+		"Select a node to view drift analysis",
+		"Loading drift analysis",
+		"drift-compact-deviation",
+		"May 30",
+		"Jun 07",
+		"Jun 15",
+		"Jun 23",
+		"Jun 29",
+		"Demo evidence",
+	} {
+		if !strings.Contains(panel, want) {
+			t.Errorf("D32e-impl-1: compact letterbox panel must contain %q", want)
+		}
+	}
+}
+
+func TestExplorer_D32eImpl1_Tranche1Spec14ViewModelContract(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	vm := getExplorerAsset(t, srv, "/explorer/assets/js/drift/drift-analytics-view-model.js")
+	for _, want := range []string{
+		"DRIFT SCORE (composite)",
+		"Authority-path divergence",
+		"Escalation-rate deviation",
+		"Evidence-completeness gap",
+		"Outcome-mix shift",
+		"authority-path-divergence",
+		"escalation-rate-deviation",
+		"evidence-completeness-gap",
+		"outcome-mix-shift",
+		"event-policy-update-jun-01",
+		"event-profile-change-jun-07",
+		"event-incident-jun-13",
+		"event-policy-update-jun-21",
+		"event-profile-change-jun-27",
+		"sourceClassification",
+		"demo_derived",
+		"May 30",
+		"Jun 03",
+		"Jun 07",
+		"Jun 11",
+		"Jun 15",
+		"Jun 19",
+		"Jun 23",
+		"Jun 27",
+		"Jun 29",
+		"0.000",
+		"0.050",
+		"0.100",
+		"0.150",
+		"0.200",
+	} {
+		if !strings.Contains(vm, want) {
+			t.Errorf("D32e-tranche-1: view-model contract must contain %q", want)
+		}
+	}
+	valuesStart := strings.Index(vm, "var VALUE_SERIES = [")
+	if valuesStart < 0 {
+		t.Fatal("D32e-tranche-1: view model must declare the fixed VALUE_SERIES array")
+	}
+	valuesEnd := strings.Index(vm[valuesStart:], "];")
+	if valuesEnd < 0 {
+		t.Fatal("D32e-tranche-1: fixed VALUE_SERIES array must close")
+	}
+	valuesBlock := vm[valuesStart : valuesStart+valuesEnd]
+	if got := strings.Count(valuesBlock, "."); got != 64 {
+		t.Fatalf("D32e-tranche-1: fixed VALUE_SERIES must contain 64 decimal values, got %d", got)
+	}
+}
+
+func TestExplorer_D32eImpl1_Tranche1ChartPinsTicksAndEvents(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	js := getExplorerAsset(t, srv, "/explorer/assets/js/drift/drift-series-chart.js")
+	for _, want := range []string{
+		"viewModel.yTicks",
+		"viewModel.xTicks",
+		"data-drift-event-id",
+		"drift-series-zone-label-breach",
+		"drift-series-zone-label-watch",
+		"drift-series-zone-label-normal",
+		"drift-series-area-gradient",
+		"Observed vs. expected - drift is the deviation, not the level",
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("D32e-tranche-1: chart must contain %q", want)
+		}
+	}
+}
+
+func TestExplorer_D32eImpl1_Tranche1ThemeTokensComplete(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	css := getExplorerAsset(t, srv, "/explorer/assets/css/drift-analytics.css")
+	for _, want := range []string{
+		":root {",
+		`:root[data-theme="light"]`,
+		"--drift-chart-gradient-start",
+		"--drift-chart-gradient-end",
+		"--drift-deviation-fill",
+		"--drift-selected-surface",
+		"--drift-toolbar-surface",
+		"--drift-grey",
+		"--drift-contribution-track",
+		"--drift-red-bg",
+		"--drift-amber-bg",
+		"--drift-green-bg",
+	} {
+		if !strings.Contains(css, want) {
+			t.Errorf("D32e-tranche-1: drift CSS must define token %q", want)
+		}
+	}
+	if !strings.Contains(css, "--drift-deviation-fill: rgba(96, 165, 250, 0.10);") {
+		t.Error("D32e-tranche-1: dark theme must define a visible compact deviation fill")
+	}
+	if !strings.Contains(css, "--drift-deviation-fill: rgba(47, 109, 246, 0.16);") {
+		t.Error("D32e-tranche-1: light theme must define a visible compact deviation fill")
+	}
+	if !strings.Contains(css, ".drift-compact-deviation {\n  fill: var(--drift-deviation-fill);") {
+		t.Error("D32e-tranche-1: compact deviation path must use the theme-specific deviation fill token")
+	}
+}
+
+func TestExplorer_D32eImpl1_CompactLetterboxFits230WithoutShrinkingChart(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+	driftCSS := getExplorerAsset(t, srv, "/explorer/assets/css/drift-analytics.css")
+	for _, want := range []string{
+		".gmap-evidence-tray.is-expanded",
+		"height: 230px;",
+		"padding: 8px 10px;",
+	} {
+		if !strings.Contains(gmapCSS, want) {
+			t.Errorf("D32e-tranche-1: governance-map.css must contain %q", want)
+		}
+	}
+	for _, want := range []string{
+		"gap: 0;",
+		"padding: 8px 11px;",
+		"padding: 3px 6px 3px 2px;",
+		"height: 152px;",
+		"stroke-width: 2.5;",
+		"opacity: 0.34;",
+		"font-variant-numeric: tabular-nums;",
+	} {
+		if !strings.Contains(driftCSS, want) {
+			t.Errorf("D32e-tranche-1: compact drift CSS must contain %q", want)
+		}
+	}
+}
+
+func TestExplorer_D32eImpl1_CompactScoreCardAndChartHeaderStructure(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	panel := getExplorerAsset(t, srv, "/explorer/assets/js/drift/drift-analytics-panel.js")
+	css := getExplorerAsset(t, srv, "/explorer/assets/css/drift-analytics.css")
+	for _, want := range []string{
+		"drift-compact-card",
+		"drift-compact-divider",
+		"drift-compact-score-row",
+		"drift-compact-status",
+		"drift-compact-chart-header",
+		"drift-compact-series-title",
+		"Observed vs expected",
+		"Expected (declared baseline)",
+		"drift-compact-runner-up",
+	} {
+		if !strings.Contains(panel, want) && !strings.Contains(css, want) {
+			t.Errorf("D32e-tranche-1: compact Drift assets must contain left-rail token %q", want)
+		}
+	}
+	if strings.Contains(panel, "drift-compact-chart-title-row") {
+		t.Error("D32e-tranche-1: compact chart must not render a title/legend chrome row above the plot")
+	}
+	if strings.Contains(panel, "Drift is the shaded deviation.") {
+		t.Error("D32e-tranche-1: compact left rail must not reintroduce the old chart subtitle")
+	}
+	if strings.Contains(panel, "DRIFT SCORE") || strings.Contains(panel, "TOP CONTRIBUTOR") ||
+		strings.Contains(panel, "drift-compact-score--") {
+		t.Error("D32e-tranche-1: compact labels must be sentence case and must not render a vertical status accent class")
+	}
+	if strings.Contains(css, "border-left-width") || strings.Contains(css, "border-left-color") ||
+		strings.Contains(css, "drift-compact-score--") {
+		t.Error("D32e-tranche-1: compact CSS must remove the score-card vertical status accent")
+	}
+	if !strings.Contains(panel, `'<div class="drift-compact-chart">' +`) ||
+		!strings.Contains(panel, `'<div class="drift-compact-chart-header">'`) {
+		t.Error("D32e-tranche-1: middle compact chart container must mount the compact chart header and plot")
+	}
+	heroIdx := strings.Index(panel, "drift-compact-score-value")
+	keyIdx := strings.Index(panel, "drift-compact-series-title")
+	chartIdx := strings.Index(panel, "drift-compact-chart-header")
+	if heroIdx < 0 || keyIdx < 0 || chartIdx < 0 || keyIdx < chartIdx || keyIdx < heroIdx {
+		t.Error("D32e-tranche-1: chart key must render in the chart header after the Drift score hero block")
+	}
+	scoreBlockEnd := strings.Index(panel, `'<div class="drift-compact-chart">' +`)
+	if scoreBlockEnd < 0 {
+		t.Fatal("D32e-tranche-1: compact chart block missing")
+	}
+	scoreBlock := panel[:scoreBlockEnd]
+	if strings.Contains(scoreBlock, "drift-compact-legend") {
+		t.Error("D32e-tranche-1: left score card must not contain the chart legend")
+	}
+	if !strings.Contains(scoreBlock, "drift-compact-status") || !strings.Contains(scoreBlock, "WATCH") {
+		t.Error("D32e-tranche-1: WATCH status chip must live in the score card")
+	}
+}
+
+func TestExplorer_D32eImpl1_CompactChartUsesMeasuredWidth(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	panel := getExplorerAsset(t, srv, "/explorer/assets/js/drift/drift-analytics-panel.js")
+	css := getExplorerAsset(t, srv, "/explorer/assets/css/drift-analytics.css")
+	for _, want := range []string{
+		"chartWidth",
+		"ResizeObserver",
+		"_measureChartWidth",
+		"_chartContentWidth",
+		"chart.clientWidth",
+		"var W = Math.max(360, Math.floor(width || 720));",
+		"var pad = { top: 16, right: 32, bottom: 28, left: 46 };",
+		"(pad.left - 8)",
+		"0.000",
+		"0.100",
+		"0.200",
+		"0.146",
+		`preserveAspectRatio="xMinYMin meet"`,
+	} {
+		if !strings.Contains(panel, want) {
+			t.Errorf("D32e-tranche-1: compact chart measured-width renderer must contain %q", want)
+		}
+	}
+	for _, bad := range []string{
+		"var W = 560;",
+		"preserveAspectRatio=\"none\"",
+		"pad = { top: 16, right: 28, bottom: 28, left: 48 }",
+		"var pad = { top: 16, right: 40, bottom: 28, left: 34 };",
+	} {
+		if strings.Contains(panel, bad) {
+			t.Errorf("D32e-tranche-1: compact chart must not retain fixed/oversized width token %q", bad)
+		}
+	}
+	if !strings.Contains(css, "padding: 0 2px 1px 44px;") {
+		t.Error("D32e-tranche-1: compact chart header should align with the reduced y-axis gutter")
+	}
+}
+
+func TestExplorer_D32eImpl1_Tranche1CleanBreakNegatives(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	panel := getExplorerAsset(t, srv, "/explorer/assets/js/drift/drift-analytics-panel.js")
+	rail := getExplorerAsset(t, srv, "/explorer/assets/js/drift/drift-series-list.js")
+	tray := getExplorerAsset(t, srv, "/explorer/assets/js/graph/context/context-evidence-tray.js")
+	driftCSS := getExplorerAsset(t, srv, "/explorer/assets/css/drift-analytics.css")
+	gmapCSS := getExplorerAsset(t, srv, "/explorer/assets/css/governance-map.css")
+	body := performRequest(t, srv, http.MethodGet, "/explorer", nil).Body.String()
+	for _, bad := range []string{
+		"window.MIDASExplorerDriftSeriesList",
+		"drift-series-row-sev-",
+		"gmap-evidence-tray-metric",
+		"gmap-evidence-tray-range",
+	} {
+		if strings.Contains(panel, bad) || strings.Contains(rail, bad) {
+			t.Errorf("D32e-tranche-1: new Drift modules must not contain legacy token %q", bad)
+		}
+	}
+	for _, bad := range []string{
+		"wireGmapEvidenceTraySelectors();",
+		`aria-label="Drift series list"`,
+	} {
+		if strings.Contains(tray, bad) {
+			t.Errorf("D32e-tranche-1: tray Drift path must not use legacy fallback token %q", bad)
+		}
+	}
+	for _, bad := range []string{
+		"fonts.googleapis",
+		"fonts.gstatic",
+		"@import url",
+		"@font-face",
+		"IBM Plex",
+		"new cytoscape(",
+	} {
+		if strings.Contains(panel, bad) || strings.Contains(rail, bad) || strings.Contains(tray, bad) ||
+			strings.Contains(driftCSS, bad) || strings.Contains(gmapCSS, bad) || strings.Contains(body, bad) {
+			t.Errorf("D32e-tranche-1: compact Drift assets must not introduce external font/network/Cytoscape token %q", bad)
 		}
 	}
 }

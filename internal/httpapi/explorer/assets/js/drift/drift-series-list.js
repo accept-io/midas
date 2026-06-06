@@ -1,20 +1,6 @@
-// /explorer/assets/js/drift/drift-series-list.js — D32e-impl-1
+// /explorer/assets/js/drift/drift-series-list.js - D32e-tranche-1
 //
-// Renders the left-rail series list for the Drift Analytics panel.
-// One row per series. Each row is keyboard-focusable, declares its
-// selected state via aria-pressed, and emits a single 'select' event
-// (via the supplied onSelect callback) when activated.
-//
-// Series shape (matches the chart + demo adapter):
-//   { id, label, metric, severity, isDemo?, points: [...] }
-//
-// Render options:
-//   { selectedId?: string, onSelect?: function(id), ariaLabel?: string }
-//
-// Public surface (window.MIDASExplorerDriftSeriesList):
-//
-//   render(mount, series, options)
-//   clear(mount)
+// Contribution rail renderer for the Drift Analytics panel.
 
 (function () {
   'use strict';
@@ -25,122 +11,72 @@
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;');
   }
+
   function _escAttr(s) {
     return _escText(s).replace(/"/g, '&quot;');
   }
 
-  function _summary(s) {
-    if (!s || !Array.isArray(s.points) || s.points.length === 0) return '—';
-    var last = s.points[s.points.length - 1];
-    if (typeof last.v !== 'number') return '—';
-    var fmt = window.MIDASExplorerDriftChartFormatters || {};
-    return (typeof fmt.formatValue === 'function') ? fmt.formatValue(last.v) : String(last.v);
-  }
-
-  function _anomalyCount(s) {
-    return (s && Array.isArray(s.anomalies)) ? s.anomalies.length : 0;
-  }
-
-  function _sevLabel(sev) {
-    switch ((sev || '').toLowerCase()) {
-      case 'critical': return 'Critical';
-      case 'warning':  return 'Warning';
-      case 'info':     return 'Info';
-      case 'ok':       return 'Stable';
-      case 'unknown':  return 'Unknown';
-      default:         return 'Info';
-    }
-  }
-
-  function _rowHTML(s, selected) {
-    var sev = s.severity || 'info';
-    var sevText = _sevLabel(sev);
-    var label = s.label || s.id || 'Series';
-    var summary = _summary(s);
-    var anomalies = _anomalyCount(s);
-    var demoBadge = s.isDemo
-      ? '<span class="drift-series-row-demo" aria-label="Synthetic demo data">DEMO</span>'
-      : '';
-    return '<button type="button" class="drift-series-row drift-series-row-' + _escAttr(sev) +
+  function _rowHTML(item, selected) {
+    var id = item.id || '';
+    var label = item.label || id || 'Contribution';
+    var color = item.color || 'grey';
+    return '<button type="button" class="drift-contribution-row drift-contribution-row-' + _escAttr(color) +
       (selected ? ' is-selected' : '') + '"' +
-      ' data-series-id="' + _escAttr(s.id) + '"' +
+      ' data-drift-contribution-id="' + _escAttr(id) + '"' +
       ' aria-pressed="' + (selected ? 'true' : 'false') + '"' +
-      ' aria-label="' + _escAttr(label + ' · ' + sevText + ' · latest ' + summary) + '">' +
-      '<span class="drift-series-row-sev drift-series-row-sev-' + _escAttr(sev) + '"' +
-        ' aria-hidden="true" data-sev="' + _escAttr(sev) + '"></span>' +
-      '<span class="drift-series-row-body">' +
-        '<span class="drift-series-row-label">' + _escText(label) + '</span>' +
-        '<span class="drift-series-row-meta">' +
-          '<span class="drift-series-row-sev-text">' + _escText(sevText) + '</span>' +
-          (anomalies > 0 ? '<span class="drift-series-row-anomaly-count">' +
-                              _escText(String(anomalies) + ' anomal' + (anomalies === 1 ? 'y' : 'ies')) +
-                          '</span>' : '') +
-          demoBadge +
+      ' aria-label="' + _escAttr(label + ' contribution ' + (item.value || '') + ' ' + (item.share || '')) + '">' +
+        '<span class="drift-contribution-label">' + _escText(label) + '</span>' +
+        '<span class="drift-contribution-value">' + _escText(item.value || '') + '</span>' +
+        '<span class="drift-contribution-share">' + _escText(item.share || '') + '</span>' +
+        '<span class="drift-contribution-track" aria-hidden="true">' +
+          '<span class="drift-contribution-fill" style="width:' + _escAttr(String(parseInt(item.share, 10) || 0)) + '%"></span>' +
         '</span>' +
-      '</span>' +
-      '<span class="drift-series-row-summary">' + _escText(summary) + '</span>' +
-    '</button>';
+      '</button>';
   }
 
-  function render(mount, series, options) {
+  function render(mount, viewModel, options) {
     if (!mount) return;
     options = options || {};
-    var aria = options.ariaLabel || 'Drift series list';
-    if (!Array.isArray(series) || series.length === 0) {
-      mount.innerHTML =
-        '<div class="drift-series-list-empty" role="status" aria-live="polite">' +
-          'No drift series for the current selection.' +
-        '</div>';
-      mount.setAttribute('role', 'list');
-      mount.setAttribute('aria-label', aria);
+    var contributions = viewModel && Array.isArray(viewModel.contributions) ? viewModel.contributions : [];
+    var selectedId = options.selectedId || (viewModel && viewModel.selectedContributionId) || '';
+    mount.setAttribute('role', 'list');
+    mount.setAttribute('aria-label', options.ariaLabel || 'Drift contribution rail');
+    if (contributions.length === 0) {
+      mount.innerHTML = '<div class="drift-contribution-empty" role="status">No drift contributions.</div>';
       return;
     }
-
-    var fmt = window.MIDASExplorerDriftChartFormatters || {};
-    var rank = (typeof fmt.severityRank === 'function') ? fmt.severityRank : function () { return 0; };
-    // Sort by severity descending so critical signals surface first.
-    var sorted = series.slice().sort(function (a, b) { return rank(b.severity) - rank(a.severity); });
-    var selectedId = options.selectedId || (sorted[0] && sorted[0].id) || null;
-    var rowsHTML = sorted.map(function (s) { return _rowHTML(s, s.id === selectedId); }).join('');
-
-    mount.innerHTML = rowsHTML;
-    mount.setAttribute('role', 'list');
-    mount.setAttribute('aria-label', aria);
-    // Detach previous click handler before re-binding so re-render
-    // does not double-fire.
-    if (mount._driftListHandler) {
-      mount.removeEventListener('click', mount._driftListHandler);
-      mount._driftListHandler = null;
+    mount.innerHTML = contributions.map(function (item) {
+      return _rowHTML(item, item.id === selectedId);
+    }).join('');
+    if (mount._driftContributionHandler) {
+      mount.removeEventListener('click', mount._driftContributionHandler);
+      mount._driftContributionHandler = null;
     }
     if (typeof options.onSelect === 'function') {
-      var handler = function (ev) {
+      mount._driftContributionHandler = function (ev) {
         var target = ev.target;
-        while (target && target !== mount && !(target.classList && target.classList.contains('drift-series-row'))) {
+        while (target && target !== mount && !(target.classList && target.classList.contains('drift-contribution-row'))) {
           target = target.parentNode;
         }
         if (!target || target === mount) return;
-        var id = target.dataset && target.dataset.seriesId;
-        if (id) {
-          try { options.onSelect(id); } catch (_) { /* swallow */ }
-        }
+        var id = target.getAttribute('data-drift-contribution-id');
+        if (id) options.onSelect(id);
       };
-      mount._driftListHandler = handler;
-      mount.addEventListener('click', handler);
+      mount.addEventListener('click', mount._driftContributionHandler);
     }
   }
 
   function clear(mount) {
-    if (mount) {
-      if (mount._driftListHandler) {
-        mount.removeEventListener('click', mount._driftListHandler);
-        mount._driftListHandler = null;
-      }
-      mount.innerHTML = '';
+    if (!mount) return;
+    if (mount._driftContributionHandler) {
+      mount.removeEventListener('click', mount._driftContributionHandler);
+      mount._driftContributionHandler = null;
     }
+    mount.innerHTML = '';
   }
 
-  window.MIDASExplorerDriftSeriesList = {
+  window.MIDASExplorerDriftContributionRail = {
     render: render,
-    clear:  clear,
+    clear: clear
   };
 })();

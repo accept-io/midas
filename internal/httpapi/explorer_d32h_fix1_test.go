@@ -316,7 +316,7 @@ func TestExplorer_D32hFix1_ContextEvidenceTrayUntouched(t *testing.T) {
 	// Drift Analytics tray remains.
 	for _, want := range []string{
 		`id="gmap-evidence-tray"`,
-		`data-drift-analytics-title>Drift Analytics`,
+		`data-drift-analytics-title>DRIFT ANALYTICS`,
 		`data-drift-analytics-subtitle`,
 		`data-drift-analytics-demo-badge`,
 		`data-drift-analytics-severity-badge`,

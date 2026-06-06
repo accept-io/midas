@@ -1,259 +1,445 @@
-/* /explorer/assets/css/drift-analytics.css — D32e-impl-1
- *
- * Drift Analytics panel styling. The panel mounts inside the existing
- * Runtime Evidence letterbox (#gmap-evidence-tray); these rules style
- * the new content layout (series rail on the left, chart on the right,
- * polished header) without redesigning the tray shell.
- *
- * All colours route through tokens defined in tokens.css so dark theme
- * + future light theme both work.
- */
+/* /explorer/assets/css/drift-analytics.css - compact letterbox summary */
 
-/* Panel grid layout — left rail + chart, with a header strip on top.
- * Mounted inside .gmap-evidence-tray-panel which is itself inside the
- * collapse-aware tray body, so heights are driven by the tray.
- */
+:root {
+  --drift-app-background: #020617;
+  --drift-surface: #0f172a;
+  --drift-surface-raised: #111827;
+  --drift-selected-surface: rgba(37, 99, 235, 0.18);
+  --drift-toolbar-surface: #0b1220;
+  --drift-border: #334155;
+  --drift-border-strong: #475569;
+  --drift-text-strong: #e2e8f0;
+  --drift-text-medium: #cbd5e1;
+  --drift-text-muted: #94a3b8;
+  --drift-grey: #64748b;
+  --drift-accent-blue: #60a5fa;
+  --drift-accent-blue-bg: rgba(37, 99, 235, 0.18);
+  --drift-green: #34d399;
+  --drift-green-bg: rgba(16, 185, 129, 0.12);
+  --drift-amber: #f59e0b;
+  --drift-amber-bg: rgba(245, 158, 11, 0.14);
+  --drift-red: #f87171;
+  --drift-red-bg: rgba(248, 113, 113, 0.14);
+  --drift-purple: #a78bfa;
+  --drift-chart-grid: rgba(148, 163, 184, 0.18);
+  --drift-contribution-track: rgba(148, 163, 184, 0.18);
+  --drift-chart-gradient-start: rgba(96, 165, 250, 0.18);
+  --drift-chart-gradient-end: rgba(96, 165, 250, 0.03);
+  --drift-deviation-fill: rgba(96, 165, 250, 0.10);
+}
+
+:root[data-theme="light"] {
+  --drift-app-background: #f8fafc;
+  --drift-surface: #ffffff;
+  --drift-surface-raised: #f8fafc;
+  --drift-selected-surface: #eff6ff;
+  --drift-toolbar-surface: #ffffff;
+  --drift-border: #dbe3ee;
+  --drift-border-strong: #b8c4d6;
+  --drift-text-strong: #172033;
+  --drift-text-medium: #475569;
+  --drift-text-muted: #94a3b8;
+  --drift-grey: #94a3b8;
+  --drift-accent-blue: #2f6df6;
+  --drift-accent-blue-bg: #eaf1ff;
+  --drift-green: #10b981;
+  --drift-green-bg: #e8fff5;
+  --drift-amber: #e07b00;
+  --drift-amber-bg: #fff4df;
+  --drift-red: #ef2d35;
+  --drift-red-bg: #ffe9ea;
+  --drift-purple: #7c3aed;
+  --drift-chart-grid: #e2e8f0;
+  --drift-contribution-track: #edf2f7;
+  --drift-chart-gradient-start: rgba(47, 109, 246, 0.14);
+  --drift-chart-gradient-end: rgba(47, 109, 246, 0.02);
+  --drift-deviation-fill: rgba(47, 109, 246, 0.16);
+}
+
+.drift-analytics-demo-badge {
+  border: 1px solid var(--drift-border);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  padding: 3px 10px;
+  text-transform: uppercase;
+}
+
+.drift-analytics-demo-badge {
+  background: var(--drift-toolbar-surface);
+  color: var(--drift-text-muted);
+}
+
 .drift-analytics-panel {
-  display: grid;
-  grid-template-columns: 240px 1fr;
-  grid-template-rows: auto 1fr;
-  grid-template-areas:
-    "header header"
-    "list   chart";
-  gap: 12px;
   height: 100%;
-  min-height: 220px;
-  color: var(--text-1, #e8ecf2);
+  min-height: 0;
+  color: var(--drift-text-strong);
+  background: transparent;
 }
 
 .drift-analytics-header {
-  grid-area: header;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 4px 0 4px;
+  display: none;
 }
 
-.drift-analytics-title {
-  font-weight: 600;
-  font-size: 12px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--text-2, #c4ccd6);
-}
-
-.drift-analytics-subtitle {
-  font-size: 12px;
-  color: var(--text-3, #93a0b0);
-}
-
-.drift-analytics-severity-badge {
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-size: 10px;
-  letter-spacing: 0.04em;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-.drift-analytics-severity-critical { background: var(--badge-bad,  #8a1f1f); color: #fff; }
-.drift-analytics-severity-warning  { background: var(--badge-warn, #8a601f); color: #fff; }
-.drift-analytics-severity-info     { background: var(--badge-info, #1c5278); color: #fff; }
-.drift-analytics-severity-ok       { background: var(--badge-good, #1d6b3f); color: #fff; }
-.drift-analytics-severity-unknown  { background: var(--badge-muted,#495163); color: #fff; }
-
-.drift-analytics-demo-badge {
-  margin-left: auto;
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: rgba(255, 184, 107, 0.18);
-  color: var(--badge-warn, #ffb86b);
-  font-size: 10px;
-  letter-spacing: 0.04em;
-  font-weight: 700;
-}
-
-/* Series list rail.
- * The rail's compact rows match the existing right-rail tab style
- * (12px font, subtle dividers) so the new panel sits inside the
- * existing dark theme without bringing its own visual language.
- */
-.drift-series-list {
-  grid-area: list;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  overflow-y: auto;
-  padding-right: 4px;
-}
-.drift-series-list-empty {
-  font-size: 12px;
-  color: var(--text-3, #93a0b0);
-  font-style: italic;
-  padding: 8px;
-}
-
-.drift-series-row {
-  appearance: none;
-  text-align: left;
-  display: grid;
-  grid-template-columns: 8px 1fr auto;
-  gap: 8px;
-  align-items: center;
-  padding: 8px 10px;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: var(--surface-2, rgba(20, 24, 32, 0.7));
-  color: inherit;
-  cursor: pointer;
-  font: inherit;
-  transition: background-color 100ms ease, border-color 100ms ease;
-}
-.drift-series-row:hover {
-  background: var(--surface-3, rgba(255, 255, 255, 0.06));
-}
-.drift-series-row:focus-visible {
-  outline: 2px solid var(--focus, #6da3ff);
-  outline-offset: 1px;
-}
-.drift-series-row.is-selected {
-  background: var(--surface-3, rgba(255, 255, 255, 0.10));
-  border-color: var(--border-muted, rgba(255, 255, 255, 0.16));
-}
-
-.drift-series-row-sev {
-  width: 6px;
-  height: 36px;
-  border-radius: 3px;
-}
-.drift-series-row-sev-critical { background: var(--badge-bad,  #ff7e9b); }
-.drift-series-row-sev-warning  { background: var(--badge-warn, #ffb86b); }
-.drift-series-row-sev-info     { background: var(--badge-info, #6da3ff); }
-.drift-series-row-sev-ok       { background: var(--badge-good, #59d3a3); }
-.drift-series-row-sev-unknown  { background: var(--badge-muted,#6b7383); }
-
-.drift-series-row-body {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-.drift-series-row-label {
-  font-weight: 600;
-  font-size: 12px;
-  color: var(--text-1, #e8ecf2);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.drift-series-row-meta {
-  display: flex;
-  gap: 6px;
-  font-size: 11px;
-  color: var(--text-3, #93a0b0);
-}
-.drift-series-row-anomaly-count {
-  color: var(--badge-warn, #ffb86b);
-}
-.drift-series-row-demo {
-  padding: 1px 4px;
-  border-radius: 3px;
-  background: rgba(255, 184, 107, 0.16);
-  color: var(--badge-warn, #ffb86b);
-  font-size: 10px;
-  letter-spacing: 0.04em;
-  font-weight: 700;
-}
-.drift-series-row-summary {
-  font-variant-numeric: tabular-nums;
-  font-size: 11px;
-  color: var(--text-2, #c4ccd6);
-  align-self: start;
-  margin-top: 2px;
-}
-
-/* Chart area. */
-.drift-series-chart {
-  grid-area: chart;
-  display: flex;
-  flex-direction: column;
+.drift-compact-summary {
+  height: 100%;
   min-height: 0;
 }
-.drift-series-chart-empty {
+
+.drift-compact-layout {
+  display: grid;
+  grid-template-columns: minmax(200px, 242px) minmax(320px, 1fr) minmax(200px, 260px);
+  gap: 0;
+  height: 100%;
+  min-height: 0;
+  align-items: stretch;
+  background: var(--drift-surface);
+  border: 1px solid var(--drift-border);
+  border-radius: 7px;
+}
+
+.drift-compact-card,
+.drift-compact-chart {
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+.drift-compact-card {
   display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 8px 11px;
+}
+
+.drift-compact-contributor {
+  border-left: 1px solid var(--drift-border);
+  justify-content: flex-start;
+}
+
+.drift-compact-chart {
+  border-left: 1px solid var(--drift-border);
+}
+
+.drift-compact-card-block {
+  min-height: 0;
+}
+
+.drift-compact-card-block--hero {
+  min-height: 0;
+}
+
+.drift-compact-divider {
+  border-top: 1px solid var(--drift-border);
+  margin: 7px 0 6px;
+}
+
+.drift-compact-label {
+  color: var(--drift-text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.drift-compact-score-row {
   align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.drift-compact-status {
+  border: 1px solid var(--drift-border);
+  border-radius: 999px;
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  text-transform: uppercase;
+}
+
+.drift-compact-status--critical {
+  background: var(--drift-red-bg);
+  color: var(--drift-red);
+}
+
+.drift-compact-status--warning {
+  background: var(--drift-amber-bg);
+  color: var(--drift-amber);
+}
+
+.drift-compact-status--ok {
+  background: var(--drift-green-bg);
+  color: var(--drift-green);
+}
+
+.drift-compact-score-value {
+  color: var(--drift-text-strong);
+  font-family: var(--font-mono);
+  font-size: 26px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  margin-top: 5px;
+}
+
+.drift-compact-contributor-value {
+  color: var(--drift-text-strong);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.25;
+  margin-top: 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drift-compact-support,
+.drift-compact-range,
+.drift-compact-evidence,
+.drift-compact-runner-up {
+  color: var(--drift-text-muted);
+  font-size: 10.5px;
+  font-weight: 400;
+  margin-top: 3px;
+}
+
+.drift-compact-number {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.drift-compact-range {
+  color: var(--drift-text-muted);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.drift-compact-evidence {
+  color: var(--drift-text-muted);
+}
+
+.drift-compact-runner-up {
+  line-height: 1.25;
+  white-space: normal;
+}
+
+.gmap-evidence-tray-open-analysis {
+  align-items: center;
+  border: 1px solid var(--drift-border);
+  border-radius: 4px;
+  display: inline-flex;
   justify-content: center;
-  height: 100%;
-  font-size: 12px;
-  color: var(--text-3, #93a0b0);
-  font-style: italic;
+  background: var(--drift-toolbar-surface);
+  color: var(--drift-text-medium);
+  cursor: not-allowed;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  height: 22px;
+  min-width: 0;
+  width: 28px;
 }
-.drift-series-chart-svg {
+
+.gmap-evidence-tray-open-analysis {
+  padding: 0;
+}
+
+.gmap-evidence-tray-open-analysis-icon {
+  flex: 0 0 auto;
+  height: 14px;
+  width: 14px;
+}
+
+.gmap-evidence-tray-open-analysis:hover {
+  border-color: var(--drift-border-strong);
+  color: var(--drift-text-strong);
+}
+
+.gmap-evidence-tray-open-analysis:focus-visible {
+  outline: 2px solid var(--drift-accent-blue);
+  outline-offset: 1px;
+}
+
+.drift-compact-chart {
+  align-items: stretch;
+  display: flex;
+  flex-direction: column;
+  padding: 3px 6px 3px 2px;
+}
+
+.drift-compact-series-title {
+  color: var(--drift-text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.drift-compact-chart-header {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  min-height: 18px;
+  padding: 0 2px 1px 44px;
+}
+
+.drift-compact-legend {
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+  align-items: center;
+  color: var(--drift-text-muted);
+  font-size: 10.5px;
+  margin: 0;
+  min-width: 0;
+}
+
+.drift-compact-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.drift-compact-legend i {
+  width: 20px;
+  height: 0;
+  display: inline-block;
+  border-top: 2px solid currentColor;
+}
+
+.drift-legend-observed {
+  color: var(--drift-accent-blue);
+}
+
+.drift-legend-expected {
+  color: var(--drift-grey);
+  border-top-style: dashed !important;
+  border-top-width: 1.6px !important;
+}
+
+.drift-compact-chart-svg {
   width: 100%;
-  height: 100%;
-  background: var(--surface-2, rgba(20, 24, 32, 0.5));
-  border-radius: 6px;
+  height: 152px;
+  display: block;
 }
-.drift-series-chart-bg {
+
+.drift-compact-chart-bg {
   fill: transparent;
 }
-.drift-series-chart-grid {
-  stroke: var(--border-muted, rgba(255, 255, 255, 0.06));
+
+.drift-compact-grid {
+  stroke: var(--drift-chart-grid);
   stroke-width: 1;
-  shape-rendering: crispEdges;
+  opacity: 0.55;
 }
-.drift-series-chart-axis-label {
-  font-size: 9px;
-  fill: var(--text-3, #93a0b0);
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+
+.drift-compact-axis-label {
+  fill: var(--drift-text-muted);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+  opacity: 0.82;
 }
-.drift-series-chart-actual {
+
+.drift-compact-threshold {
   fill: none;
-  stroke-width: 1.8;
+  stroke-width: 1;
+  stroke-dasharray: 5 6;
+  opacity: 0.34;
+}
+
+.drift-compact-watch {
+  stroke: var(--drift-amber);
+}
+
+.drift-compact-breach {
+  stroke: var(--drift-red);
+}
+
+.drift-compact-deviation {
+  fill: var(--drift-deviation-fill);
+  opacity: 1;
+}
+
+.drift-compact-expected {
+  fill: none;
+  stroke: var(--drift-grey);
+  stroke-dasharray: 6 5;
+  stroke-linecap: round;
+  stroke-width: 1.6;
+  opacity: 0.9;
+}
+
+.drift-compact-observed {
+  fill: none;
+  stroke: var(--drift-accent-blue);
   stroke-linecap: round;
   stroke-linejoin: round;
+  stroke-width: 2.5;
 }
-.drift-series-chart-baseline {
-  fill: none;
-  stroke: var(--text-3, #93a0b0);
-  stroke-width: 1.2;
-  stroke-dasharray: 4 4;
-  opacity: 0.7;
-}
-.drift-series-chart-forecast {
-  fill: none;
-  stroke: var(--badge-info, #6da3ff);
-  stroke-width: 1.2;
-  stroke-dasharray: 2 4;
-  opacity: 0.6;
-}
-.drift-series-chart-anomaly {
-  fill: var(--badge-bad, #ff7e9b);
-  stroke: var(--surface-2, #0d1117);
-  stroke-width: 1.2;
-}
-.drift-series-chart-severity-critical .drift-series-chart-actual { stroke: var(--badge-bad,  #ff7e9b); }
-.drift-series-chart-severity-warning  .drift-series-chart-actual { stroke: var(--badge-warn, #ffb86b); }
-.drift-series-chart-severity-info     .drift-series-chart-actual { stroke: var(--badge-info, #6da3ff); }
-.drift-series-chart-severity-ok       .drift-series-chart-actual { stroke: var(--badge-good, #59d3a3); }
-.drift-series-chart-severity-unknown  .drift-series-chart-actual { stroke: var(--badge-muted,#6b7383); }
 
-/* Narrow-viewport stack: rail above chart instead of beside it. */
-@media (max-width: 920px) {
-  .drift-analytics-panel {
+.drift-compact-latest-dot {
+  fill: var(--drift-accent-blue);
+  stroke: var(--drift-surface);
+  stroke-width: 1.5;
+}
+
+.drift-compact-latest-badge {
+  fill: var(--drift-accent-blue);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.drift-compact-empty,
+.drift-compact-chart-empty {
+  align-items: center;
+  color: var(--drift-text-muted);
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  height: 100%;
+  justify-content: center;
+  min-height: 0;
+  padding: 12px;
+  text-align: center;
+}
+
+.drift-compact-empty-title {
+  color: var(--drift-text-strong);
+  font-weight: 750;
+}
+
+.drift-compact-empty-copy {
+  color: var(--drift-text-muted);
+  margin-top: 4px;
+}
+
+@media (max-width: 980px) {
+  .drift-compact-layout {
+    grid-template-columns: minmax(150px, 190px) minmax(260px, 1fr);
+  }
+
+  .drift-compact-contributor {
+    display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .drift-compact-layout {
     grid-template-columns: 1fr;
-    grid-template-rows: auto auto 1fr;
-    grid-template-areas:
-      "header"
-      "list"
-      "chart";
   }
-  .drift-series-list {
-    flex-direction: row;
-    overflow-x: auto;
-    overflow-y: hidden;
-    padding-bottom: 4px;
-  }
-  .drift-series-row {
-    min-width: 200px;
+
+  .drift-compact-score {
+    display: none;
   }
 }

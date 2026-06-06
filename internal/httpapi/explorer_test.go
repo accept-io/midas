@@ -6236,8 +6236,8 @@ func TestExplorer_HTML_GovernanceMap_EvidenceTrayActivityFromExplorerEnvelopes(t
 		// D24i + D24i-fix3 canvas affordances regression-pinned.
 		"id=\"gmap-pan-mode-button\"",
 		"id=\"gmap-select-mode-button\"",
-		// D25b-fix tray height regression pin.
-		"height: 320px;",
+		// Compact Drift letterbox height regression pin.
+		"height: 230px;",
 		// D26a/D26b runtime feed prerequisites still in place.
 		"function loadExplorerRuntimeRecords()",
 	} {

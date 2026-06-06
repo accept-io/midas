@@ -20,7 +20,7 @@ import (
 
 // TestExplorer_D32hFix2dConverge_AuthorityWorkbenchUsesHeightCollapseModel
 // pins the height-driven collapse model (height: 36px collapsed,
-// height: 320px expanded). Bans the pre-fix min-height / max-height
+// height: 320px expanded for the authority workbench). Bans the pre-fix min-height / max-height
 // shape that allowed content to drive height regardless of
 // `.is-expanded` state.
 func TestExplorer_D32hFix2dConverge_AuthorityWorkbenchUsesHeightCollapseModel(t *testing.T) {
@@ -249,10 +249,9 @@ func TestExplorer_D32hFix2dConverge_AuthorityWorkbenchHardcodedFallbacksRemoved(
 }
 
 // TestExplorer_D32hFix2dConverge_ContextLetterboxUntouched pins that
-// Context's evidence-tray contract is unchanged. The CSS rules at
-// governance-map.css:1246-1265 (collapsed height, transition,
-// expanded height) and the Context-tray DOM in index.html remain
-// byte-identical.
+// Context's evidence-tray collapse model is unchanged. The expanded
+// height may move with the compact letterbox content, but collapsed
+// height, transition, and DOM wiring remain stable.
 func TestExplorer_D32hFix2dConverge_ContextLetterboxUntouched(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
@@ -263,7 +262,7 @@ func TestExplorer_D32hFix2dConverge_ContextLetterboxUntouched(t *testing.T) {
 		"height: 36px;",
 		"transition: height 0.18s ease-out;",
 		".gmap-evidence-tray.is-expanded {",
-		"height: 320px;",
+		"height: 230px;",
 	} {
 		if !strings.Contains(contextCSS, want) {
 			t.Errorf("D32h-fix-2d-converge: Context tray CSS contract must remain — missing %q in governance-map.css", want)
