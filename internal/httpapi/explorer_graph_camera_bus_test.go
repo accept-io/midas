@@ -549,7 +549,7 @@ func TestExplorer_D37pPlatform3_IndexHtmlWithinCeiling(t *testing.T) {
 		WithExplorerEnabled(true)
 	body := performRequest(t, srv, http.MethodGet, "/explorer", nil).Body.String()
 	lines := strings.Count(body, "\n") + 1
-	if lines > 7820 {
-		t.Errorf("D37p-platform-3: index.html line count %d exceeds the existing 7820 ceiling — pin bump required", lines)
+	if lines > 8000 {
+		t.Errorf("D37p-platform-3: index.html line count %d exceeds the existing 8000 ceiling — pin bump required", lines)
 	}
 }

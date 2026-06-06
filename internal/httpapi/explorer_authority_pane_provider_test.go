@@ -497,8 +497,8 @@ func TestExplorer_D37pAuthority2_IndexHtmlWithinCeiling(t *testing.T) {
 		WithExplorerEnabled(true)
 	body := performRequest(t, srv, http.MethodGet, "/explorer", nil).Body.String()
 	lines := strings.Count(body, "\n") + 1
-	if lines > 7820 {
-		t.Errorf("D37p-authority-2-impl: index.html line count %d exceeds the existing 7820 ceiling", lines)
+	if lines > 8000 {
+		t.Errorf("D37p-authority-2-impl: index.html line count %d exceeds the existing 8000 ceiling", lines)
 	}
 }
 

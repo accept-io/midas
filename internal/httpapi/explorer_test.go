@@ -2312,9 +2312,15 @@ func TestExplorer_HTML_RecordsView_EnvelopeDetailRail(t *testing.T) {
 		"Activity uses real Explorer runtime envelopes",
 		// D26d metrics
 		`id="records-metric-total"`,
-		// D25e drift semantics
+		// Compact Drift Analytics letterbox semantics.
 		"function getGmapEvidenceSignalSemantics(nodeId)",
-		"Illustrative demo signal. Not calculated from runtime envelopes.",
+		"Compact Drift Analytics summary",
+		"Select a node to view drift analysis",
+		"Drift score",
+		"Observed vs expected",
+		"DEMO DATA",
+		"demo_derived",
+		`id="gmap-evidence-tray-toggle"`,
 		// D26b badge
 		`>Explorer runtime<`,
 	} {
@@ -2605,16 +2611,22 @@ func TestExplorer_HTML_GovernanceMap_CompactEdgeLegend(t *testing.T) {
 		t.Error("D26g-impl-1: gmap-back-button must remain inside .governance-map-toolbar")
 	}
 
-	// === 11. D26f tray regression ===
+	// === 11. Compact Drift Analytics letterbox regression ===
 	for _, want := range []string{
-		"gmap-evidence-tray-analytic-layout",
-		"gmap-evidence-tray-signal-column",
-		"gmap-evidence-tray-chart-panel",
-		// D25e disclaimer still in the DOM (Drift tab provenance).
-		"Illustrative demo signal. Not calculated from runtime envelopes.",
+		`aria-label="Drift Analytics tray"`,
+		`data-drift-compact-summary`,
+		"Compact Drift Analytics summary",
+		"Select a node to view drift analysis",
+		"Drift score",
+		"Observed vs expected",
+		"DEMO DATA",
+		"demo_derived",
+		`aria-label="Open Drift Analysis"`,
+		`id="gmap-evidence-tray-toggle"`,
+		`aria-label="Expand letterbox"`,
 	} {
 		if !strings.Contains(body, want) {
-			t.Errorf("D26g-impl-3 must NOT remove D25e/D26f tray affordance %q", want)
+			t.Errorf("D26g-impl-3 must NOT remove compact Drift Analytics letterbox affordance %q", want)
 		}
 	}
 
@@ -6012,8 +6024,8 @@ func TestExplorer_HTML_GovernanceMap_RightRailInspector(t *testing.T) {
 //     kinds and exposure fields (affected_count, total_count,
 //     primary_driver, primary_contributor, exposure_band) for
 //     structural kinds. Deterministic; never uses Math.random.
-//   - Persistent demo provenance disclaimer appears in the panel:
-//     "Illustrative demo signal. Not calculated from runtime envelopes."
+//   - Demo provenance remains explicit through the compact Drift
+//     Analytics DEMO DATA badge and demo_derived source marker.
 //
 // Negative pins (scoped to runtime-rendered strings, not comments)
 // guard against the disallowed wording from the design model.
@@ -6099,23 +6111,21 @@ func TestExplorer_HTML_GovernanceMap_EvidenceTrayActivityFromExplorerEnvelopes(t
 		}
 	}
 
-	// === 4. Provenance — Activity is real, Drift remains illustrative ===
-	// Activity must distinguish itself from the synthetic Drift signal.
+	// === 4. Provenance: Activity is real; compact Drift remains demo-scoped.
+	// Activity must distinguish itself from the demo-derived Drift signal.
 	for _, want := range []string{
 		"Activity uses real Explorer runtime envelopes",
-		"Drift signals remain illustrative until analytics is wired",
+		"DEMO DATA",
+		"Demo-derived Drift Analytics summary.",
+		"demo_derived",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("D26c: missing per-tab provenance copy %q", want)
 		}
 	}
-	// The Drift panel still carries the D25e disclaimer verbatim.
-	if !strings.Contains(body, "Illustrative demo signal. Not calculated from runtime envelopes.") {
-		t.Error("D26c: D25e Drift disclaimer must remain — Drift tab semantics preserved")
-	}
-	// Tray-level DEMO DATA badge remains because Drift is still synthetic.
+	// Tray-level DEMO DATA badge remains because compact Drift is demo-derived.
 	if !strings.Contains(body, "DEMO DATA") {
-		t.Error("D26c: tray DEMO DATA badge must remain while Drift is still synthetic")
+		t.Error("D26c: tray DEMO DATA badge must remain while Drift is demo-derived")
 	}
 
 	// === 5. Mapping — Activity consumes the D26a fields ===
@@ -6188,8 +6198,8 @@ func TestExplorer_HTML_GovernanceMap_EvidenceTrayActivityFromExplorerEnvelopes(t
 	}
 
 	// === 7. Tab switching invokes Activity render + load ===
-	// The wireGmapEvidenceTray IIFE dispatches on which === 'activity'.
-	wireBody := extractBetween(t, body, "function wireGmapEvidenceTray()", "function wireGmapEvidenceTraySelectors()")
+	// The wireGmapEvidenceTray dispatcher dispatches on which === 'activity'.
+	wireBody := extractBetween(t, body, "function wireGmapEvidenceTray()", "window.MIDASExplorerGraph.contextEvidenceTray = {")
 	if !strings.Contains(wireBody, "which === 'activity'") {
 		t.Error("D26c: tab switcher must branch on which === 'activity'")
 	}
@@ -6205,7 +6215,7 @@ func TestExplorer_HTML_GovernanceMap_EvidenceTrayActivityFromExplorerEnvelopes(t
 	// notifyGmapEvidenceTraySelectionChanged refreshes Activity for selection.
 	notifyBody := extractBetween(t, body,
 		"function notifyGmapEvidenceTraySelectionChanged()",
-		"// ── D26c: Activity tab")
+		"async function loadGmapEvidenceActivity()")
 	if !strings.Contains(notifyBody, "gmapEvidenceTrayActiveTab === 'activity'") ||
 		!strings.Contains(notifyBody, "renderGmapEvidenceTrayActivityPanel()") {
 		t.Error("D26c: notifyGmapEvidenceTraySelectionChanged must re-render Activity panel when tab is active")

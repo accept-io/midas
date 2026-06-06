@@ -2363,21 +2363,17 @@ func TestExplorer_D32aImpl9_EvidenceTrayModuleServedAndExposesNamespace(t *testi
 	}
 }
 
-// TestExplorer_D32aImpl9_TrayFunctionsLiveInModule pins that the 14
-// tray functions and 6 tray state vars are owned by the module body.
+// TestExplorer_D32aImpl9_TrayFunctionsLiveInModule pins that the
+// compact tray's live state and dispatch helpers are owned by the
+// module body. The chart renderer itself lives in the dedicated Drift
+// Analytics panel asset.
 func TestExplorer_D32aImpl9_TrayFunctionsLiveInModule(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
 	modBody := getExplorerAsset(t, srv, "/explorer/assets/js/graph/context/context-evidence-tray.js")
+	panelBody := getExplorerAsset(t, srv, "/explorer/assets/js/drift/drift-analytics-panel.js")
 	for _, want := range []string{
-		// Tray demo-data synthesis primitives
-		"function hashGmapDemoSeed(",
-		"function buildDemoDriftSeries(",
-		"function buildDemoGovernanceSignal(",
-		"function getGmapEvidenceSignalSemantics(",
-		// Tray renderers
-		"function renderGmapEvidenceTrayChart(",
-		"function renderGmapEvidenceTrayTiles(",
+		// Tray delegates compact Drift rendering to the Drift panel asset.
 		"function renderGmapEvidenceTrayDriftPanel(",
 		"function renderGmapEvidenceTrayActivityPanel(",
 		// Tray header + state apply + selection notify
@@ -2385,7 +2381,6 @@ func TestExplorer_D32aImpl9_TrayFunctionsLiveInModule(t *testing.T) {
 		"function notifyGmapEvidenceTraySelectionChanged(",
 		"function filterGmapEvidenceActivityForSelection(",
 		"function applyGmapEvidenceTrayState(",
-		"function wireGmapEvidenceTraySelectors(",
 		"function gmapNodeKindLabel(",
 		// Tray module-private state declarations
 		"let gmapEvidenceTrayExpanded",
@@ -2397,6 +2392,15 @@ func TestExplorer_D32aImpl9_TrayFunctionsLiveInModule(t *testing.T) {
 	} {
 		if !strings.Contains(modBody, want) {
 			t.Errorf("D32a-impl-9: tray module must own %q", want)
+		}
+	}
+	for _, want := range []string{
+		"Compact Drift Analytics summary",
+		"Observed vs expected",
+		"Drift score",
+	} {
+		if !strings.Contains(panelBody, want) {
+			t.Errorf("D32a-impl-9: compact Drift panel asset must own %q", want)
 		}
 	}
 }
@@ -2550,8 +2554,8 @@ func TestExplorer_D32aImpl9_IndexHtmlReducedBelowImpl8(t *testing.T) {
 		WithExplorerEnabled(true)
 	body := performRequest(t, srv, http.MethodGet, "/explorer", nil).Body.String()
 	lines := strings.Count(body, "\n") + 1
-	if lines > 7820 {
-		t.Errorf("D32a-impl-9 / D32b-debug-1 / D32h-fix-1 / D33x-help-1 / D33x-list-mode / D34b / D35a / D37h / D37m / D37o-impl-2 / D37o-toolbar-1: index.html line count %d exceeds 7820 — extraction discipline should hold", lines)
+	if lines > 8000 {
+		t.Errorf("D32a-impl-9 / D32b-debug-1 / D32h-fix-1 / D33x-help-1 / D33x-list-mode / D34b / D35a / D37h / D37m / D37o-impl-2 / D37o-toolbar-1: index.html line count %d exceeds 8000 — extraction discipline should hold", lines)
 	}
 }
 

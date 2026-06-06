@@ -174,6 +174,44 @@ func (r *DriftDefinitionRepo) ListVersions(ctx context.Context, id string) ([]*d
 	return out, nil
 }
 
+// ListByTarget returns every definition revision for the target entity.
+// The lookup is read-only and uses the existing target_entity index.
+func (r *DriftDefinitionRepo) ListByTarget(
+	ctx context.Context,
+	kind drift.TargetEntityKind,
+	entityID string,
+) ([]*drift.DriftDefinition, error) {
+	q := `
+		SELECT ` + driftDefinitionColumns + `
+		FROM drift_definitions
+		WHERE target_entity_kind = $1 AND target_entity_id = $2
+		ORDER BY id ASC, version DESC
+	`
+	rows, err := r.db.QueryContext(ctx, q, string(kind), entityID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []*drift.DriftDefinition{}
+	for rows.Next() {
+		d, err := scanDriftDefinitionRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for _, d := range out {
+		if err := r.attachMetrics(ctx, d); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
 // Create inserts a new definition revision and all of its child metric
 // rows. Operates inside the caller's transaction when DBTX is *sql.Tx;
 // otherwise wraps a local transaction so the parent and children are
@@ -354,19 +392,19 @@ type driftScanner interface {
 
 func scanDriftDefinitionRow(row driftScanner) (*drift.DriftDefinition, error) {
 	var (
-		d                       drift.DriftDefinition
-		description             sql.NullString
-		effectiveUntil          sql.NullTime
-		retiredAt               sql.NullTime
-		replaces                sql.NullString
-		successorDefinitionID   sql.NullString
-		successorVersion        sql.NullInt64
-		createdBy               sql.NullString
-		approvedBy              sql.NullString
-		approvedAt              sql.NullTime
-		statusStr               string
-		targetEntityKind        string
-		origin                  string
+		d                     drift.DriftDefinition
+		description           sql.NullString
+		effectiveUntil        sql.NullTime
+		retiredAt             sql.NullTime
+		replaces              sql.NullString
+		successorDefinitionID sql.NullString
+		successorVersion      sql.NullInt64
+		createdBy             sql.NullString
+		approvedBy            sql.NullString
+		approvedAt            sql.NullTime
+		statusStr             string
+		targetEntityKind      string
+		origin                string
 	)
 	err := row.Scan(
 		&d.ID, &d.Version,

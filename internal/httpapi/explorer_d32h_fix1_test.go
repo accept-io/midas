@@ -319,7 +319,6 @@ func TestExplorer_D32hFix1_ContextEvidenceTrayUntouched(t *testing.T) {
 		`data-drift-analytics-title>DRIFT ANALYTICS`,
 		`data-drift-analytics-subtitle`,
 		`data-drift-analytics-demo-badge`,
-		`data-drift-analytics-severity-badge`,
 		`id="gmap-evidence-tray-toggle"`,
 		`data-tab="drift"`,
 		`data-tab="evidence"`,

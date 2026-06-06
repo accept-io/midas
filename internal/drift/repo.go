@@ -31,6 +31,7 @@ type DriftDefinitionRepository interface {
 	FindByIDAndVersion(ctx context.Context, id string, version int) (*DriftDefinition, error)
 	FindActiveAt(ctx context.Context, id string, at time.Time) (*DriftDefinition, error)
 	ListVersions(ctx context.Context, id string) ([]*DriftDefinition, error)
+	ListByTarget(ctx context.Context, kind TargetEntityKind, entityID string) ([]*DriftDefinition, error)
 }
 
 // DriftSeriesRepository persists DriftSeries headers. Series are

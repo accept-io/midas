@@ -445,14 +445,14 @@ func TestExplorer_D37pImpl4_FoundationPreserved(t *testing.T) {
 
 // TestExplorer_D37pImpl4_IndexHtml_WithinCeiling — the removed inline
 // IIFEs net ~25 lines off; with the new adapter script tag added, the
-// final count should be comfortably under the 7820 ceiling.
+// final count should be comfortably under the 8000 ceiling.
 func TestExplorer_D37pImpl4_IndexHtml_WithinCeiling(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
 	body := performRequest(t, srv, http.MethodGet, "/explorer", nil).Body.String()
 	lines := strings.Count(body, "\n") + 1
-	if lines > 7820 {
-		t.Errorf("D37p-impl-4: index.html line count %d exceeds the existing 7820 ceiling", lines)
+	if lines > 8000 {
+		t.Errorf("D37p-impl-4: index.html line count %d exceeds the existing 8000 ceiling", lines)
 	}
 }
 

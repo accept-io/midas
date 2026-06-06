@@ -22,6 +22,7 @@ import (
 	"github.com/accept-io/midas/internal/controlplane/apply"
 	"github.com/accept-io/midas/internal/controlplane/approval"
 	"github.com/accept-io/midas/internal/decision"
+	driftanalytics "github.com/accept-io/midas/internal/drift/analytics"
 	"github.com/accept-io/midas/internal/governancecoverage"
 	authoritygraph "github.com/accept-io/midas/internal/graph/authority"
 	contextgraph "github.com/accept-io/midas/internal/graph/context"
@@ -313,6 +314,13 @@ func main() {
 	// (graceful 501 per route); the *store.Repositories drift fields are
 	// populated by Drift-1a/1b in both memory and Postgres backends.
 	srv.WithDriftReadService(httpapi.NewDriftReadService(
+		repos.DriftDefinitions,
+		repos.DriftSeries,
+		repos.DriftSeriesPoints,
+		repos.DriftObservations,
+		repos.DriftAnnotations,
+	))
+	srv.WithDriftAnalyticsReadService(driftanalytics.NewService(
 		repos.DriftDefinitions,
 		repos.DriftSeries,
 		repos.DriftSeriesPoints,

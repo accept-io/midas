@@ -119,6 +119,7 @@ func TestOpenAPI_DriftTargetEntityKind_NineValues(t *testing.T) {
 func TestOpenAPI_DriftPaths_AllPresent(t *testing.T) {
 	src := driftOpenAPISpec(t)
 	wantPaths := []string{
+		"/v1/drift/analytics:",
 		"/v1/drift/definitions/{id}:",
 		"/v1/drift/definitions/{id}/versions:",
 		"/v1/drift/definitions/{id}/versions/{version}:",

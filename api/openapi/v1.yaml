@@ -4064,6 +4064,181 @@ components:
           items:
             $ref: "#/components/schemas/DriftAnnotation"
 
+    DriftAnalyticsPoint:
+      type: object
+      required: [t, value]
+      properties:
+        t:
+          type: string
+          format: date-time
+        value:
+          type: number
+          format: double
+
+    DriftAnalyticsObservedPoint:
+      type: object
+      required: [t, value]
+      properties:
+        t:
+          type: string
+          format: date-time
+        value:
+          type: number
+          format: double
+        status:
+          type: string
+        magnitude:
+          type: number
+          format: double
+
+    DriftAnalyticsResponse:
+      type: object
+      required: [node, range, chart, provenance, sourceClassification, dataAvailable]
+      properties:
+        node:
+          type: object
+          required: [kind, id]
+          properties:
+            kind:
+              $ref: "#/components/schemas/DriftTargetEntityKind"
+            id:
+              type: string
+        range:
+          type: object
+          required: [key, label]
+          properties:
+            key:
+              type: string
+            label:
+              type: string
+            from:
+              type: string
+              format: date-time
+            to:
+              type: string
+              format: date-time
+        chart:
+          type: object
+          required: [observed, expected, watch, breach, yDomain]
+          properties:
+            metricId:
+              type: string
+            driftType:
+              $ref: "#/components/schemas/DriftType"
+            seriesId:
+              type: string
+            observed:
+              type: array
+              items:
+                $ref: "#/components/schemas/DriftAnalyticsObservedPoint"
+            expected:
+              type: array
+              items:
+                $ref: "#/components/schemas/DriftAnalyticsPoint"
+            watch:
+              type: array
+              items:
+                $ref: "#/components/schemas/DriftAnalyticsPoint"
+            breach:
+              type: array
+              items:
+                $ref: "#/components/schemas/DriftAnalyticsPoint"
+            currentValue:
+              type: number
+              format: double
+            currentStatus:
+              type: string
+            yDomain:
+              type: object
+              required: [min, max]
+              properties:
+                min:
+                  type: number
+                  format: double
+                max:
+                  type: number
+                  format: double
+        provenance:
+          type: object
+          required: [envelopeIds, pointIds, observationIds, annotationIds, profileRefs, policyRefs, verificationStatus]
+          properties:
+            envelopeIds:
+              type: array
+              items:
+                type: string
+            pointIds:
+              type: array
+              items:
+                type: string
+            observationIds:
+              type: array
+              items:
+                type: string
+            annotationIds:
+              type: array
+              items:
+                type: string
+            profileRefs:
+              type: array
+              items:
+                type: string
+            policyRefs:
+              type: array
+              items:
+                type: string
+            verificationStatus:
+              type: string
+              enum: [not_requested, not_verified]
+        sourceClassification:
+          type: object
+          required:
+            - selectedNode
+            - observedSeries
+            - expectedBaseline
+            - thresholds
+            - status
+            - provenance
+            - compositeScore
+            - contributionValues
+            - contributionWeights
+            - graphOverlay
+          properties:
+            selectedNode:
+              type: string
+              enum: [backend]
+            observedSeries:
+              type: string
+              enum: [backend, unavailable]
+            expectedBaseline:
+              type: string
+              enum: [backend, unavailable]
+            thresholds:
+              type: string
+              enum: [backend, unavailable]
+            status:
+              type: string
+              enum: [backend, unavailable]
+            provenance:
+              type: string
+              enum: [backend_refs, not_available]
+            compositeScore:
+              type: string
+              enum: [not_available]
+            contributionValues:
+              type: string
+              enum: [not_available]
+            contributionWeights:
+              type: string
+              enum: [not_available]
+            graphOverlay:
+              type: string
+              enum: [not_implemented]
+        projectionAsOf:
+          type: string
+          format: date-time
+        dataAvailable:
+          type: boolean
+
 paths:
   /healthz:
     get:
@@ -7770,6 +7945,59 @@ paths:
   # -----------------------------------------------------------------
   # Drift (Drift-1d read APIs)
   # -----------------------------------------------------------------
+
+  /v1/drift/analytics:
+    get:
+      operationId: getDriftAnalytics
+      summary: Get node-scoped Drift Analytics read model data
+      parameters:
+        - name: node_kind
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/DriftTargetEntityKind"
+        - name: node_id
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: range
+          in: query
+          required: false
+          schema:
+            type: string
+            default: 30d
+      responses:
+        "200":
+          description: Node-scoped drift analytics read model
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DriftAnalyticsResponse"
+        "400":
+          description: Invalid node selector
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient role (requires platform.viewer or above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: Drift analytics reader not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /v1/drift/definitions/{id}:
     get:

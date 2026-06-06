@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/accept-io/midas/internal/drift"
+	driftanalytics "github.com/accept-io/midas/internal/drift/analytics"
 )
 
 // ---------------------------------------------------------------------------
@@ -387,6 +388,35 @@ func (s *Server) handleDriftEntitiesPrefix(w http.ResponseWriter, r *http.Reques
 // ---------------------------------------------------------------------------
 // Per-route handlers.
 // ---------------------------------------------------------------------------
+
+func (s *Server) handleGetDriftAnalytics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	if s.driftAnalytics == nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "drift analytics reader not configured"})
+		return
+	}
+	q := r.URL.Query()
+	resp, err := s.driftAnalytics.GetNodeAnalytics(r.Context(), driftanalytics.DriftAnalyticsRequest{
+		NodeKind: q.Get("node_kind"),
+		NodeID:   q.Get("node_id"),
+		RangeKey: q.Get("range"),
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, driftanalytics.ErrInvalidRequest):
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "node_kind and node_id are required and node_kind must be valid"})
+		case errors.Is(err, driftanalytics.ErrNotConfigured):
+			writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "drift analytics reader not configured"})
+		default:
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
 
 func (s *Server) handleGetDriftDefinition(w http.ResponseWriter, r *http.Request, id string) {
 	if s.driftRead == nil || !s.driftRead.HasDefinitions() {

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/accept-io/midas/internal/drift"
+	driftanalytics "github.com/accept-io/midas/internal/drift/analytics"
 	"github.com/accept-io/midas/internal/store/memory"
 )
 
@@ -63,6 +64,9 @@ func newDriftHandlerServer(
 	svc := NewDriftReadService(defRepo, seriesRepo, pointRepo, obsRepo, annRepo)
 	srv := NewServerFull(nil, nil, nil, nil, nil, nil)
 	srv.WithDriftReadService(svc)
+	srv.WithDriftAnalyticsReadService(driftanalytics.NewService(defRepo, seriesRepo, pointRepo, obsRepo, annRepo, driftanalytics.WithClock(func() time.Time {
+		return time.Date(2026, 1, 20, 12, 0, 0, 0, time.UTC)
+	})))
 	return srv
 }
 
@@ -166,6 +170,97 @@ func makeTestDriftAnnotation(id string, kind drift.DriftAnnotationTargetKind, ta
 		AuthorID:       "alice",
 		CreatedAt:      now,
 		UpdatedAt:      now,
+	}
+}
+
+// ---------------------------------------------------------------------
+// GET /v1/drift/analytics
+// ---------------------------------------------------------------------
+
+func TestDriftHandler_GetAnalytics_HappyPath(t *testing.T) {
+	t0 := time.Date(2026, 1, 19, 12, 0, 0, 0, time.UTC)
+	def := makeTestDriftDefinition("approve-rate-drift", 1)
+	def.Status = drift.DriftDefinitionStatusActive
+	def.Metrics[0].MetricID = "outcome-psi"
+	def.Metrics[0].WarningThreshold = 0.10
+	def.Metrics[0].BreachedThreshold = 0.20
+	def.Metrics[0].GovernanceExpectationRef = "gov-exp:outcome"
+	series := makeTestDriftSeries("ser-analytics", def.ID, def.Version, "analytics")
+	p1 := makeTestDriftPoint("p1", series.ID, t0)
+	p1.SummaryStats = map[string]any{"value": 0.08, "unit": "ratio"}
+	p1.BaselineStats = map[string]any{"baseline": 0.06, "strategy": "rolling"}
+	p1.ProvenanceEnvelopeIDs = []string{"env-1"}
+	p2 := makeTestDriftPoint("p2", series.ID, t0.Add(time.Hour))
+	p2.SummaryStats = map[string]any{"value": 0.146, "unit": "ratio"}
+	p2.BaselineStats = map[string]any{"baseline": 0.09, "strategy": "rolling"}
+	p2.Status = drift.DriftSeriesPointStatusWarning
+	srv := newDriftHandlerServer(t,
+		[]*drift.DriftDefinition{def},
+		[]*drift.DriftSeries{series},
+		[]*drift.DriftSeriesPoint{p1, p2},
+		nil,
+		nil,
+	)
+
+	rec := performRequest(t, srv, http.MethodGet, "/v1/drift/analytics?node_kind=decision_surface&node_id=surf-x&range=30d", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		`"dataAvailable":true`,
+		`"metricId":"outcome-psi"`,
+		`"seriesId":"ser-analytics"`,
+		`"value":0.146`,
+		`"currentStatus":"warning"`,
+		`"observedSeries":"backend"`,
+		`"expectedBaseline":"backend"`,
+		`"compositeScore":"not_available"`,
+		`"contributionValues":"not_available"`,
+		`"graphOverlay":"not_implemented"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected %s in analytics response; got %s", want, body)
+		}
+	}
+	for _, banned := range []string{"currentScore", "contributions", "contributors", "provisional"} {
+		if strings.Contains(body, banned) {
+			t.Fatalf("analytics response must not emit %q: %s", banned, body)
+		}
+	}
+}
+
+func TestDriftHandler_GetAnalytics_ValidationAndMethod(t *testing.T) {
+	srv := newDriftHandlerServer(t, nil, nil, nil, nil, nil)
+	rec := performRequest(t, srv, http.MethodGet, "/v1/drift/analytics?node_kind=decision_surface", nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing node_id status = %d, want 400", rec.Code)
+	}
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
+		rec := performRequest(t, srv, method, "/v1/drift/analytics?node_kind=decision_surface&node_id=surf-x", nil)
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("%s status = %d, want 405", method, rec.Code)
+		}
+	}
+}
+
+func TestDriftHandler_GetAnalytics_NoDataDoesNotFabricate(t *testing.T) {
+	srv := newDriftHandlerServer(t, nil, nil, nil, nil, nil)
+	rec := performRequest(t, srv, http.MethodGet, "/v1/drift/analytics?node_kind=decision_surface&node_id=surf-x", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		`"dataAvailable":false`,
+		`"observed":[]`,
+		`"expected":[]`,
+		`"observedSeries":"unavailable"`,
+		`"expectedBaseline":"unavailable"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected %s in unavailable response; got %s", want, body)
+		}
 	}
 }
 

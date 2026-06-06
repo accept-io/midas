@@ -31,6 +31,7 @@ import (
 	cpTypes "github.com/accept-io/midas/internal/controlplane/types"
 	"github.com/accept-io/midas/internal/decision"
 	"github.com/accept-io/midas/internal/drift"
+	driftanalytics "github.com/accept-io/midas/internal/drift/analytics"
 	"github.com/accept-io/midas/internal/envelope"
 	"github.com/accept-io/midas/internal/eval"
 	"github.com/accept-io/midas/internal/externalref"
@@ -251,6 +252,7 @@ type Server struct {
 	contextGraph         contextGraphService         // nil when context graph projection service is not wired (D31d)
 	authorityGraph       authorityGraphService       // nil when authority graph projection service is not wired (D31f)
 	driftRead            driftReadService            // nil when the Drift-1d read service is not wired
+	driftAnalytics       driftanalytics.DriftAnalyticsReadService
 	failModePolicyRead   failModePolicyReadService   // nil when the D29d FailModePolicy read service is not wired
 	escalationTargetRead escalationTargetReadService // nil when the D31k escalation target read service is not wired
 	evidenceRead         evidenceReadService         // nil when the D30b runtime evidence read service is not wired
@@ -1448,6 +1450,11 @@ func (s *Server) WithDriftReadService(svc driftReadService) *Server {
 	return s
 }
 
+func (s *Server) WithDriftAnalyticsReadService(svc driftanalytics.DriftAnalyticsReadService) *Server {
+	s.driftAnalytics = svc
+	return s
+}
+
 // WithFailModePolicyReadService attaches the read-only FailModePolicy
 // service that backs the /v1/fail_mode_policies/* endpoints (D29d).
 // When nil, every route returns 501 Not Implemented. The mutating
@@ -1704,6 +1711,7 @@ func (s *Server) routes() {
 	// 13 GET routes that back the upcoming Explorer drift workbench.
 	// Same auth posture as the rest of the read surface.
 	driftRoleGate := s.requireRole(identity.RolePlatformViewer, identity.RolePlatformOperator, identity.RolePlatformAdmin)
+	s.mux.HandleFunc("/v1/drift/analytics", s.requireAuth(driftRoleGate(s.handleGetDriftAnalytics)))
 	s.mux.HandleFunc("/v1/drift/definitions/", s.requireAuth(driftRoleGate(s.handleDriftDefinitionsPrefix)))
 	s.mux.HandleFunc("/v1/drift/series/", s.requireAuth(driftRoleGate(s.handleDriftSeriesPrefix)))
 	s.mux.HandleFunc("/v1/drift/series-points/", s.requireAuth(driftRoleGate(s.handleDriftSeriesPointsPrefix)))

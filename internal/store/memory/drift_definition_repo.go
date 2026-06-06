@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"sort"
 	"time"
 
 	"github.com/accept-io/midas/internal/drift"
@@ -82,6 +83,30 @@ func (r *DriftDefinitionRepo) ListVersions(_ context.Context, id string) ([]*dri
 	for i, d := range versions {
 		out[len(versions)-1-i] = d
 	}
+	return out, nil
+}
+
+// ListByTarget returns every definition revision for the target entity,
+// newest revisions first within a stable logical-ID ordering.
+func (r *DriftDefinitionRepo) ListByTarget(
+	_ context.Context,
+	kind drift.TargetEntityKind,
+	entityID string,
+) ([]*drift.DriftDefinition, error) {
+	out := []*drift.DriftDefinition{}
+	for _, versions := range r.items {
+		for _, d := range versions {
+			if d.TargetEntityKind == kind && d.TargetEntityID == entityID {
+				out = append(out, d)
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].ID != out[j].ID {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].Version > out[j].Version
+	})
 	return out, nil
 }
 
