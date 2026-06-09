@@ -22,6 +22,17 @@
   var X_TICKS = ['May 30', 'Jun 03', 'Jun 07', 'Jun 11', 'Jun 15', 'Jun 19', 'Jun 23', 'Jun 27', 'Jun 29'];
   var COMPACT_X_TICKS = ['May 30', 'Jun 07', 'Jun 15', 'Jun 23', 'Jun 29'];
   var Y_TICKS = ['0.000', '0.050', '0.100', '0.150', '0.200'];
+  var DEMO_SOURCE_CLASSIFICATION = {
+    observedSeries: 'demo_fallback',
+    expectedBaseline: 'demo_fallback',
+    thresholds: 'demo_fallback',
+    status: 'demo_fallback',
+    provenance: 'demo',
+    compositeScore: 'demo_provisional',
+    contributionValues: 'demo_provisional',
+    contributionWeights: 'demo_provisional',
+    graphOverlay: 'not_implemented'
+  };
 
   function cloneArray(items) {
     return Array.isArray(items) ? items.slice() : [];
@@ -44,6 +55,7 @@
     input = input || {};
     var values = Array.isArray(input.values) && input.values.length === 64 ? input.values : VALUE_SERIES;
     var points = Array.isArray(input.points) && input.points.length > 0 ? input.points : buildPoints(values);
+    var sourceClassification = Object.assign({}, DEMO_SOURCE_CLASSIFICATION, input.sourceClassification || {});
     return {
       id: input.id || 'drift-analytics-cards-authority-paths',
       title: input.title || 'Drift Analytics',
@@ -55,7 +67,7 @@
       scoreStatus: input.scoreStatus || 'WATCH',
       scoreSubtitle: input.scoreSubtitle || 'weighted sum of 4 signals',
       breachGap: input.breachGap || '0.006 below breach',
-      sourceClassification: input.sourceClassification || 'demo_derived',
+      sourceClassification: sourceClassification,
       provenanceLabel: input.provenanceLabel || 'Demo evidence',
       provenanceHash: input.provenanceHash || '',
       formula: input.formula || 'score = sum w_i * dev_i; weights: profile v4.2',
@@ -70,9 +82,15 @@
       watchThreshold: input.watchThreshold || 0.104,
       breachThreshold: input.breachThreshold || 0.152,
       yTicks: cloneArray(input.yTicks || Y_TICKS),
+      yDomain: input.yDomain || { min: 0, max: 0.2 },
       xTicks: cloneArray(input.xTicks || X_TICKS),
       compactXTicks: cloneArray(input.compactXTicks || COMPACT_X_TICKS),
       rangeLabel: input.rangeLabel || 'Last 30 days',
+      chartStatus: input.chartStatus || '',
+      projectionAsOf: input.projectionAsOf || null,
+      provenance: input.provenance || null,
+      dataAvailable: input.dataAvailable !== false,
+      sourceStateLabel: input.sourceStateLabel || 'Demo evidence',
       selectedContributionId: input.selectedContributionId || 'authority-path-divergence',
       contributions: cloneArray(input.contributions || [
         { id: 'authority-path-divergence', label: 'Authority-path divergence', value: '0.071', share: '49%', severity: 'breach', color: 'red' },
@@ -94,6 +112,7 @@
     normalise: normalise,
     buildPoints: buildPoints,
     demoValues64: cloneArray(VALUE_SERIES),
+    demoSourceClassification: Object.assign({}, DEMO_SOURCE_CLASSIFICATION),
     xTicks: cloneArray(X_TICKS),
     yTicks: cloneArray(Y_TICKS)
   };

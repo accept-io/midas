@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/accept-io/midas/internal/drift"
+	driftanalytics "github.com/accept-io/midas/internal/drift/analytics"
 	"github.com/accept-io/midas/internal/store"
 )
 
@@ -352,6 +353,80 @@ func TestSeedSyntheticDrift_IsIdempotent(t *testing.T) {
 
 	if before != after {
 		t.Errorf("idempotency violation: counts changed across invocations: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestSeedSyntheticDrift_CreatesVisibleCapabilityAnalyticsData(t *testing.T) {
+	ctx := context.Background()
+	repos := freshRepos(t)
+	if err := SeedDemo(ctx, repos); err != nil {
+		t.Fatalf("SeedDemo: %v", err)
+	}
+	if err := SeedSyntheticDrift(ctx, repos); err != nil {
+		t.Fatalf("first SeedSyntheticDrift: %v", err)
+	}
+
+	before := snapshotDriftCounts(t, ctx, repos)
+	if err := SeedSyntheticDrift(ctx, repos); err != nil {
+		t.Fatalf("second SeedSyntheticDrift: %v", err)
+	}
+	after := snapshotDriftCounts(t, ctx, repos)
+	if before != after {
+		t.Fatalf("visible analytics seed is not idempotent: before=%+v after=%+v", before, after)
+	}
+
+	def, err := repos.DriftDefinitions.FindByIDAndVersion(ctx, "drift-demo-payment-execution-latency", 1)
+	if err != nil {
+		t.Fatalf("FindByIDAndVersion payment execution definition: %v", err)
+	}
+	if def == nil {
+		t.Fatal("payment execution drift definition was not seeded")
+	}
+	if def.TargetEntityKind != drift.TargetEntityKindCapability || def.TargetEntityID != "cap-payment-execution" {
+		t.Fatalf("target = %s/%s, want capability/cap-payment-execution", def.TargetEntityKind, def.TargetEntityID)
+	}
+
+	svc := driftanalytics.NewService(
+		repos.DriftDefinitions,
+		repos.DriftSeries,
+		repos.DriftSeriesPoints,
+		repos.DriftObservations,
+		repos.DriftAnnotations,
+		driftanalytics.WithClock(func() time.Time {
+			return time.Date(2026, time.June, 9, 12, 0, 0, 0, time.UTC)
+		}),
+	)
+	resp, err := svc.GetNodeAnalytics(ctx, driftanalytics.DriftAnalyticsRequest{
+		NodeKind: string(drift.TargetEntityKindCapability),
+		NodeID:   "cap-payment-execution",
+		RangeKey: "30d",
+	})
+	if err != nil {
+		t.Fatalf("GetNodeAnalytics: %v", err)
+	}
+	if !resp.DataAvailable {
+		t.Fatal("DataAvailable = false, want true")
+	}
+	if got := resp.Node.Kind + "/" + resp.Node.ID; got != "capability/cap-payment-execution" {
+		t.Fatalf("node = %s", got)
+	}
+	if len(resp.Chart.Observed) == 0 || len(resp.Chart.Expected) == 0 {
+		t.Fatalf("chart points missing: observed=%d expected=%d", len(resp.Chart.Observed), len(resp.Chart.Expected))
+	}
+	if len(resp.Chart.Watch) == 0 || len(resp.Chart.Breach) == 0 {
+		t.Fatalf("ascending thresholds missing: watch=%d breach=%d", len(resp.Chart.Watch), len(resp.Chart.Breach))
+	}
+	if resp.SourceClassification.ObservedSeries != "backend" ||
+		resp.SourceClassification.ExpectedBaseline != "backend" ||
+		resp.SourceClassification.Thresholds != "backend" ||
+		resp.SourceClassification.Status != "backend" {
+		t.Fatalf("backend source classification incomplete: %#v", resp.SourceClassification)
+	}
+	if resp.SourceClassification.CompositeScore != "demo_provisional" ||
+		resp.SourceClassification.ContributionValues != "demo_provisional" ||
+		resp.SourceClassification.ContributionWeights != "demo_provisional" ||
+		resp.SourceClassification.GraphOverlay != "not_implemented" {
+		t.Fatalf("non-chart source classification must remain provisional/not implemented: %#v", resp.SourceClassification)
 	}
 }
 

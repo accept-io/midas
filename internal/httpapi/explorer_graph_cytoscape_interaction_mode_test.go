@@ -81,6 +81,20 @@ func TestExplorer_D37pGraphCytoscapeInteractionMode_CleanupRestoresSafeDefaults(
 	}
 }
 
+func TestExplorer_D37pGraphCytoscapeInteractionMode_CoreTapUsesDefinedModeState(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	js := getExplorerAsset(t, srv, "/explorer/assets/js/graph/graph-platform/graph-cytoscape-engine.js")
+
+	block := d37pCytoscapeInteractionBoundedBlock(t, js, "function onCoreTap(evt)", "function onKeydown")
+	if !strings.Contains(block, `_interactionModeId && _interactionModeId !== 'select'`) {
+		t.Fatalf("core tap handler must use the defined interaction mode state; block:\n%s", block)
+	}
+	if strings.Contains(block, `_interactionMode &&`) {
+		t.Fatalf("core tap handler must not reference undefined _interactionMode; block:\n%s", block)
+	}
+}
+
 func TestExplorer_D37pGraphCytoscapeInteractionMode_RemainsLensNeutralAndDoesNotTouchOverlay(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)

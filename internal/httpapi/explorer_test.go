@@ -2319,7 +2319,8 @@ func TestExplorer_HTML_RecordsView_EnvelopeDetailRail(t *testing.T) {
 		"Drift score",
 		"Observed vs expected",
 		"DEMO DATA",
-		"demo_derived",
+		"demo_fallback",
+		"demo_provisional",
 		`id="gmap-evidence-tray-toggle"`,
 		// D26b badge
 		`>Explorer runtime<`,
@@ -2620,7 +2621,8 @@ func TestExplorer_HTML_GovernanceMap_CompactEdgeLegend(t *testing.T) {
 		"Drift score",
 		"Observed vs expected",
 		"DEMO DATA",
-		"demo_derived",
+		"demo_fallback",
+		"demo_provisional",
 		`aria-label="Open Drift Analysis"`,
 		`id="gmap-evidence-tray-toggle"`,
 		`aria-label="Expand letterbox"`,
@@ -6117,7 +6119,8 @@ func TestExplorer_HTML_GovernanceMap_EvidenceTrayActivityFromExplorerEnvelopes(t
 		"Activity uses real Explorer runtime envelopes",
 		"DEMO DATA",
 		"Demo-derived Drift Analytics summary.",
-		"demo_derived",
+		"demo_fallback",
+		"demo_provisional",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("D26c: missing per-tab provenance copy %q", want)

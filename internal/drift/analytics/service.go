@@ -200,6 +200,9 @@ func (s *Service) GetNodeAnalytics(ctx context.Context, req DriftAnalyticsReques
 	resp.SourceClassification.ObservedSeries = "backend"
 	resp.SourceClassification.ExpectedBaseline = "backend"
 	resp.SourceClassification.Status = "backend"
+	resp.SourceClassification.CompositeScore = "demo_provisional"
+	resp.SourceClassification.ContributionValues = "demo_provisional"
+	resp.SourceClassification.ContributionWeights = "demo_provisional"
 
 	if selected.metric.ThresholdDirection == drift.ThresholdDirectionAscending {
 		resp.SourceClassification.Thresholds = "backend"

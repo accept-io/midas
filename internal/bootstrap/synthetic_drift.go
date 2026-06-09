@@ -53,6 +53,11 @@ const syntheticDriftCreator = "seed-synthetic-drift"
 // makes Drift-2b screenshots stable.
 var syntheticDriftEpoch = time.Date(2026, time.April, 1, 0, 0, 0, 0, time.UTC)
 
+// syntheticDriftExplorerAnalyticsEpoch anchors the compact Explorer Drift
+// Analytics demo target inside the June 2026 30-day browser diagnostics
+// window without mutating the existing Drift-2a April dataset.
+var syntheticDriftExplorerAnalyticsEpoch = time.Date(2026, time.May, 11, 0, 0, 0, 0, time.UTC)
+
 // syntheticDriftEffective is the EffectiveDate stamped on every
 // generated DriftDefinition. Before the first point window so the
 // definitions are "active at" every synthetic point.
@@ -94,6 +99,7 @@ type syntheticDef struct {
 	TechnicalOwner   string
 	TargetEntityKind drift.TargetEntityKind
 	TargetEntityID   string
+	PointEpoch       time.Time
 	Metrics          []syntheticMetric
 }
 
@@ -333,6 +339,28 @@ func syntheticDriftPlan() []syntheticDef {
 			},
 		},
 		{
+			ID:               "drift-demo-payment-execution-latency",
+			Name:             "Payment Execution Latency",
+			Description:      "P95 payment execution latency for the visible payment-execution capability.",
+			BusinessOwner:    "payments-team",
+			TechnicalOwner:   "payments-platform-team",
+			TargetEntityKind: drift.TargetEntityKindCapability,
+			TargetEntityID:   "cap-payment-execution",
+			PointEpoch:       syntheticDriftExplorerAnalyticsEpoch,
+			Metrics: []syntheticMetric{
+				{
+					MetricID:           "p95-execution-latency-ms",
+					Description:        "P95 payment execution latency in milliseconds.",
+					DriftType:          drift.DriftTypeLatency,
+					ThresholdDirection: drift.ThresholdDirectionAscending,
+					WarningThreshold:   120,
+					BreachedThreshold:  180,
+					Pattern:            patternWarningTrail,
+					BackfillPointIndex: -1,
+				},
+			},
+		},
+		{
 			ID:               "drift-demo-fraud-system-confidence",
 			Name:             "Fraud Detection Decision Confidence",
 			Description:      "Decision-confidence for the fraud-detection AI system across all bindings.",
@@ -469,7 +497,7 @@ func SeedSyntheticDrift(ctx context.Context, repos *store.Repositories) error {
 			if err := ensureSyntheticDriftObservation(ctx, repos, defPlan, m, seriesID); err != nil {
 				return err
 			}
-			if err := ensureSyntheticDriftAnnotation(ctx, repos, m, seriesID); err != nil {
+			if err := ensureSyntheticDriftAnnotation(ctx, repos, defPlan, m, seriesID); err != nil {
 				return err
 			}
 		}
@@ -502,6 +530,13 @@ func syntheticAnnotationID(seriesID string) string {
 
 func syntheticBaselineWindowID(seriesID string, index int) string {
 	return fmt.Sprintf("%s-bw-%03d", seriesID, index)
+}
+
+func syntheticPointEpoch(p syntheticDef) time.Time {
+	if p.PointEpoch.IsZero() {
+		return syntheticDriftEpoch
+	}
+	return p.PointEpoch
 }
 
 // ---------------------------------------------------------------------------
@@ -589,7 +624,7 @@ func ensureSyntheticDriftSeries(
 		Status:            rollup,
 		ContinuityGroupID: defPlan.ID + "-cg",
 		CreatedAt:         syntheticDriftEffective,
-		UpdatedAt:         syntheticDriftEpoch.Add(syntheticPointCount * syntheticDayWindow),
+		UpdatedAt:         syntheticPointEpoch(defPlan).Add(syntheticPointCount * syntheticDayWindow),
 	}
 	if err := repos.DriftSeries.Create(ctx, s); err != nil {
 		return fmt.Errorf("create drift series %s: %w", seriesID, err)
@@ -615,7 +650,7 @@ func ensureSyntheticDriftPoints(
 			continue
 		}
 
-		windowStart := syntheticDriftEpoch.Add(time.Duration(i) * syntheticDayWindow)
+		windowStart := syntheticPointEpoch(defPlan).Add(time.Duration(i) * syntheticDayWindow)
 		windowEnd := windowStart.Add(syntheticDayWindow)
 
 		status, value, baseline, magnitude := scorePoint(m, i, rng)
@@ -693,7 +728,7 @@ func ensureSyntheticDriftObservation(
 	}
 
 	pointID := syntheticPointID(seriesID, pointIndex)
-	windowStart := syntheticDriftEpoch.Add(time.Duration(pointIndex) * syntheticDayWindow)
+	windowStart := syntheticPointEpoch(defPlan).Add(time.Duration(pointIndex) * syntheticDayWindow)
 	windowEnd := windowStart.Add(syntheticDayWindow)
 	detectedAt := windowEnd.Add(time.Hour)
 	emittedAt := detectedAt.Add(time.Minute)
@@ -746,6 +781,7 @@ func ensureSyntheticDriftObservation(
 func ensureSyntheticDriftAnnotation(
 	ctx context.Context,
 	repos *store.Repositories,
+	defPlan syntheticDef,
 	m syntheticMetric,
 	seriesID string,
 ) error {
@@ -769,8 +805,8 @@ func ensureSyntheticDriftAnnotation(
 		ReferenceEnvelopeIDs: []string{},
 		Status:               drift.DriftAnnotationStatusActive,
 		AuthorID:             syntheticDriftCreator,
-		CreatedAt:            syntheticDriftEpoch.Add(syntheticPointCount * syntheticDayWindow),
-		UpdatedAt:            syntheticDriftEpoch.Add(syntheticPointCount * syntheticDayWindow),
+		CreatedAt:            syntheticPointEpoch(defPlan).Add(syntheticPointCount * syntheticDayWindow),
+		UpdatedAt:            syntheticPointEpoch(defPlan).Add(syntheticPointCount * syntheticDayWindow),
 	}
 	if err := repos.DriftAnnotations.Create(ctx, a); err != nil {
 		return fmt.Errorf("create drift annotation %s: %w", annoID, err)

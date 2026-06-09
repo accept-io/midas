@@ -4270,8 +4270,8 @@ func TestExplorer_D32bImpl3_DrawerNotHiddenInFocusMode(t *testing.T) {
 //   • The Drift tab renderer in context-evidence-tray.js delegates
 //     to MIDASExplorerDriftAnalytics.render() when present.
 //   • Boot wiring invokes MIDASExplorerDriftAnalytics.init({hooks}).
-//   • New modules do not call fetch directly or reference ExplorerAPI
-//     except through the canonical typed methods.
+//   • New modules do not call fetch directly; the panel references
+//     ExplorerAPI only through the canonical typed drift analytics method.
 //   • ExplorerAPI.drift gained seriesPointsByID for /v1/drift/series/{id}/points.
 //   • Demo / synthetic data is clearly labelled as "DEMO DATA".
 // ---------------------------------------------------------------------------
@@ -4312,7 +4312,7 @@ var d32eImpl1DriftModules = []struct {
 			"fromServiceContext",
 			"fromGraphNode",
 			"isDemoData",
-			"demo_derived",
+			"demo_fallback",
 		},
 	},
 	{
@@ -4790,10 +4790,9 @@ func TestExplorer_D32eImpl1_NoDirectFetchInDriftModules(t *testing.T) {
 			t.Errorf("D32e-impl-1: %s must not call fetch(...)", m.path)
 		}
 		// The chart / list / formatters / demo adapter must not even
-		// reference ExplorerAPI. The panel module is allowed to read
-		// ExplorerAPI.drift in a future tranche when real data is
-		// wired in, but today it must not.
-		if strings.Contains(body, "ExplorerAPI") {
+		// reference ExplorerAPI. The panel module may read
+		// ExplorerAPI.drift.analytics for backend wiring.
+		if m.path != "/explorer/assets/js/drift/drift-analytics-panel.js" && strings.Contains(body, "ExplorerAPI") {
 			t.Errorf("D32e-impl-1: %s must not invoke ExplorerAPI directly in this tranche", m.path)
 		}
 	}
@@ -4867,8 +4866,9 @@ func TestExplorer_D32eImpl1_DemoDataHonestlyLabelled(t *testing.T) {
 	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
 		WithExplorerEnabled(true)
 	adapterJS := getExplorerAsset(t, srv, "/explorer/assets/js/drift/drift-chart-demo-adapter.js")
-	if !strings.Contains(adapterJS, "sourceClassification: 'demo_derived'") {
-		t.Error("D32e-impl-1: demo adapter must tag the view model with sourceClassification demo_derived")
+	if !strings.Contains(adapterJS, "observedSeries: 'demo_fallback'") ||
+		!strings.Contains(adapterJS, "compositeScore: 'demo_provisional'") {
+		t.Error("D32e-impl-1: demo adapter must tag fallback chart data and provisional composite data per field")
 	}
 	panelJS := getExplorerAsset(t, srv, "/explorer/assets/js/drift/drift-analytics-panel.js")
 	if !strings.Contains(panelJS, "isDemoData") {
@@ -5020,7 +5020,8 @@ func TestExplorer_D32eImpl1_Tranche1Spec14ViewModelContract(t *testing.T) {
 		"event-policy-update-jun-21",
 		"event-profile-change-jun-27",
 		"sourceClassification",
-		"demo_derived",
+		"demo_fallback",
+		"demo_provisional",
 		"May 30",
 		"Jun 03",
 		"Jun 07",

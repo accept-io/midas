@@ -94,8 +94,9 @@ func TestService_HappyPathBuildsObservedExpectedThresholdsAndProvenanceRefs(t *t
 	if resp.Provenance.VerificationStatus != "not_requested" {
 		t.Fatalf("VerificationStatus = %q", resp.Provenance.VerificationStatus)
 	}
-	if resp.SourceClassification.CompositeScore != "not_available" ||
-		resp.SourceClassification.ContributionValues != "not_available" ||
+	if resp.SourceClassification.CompositeScore != "demo_provisional" ||
+		resp.SourceClassification.ContributionValues != "demo_provisional" ||
+		resp.SourceClassification.ContributionWeights != "demo_provisional" ||
 		resp.SourceClassification.GraphOverlay != "not_implemented" {
 		t.Fatalf("unexpected source classification: %#v", resp.SourceClassification)
 	}
@@ -198,9 +199,19 @@ func TestService_ResponseDoesNotEmitCompositeOrContributionValues(t *testing.T) 
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	for _, banned := range []string{"currentScore", `"contributions"`, "contributors", "provisional"} {
+	for _, banned := range []string{"currentScore", `"contributions"`, "contributors"} {
 		if strings.Contains(string(body), banned) {
 			t.Fatalf("response must not emit %q: %s", banned, string(body))
+		}
+	}
+	for _, want := range []string{
+		`"compositeScore":"demo_provisional"`,
+		`"contributionValues":"demo_provisional"`,
+		`"contributionWeights":"demo_provisional"`,
+		`"graphOverlay":"not_implemented"`,
+	} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("response must mark non-chart sources honestly with %s: %s", want, string(body))
 		}
 	}
 }

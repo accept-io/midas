@@ -15,6 +15,9 @@
     chartWidth: 0,
     chartResizeObserver: null,
     resizeRenderQueued: false,
+    requestSeq: 0,
+    pendingAbort: null,
+    pendingNodeKey: '',
     hooks: {},
     mountSelectors: {
       compact: '[data-drift-compact-summary]',
@@ -26,6 +29,7 @@
 
   function _q(sel) { return document.querySelector(sel); }
   function _adapter() { return window.MIDASExplorerDriftChartAdapter || null; }
+  function _api() { return (window.MIDASExplorerAPI && window.MIDASExplorerAPI.drift) || null; }
 
   function _activeNodeId() {
     var fn = _state.hooks.getSelectedNodeId;
@@ -35,11 +39,75 @@
     return '';
   }
 
-  function _buildViewModel() {
+  function _activeNodeRef() {
+    var fn = _state.hooks.getSelectedNodeRef;
+    if (typeof fn === 'function') {
+      try {
+        var ref = fn();
+        var resolved = _resolveNodeRef(ref);
+        if (resolved) return resolved;
+      } catch (_) { /* fall through */ }
+    }
+    return _resolveNodeRef(_activeNodeId());
+  }
+
+  function _resolveNodeRef(input) {
+    var kind = '';
+    var id = '';
+    if (input && typeof input === 'object') {
+      var source = input.sourceNodeRef || input.nodeRef || input;
+      kind = source.kind || input.kind || '';
+      id = source.id || input.nodeId || input.id || '';
+    } else if (typeof input === 'string') {
+      var raw = input.trim();
+      var sep = raw.indexOf(':');
+      if (sep > 0) {
+        kind = raw.slice(0, sep);
+        id = raw.slice(sep + 1);
+      } else {
+        id = raw;
+      }
+    }
+    kind = _backendNodeKind(kind);
+    id = String(id || '').trim();
+    if (!kind || !id) return null;
+    return { kind: kind, id: id };
+  }
+
+  function _backendNodeKind(kind) {
+    var raw = String(kind || '').trim();
+    var k = raw.replace(/[\s_-]+/g, '').toLowerCase();
+    var map = {
+      bs: 'business_service',
+      businessservice: 'business_service',
+      business: 'business_service',
+      cap: 'capability',
+      capability: 'capability',
+      proc: 'process',
+      process: 'process',
+      surface: 'decision_surface',
+      decisionsurface: 'decision_surface',
+      ai: 'ai_system',
+      aisystem: 'ai_system',
+      aibinding: 'ai_system_binding',
+      aisystembinding: 'ai_system_binding',
+      agent: 'agent',
+      authorityprofile: 'authority_profile',
+      authoritygrant: 'authority_grant'
+    };
+    return map[k] || '';
+  }
+
+  function _buildFallbackViewModel(opts) {
+    opts = opts || {};
     var adapter = _adapter();
     if (!adapter) return { __loading: true };
-    var nodeId = _activeNodeId();
-    return nodeId ? adapter.fromGraphNode({ nodeId: nodeId, range: '30d' }) : null;
+    var nodeId = opts.nodeId || _activeNodeId();
+    return nodeId ? adapter.fromGraphNode({
+      nodeId: nodeId,
+      range: '30d',
+      sourceStateLabel: opts.sourceStateLabel || 'Demo evidence'
+    }) : null;
   }
 
   function _renderHeader(vm) {
@@ -58,6 +126,10 @@
         badgeEl.removeAttribute('hidden');
         badgeEl.textContent = 'DEMO DATA';
         badgeEl.setAttribute('title', 'Demo-derived Drift Analytics summary.');
+      } else if (vm && vm.sourceStateLabel) {
+        badgeEl.removeAttribute('hidden');
+        badgeEl.textContent = String(vm.sourceStateLabel).toUpperCase();
+        badgeEl.setAttribute('title', String(vm.sourceStateLabel));
       } else {
         badgeEl.setAttribute('hidden', '');
         badgeEl.textContent = '';
@@ -82,6 +154,112 @@
     return 'warning';
   }
 
+  function _chartStatusClass(status) {
+    var s = String(status || '').toLowerCase();
+    if (s.indexOf('breach') >= 0 || s.indexOf('critical') >= 0) return 'critical';
+    if (s.indexOf('healthy') >= 0 || s.indexOf('normal') >= 0 || s.indexOf('ok') >= 0) return 'ok';
+    return 'warning';
+  }
+
+  function _formatChartStatus(status) {
+    var s = String(status || '').replace(/_/g, ' ').trim();
+    return s ? s.toUpperCase() : '';
+  }
+
+  function _seriesMap(items) {
+    var out = {};
+    if (!Array.isArray(items)) return out;
+    for (var i = 0; i < items.length; i++) {
+      var p = items[i] || {};
+      if (p.t == null || typeof p.value !== 'number' || !isFinite(p.value)) continue;
+      out[String(p.t)] = p.value;
+    }
+    return out;
+  }
+
+  function _shortDateLabel(t) {
+    var d = new Date(t);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleDateString('en-US', { month: 'short', day: '2-digit' });
+  }
+
+  function _ticksFromPoints(points, compact) {
+    if (!points.length) return [];
+    var count = compact ? 5 : 9;
+    var labels = [];
+    for (var i = 0; i < count; i++) {
+      var idx = Math.round((i / Math.max(1, count - 1)) * (points.length - 1));
+      var label = points[idx] && points[idx].label;
+      if (label) labels.push(label);
+    }
+    return labels;
+  }
+
+  function _sourceClassificationFromBackend(resp, fallback) {
+    var src = Object.assign({}, fallback || {}, resp && resp.sourceClassification || {});
+    src.observedSeries = src.observedSeries || 'unavailable';
+    src.expectedBaseline = src.expectedBaseline || 'unavailable';
+    src.thresholds = src.thresholds || 'unavailable';
+    src.status = src.status || 'unavailable';
+    src.provenance = src.provenance || 'not_available';
+    src.compositeScore = 'demo_provisional';
+    src.contributionValues = 'demo_provisional';
+    src.contributionWeights = 'demo_provisional';
+    src.graphOverlay = 'not_implemented';
+    return src;
+  }
+
+  function _backendViewModel(resp, nodeRef) {
+    var vmFactory = window.MIDASExplorerDriftAnalyticsViewModel;
+    if (!vmFactory || typeof vmFactory.normalise !== 'function') return null;
+    var chart = resp && resp.chart;
+    var observed = chart && Array.isArray(chart.observed) ? chart.observed : [];
+    var expected = _seriesMap(chart && chart.expected);
+    var watch = _seriesMap(chart && chart.watch);
+    var breach = _seriesMap(chart && chart.breach);
+    if (!resp || resp.dataAvailable !== true || !observed.length) return null;
+    var points = [];
+    for (var i = 0; i < observed.length; i++) {
+      var p = observed[i] || {};
+      if (p.t == null || typeof p.value !== 'number' || !isFinite(p.value)) continue;
+      var key = String(p.t);
+      if (typeof expected[key] !== 'number' || !isFinite(expected[key])) continue;
+      points.push({
+        id: 'backend-point-' + String(i + 1),
+        t: p.t,
+        label: _shortDateLabel(p.t),
+        value: p.value,
+        expected: expected[key],
+        watch: watch[key],
+        breach: breach[key],
+        status: p.status || ''
+      });
+    }
+    if (!points.length) return null;
+    var yDomain = chart.yDomain || { min: 0, max: 0.2 };
+    var yMax = typeof yDomain.max === 'number' && isFinite(yDomain.max) ? yDomain.max : 0.2;
+    var yMin = typeof yDomain.min === 'number' && isFinite(yDomain.min) ? yDomain.min : 0;
+    var currentStatus = chart.currentStatus || points[points.length - 1].status || '';
+    return vmFactory.normalise({
+      nodeLabel: 'Node ' + nodeRef.kind + ':' + nodeRef.id,
+      serviceLabel: nodeRef.id,
+      points: points,
+      values: points.map(function (pt) { return pt.value; }),
+      rangeLabel: (resp.range && resp.range.label) || 'Last 30 days',
+      sourceClassification: _sourceClassificationFromBackend(resp, vmFactory.demoSourceClassification),
+      sourceStateLabel: 'Chart from backend',
+      isDemo: false,
+      dataAvailable: true,
+      yDomain: { min: yMin, max: yMax },
+      yTicks: [yMin.toFixed(3), ((yMin + yMax) / 2).toFixed(3), yMax.toFixed(3)],
+      xTicks: _ticksFromPoints(points, false),
+      compactXTicks: _ticksFromPoints(points, true),
+      chartStatus: currentStatus,
+      projectionAsOf: resp.projectionAsOf || null,
+      provenance: resp.provenance || null
+    });
+  }
+
   function _baselineForIndex(vm, idx) {
     var changeIdx = 16;
     return idx < changeIdx ? (vm.baselineBeforeProfileChange || 0.040) : (vm.baselineAfterProfileChange || 0.052);
@@ -92,7 +270,9 @@
     return points.map(function (point, idx) {
       return {
         observed: +point.value,
-        expected: _baselineForIndex(vm, idx)
+        expected: typeof point.expected === 'number' ? point.expected : _baselineForIndex(vm, idx),
+        watch: typeof point.watch === 'number' ? point.watch : null,
+        breach: typeof point.breach === 'number' ? point.breach : null
       };
     });
   }
@@ -128,12 +308,13 @@
     var pad = { top: 16, right: 32, bottom: 28, left: 46 };
     var plotW = W - pad.left - pad.right;
     var plotH = H - pad.top - pad.bottom;
-    var minV = 0;
-    var maxV = 0.2;
+    var minV = vm.yDomain && typeof vm.yDomain.min === 'number' ? vm.yDomain.min : 0;
+    var maxV = vm.yDomain && typeof vm.yDomain.max === 'number' ? vm.yDomain.max : 0.2;
+    if (!(maxV > minV)) maxV = minV + 0.2;
     function sx(idx) { return pad.left + (idx / Math.max(1, points.length - 1)) * plotW; }
     function sy(value) { return pad.top + plotH - ((value - minV) / (maxV - minV)) * plotH; }
 
-    var yTicks = ['0.000', '0.100', '0.200'];
+    var yTicks = Array.isArray(vm.yTicks) && vm.yTicks.length ? vm.yTicks : ['0.000', '0.100', '0.200'];
     var grid = '';
     for (var i = 0; i < yTicks.length; i++) {
       var y = sy(parseFloat(yTicks[i]));
@@ -152,11 +333,19 @@
     var lastY = sy(last.observed);
     var watch = (vm.baselineAfterProfileChange || 0.052) + (vm.watchThresholdOffset || 0.052);
     var breach = (vm.baselineAfterProfileChange || 0.052) + (vm.breachThresholdOffset || 0.100);
+    var hasWatchSeries = points.some(function (p) { return typeof p.watch === 'number'; });
+    var hasBreachSeries = points.some(function (p) { return typeof p.breach === 'number'; });
+    var watchMarkup = hasWatchSeries
+      ? '<path class="drift-compact-threshold drift-compact-watch" d="' + _path(points, sx, sy, 'watch') + '"/>'
+      : '<line class="drift-compact-threshold drift-compact-watch" x1="' + pad.left + '" x2="' + (W - pad.right) + '" y1="' + sy(watch).toFixed(2) + '" y2="' + sy(watch).toFixed(2) + '"/>';
+    var breachMarkup = hasBreachSeries
+      ? '<path class="drift-compact-threshold drift-compact-breach" d="' + _path(points, sx, sy, 'breach') + '"/>'
+      : '<line class="drift-compact-threshold drift-compact-breach" x1="' + pad.left + '" x2="' + (W - pad.right) + '" y1="' + sy(breach).toFixed(2) + '" y2="' + sy(breach).toFixed(2) + '"/>';
     return '<svg class="drift-compact-chart-svg" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMinYMin meet" role="img" aria-label="Observed vs expected drift score over the last 30 days">' +
         '<rect class="drift-compact-chart-bg" x="' + pad.left + '" y="' + pad.top + '" width="' + plotW + '" height="' + plotH + '"/>' +
         grid +
-        '<line class="drift-compact-threshold drift-compact-watch" x1="' + pad.left + '" x2="' + (W - pad.right) + '" y1="' + sy(watch).toFixed(2) + '" y2="' + sy(watch).toFixed(2) + '"/>' +
-        '<line class="drift-compact-threshold drift-compact-breach" x1="' + pad.left + '" x2="' + (W - pad.right) + '" y1="' + sy(breach).toFixed(2) + '" y2="' + sy(breach).toFixed(2) + '"/>' +
+        watchMarkup +
+        breachMarkup +
         '<path class="drift-compact-deviation" d="' + _driftBandPath(points, sx, sy) + '"/>' +
         '<path class="drift-compact-expected" d="' + _path(points, sx, sy, 'expected') + '"/>' +
         '<path class="drift-compact-observed" d="' + _path(points, sx, sy, 'observed') + '"/>' +
@@ -185,10 +374,15 @@
     }
     var top = _topContribution(vm);
     var runnerUp = _runnerUpContribution(vm);
-    var range = _escText(vm.rangeLabel || 'Last 30 days') + ' &middot; demo';
+    var sourceLabel = vm.sourceStateLabel || (vm.isDemo ? 'Demo evidence' : 'Chart from backend');
+    var range = _escText(vm.rangeLabel || 'Last 30 days') + ' &middot; ' + _escText(sourceLabel);
     var runnerUpLine = 'Next: ' + (runnerUp.label || 'Escalation-rate deviation') + ' - ' + (runnerUp.share || '26%');
     var runnerUpMarkup = 'Next: ' + _escText(runnerUp.label || 'Escalation-rate deviation') + ' &middot; ' + _escText(runnerUp.share || '26%');
     var chartWidth = _state.chartWidth || _estimateChartWidth(mount);
+    var chartStatus = _formatChartStatus(vm.chartStatus);
+    var chartStatusMarkup = chartStatus
+      ? '<span class="drift-compact-status drift-compact-status--' + _chartStatusClass(chartStatus) + '">' + _escText(chartStatus) + '</span>'
+      : '';
     mount.innerHTML =
       '<section class="drift-compact-layout" aria-label="Compact Drift Analytics summary">' +
         '<div class="drift-compact-card drift-compact-score">' +
@@ -205,6 +399,7 @@
         '<div class="drift-compact-chart">' +
           '<div class="drift-compact-chart-header">' +
             '<div class="drift-compact-series-title">Observed vs expected</div>' +
+            chartStatusMarkup +
             '<div class="drift-compact-legend" aria-label="Chart series">' +
               '<span><i class="drift-legend-observed"></i>Observed</span>' +
               '<span><i class="drift-legend-expected"></i>Expected (declared baseline)</span>' +
@@ -278,16 +473,73 @@
     else setTimeout(run, 0);
   }
 
-  function render(ctx) {
-    void ctx;
-    var vm = _buildViewModel();
+  function _renderViewModel(vm) {
     _state.lastViewModel = vm;
     _renderHeader(vm);
     _renderCompact(vm);
   }
 
+  function _cancelPending() {
+    if (_state.pendingAbort && typeof _state.pendingAbort.abort === 'function') {
+      try { _state.pendingAbort.abort(); } catch (_) { /* swallow */ }
+    }
+    _state.pendingAbort = null;
+    _state.pendingNodeKey = '';
+  }
+
+  function _fallbackForNode(nodeRef, sourceStateLabel) {
+    return _buildFallbackViewModel({
+      nodeId: nodeRef ? nodeRef.kind + ':' + nodeRef.id : _activeNodeId(),
+      sourceStateLabel: sourceStateLabel || 'Demo evidence'
+    });
+  }
+
+  function _fetchBackend(nodeRef, seq) {
+    var api = _api();
+    if (!api || typeof api.analytics !== 'function') {
+      _renderViewModel(_fallbackForNode(nodeRef, 'Demo evidence'));
+      return;
+    }
+    var aborter = typeof AbortController === 'function' ? new AbortController() : null;
+    _state.pendingAbort = aborter;
+    api.analytics(nodeRef.kind, nodeRef.id, '30d', { signal: aborter && aborter.signal }).then(function (resp) {
+      if (seq !== _state.requestSeq) return;
+      if (resp && resp.__status) {
+        _renderViewModel(_fallbackForNode(nodeRef, 'Demo evidence'));
+        return;
+      }
+      var vm = _backendViewModel(resp, nodeRef);
+      _renderViewModel(vm || _fallbackForNode(nodeRef, 'Demo evidence'));
+    }).catch(function (err) {
+      if (seq !== _state.requestSeq) return;
+      if (err && err.name === 'AbortError') return;
+      _renderViewModel(_fallbackForNode(nodeRef, 'Demo evidence'));
+    });
+  }
+
+  function render(ctx) {
+    void ctx;
+    var rawNodeId = _activeNodeId();
+    var nodeRef = _activeNodeRef();
+    _state.requestSeq += 1;
+    var seq = _state.requestSeq;
+    _cancelPending();
+    if (!nodeRef) {
+      _renderViewModel(rawNodeId ? _buildFallbackViewModel({
+        nodeId: rawNodeId,
+        sourceStateLabel: 'Demo evidence'
+      }) : null);
+      return;
+    }
+    _state.pendingNodeKey = nodeRef.kind + ':' + nodeRef.id;
+    _renderViewModel({ __loading: true, nodeLabel: 'Node ' + _state.pendingNodeKey });
+    _fetchBackend(nodeRef, seq);
+  }
+
   function clear() {
     _state.lastViewModel = null;
+    _state.requestSeq += 1;
+    _cancelPending();
     if (_state.chartResizeObserver) {
       _state.chartResizeObserver.disconnect();
       _state.chartResizeObserver = null;

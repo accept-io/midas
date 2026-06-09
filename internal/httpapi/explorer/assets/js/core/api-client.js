@@ -56,7 +56,7 @@
 //
 //   businessServices.list / .get / .capabilities / .aiBindings
 //   capabilities.list / .get / .children / .businessServices / .aiBindings
-//   drift.definitions / .seriesPoints / .series / .observations / .annotations
+//   drift.analytics / .definitions / .seriesPoints / .series / .observations / .annotations
 //   evidence.searchAuditEvents / .envelope
 //   escalationTargets.list / .get / .versions / .version
 //   failModePolicies.get / .versions / .version
@@ -231,6 +231,11 @@
   };
 
   var drift = {
+    analytics: function (nodeKind, nodeId, range, opts) {
+      opts = opts || {};
+      var q = _query({ node_kind: nodeKind, node_id: nodeId, range: range || '30d' });
+      return request('/v1/drift/analytics' + q, { signal: opts.signal });
+    },
     definitions:  function ()           { return request('/v1/drift/definitions'); },
     seriesPoints: function (id)         { return request('/v1/drift/definitions/' + encodeURIComponent(id) + '/series-points'); },
     series:       function (id)         { return request('/v1/drift/definitions/' + encodeURIComponent(id) + '/series'); },

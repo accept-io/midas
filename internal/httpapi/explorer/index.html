@@ -2529,6 +2529,29 @@
       hooks: {
         getServiceId:        function () { return (typeof currentSelectedService === 'string') ? currentSelectedService : ''; },
         getSelectedNodeId:   function () { return (typeof gmapSelectedId === 'string') ? gmapSelectedId : ''; },
+        getSelectedNodeRef:  function () {
+          var graph = window.MIDASExplorerGraph || {};
+          var shared = graph.graphSelectionBridge;
+          if (shared && typeof shared.getCurrentNodeRef === 'function') {
+            var ref = shared.getCurrentNodeRef();
+            if (ref && ref.kind && ref.id) return ref;
+          }
+          if (shared && typeof shared.getCurrentCard === 'function') {
+            var sharedCard = shared.getCurrentCard();
+            if (sharedCard && sharedCard.sourceNodeRef) return sharedCard.sourceNodeRef;
+          }
+          var context = graph.contextSelectionBridge;
+          if (context && typeof context.getCurrentCard === 'function') {
+            var card = context.getCurrentCard();
+            if (card && card.sourceNodeRef) return card.sourceNodeRef;
+          }
+          var store = window.MIDASExplorerStore;
+          if (store && typeof store.getState === 'function') {
+            var state = store.getState();
+            if (state && state.selectedNodeRef) return state.selectedNodeRef;
+          }
+          return (typeof gmapSelectedId === 'string') ? gmapSelectedId : '';
+        },
       },
     });
   }

@@ -2011,7 +2011,7 @@
 
         function onCoreTap(evt) {
           if (!evt || evt.target !== cy) return;
-          if (_interactionMode && _interactionMode !== 'select') return;
+          if (_interactionModeId && _interactionModeId !== 'select') return;
           clearVisualSelectionSet();
         }
 

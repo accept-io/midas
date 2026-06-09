@@ -215,15 +215,16 @@ func TestDriftHandler_GetAnalytics_HappyPath(t *testing.T) {
 		`"currentStatus":"warning"`,
 		`"observedSeries":"backend"`,
 		`"expectedBaseline":"backend"`,
-		`"compositeScore":"not_available"`,
-		`"contributionValues":"not_available"`,
+		`"compositeScore":"demo_provisional"`,
+		`"contributionValues":"demo_provisional"`,
+		`"contributionWeights":"demo_provisional"`,
 		`"graphOverlay":"not_implemented"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected %s in analytics response; got %s", want, body)
 		}
 	}
-	for _, banned := range []string{"currentScore", "contributions", "contributors", "provisional"} {
+	for _, banned := range []string{"currentScore", `"contributions"`, "contributors"} {
 		if strings.Contains(body, banned) {
 			t.Fatalf("analytics response must not emit %q: %s", banned, body)
 		}
