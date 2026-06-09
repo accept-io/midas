@@ -48,7 +48,7 @@ Explorer selected node
 -> compact panel falls back honestly if dataAvailable=false
 ```
 
-The selected node resolver accepts Explorer graph references such as `capability:cap-payment-execution` and normalises frontend visual kind names to backend query kinds before calling the API.
+The selected node resolver accepts Explorer graph references such as `capability:cap-payment-authorization` and normalises frontend visual kind names to backend query kinds before calling the API.
 
 ## Backend read model
 
