@@ -195,6 +195,153 @@ func TestExplorer_DriftAnalytics_NegativeScopePins(t *testing.T) {
 	}
 }
 
+func TestExplorer_DriftAnalysisShell_FrameExistsHiddenByDefault(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	body := performRequest(t, srv, http.MethodGet, "/explorer", nil).Body.String()
+	for _, want := range []string{
+		`id="gmap-drift-analysis-shell"`,
+		`class="drift-analysis-shell"`,
+		`data-drift-analysis-shell`,
+		`aria-label="Maximised Drift Analysis"`,
+		`aria-hidden="true"`,
+		`hidden`,
+		`data-drift-analysis-shell-context`,
+		`data-drift-analysis-shell-body`,
+		`data-drift-analysis-close`,
+		`aria-label="Close Drift Analysis"`,
+		`Detailed chart, source, provenance, composite, and contribution sections arrive in later Drift Analysis tranches.`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("drift analysis shell frame must contain %q", want)
+		}
+	}
+}
+
+func TestExplorer_DriftAnalysisShell_OpenCloseWiring(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	js := getExplorerAsset(t, srv, "/explorer/assets/js/drift/drift-analytics-panel.js")
+	for _, want := range []string{
+		"openAnalysis: '[data-drift-analysis-open]'",
+		"shell: '[data-drift-analysis-shell]'",
+		"shellClose: '[data-drift-analysis-close]'",
+		"function openAnalysisShell()",
+		"function closeAnalysisShell()",
+		"openBtn.addEventListener('click', openAnalysisShell)",
+		"closeBtn.addEventListener('click', closeAnalysisShell)",
+		"shell.setAttribute('aria-hidden', 'false')",
+		"shell.setAttribute('aria-hidden', 'true')",
+		"shell.classList.add('is-open')",
+		"shell.classList.remove('is-open')",
+		"trayBody.hidden = true",
+		"trayBody.hidden = false",
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("drift analysis shell open/close wiring must contain %q", want)
+		}
+	}
+}
+
+func TestExplorer_DriftAnalysisShell_OpenActionEnabledOnlyWithViewModel(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	body := performRequest(t, srv, http.MethodGet, "/explorer", nil).Body.String()
+	openIdx := strings.Index(body, `data-drift-analysis-open`)
+	if openIdx < 0 {
+		t.Fatal("compact Drift header must expose data-drift-analysis-open")
+	}
+	openTagStart := strings.LastIndex(body[:openIdx], `<button`)
+	openTagEnd := strings.Index(body[openIdx:], `>`)
+	if openTagStart < 0 || openTagEnd < 0 {
+		t.Fatal("compact Drift open action tag malformed")
+	}
+	openTag := body[openTagStart : openIdx+openTagEnd+1]
+	if !strings.Contains(openTag, `disabled`) || !strings.Contains(openTag, `aria-disabled="true"`) {
+		t.Fatalf("open action must default disabled before compact view model exists, got %q", openTag)
+	}
+
+	js := getExplorerAsset(t, srv, "/explorer/assets/js/drift/drift-analytics-panel.js")
+	for _, want := range []string{
+		"function _canOpenAnalysis(vm)",
+		"!!(vm && !vm.__loading && vm.nodeLabel)",
+		"btn.disabled = !enabled",
+		"btn.setAttribute('aria-disabled', enabled ? 'false' : 'true')",
+		"_syncOpenAnalysisAction(vm)",
+		"if (!_canOpenAnalysis(_state.lastViewModel)) return false",
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("open action enablement must contain %q", want)
+		}
+	}
+}
+
+func TestExplorer_DriftAnalysisShell_SelectedNodeContextHeader(t *testing.T) {
+	srv := NewServerFull(&mockOrchestrator{}, nil, nil, nil, nil, nil).
+		WithExplorerEnabled(true)
+	js := getExplorerAsset(t, srv, "/explorer/assets/js/drift/drift-analytics-panel.js")
+	for _, want := range []string{
+		"lastNodeRef",
+		"_state.lastNodeRef = nodeRef",
+		"function _nodeContextLabel(vm)",
+		"vm.nodeLabel",
+		"ref.kind + ':' + ref.id",
+		"context.textContent = _nodeContextLabel(vm)",
+		"context.setAttribute('title', context.textContent)",
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("shell selected-node context header must contain %q", want)
+		}
+	}
+}
+
+func TestExplorer_DriftAnalysisShell_TrancheANegativeScope(t *testing.T) {
+	root := repoRootForDriftAnalyticsTest(t)
+	changedScope := []string{
+		"internal/httpapi/explorer/index.html",
+		"internal/httpapi/explorer/assets/js/drift/drift-analytics-panel.js",
+		"internal/httpapi/explorer/assets/css/drift-analytics.css",
+	}
+	for _, rel := range changedScope {
+		if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
+			t.Fatalf("expected repo file %s: %v", rel, err)
+		}
+	}
+	panel := readRepoFileForDriftAnalyticsTest(t, root, "internal/httpapi/explorer/assets/js/drift/drift-analytics-panel.js")
+	index := readRepoFileForDriftAnalyticsTest(t, root, "internal/httpapi/explorer/index.html")
+	css := readRepoFileForDriftAnalyticsTest(t, root, "internal/httpapi/explorer/assets/css/drift-analytics.css")
+	combined := panel + "\n" + index + "\n" + css
+	for _, forbidden := range []string{
+		"docker-compose",
+		"Graph overlay",
+		"Graph Overlay",
+		"drift-analysis-overlay",
+		"large observed-vs-expected chart",
+		"source classification table",
+		"provenance references",
+		"hash verified",
+		"governed composite",
+		"reconstructible",
+		"openAnalysisShell: function",
+		"fetch('/v1/drift/analytics'",
+	} {
+		if strings.Contains(combined, forbidden) {
+			t.Errorf("tranche A shell must not introduce out-of-scope token %q", forbidden)
+		}
+	}
+	for _, forbiddenPath := range []string{
+		"internal/store/postgres/schema.sql",
+		"internal/store/postgres/migrations",
+		"internal/bootstrap/synthetic_drift.go",
+		"internal/drift/analytics/service.go",
+		"internal/httpapi/server.go",
+	} {
+		if strings.Contains(combined, forbiddenPath) {
+			t.Errorf("tranche A shell must not reference out-of-scope path %q", forbiddenPath)
+		}
+	}
+}
+
 func repoRootForDriftAnalyticsTest(t *testing.T) string {
 	t.Helper()
 	wd, err := os.Getwd()

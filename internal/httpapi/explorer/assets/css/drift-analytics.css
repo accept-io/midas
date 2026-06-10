@@ -247,6 +247,14 @@
   width: 28px;
 }
 
+.gmap-evidence-tray-open-analysis:not(:disabled) {
+  cursor: pointer;
+}
+
+.gmap-evidence-tray-open-analysis:disabled {
+  opacity: 0.48;
+}
+
 .gmap-evidence-tray-open-analysis {
   padding: 0;
 }
@@ -265,6 +273,98 @@
 .gmap-evidence-tray-open-analysis:focus-visible {
   outline: 2px solid var(--drift-accent-blue);
   outline-offset: 1px;
+}
+
+.drift-analysis-shell {
+  background: var(--drift-surface);
+  border: 1px solid var(--drift-border);
+  border-radius: 7px;
+  color: var(--drift-text-strong);
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.drift-analysis-shell[hidden] {
+  display: none;
+}
+
+.drift-analysis-shell-header {
+  align-items: center;
+  border-bottom: 1px solid var(--drift-border);
+  display: flex;
+  flex: 0 0 auto;
+  gap: 12px;
+  justify-content: space-between;
+  min-height: 42px;
+  padding: 8px 10px 8px 12px;
+}
+
+.drift-analysis-shell-heading {
+  min-width: 0;
+}
+
+.drift-analysis-shell-title {
+  color: var(--drift-text-strong);
+  font-size: 13px;
+  font-weight: 750;
+  line-height: 1.2;
+  margin: 0;
+}
+
+.drift-analysis-shell-context {
+  color: var(--drift-text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.35;
+  margin: 2px 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drift-analysis-shell-close {
+  align-items: center;
+  background: var(--drift-toolbar-surface);
+  border: 1px solid var(--drift-border);
+  border-radius: 4px;
+  color: var(--drift-text-medium);
+  cursor: pointer;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 18px;
+  height: 26px;
+  justify-content: center;
+  line-height: 1;
+  padding: 0;
+  width: 28px;
+}
+
+.drift-analysis-shell-close:hover {
+  border-color: var(--drift-border-strong);
+  color: var(--drift-text-strong);
+}
+
+.drift-analysis-shell-close:focus-visible {
+  outline: 2px solid var(--drift-accent-blue);
+  outline-offset: 1px;
+}
+
+.drift-analysis-shell-body {
+  align-items: center;
+  color: var(--drift-text-muted);
+  display: flex;
+  flex: 1 1 auto;
+  font-size: 12px;
+  justify-content: center;
+  line-height: 1.45;
+  min-height: 0;
+  padding: 16px;
+  text-align: center;
 }
 
 .drift-compact-chart {

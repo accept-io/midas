@@ -23,8 +23,16 @@
       compact: '[data-drift-compact-summary]',
       title: '[data-drift-analytics-title]',
       subtitle: '[data-drift-analytics-subtitle]',
-      badge: '[data-drift-analytics-demo-badge]'
-    }
+      badge: '[data-drift-analytics-demo-badge]',
+      openAnalysis: '[data-drift-analysis-open]',
+      trayBody: '#gmap-evidence-tray-body',
+      shell: '[data-drift-analysis-shell]',
+      shellContext: '[data-drift-analysis-shell-context]',
+      shellBody: '[data-drift-analysis-shell-body]',
+      shellClose: '[data-drift-analysis-close]'
+    },
+    shellOpen: false,
+    lastNodeRef: null
   };
 
   function _q(sel) { return document.querySelector(sel); }
@@ -135,6 +143,73 @@
         badgeEl.textContent = '';
       }
     }
+    _syncOpenAnalysisAction(vm);
+    if (_state.shellOpen) _renderShell(vm);
+  }
+
+  function _canOpenAnalysis(vm) {
+    return !!(vm && !vm.__loading && vm.nodeLabel);
+  }
+
+  function _syncOpenAnalysisAction(vm) {
+    var btn = _q(_state.mountSelectors.openAnalysis);
+    if (!btn) return;
+    var enabled = _canOpenAnalysis(vm);
+    btn.disabled = !enabled;
+    btn.setAttribute('aria-disabled', enabled ? 'false' : 'true');
+  }
+
+  function _nodeContextLabel(vm) {
+    if (!vm || !vm.nodeLabel) return 'Select a graph node to inspect Drift Analysis.';
+    var parts = [vm.nodeLabel];
+    var ref = _state.lastNodeRef;
+    if (ref && ref.kind && ref.id) parts.push(ref.kind + ':' + ref.id);
+    return parts.join(' - ');
+  }
+
+  function _renderShell(vm) {
+    var shell = _q(_state.mountSelectors.shell);
+    if (!shell) return;
+    var context = _q(_state.mountSelectors.shellContext);
+    if (context) {
+      context.textContent = _nodeContextLabel(vm);
+      context.setAttribute('title', context.textContent);
+    }
+    var body = _q(_state.mountSelectors.shellBody);
+    if (body) {
+      body.textContent = 'Detailed chart, source, provenance, composite, and contribution sections arrive in later Drift Analysis tranches. This shell frame does not add backend-backed content yet.';
+    }
+  }
+
+  function openAnalysisShell() {
+    if (!_canOpenAnalysis(_state.lastViewModel)) return false;
+    var shell = _q(_state.mountSelectors.shell);
+    if (!shell) return false;
+    _state.shellOpen = true;
+    shell.hidden = false;
+    shell.removeAttribute('hidden');
+    shell.setAttribute('aria-hidden', 'false');
+    shell.classList.add('is-open');
+    var trayBody = _q(_state.mountSelectors.trayBody);
+    if (trayBody) trayBody.hidden = true;
+    _renderShell(_state.lastViewModel);
+    var close = _q(_state.mountSelectors.shellClose);
+    if (close && typeof close.focus === 'function') {
+      try { close.focus(); } catch (_) { /* swallow */ }
+    }
+    return true;
+  }
+
+  function closeAnalysisShell() {
+    var shell = _q(_state.mountSelectors.shell);
+    _state.shellOpen = false;
+    if (!shell) return false;
+    shell.classList.remove('is-open');
+    shell.setAttribute('aria-hidden', 'true');
+    shell.hidden = true;
+    var trayBody = _q(_state.mountSelectors.trayBody);
+    if (trayBody) trayBody.hidden = false;
+    return true;
   }
 
   function _topContribution(vm) {
@@ -521,6 +596,7 @@
     void ctx;
     var rawNodeId = _activeNodeId();
     var nodeRef = _activeNodeRef();
+    _state.lastNodeRef = nodeRef;
     _state.requestSeq += 1;
     var seq = _state.requestSeq;
     _cancelPending();
@@ -538,6 +614,7 @@
 
   function clear() {
     _state.lastViewModel = null;
+    _state.lastNodeRef = null;
     _state.requestSeq += 1;
     _cancelPending();
     if (_state.chartResizeObserver) {
@@ -546,6 +623,8 @@
     }
     var mount = _q(_state.mountSelectors.compact);
     if (mount) mount.innerHTML = '';
+    closeAnalysisShell();
+    _syncOpenAnalysisAction(null);
   }
 
   function setExpanded(expanded) {
@@ -562,6 +641,16 @@
     options = options || {};
     _state.hooks = options.hooks || {};
     _state.initialised = true;
+    var openBtn = _q(_state.mountSelectors.openAnalysis);
+    if (openBtn && !openBtn.__driftAnalysisShellBound) {
+      openBtn.__driftAnalysisShellBound = true;
+      openBtn.addEventListener('click', openAnalysisShell);
+    }
+    var closeBtn = _q(_state.mountSelectors.shellClose);
+    if (closeBtn && !closeBtn.__driftAnalysisShellBound) {
+      closeBtn.__driftAnalysisShellBound = true;
+      closeBtn.addEventListener('click', closeAnalysisShell);
+    }
     render();
   }
 
@@ -582,6 +671,8 @@
     clear: clear,
     setExpanded: setExpanded,
     setSelectedSeries: setSelectedSeries,
+    openAnalysisShell: openAnalysisShell,
+    closeAnalysisShell: closeAnalysisShell,
     _state: _state
   };
 })();
